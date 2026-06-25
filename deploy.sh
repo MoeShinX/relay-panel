@@ -189,9 +189,8 @@ else
         info "Database backend selection"
         echo "  1) SQLite (default, zero-config)"
         echo "  2) PostgreSQL (embedded Docker container)"
-        echo "  3) PostgreSQL (external — you provide the URL)"
         echo ""
-        printf "Choose [1-3] (default 1): "
+        printf "Choose [1-2] (default 1): "
         read -r DB_CHOICE
         DB_CHOICE="${DB_CHOICE:-1}"
 
@@ -217,20 +216,6 @@ POSTGRES_DB=${PG_DB}
 POSTGRES_USER=${PG_USER}
 POSTGRES_PASSWORD=${PG_PASS}
 RELAYPANEL_DB_MODE=embedded-postgres
-EOF
-                ;;
-            3)
-                info "Selected: PostgreSQL (external)"
-                echo "  Provide the full connection URL, e.g.:"
-                echo "    postgres://user:pass@host:5432/dbname"
-                echo "  (passwords with special characters must be URL-encoded)"
-                printf "  DATABASE_URL: "
-                read -r DATABASE_URL
-                if [ -z "$DATABASE_URL" ]; then
-                    fail "DATABASE_URL must not be empty for external PostgreSQL"
-                fi
-                cat >> .env <<EOF
-RELAYPANEL_DB_MODE=external-postgres
 EOF
                 ;;
             *)
