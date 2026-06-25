@@ -653,8 +653,8 @@ else
 fi
 
 # ---------- 4. Start ----------
-info "Starting services (docker compose -f $COMPOSE_FILE up -d $COMPOSE_FLAGS ${PROFILE_ARGS[*]}) ..."
-docker compose -f "$COMPOSE_FILE" up -d $COMPOSE_FLAGS "${PROFILE_ARGS[@]}"
+info "Starting services (docker compose -f $COMPOSE_FILE ${PROFILE_ARGS[*]} up -d $COMPOSE_FLAGS) ..."
+docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" up -d $COMPOSE_FLAGS
 
 # ---------- 5. Verify ----------
 # Deployment success is decided by the CONTAINER + PORT + a real health
