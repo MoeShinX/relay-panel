@@ -35,7 +35,7 @@
 - 📋 **Multi-plan registration** — admins configure allowed plans; users choose on sign-up
 - 👥 **User management** — manage any user's rules, reset traffic, reset password, ban/unban
 - 🖥️ **Live node status** — CPU, memory, connections, version
-- 🌍 **GeoIP flags** — built-in ipinfo.io + ipwho.is dual-source, enabled by default
+- 🌍 **Node region detection** — automatically identifies each node's country/region with flag display
 - 🗄️ **Dual database** — SQLite (default, zero-config) or PostgreSQL
 - 🔒 **Security** — first login forces password change; node auth via Bearer token
 
