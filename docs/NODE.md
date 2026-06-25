@@ -75,9 +75,9 @@ Use this if you cannot run the installer (no systemd, custom paths, air-gapped
 server where you copy the binary over manually).
 
 ```bash
-# 1. Download the right binary for your arch (replace v0.2.0 with your release)
+# 1. Download the right binary for your arch (replace with your release version)
 ARCH=amd64   # or arm64
-VERSION=0.2.0
+VERSION=1.0.1
 curl -fL -o relay-node \
   "https://github.com/MoeShinX/relay-panel/releases/download/v${VERSION}/relay-node-linux-${ARCH}"
 
@@ -179,7 +179,7 @@ After install:
 ```bash
 # 1. Version should print instantly and exit (does NOT start the service)
 timeout 3 /opt/relay-node/relay-node --version
-# expected: relay-node 0.2.0
+# expected: relay-node 1.0.1
 
 # 2. Service status
 systemctl status relay-node
@@ -189,7 +189,7 @@ journalctl -u relay-node -f
 ```
 
 In the logs you should see:
-- `RelayNode 0.2.0 starting, panel=...`
+- `RelayNode 1.0.1 starting, panel=...`
 - `websocket connected` (if your reverse proxy supports WS)
 - `TCP listening on <port> (rule <id>)` / `UDP listening on ...` for each rule
 - `report_traffic HTTP 200` (the per-report status line; the detailed per-cycle
@@ -268,13 +268,13 @@ rm -rf /opt/relay-node
   within 30 seconds (3x the default poll interval)
 
 ### `websocket error: ... sec-websocket-key ...`
-This was fixed in v0.1.7+. Make sure you are on v0.2.0 or later:
+Make sure you are on the latest version:
 `/opt/relay-node/relay-node --version`. If it still happens, your reverse proxy
 may not be passing the WebSocket Upgrade headers - but note WS is only the
 control channel; forwarding + status reporting work over plain HTTP regardless.
 
 ### WebSocket keeps disconnecting / reconnecting every ~2 minutes
-Since v0.2.0 the node sends a 25s heartbeat Ping so the connection is not
+The node sends a 25s heartbeat Ping so the connection is not
 treated as idle. If you still see periodic disconnects, your reverse proxy /
 CDN may have an idle timeout shorter than 25s, or may not be forwarding
 Pong frames. Occasional reconnects are harmless (config is re-synced), but if
@@ -334,10 +334,7 @@ of inactivity. Generate real traffic and the count moves.
    (only warnings/errors). Set `RUST_LOG=debug` only when diagnosing issues
    (it prints every status report + every connection open/close).
 
-8. **Transport options.** v0.4.0+ supports `raw` (plain TCP/UDP), `ws`
-   (plaintext WebSocket), and `tls_simple` (node terminates TLS via rustls,
-   v0.4.1). Business WSS (WebSocket Secure via reverse proxy) was removed in
-   v0.4.1 — use TLS Simple for encrypted ingress.
+8. **Transport options.** Raw (plain TCP/UDP) is the default transport.
 
 ---
 
@@ -348,13 +345,13 @@ the `main` branch, and it downloads the binary version compiled into itself
 (the `SCRIPT_VERSION` at the top of the script). So `main`'s installer always
 installs the **latest** release.
 
-If you need to **pin a specific older version** (e.g. stay on v0.1.9 while
+If you need to **pin a specific older version** (e.g. stay on a specific version while
 testing), do NOT use the `main` installer — download that release's binary
 directly and install by hand (see [Manual install](#option-b-manual-install)):
 
 ```bash
-# Example: pin to v0.1.9 on amd64
-VERSION=0.1.9
+# Example: pin to a specific version on amd64
+VERSION=1.0.1
 ARCH=amd64   # or arm64
 curl -fL -o relay-node \
   "https://github.com/MoeShinX/relay-panel/releases/download/v${VERSION}/relay-node-linux-${ARCH}"

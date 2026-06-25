@@ -18,7 +18,7 @@ Current target: **1.0.1**
 | 4 | `crates/panel/src/config.rs` | `COMPILED_APP_VERSION` (the panel's own version, shown in the update-check UI). Overridable at runtime via the `APP_VERSION` env var. | 1.0.1 |
 | 5 | `README.md` | the `**Version:** \`x.y.z\`` badge line | 1.0.1 |
 | 6 | `README.zh-CN.md` | the `**当前版本：** \`x.y.z\`` badge line | 1.0.1 |
-| 7 | `crates/panel/Cargo.toml` | `version = "x.y.z"` (the panel crate version). **v0.3.5: now release-sync'd — `release-check.sh` FAILs if it drifts.** It was missed in v0.3.4 (stayed 0.3.3). `Cargo.lock` carries it too, so run `cargo check` after bumping. | 1.0.1 |
+| 7 | `crates/panel/Cargo.toml` | `version = "x.y.z"` (the panel crate version). `release-check.sh` FAILs if it drifts. `Cargo.lock` carries it too, so run `cargo check` after bumping. | 1.0.1 |
 
 Also bump, but not part of the "must match" set:
 - `CHANGELOG.md` — add a new `## [x.y.z] - YYYY-MM-DD` section describing the
@@ -26,7 +26,7 @@ Also bump, but not part of the "must match" set:
   The section MUST be non-empty: `release-check.sh` + the Binary Release
   workflow extract it via `scripts/extract-changelog.sh` to build the GitHub
   Release body, and both FAIL on a missing / empty section (this prevents the
-  v0.3.4 `body: null` bug where the dashboard "view changelog" was blank).
+  release body extraction bug).
 
 ---
 
@@ -45,7 +45,7 @@ appears, fix it before continuing — do not tag with a failing check.
 For a quick manual grep (e.g. hunting for a leftover old version):
 
 ```powershell
-$v = '0.2.0'  # the version you are migrating FROM
+$v = '1.0.1'  # the version you are migrating FROM
 Get-ChildItem -Recurse -File -Include *.toml,*.sh,*.yaml,*.yml,*.md,*.rs,Dockerfile |
   Where-Object { $_.FullName -notmatch '\\(target|node_modules|\.git)\\' -and $_.Name -ne 'CHANGELOG.md' -and $_.Name -ne 'Cargo.lock' -and $_.Name -ne 'VERSIONS.md' } |
   Select-String -Pattern $v -SimpleMatch
@@ -62,7 +62,7 @@ grep -A1 'name = "relay-node"' Cargo.lock   # should show the new version
 
 ## Release flow (correct order)
 
-This order matters — it avoids the v0.1.9 mistake where the tag ended up
+This order matters — it avoids a mistake where the tag ended up
 behind `main` by a commit:
 
 1. Update all 7 places above + CHANGELOG.
@@ -107,5 +107,5 @@ change, and vice versa). If they ever diverge, document which is which here.
 
 All releases so far are marked `prerelease: true` on GitHub. The update check
 (`crates/panel/src/api/system.rs`) sets `ALLOW_PRERELEASE_UPDATES = true`, so
-the dashboard will offer pre-release updates. Once a stable `1.0` ships, flip
+the dashboard will offer pre-release updates. Once you want to disable pre-release updates, flip
 that constant to `false` to only notify about stable releases.

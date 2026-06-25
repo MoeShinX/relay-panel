@@ -115,7 +115,7 @@ NODE_TOKEN=<paste a node token from the UI later>
 # Optional: set when the panel is behind a domain/reverse proxy so the
 # "Copy Install Command" button emits the right URL for nodes.
 PUBLIC_PANEL_URL=https://panel.example.com
-# v0.4.3+: DATABASE_URL controls the database backend.  Defaults to SQLite.
+# DATABASE_URL controls the database backend.  Defaults to SQLite.
 # See "Database modes" section below.
 DATABASE_URL=sqlite:/app/data/data.db?mode=rwc
 EOF
@@ -126,7 +126,7 @@ EOF
     > in the panel UI after first login, copy its token, then update `.env` and
     > `docker compose restart node`.
 
-    ### Database modes (v0.4.3+)
+    ### Database modes
 
     RelayPanel supports three database modes, controlled by `DATABASE_URL`:
 
@@ -136,7 +136,7 @@ EOF
     | **PostgreSQL (embedded)** | `postgres://user:pass@postgres:5432/db` | `deploy.sh` starts a `postgres` container (profile), waits for healthy, then starts panel. Set `RELAYPANEL_DB_MODE=embedded-postgres` + `POSTGRES_DB`/`POSTGRES_USER`/`POSTGRES_PASSWORD` in `.env`. |
     | **PostgreSQL (external)** | `postgres://user:pass@host:port/db` | `deploy.sh` verifies connectivity with a real `psql` query before starting the panel. Set `RELAYPANEL_DB_MODE=external-postgres`. |
 
-    - `DATABASE_URL` is the **canonical** env var (v0.4.3+).
+    - `DATABASE_URL` is the **canonical** env var.
     - `DATABASE_PATH` is a **legacy fallback** — it still works, but new
       deployments should use `DATABASE_URL`. On upgrade, `deploy.sh` wraps a
       legacy `DATABASE_PATH` into a `sqlite:` URL **at the same location** (the
@@ -173,19 +173,19 @@ embeds it into the one-line install command.
 - A `localhost` / `127.0.0.1` / `0.0.0.0` value triggers a warning in the
   install-command modal, since nodes on other hosts cannot connect to those.
 
-    #### GeoIP — node region resolution (optional, **enabled by default since v0.4.16**)
+    #### GeoIP — node region resolution
 
 The panel can display a country flag + name next to each node's public IP on the
-node-status board. v0.4.15 shipped this opt-in (off by default); **v0.4.16
+node-status board. GeoIP is **enabled by default** with built-in providers.
 flips the default to ON**, so a fresh install shows country flags without any
 extra configuration. To opt out, set `GEOIP_ENABLED=false`.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `GEOIP_ENABLED` | `true` (since v0.4.16; was `false` in v0.4.15) | Master switch. Set to `false` / `0` to disable region resolution entirely. |
+| `GEOIP_ENABLED` | `true` | Master switch. Set to `false` / `0` to disable region resolution entirely. |
 | `GEOIP_CACHE_TTL` | `604800` (7 days) | How long a resolved country is cached (seconds) before a re-lookup. |
 
-**Since v0.4.19, the GeoIP provider URLs are built-in and no longer
+**The GeoIP provider URLs are built-in and no longer
 user-configurable.** The panel uses **ipinfo.io Lite** as primary, with
 automatic fallback to **ipwho.is** if the primary fails (timeout, error, or
 missing `country_code`). The old `GEOIP_API_URL` env var is ignored;
@@ -201,7 +201,6 @@ Privacy / safety notes:
 - Failures degrade gracefully to "unknown" and **never** affect node status,
   online state, or forwarding. The third-party response body is not logged.
 - To disable entirely, set `GEOIP_ENABLED=false`.
-- **Upgrading from v0.4.18:** if you previously set `GEOIP_API_URL` in `.env`,
   remove that line — it is no longer read. The panel always uses its built-in
   primary + fallback pair.
 
@@ -285,7 +284,7 @@ pulls the new GHCR images, and restarts the `panel`/`node` containers:
 > **Note on the admin password:** `deploy.sh` decides success by the container
 > state + port reachability + the `GET /api/v1/health` endpoint (a real JSON
 > health probe — status:"ok" + version). It does **not** log in as
-> `admin`/`admin123` at all (that probe was removed in v0.3.2 — it was a
+> `admin`/`admin123` at all (that probe was removed — it was a
 > needless login that could trip rate-limiting). So an upgrade on a deployment
 > where you've already changed the default password reports success exactly
 > like a first deploy.
