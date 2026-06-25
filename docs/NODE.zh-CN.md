@@ -72,9 +72,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MoeShinX/relay-panel/main/sc
 适用于无法跑脚本的情况（没有 systemd、自定义路径、离线服务器手动拷贝二进制）。
 
 ```bash
-# 1. 下载对应架构的二进制（把 v0.2.0 换成你要的版本）
+# 1. 下载对应架构的二进制（替换为你要的版本）
 ARCH=amd64   # 或 arm64
-VERSION=0.2.0
+VERSION=1.0.1
 curl -fL -o relay-node \
   "https://github.com/MoeShinX/relay-panel/releases/download/v${VERSION}/relay-node-linux-${ARCH}"
 
@@ -173,7 +173,7 @@ systemctl status relay-node   # 应显示 active (running)
 ```bash
 # 1. 版本号应该秒退（不会启动服务）
 timeout 3 /opt/relay-node/relay-node --version
-# 期望输出：relay-node 0.2.0
+# 期望输出：relay-node 1.0.1
 
 # 2. 服务状态
 systemctl status relay-node
@@ -183,7 +183,7 @@ journalctl -u relay-node -f
 ```
 
 日志里应该看到：
-- `RelayNode 0.2.0 starting, panel=...`
+- `RelayPanel 1.0.1 starting, panel=...`
 - `websocket connected`（如果你的反代支持 WS）
 - `TCP listening on <端口> (rule <id>)` / `UDP listening on ...` 每条规则一行
 - `report_traffic HTTP 200`（每次上报的状态码；详细的周期指标在 `debug` 级别）
@@ -250,13 +250,13 @@ rm -rf /opt/relay-node
 - 在线判定阈值：超过 30 秒（默认轮询周期的 3 倍）没收到状态上报就判离线
 
 ### `websocket error: ... sec-websocket-key ...`
-这在 v0.1.7+ 已修复。确认你在 v0.2.0 或更高版本：
+确认你在最新版本：
 `/opt/relay-node/relay-node --version`。如果还出现，可能是你的反代没透传
 WebSocket Upgrade 头 —— 但注意 WS 只是控制通道，转发和状态上报走的是纯
 HTTP，不受影响。
 
 ### WebSocket 每隔约 2 分钟断开重连
-v0.2.0 起节点每 25 秒发一次心跳 Ping，连接不会被当空闲。如果仍然周期性
+节点每 25 秒发一次心跳 Ping，连接不会被当空闲。如果仍然周期性
 断开，可能是反代 / CDN 的空闲超时短于 25 秒，或没转发 Pong 帧。偶尔重连
 无害（配置会重新同步），但如果很频繁，检查反代的 WebSocket 超时设置。
 注意：任何 WS 中断期间节点照常转发。
@@ -323,12 +323,12 @@ GitHub Releases 在国内访问可能很慢。可以：
 二进制版本由脚本自身的 `SCRIPT_VERSION` 决定。所以 `main` 上的脚本总是装
 **最新**版本。
 
-如果你需要**固定某个旧版本**（比如暂时留在 v0.1.9 测试），**不要**用 `main`
+如果你需要**固定某个旧版本**（比如暂时留在某个版本测试），**不要**用 `main`
 的脚本 —— 直接下载那个版本的二进制手动安装（见上文[手动安装](#方式-b手动安装)）：
 
 ```bash
-# 示例：固定到 v0.1.9，amd64
-VERSION=0.1.9
+# 示例：固定到某个版本，amd64
+VERSION=1.0.1
 ARCH=amd64   # 或 arm64
 curl -fL -o relay-node \
   "https://github.com/MoeShinX/relay-panel/releases/download/v${VERSION}/relay-node-linux-${ARCH}"
