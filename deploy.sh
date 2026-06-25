@@ -421,19 +421,17 @@ else
         echo ""
         info "Web access mode"
         echo "  1) Direct (default) — panel port 18888 open to the network"
-        echo "  2) Reverse proxy (same server) — panel on localhost only"
-        echo "  3) Reverse proxy (separate server) — panel public, firewall-controlled"
-        echo "  4) Caddy — Compose-managed Caddy with auto-TLS + custom domain"
+        echo "  2) Reverse proxy — panel on localhost only, Nginx/Caddy in front"
+        echo "  3) Caddy — Compose-managed Caddy with auto-TLS + custom domain"
         echo ""
-        printf "Choose [1-4] (default 1): "
+        printf "Choose [1-3] (default 1): "
         read -r WEB_CHOICE
         WEB_CHOICE="${WEB_CHOICE:-1}"
 
         case "$WEB_CHOICE" in
             1) RELAYPANEL_WEB_MODE="direct" ;;
             2) RELAYPANEL_WEB_MODE="reverse-proxy" ;;
-            3) RELAYPANEL_WEB_MODE="reverse-proxy"; REVERSE_PROXY_EXTERNAL=1 ;;
-            4) RELAYPANEL_WEB_MODE="caddy" ;;
+            3) RELAYPANEL_WEB_MODE="caddy" ;;
             *) fail "Invalid choice: $WEB_CHOICE" ;;
         esac
 
