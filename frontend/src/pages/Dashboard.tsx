@@ -30,10 +30,10 @@ interface VersionInfo {
 }
 
 const IGNORED_KEY = 'relaypanel_ignored_version';
-// The "Update Now" button points here. README.zh-CN.md is the user-facing entry
+// The "Update Now" button points here. README.md is the user-facing entry
 // doc with the one-line install + a dedicated upgrade section, so it's a better
 // landing page than the (more ops-focused) docs/DEPLOYMENT.md.
-const DEPLOY_DOC_URL = 'https://github.com/MoeShinX/relay-panel/blob/main/README.zh-CN.md#更新';
+const DEPLOY_DOC_URL = 'https://github.com/MoeShinX/relay-panel/blob/main/README.md#更新';
 
 export default function Dashboard() {
   const { t } = useI18n();

@@ -17,7 +17,7 @@ Current target: **1.0.1**
 | 3 | `docker-compose.release.yaml` | both image tags: `ghcr.io/moeshinx/relay-panel-panel:x.y.z` AND `.../relay-panel-node:x.y.z` | 1.0.1 |
 | 4 | `crates/panel/src/config.rs` | `COMPILED_APP_VERSION` (the panel's own version, shown in the update-check UI). Overridable at runtime via the `APP_VERSION` env var. | 1.0.1 |
 | 5 | `README.md` | the `**Version:** \`x.y.z\`` badge line | 1.0.1 |
-| 6 | `README.zh-CN.md` | the `**当前版本：** \`x.y.z\`` badge line | 1.0.1 |
+| 6 | `README.md` | the `**当前版本：** \`x.y.z\`` badge line | 1.0.1 |
 | 7 | `crates/panel/Cargo.toml` | `version = "x.y.z"` (the panel crate version). `release-check.sh` FAILs if it drifts. `Cargo.lock` carries it too, so run `cargo check` after bumping. | 1.0.1 |
 
 Also bump, but not part of the "must match" set:
