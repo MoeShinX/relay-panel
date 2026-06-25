@@ -71,9 +71,7 @@ curl -fsSL https://raw.githubusercontent.com/MoeShinX/relay-panel/main/install.s
 
 > **Default login `admin` / `admin123` — first login forces a password change.**
 
-Full deployment guide: **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** ·
-Reverse proxy: **[docs/REVERSE-PROXY.md](docs/REVERSE-PROXY.md)** ·
-Node setup: **[docs/NODE.md](docs/NODE.md)**
+Full guide: **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
 
 **Local dev:**
 

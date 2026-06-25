@@ -64,9 +64,7 @@ curl -fsSL https://raw.githubusercontent.com/MoeShinX/relay-panel/main/install.s
 
 > **默认账号 `admin` / `admin123`，首次登录强制修改密码。**
 
-完整部署指南：**[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** ·
-反向代理：**[docs/REVERSE-PROXY.md](docs/REVERSE-PROXY.md)** ·
-节点安装：**[docs/NODE.zh-CN.md](docs/NODE.zh-CN.md)**
+完整指南：**[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
 
 **本地开发：**
 
