@@ -440,7 +440,7 @@ export const enUS: Dict = {
   registrationSettingsHint: 'When enabled, users can self-register and are bound to the default plan.',
   // v0.4.10 PR4: password reset + forced change
   forcePasswordChange: 'Change your password',
-  forcePasswordChangeDesc: 'An admin reset your password. Set a new one and log in again; other features are unavailable until you do.',
+  forcePasswordChangeDesc: 'An admin requires you to set a new password before continuing. Set a new one and log in again; other features are unavailable until you do.',
   resetPassword: 'Reset password',
   confirmReset: 'Confirm reset',
   resetPasswordWarning: 'Resetting immediately invalidates all of this user\'s sessions; they must log in again with the new temporary password.',

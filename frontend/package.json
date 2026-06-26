@@ -14,6 +14,7 @@
   "dependencies": {
     "@ant-design/charts": "^2.6.7",
     "@ant-design/icons": "^6.2.5",
+    "@fontsource/noto-sans-sc": "^5.2.9",
     "antd": "^6.4.4",
     "axios": "^1.18.0",
     "flag-icons": "^7.5.0",
