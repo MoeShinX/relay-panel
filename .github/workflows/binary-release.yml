@@ -112,7 +112,8 @@ jobs:
           files: |
             ${{ matrix.asset_name }}
             ${{ matrix.asset_name }}.sha256
-          prerelease: true
+          prerelease: false
+          make_latest: true
           name: ${{ github.ref_name || format('v{0}', steps.ver.outputs.version) }}
           body_path: RELEASE_BODY.md
 
