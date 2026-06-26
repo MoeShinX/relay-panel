@@ -74,7 +74,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MoeShinX/relay-panel/main/sc
 ```bash
 # 1. 下载对应架构的二进制（替换为你要的版本）
 ARCH=amd64   # 或 arm64
-VERSION=1.0.1
+VERSION=1.0.2
 curl -fL -o relay-node \
   "https://github.com/MoeShinX/relay-panel/releases/download/v${VERSION}/relay-node-linux-${ARCH}"
 
@@ -173,7 +173,7 @@ systemctl status relay-node   # 应显示 active (running)
 ```bash
 # 1. 版本号应该秒退（不会启动服务）
 timeout 3 /opt/relay-node/relay-node --version
-# 期望输出：relay-node 1.0.1
+# 期望输出：relay-node 1.0.2
 
 # 2. 服务状态
 systemctl status relay-node
@@ -183,7 +183,7 @@ journalctl -u relay-node -f
 ```
 
 日志里应该看到：
-- `RelayPanel 1.0.1 starting, panel=...`
+- `RelayPanel 1.0.2 starting, panel=...`
 - `websocket connected`（如果你的反代支持 WS）
 - `TCP listening on <端口> (rule <id>)` / `UDP listening on ...` 每条规则一行
 - `report_traffic HTTP 200`（每次上报的状态码；详细的周期指标在 `debug` 级别）
@@ -328,7 +328,7 @@ GitHub Releases 在国内访问可能很慢。可以：
 
 ```bash
 # 示例：固定到某个版本，amd64
-VERSION=1.0.1
+VERSION=1.0.2
 ARCH=amd64   # 或 arm64
 curl -fL -o relay-node \
   "https://github.com/MoeShinX/relay-panel/releases/download/v${VERSION}/relay-node-linux-${ARCH}"

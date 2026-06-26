@@ -27,7 +27,7 @@ set -euo pipefail
 
 # Bump this when releasing a new version. The binary is downloaded from
 # GitHub Releases assets.
-SCRIPT_VERSION="1.0.1"
+SCRIPT_VERSION="1.0.2"
 REPO="MoeShinX/relay-panel"
 
 GREEN='\033[0;32m'
