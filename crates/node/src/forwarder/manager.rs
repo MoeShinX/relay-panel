@@ -174,6 +174,7 @@ impl ForwarderManager {
             .filter(|(_, m)| m.handle.is_finished())
             .map(|(k, _)| *k)
             .collect();
+        let mut dead_rule_ids: Vec<i64> = Vec::new();
         for key in &dead {
             let (port, proto, transport) = *key;
             tracing::warn!(
@@ -182,7 +183,9 @@ impl ForwarderManager {
                 transport,
                 port
             );
-            self.listeners.remove(key);
+            if let Some(m) = self.listeners.remove(key) {
+                dead_rule_ids.push(m.fingerprint.rule_id);
+            }
         }
 
         // ── Step 2: compute the desired set ──
@@ -194,6 +197,25 @@ impl ForwarderManager {
             .filter(|l| l.protocol != Protocol::TcpUdp)
             .map(|l| (l.port, l.protocol, l.node_transport))
             .collect();
+
+        // v0.5.1: collect the rule_ids present in the NEW config so we can
+        // decide which stopped listeners truly belong to deleted rules (and
+        // therefore need their traffic counters pruned) vs. listeners that
+        // are merely being restarted with a different fingerprint.
+        let desired_rule_ids: HashSet<i64> = config.listeners.iter().map(|l| l.rule_id).collect();
+
+        // v0.5.1: prune counters for dead listeners whose rule is no longer in
+        // the new config AND has no other live listener referencing it.
+        for rule_id in &dead_rule_ids {
+            if !desired_rule_ids.contains(rule_id)
+                && !self
+                    .listeners
+                    .values()
+                    .any(|live| live.fingerprint.rule_id == *rule_id)
+            {
+                self.counter.prune_rule(*rule_id).await;
+            }
+        }
 
         // ── Step 3: stop listeners no longer desired, AND restart listeners
         // whose fingerprint changed (target / ws_path / rule_id). Both are
@@ -227,6 +249,20 @@ impl ForwarderManager {
                 // and fail with "address already in use". A wait on an aborted
                 // task returns promptly (it's just the cleanup signal).
                 let _ = (&mut { handle }).await;
+                // v0.5.1: prune traffic-counter entries for this rule_id when
+                // the rule is genuinely gone (not just being restarted with a
+                // new fingerprint) AND no other live listener still references
+                // this rule_id (e.g. the UDP listener of a tcp_udp rule). This
+                // prevents orphaned bytes from poisoning future traffic batches.
+                let rule_id = m.fingerprint.rule_id;
+                if !desired_rule_ids.contains(&rule_id)
+                    && !self
+                        .listeners
+                        .values()
+                        .any(|live| live.fingerprint.rule_id == rule_id)
+                {
+                    self.counter.prune_rule(rule_id).await;
+                }
                 tracing::info!(
                     "stopped {:?}/{:?} listener on port {} for reconfiguration",
                     proto,
@@ -1047,5 +1083,131 @@ mod tests {
         assert!(mgr.listener_info_for_rule_tcp(9).is_none());
         // An unknown rule_id also returns None.
         assert!(mgr.listener_info_for_rule_tcp(999).is_none());
+    }
+
+    // ── v1.0.3 PR1: traffic counter poison-pill pruning ──
+
+    /// When a rule is deleted from the config, the counter entry for its
+    /// rule_id must be pruned so orphaned bytes don't poison future batches.
+    #[tokio::test]
+    async fn deleted_rule_prunes_traffic_counter() {
+        let counter = Arc::new(TrafficCounter::new());
+        let connections = Arc::new(ConnectionTracker::new());
+        let mut mgr = ForwarderManager::new(counter.clone(), connections.clone());
+
+        // Apply a config with one rule.
+        mgr.apply_config(&one_rule(40001, Protocol::Tcp, NodeTransport::Raw))
+            .await;
+        // Simulate traffic: accumulate bytes for rule 1.
+        counter.add(1, 100, 50).await;
+        assert!(counter.has_rule(1).await);
+
+        // Delete the rule: apply an empty config.
+        mgr.apply_config(&NodeConfigResponse {
+            listeners: Vec::new(),
+        })
+        .await;
+
+        // Counter must be pruned.
+        assert!(
+            !counter.has_rule(1).await,
+            "orphan rule_id must be pruned after rule deletion"
+        );
+    }
+
+    /// When a tcp_udp rule is changed to tcp-only (one listener removed), the
+    /// remaining listener's counter must NOT be pruned — only the deleted
+    /// listener is gone, but the rule itself still exists.
+    #[tokio::test]
+    async fn tcp_udp_to_tcp_does_not_prune_surviving_rule_counter() {
+        let counter = Arc::new(TrafficCounter::new());
+        let connections = Arc::new(ConnectionTracker::new());
+        let mut mgr = ForwarderManager::new(counter.clone(), connections.clone());
+
+        // tcp_udp rule: two listeners share rule_id 1.
+        let tcp_udp_cfg = NodeConfigResponse {
+            listeners: vec![
+                ListenerConfig {
+                    rule_id: 1,
+                    port: 40001,
+                    protocol: Protocol::Tcp,
+                    node_transport: NodeTransport::Raw,
+                    ws_path: None,
+                    targets: vec!["127.0.0.1:1".into()],
+                    load_balance_strategy: LoadBalanceStrategy::First,
+                    upload_limit_bps: None,
+                    download_limit_bps: None,
+                },
+                ListenerConfig {
+                    rule_id: 1,
+                    port: 40001,
+                    protocol: Protocol::Udp,
+                    node_transport: NodeTransport::Raw,
+                    ws_path: None,
+                    targets: vec!["127.0.0.1:1".into()],
+                    load_balance_strategy: LoadBalanceStrategy::First,
+                    upload_limit_bps: None,
+                    download_limit_bps: None,
+                },
+            ],
+        };
+        mgr.apply_config(&tcp_udp_cfg).await;
+        counter.add(1, 200, 100).await;
+        assert!(counter.has_rule(1).await);
+
+        // Change to tcp-only: remove the UDP listener for rule 1.
+        let tcp_cfg = NodeConfigResponse {
+            listeners: vec![ListenerConfig {
+                rule_id: 1,
+                port: 40001,
+                protocol: Protocol::Tcp,
+                node_transport: NodeTransport::Raw,
+                ws_path: None,
+                targets: vec!["127.0.0.1:2".into()],
+                load_balance_strategy: LoadBalanceStrategy::First,
+                upload_limit_bps: None,
+                download_limit_bps: None,
+            }],
+        };
+        mgr.apply_config(&tcp_cfg).await;
+
+        // Rule 1 still exists (TCP listener survived) — counter must NOT be pruned.
+        assert!(
+            counter.has_rule(1).await,
+            "surviving rule's counter must not be pruned when only the UDP listener is removed"
+        );
+    }
+
+    /// A dead listener whose rule was also removed from the config must have
+    /// its counter pruned, same as a normally-stopped listener.
+    #[tokio::test]
+    async fn dead_listener_prunes_counter_when_rule_removed() {
+        let counter = Arc::new(TrafficCounter::new());
+        let connections = Arc::new(ConnectionTracker::new());
+        let mut mgr = ForwarderManager::new(counter.clone(), connections.clone());
+
+        // Apply config with rule 1.
+        mgr.apply_config(&one_rule(40001, Protocol::Tcp, NodeTransport::Raw))
+            .await;
+        counter.add(1, 50, 25).await;
+
+        // Simulate a dead listener: abort its JoinHandle so is_finished() is true.
+        let key = (40001, Protocol::Tcp, NodeTransport::Raw);
+        if let Some(m) = mgr.listeners.get(&key) {
+            m.handle.abort();
+            // Briefly wait for the abort to propagate.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        // Apply empty config — step 1 finds the dead listener and removes it.
+        mgr.apply_config(&NodeConfigResponse {
+            listeners: Vec::new(),
+        })
+        .await;
+
+        assert!(
+            !counter.has_rule(1).await,
+            "dead listener for a removed rule must prune its counter entry"
+        );
     }
 }

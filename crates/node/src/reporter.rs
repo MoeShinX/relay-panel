@@ -69,6 +69,20 @@ impl TrafficCounter {
             })
             .collect()
     }
+
+    /// Remove all accumulated bytes for a single rule from the counter. Used
+    /// when a listener is permanently stopped (rule deleted or no longer in the
+    /// config) so that orphaned bytes don't poison future traffic batches — a
+    /// stale rule_id causes the panel to atomically reject the entire batch.
+    pub async fn prune_rule(&self, rule_id: i64) {
+        self.data.lock().await.remove(&rule_id);
+    }
+
+    /// Test-only: check whether a rule_id has any accumulated bytes.
+    #[cfg(test)]
+    pub async fn has_rule(&self, rule_id: i64) -> bool {
+        self.data.lock().await.contains_key(&rule_id)
+    }
 }
 
 /// Snapshot of [`TrafficCounter`] at one instant. Drop without calling
