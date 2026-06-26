@@ -96,7 +96,7 @@ impl RuleRepository for PgRepository {
     ) -> Result<(), DbError> {
         // Scope guard: under Owner scope, no-op unless the rule is owned by uid.
         if let Some(uid) = scope.owner_id() {
-            let owned: Option<(i64,)> =
+            let owned: Option<(i32,)> =
                 sqlx::query_as("SELECT 1 FROM forward_rules WHERE id = $1 AND uid = $2")
                     .bind(rule_id)
                     .bind(uid)
