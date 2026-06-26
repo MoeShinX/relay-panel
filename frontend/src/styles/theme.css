@@ -1,48 +1,50 @@
-/* RelayPanel global theme — clean, professional admin panel.
-   Inspired by NyanPass: white/light-gray bg, ample whitespace,
-   comfortable table rows, muted accents. No marketing glitz. */
+/* RelayPanel global theme — "石墨靛蓝 / Graphite + Indigo".
+   Near-black graphite sidebar, indigo accent, larger radii, hairline
+   borders. Premium admin look (Linear / Vercel direction), no template feel.
+   Component colors are driven by styles/antdTheme.ts; this file owns the
+   layout chrome + custom (non-antd) elements. */
 
 :root {
   /* Layout */
-  --rp-sidebar-bg: #001529;
+  --rp-sidebar-bg: #18181b;
   --rp-sidebar-width: 220px;
   --rp-header-height: 56px;
   --rp-content-padding: 24px;
 
   /* Colors — muted, not garish */
-  --rp-bg: #f5f6f8;
+  --rp-bg: #fafafa;
   --rp-card-bg: #ffffff;
-  --rp-border: #e8eaed;
-  --rp-text: #1f2329;
+  --rp-border: #ececef;
+  --rp-text: #18181b;
   --rp-text-secondary: #646a73;
   --rp-text-tertiary: #8f959e;
 
-  /* Accents */
-  --rp-primary: #1677ff;
-  --rp-primary-bg: #e8f3ff;
-  --rp-success: #00a878;
-  --rp-warning: #ed7b2f;
-  --rp-danger: #f54a45;
+  /* Accents — indigo */
+  --rp-primary: #6366f1;
+  --rp-primary-bg: #eef2ff;
+  --rp-success: #059669;
+  --rp-warning: #d97706;
+  --rp-danger: #ef4444;
 
   /* Tags — desaturated for admin comfort */
-  --rp-tag-tcp: #1677ff;
-  --rp-tag-udp: #722ed1;
-  --rp-tag-in: #389e0d;
-  --rp-tag-out: #08979c;
-  --rp-tag-admin: #d48806;
+  --rp-tag-tcp: #6366f1;
+  --rp-tag-udp: #7c3aed;
+  --rp-tag-in: #059669;
+  --rp-tag-out: #0d9488;
+  --rp-tag-admin: #d97706;
 
   /* Radii & shadows — subtle */
-  --rp-radius: 6px;
-  --rp-radius-sm: 4px;
+  --rp-radius: 10px;
+  --rp-radius-sm: 8px;
   --rp-shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
   --rp-shadow: 0 2px 8px rgba(0,0,0,0.06);
 
   /* Table */
-  --rp-table-header-bg: #fafbfc;
-  --rp-table-row-hover: #f0f7ff;
+  --rp-table-header-bg: #fafafa;
+  --rp-table-row-hover: #f5f5ff;
 
   /* Font */
-  --rp-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+  --rp-font: "Noto Sans SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
   --rp-font-mono: "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas,
     "Courier New", monospace;
@@ -69,7 +71,7 @@ html, body, #root {
 }
 .ant-table-thead > tr > th {
   background: var(--rp-table-header-bg) !important;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--rp-text-secondary);
   border-bottom: 1px solid var(--rp-border) !important;
 }
@@ -126,7 +128,7 @@ html, body, #root {
 /* ---- Layout helpers ---- */
 .rp-page-title {
   font-size: 18px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--rp-text);
   margin: 0 0 16px 0;
   display: flex;
@@ -152,7 +154,7 @@ html, body, #root {
 }
 .rp-stat-card .ant-statistic-content {
   font-size: 28px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 /* Mono fields in tables */

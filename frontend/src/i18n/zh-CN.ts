@@ -439,7 +439,7 @@ export const zhCN = {
   registrationSettingsHint: '开启后，用户可自行注册账户并绑定默认套餐。',
   // v0.4.10 PR4: password reset + forced change
   forcePasswordChange: '请修改密码',
-  forcePasswordChangeDesc: '管理员已重置你的密码。请设置新密码后重新登录，期间无法使用其他功能。',
+  forcePasswordChangeDesc: '管理员要求你设置新密码后才能继续。请设置新密码并重新登录，期间无法使用其他功能。',
   resetPassword: '重置密码',
   confirmReset: '确认重置',
   resetPasswordWarning: '重置后该用户的所有登录会话立即失效，需使用新的临时密码重新登录。',
