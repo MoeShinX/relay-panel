@@ -484,7 +484,7 @@ export default function Rules() {
           </Button>
           <Button size="small" type="text" icon={<EditOutlined />} onClick={() => handleEdit(r)}>{t('edit')}</Button>
           <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => handleCopy(r)}>{t('copy')}</Button>
-          <Button size="small" type="text" icon={<DownloadOutlined />} onClick={() => handleExportOne(r)} />
+          <Button size="small" type="text" icon={<DownloadOutlined />} onClick={() => handleExportOne(r)}>{t('export')}</Button>
           {/* v0.4.9: diagnosis is TCP-only — disable for pure-UDP rules. */}
           <Button size="small" type="text" icon={<MedicineBoxOutlined />} disabled={r.protocol === 'udp'} onClick={() => handleDiagnose(r)} title={r.protocol === 'udp' ? t('diagnoseUdpUnsupported') : t('diagnose')}>{t('diagnose')}</Button>
           <Popconfirm title={t('deleteRuleConfirm')} onConfirm={() => handleDelete(r.id)}>

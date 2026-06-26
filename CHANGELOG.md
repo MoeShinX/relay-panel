@@ -5,6 +5,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [1.0.3] - 2026-06-26
+
+### Fixed
+
+- **Node-side traffic counter poison-pill.** When a rule was deleted, stale
+  bytes in the node's `TrafficCounter` were never pruned. The next report batch
+  was rejected atomically, the node kept retrying the same bytes, and traffic
+  billing froze until node restart. The counter entry is now pruned when its
+  rule disappears from the config and no live listener still references it.
+- **Per-rule export button had no label.** The icon-only export button in the
+  rules action column now shows 导出 / Export, matching its siblings.
+
+### Changed
+
+- **New 石墨靛蓝 / Graphite + Indigo UI theme.** Graphite sidebar, indigo accent,
+  larger radii, hairline borders, flatter buttons — replacing the default
+  deep-blue admin-template look. antd v6 token-driven; no business components
+  touched.
+- **Self-hosted Noto Sans SC (思源黑体)** as the UI font, for crisp and
+  consistent CJK rendering across platforms.
+- **Forced password-change notice reworded** (zh + en) to cover both the
+  admin-reset and create-with-must-change cases, instead of only "an admin
+  reset your password".
+
+---
+
 ## [1.0.2] - 2026-06-26
 
 ### Fixed

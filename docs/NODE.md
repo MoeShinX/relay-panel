@@ -77,7 +77,7 @@ server where you copy the binary over manually).
 ```bash
 # 1. Download the right binary for your arch (replace with your release version)
 ARCH=amd64   # or arm64
-VERSION=1.0.2
+VERSION=1.0.3
 curl -fL -o relay-node \
   "https://github.com/MoeShinX/relay-panel/releases/download/v${VERSION}/relay-node-linux-${ARCH}"
 
@@ -179,7 +179,7 @@ After install:
 ```bash
 # 1. Version should print instantly and exit (does NOT start the service)
 timeout 3 /opt/relay-node/relay-node --version
-# expected: relay-node 1.0.2
+# expected: relay-node 1.0.3
 
 # 2. Service status
 systemctl status relay-node
@@ -189,7 +189,7 @@ journalctl -u relay-node -f
 ```
 
 In the logs you should see:
-- `RelayNode 1.0.2 starting, panel=...`
+- `RelayNode 1.0.3 starting, panel=...`
 - `websocket connected` (if your reverse proxy supports WS)
 - `TCP listening on <port> (rule <id>)` / `UDP listening on ...` for each rule
 - `report_traffic HTTP 200` (the per-report status line; the detailed per-cycle
@@ -351,7 +351,7 @@ directly and install by hand (see [Manual install](#option-b-manual-install)):
 
 ```bash
 # Example: pin to a specific version on amd64
-VERSION=1.0.2
+VERSION=1.0.3
 ARCH=amd64   # or arm64
 curl -fL -o relay-node \
   "https://github.com/MoeShinX/relay-panel/releases/download/v${VERSION}/relay-node-linux-${ARCH}"
