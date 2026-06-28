@@ -141,9 +141,6 @@ pub async fn delete_group(
     Path(id): Path<i64>,
 ) -> Json<ApiResponse<()>> {
     match crate::service::groups::delete_group(state.db.as_ref(), id).await {
-        // v0.3.6: 0 rows affected = nothing existed at that id. Return 404 and
-        // do NOT broadcast config_changed — a no-op delete shouldn't trigger a
-        // node re-fetch. The success branch only runs when a real row changed.
         Ok(false) => Json(err(404, "Not found")),
         Ok(true) => {
             tracing::warn!(
@@ -153,6 +150,10 @@ pub async fn delete_group(
                 actor_admin = true,
                 "destructive op"
             );
+            // v1.0.4: close WS connections for the deleted group so nodes
+            // stop reporting. Node status entries naturally expire via the
+            // existing 2-minute timeout sweep.
+            state.node_connections.close_group(id).await;
             state
                 .node_connections
                 .broadcast_all(r#"{"type":"config_changed"}"#)
@@ -160,6 +161,15 @@ pub async fn delete_group(
             Json(ApiResponse::success(()))
         }
         Err(e) => {
+            if let Some(in_use) = e.downcast_ref::<crate::service::groups::GroupInUseError>() {
+                return Json(err(
+                    409,
+                    format!(
+                        "该分组仍被 {} 条规则使用，请先迁移规则。",
+                        in_use.rule_count
+                    ),
+                ));
+            }
             tracing::error!("delete_group {}: delete_group failed: {}", id, e);
             Json(err(500, "database error"))
         }

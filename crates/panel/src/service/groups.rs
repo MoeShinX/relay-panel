@@ -110,10 +110,41 @@ pub async fn update_group(
     }
 }
 
-/// Delete an admin-owned device group. Returns `Ok(true)` when a row was
-/// deleted, `Ok(false)` when nothing existed at that id (the handler maps that
-/// to 404 + no broadcast).
-pub async fn delete_group(db: &dyn Repository, id: i64) -> Result<bool, DbError> {
+/// v1.0.4: error returned when a group cannot be deleted because rules
+/// still reference it.
+#[derive(Debug)]
+pub struct GroupInUseError {
+    pub group_id: i64,
+    pub rule_count: i64,
+}
+
+impl std::fmt::Display for GroupInUseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "group {} still referenced by {} rule(s)",
+            self.group_id, self.rule_count
+        )
+    }
+}
+
+impl std::error::Error for GroupInUseError {}
+
+/// Delete an admin-owned device group. Before deleting, checks that no
+/// forward_rules reference this group via device_group_in, device_group_out,
+/// or fallback_group. Returns `GroupInUseError` with the rule count if any
+/// references exist, so the handler can return a clear 409.
+pub async fn delete_group(
+    db: &dyn Repository,
+    id: i64,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    let count = db.count_rules_by_group(id).await?;
+    if count > 0 {
+        return Err(Box::new(GroupInUseError {
+            group_id: id,
+            rule_count: count,
+        }));
+    }
     Ok(db.delete_group(id, &ResourceScope::All).await? > 0)
 }
 

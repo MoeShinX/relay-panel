@@ -538,7 +538,7 @@ export default function Rules() {
   };
 
   const renderTargetsEditor = () => (
-    <Form.List name="targets" initialValue={[]}>
+    <Form.List name="targets" initialValue={[{ host: '', port: undefined as unknown as number, enabled: true }]}>
       {(fields, { add, remove, move }) => (
         <Space direction="vertical" style={{ width: '100%' }}>
           <Text strong>{t('targets')}</Text>

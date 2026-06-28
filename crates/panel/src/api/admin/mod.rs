@@ -714,6 +714,63 @@ mod tests {
         .await;
     }
 
+    // ── v1.0.4: group delete safety ──
+
+    /// Group with rules referencing it returns 409, not 200.
+    #[tokio::test]
+    async fn delete_group_with_rules_returns_409() {
+        let (state, pool) = test_state().await;
+        // Create a group and a rule that references it.
+        add_group(&pool, 10, 1, "test-in").await;
+        add_rule(&pool, 100, 1, 10, 20000, 0).await;
+
+        let Json(resp) =
+            super::delete_group(AdminOnly { user_id: 1 }, State(state.clone()), Path(10)).await;
+        assert_eq!(resp.code, 409, "group with rules must be rejected");
+        assert!(
+            resp.message.contains("条规则"),
+            "message must include rule count"
+        );
+    }
+
+    /// An empty group can be deleted successfully.
+    #[tokio::test]
+    async fn delete_empty_group_succeeds() {
+        let (state, pool) = test_state().await;
+        add_group(&pool, 20, 1, "empty-in").await;
+
+        let Json(resp) =
+            super::delete_group(AdminOnly { user_id: 1 }, State(state.clone()), Path(20)).await;
+        assert_eq!(
+            resp.code, 0,
+            "empty group must be deletable: {}",
+            resp.message
+        );
+    }
+
+    /// v1.0.4: count_rules_by_group detects rule references correctly.
+    #[tokio::test]
+    async fn count_rules_by_group_detects_rule_references() {
+        let (state, pool) = test_state().await;
+        add_group(&pool, 30, 1, "node-group").await;
+        add_rule(&pool, 300, 1, 30, 20001, 0).await;
+
+        let count = state.db.count_rules_by_group(30).await.unwrap();
+        assert_eq!(count, 1, "group 30 should have 1 rule referencing it");
+
+        // After deleting the rule, the group is free.
+        state
+            .db
+            .delete_rule(300, &crate::db::repo::ResourceScope::All)
+            .await
+            .unwrap();
+        let count2 = state.db.count_rules_by_group(30).await.unwrap();
+        assert_eq!(
+            count2, 0,
+            "after rule deletion, group should have 0 references"
+        );
+    }
+
     #[tokio::test]
     async fn delete_group_nonexistent_returns_404_no_broadcast() {
         let (state, _pool) = test_state().await;

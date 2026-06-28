@@ -194,6 +194,13 @@ export const zhCN = {
   failedCreateGroup: '创建分组失败',
   tokenCopied: '令牌已复制',
   groupHelpText: '每个分组有一个节点令牌。运行 relay-node 并设置 NODE_TOKEN=<令牌> 即可注册转发节点。',
+  nodes: '节点',
+  nodesInGroup: '该分组中的节点',
+  noNodesInGroup: '暂无节点加入该分组.',
+  addNode: '添加节点',
+  groupInUse: '该分组仍被规则使用，请先迁移规则。',
+  failedDeleteGroup: '删除分组失败。',
+  // v1.0.4 end
 
   // Users page
   banned: '已封禁',

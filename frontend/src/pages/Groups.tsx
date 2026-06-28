@@ -1,8 +1,8 @@
 import { Table, Button, Modal, Form, Input, Select, Space, message, Popconfirm, Typography, Tag, Tooltip, Alert } from 'antd';
-import { PlusOutlined, ReloadOutlined, CopyOutlined, EditOutlined, CloudServerOutlined, CodeOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, CopyOutlined, EditOutlined, CloudServerOutlined, CodeOutlined, ApiOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import api from '../api/client';
-import type { ApiEnvelope, DeviceGroup, User } from '../api/types';
+import type { ApiEnvelope, DeviceGroup, User, NodeStatus } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { copyText } from '../utils/clipboard';
 import { useAuth } from '../auth/useAuth';
@@ -11,12 +11,10 @@ const { Text } = Typography;
 
 const INSTALL_SCRIPT_URL = 'https://raw.githubusercontent.com/MoeShinX/relay-panel/main/scripts/relay-node-install.sh';
 
-/** Build the one-line install command for a node. */
 function buildInstallCommand(token: string, panelUrl: string): string {
   return `bash <(curl -fsSL ${INSTALL_SCRIPT_URL}) -t ${token} -u ${panelUrl}`;
 }
 
-/** Check if we're on a localhost address. */
 function isLocalhost(): boolean {
   const h = window.location.hostname;
   return h === 'localhost' || h === '127.0.0.1' || h === '::1';
@@ -27,6 +25,7 @@ export default function Groups() {
   const { isAdmin } = useAuth();
   const [groups, setGroups] = useState<DeviceGroup[]>([]);
   const [users, setUsers] = useState<User[]>([]);
+  const [nodes, setNodes] = useState<NodeStatus[]>([]);
   const [loading, setLoading] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -39,30 +38,40 @@ export default function Groups() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      // v0.4.10: /admin/users is admin-only and fetched separately so a regular
-      // user doesn't 403 and block the groups list. The owner selector is
-      // hidden for non-admins (backend forces owner = caller).
       const g = await api.get<unknown, ApiEnvelope<DeviceGroup[]>>('/groups');
       setGroups(g.data || []);
       if (isAdmin) {
         try {
           const u = await api.get<unknown, ApiEnvelope<User[]>>('/admin/users');
           setUsers(u.data || []);
-        } catch {
-          setUsers([]);
-        }
+        } catch { setUsers([]); }
+        // v1.0.4: fetch node status for expandable node lists.
+        try {
+          const n = await api.get<unknown, ApiEnvelope<NodeStatus[]>>('/nodes');
+          setNodes(n.data || []);
+        } catch { setNodes([]); }
       } else {
         setUsers([]);
+        try {
+          const n = await api.get<unknown, ApiEnvelope<NodeStatus[]>>('/nodes/shared');
+          setNodes(n.data || []);
+        } catch { setNodes([]); }
       }
     } finally { setLoading(false); }
   }, [isAdmin]);
 
   useEffect(() => { load(); }, [load]);
 
+  // ── Node helpers ──
+  const nodesByGroup = useCallback((groupId: number): NodeStatus[] => {
+    return nodes.filter(n => n.group_id === groupId);
+  }, [nodes]);
+
+  const nodeCount = useCallback((groupId: number) => nodesByGroup(groupId).length, [nodesByGroup]);
+  const onlineCount = useCallback((groupId: number) => nodesByGroup(groupId).filter(n => n.online).length, [nodesByGroup]);
+
   const handleCreate = async (values: { name: string; group_type: string; connect_host: string; port_range: string; owner_uid?: number | null }) => {
     try {
-      // owner_uid is admin-only (create on behalf of another user). Omit when
-      // empty so the request stays clean; the backend ignores it for non-admins.
       const payload = { ...values, owner_uid: values.owner_uid || undefined };
       const res = await api.post<unknown, ApiEnvelope<DeviceGroup>>('/groups', payload);
       if (res.code !== 0) { message.error(res.message); return; }
@@ -97,17 +106,22 @@ export default function Groups() {
   };
 
   const handleDelete = async (id: number) => {
-    await api.delete(`/groups/${id}`);
-    message.success(t('groupDeleted'));
-    load();
+    try {
+      await api.delete(`/groups/${id}`);
+      message.success(t('groupDeleted'));
+      load();
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { code?: number; message?: string } } };
+      if (err?.response?.data?.code === 409) {
+        message.error(err.response.data.message || t('groupInUse'));
+      } else {
+        message.error(t('failedDeleteGroup'));
+      }
+    }
   };
 
   const doCopy = async (text: string, successMsg: string) => {
-    // Validate command looks correct before copying
-    if (!text || text.length < 20) {
-      message.error(t('copyFailed'));
-      return;
-    }
+    if (!text || text.length < 20) { message.error(t('copyFailed')); return; }
     const ok = await copyText(text);
     if (ok) {
       message.success(successMsg);
@@ -131,26 +145,12 @@ export default function Groups() {
       title: <span>{t('installCommandTitle')}</span>,
       body: (
         <>
-{(isLocalhost() || panelUrl.includes("127.0.0.1") || panelUrl.includes("localhost") || panelUrl.includes("0.0.0.0")) && (
-            <Alert
-              type="warning"
-              showIcon
-              style={{ marginBottom: 12 }}
-              message={t('localhostWarning')}
-            />
+          {(isLocalhost() || panelUrl.includes("127.0.0.1") || panelUrl.includes("localhost") || panelUrl.includes("0.0.0.0")) && (
+            <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={t('localhostWarning')} />
           )}
-          <Input.TextArea
-            value={cmd}
-            readOnly
-            autoSize={{ minRows: 3, maxRows: 5 }}
-            style={{ fontFamily: 'var(--rp-font-mono)', fontSize: 12 }}
-          />
+          <Input.TextArea value={cmd} readOnly autoSize={{ minRows: 3, maxRows: 5 }} style={{ fontFamily: 'var(--rp-font-mono)', fontSize: 12 }} />
           <div style={{ textAlign: 'right', marginTop: 8 }}>
-            <Button
-              type="primary"
-              icon={<CopyOutlined />}
-              onClick={() => doCopy(cmd, t('installCommandCopied'))}
-            >
+            <Button type="primary" icon={<CopyOutlined />} onClick={() => doCopy(cmd, t('installCommandCopied'))}>
               {t('copyInstallCommand')}
             </Button>
           </div>
@@ -169,12 +169,31 @@ export default function Groups() {
     }
   };
 
+  // v1.0.4: create form only shows in/monitor (no out/egress).
+  const createGroupTypeOptions = [
+    { value: 'in', label: t('inboundListener') },
+    { value: 'monitor', label: t('typeMonitor') },
+  ];
+  const allGroupTypeOptions = [
+    { value: 'in', label: t('inboundListener') },
+    { value: 'out', label: t('outboundEgress') },
+    { value: 'monitor', label: t('typeMonitor') },
+  ];
+
   const columns = [
     { title: t('id'), dataIndex: 'id', key: 'id', width: 60 },
     { title: t('name'), dataIndex: 'name', key: 'name' },
     {
       title: t('type'), dataIndex: 'group_type', key: 'group_type',
       render: (gt: string) => <Tag color={typeColor(gt)}>{gt.toUpperCase()}</Tag>,
+    },
+    {
+      title: t('nodes'), key: 'nodes', width: 100,
+      render: (_: unknown, g: DeviceGroup) => {
+        const total = nodeCount(g.id);
+        const online = onlineCount(g.id);
+        return <span>{total > 0 ? `${online}/${total}` : '-'}</span>;
+      },
     },
     {
       title: t('nodeToken'), dataIndex: 'token', key: 'token',
@@ -202,11 +221,39 @@ export default function Groups() {
     },
   ];
 
-  const groupTypeOptions = [
-    { value: 'in', label: t('inboundListener') },
-    { value: 'out', label: t('outboundEgress') },
-    { value: 'monitor', label: t('typeMonitor') },
-  ];
+  const expandedRowRender = (g: DeviceGroup) => {
+    const groupNodes = nodesByGroup(g.id);
+    if (groupNodes.length === 0) {
+      return (
+        <div style={{ padding: '8px 0', color: 'var(--rp-text-tertiary)', fontSize: 13 }}>
+          {t('noNodesInGroup')}
+          <Button size="small" type="link" icon={<ApiOutlined />} style={{ marginLeft: 12 }} onClick={() => showInstallCommand(g)}>
+            {t('addNode')}
+          </Button>
+        </div>
+      );
+    }
+    return (
+      <div style={{ padding: 4 }}>
+        <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>{t('nodesInGroup')} ({groupNodes.length})</Text>
+          <Button size="small" icon={<ApiOutlined />} onClick={() => showInstallCommand(g)}>{t('addNode')}</Button>
+        </div>
+        <Table
+          dataSource={groupNodes}
+          rowKey={(n: NodeStatus) => n.node_id ?? `${n.public_ipv4 ?? n.public_ip}-${n.last_seen}`}
+          pagination={false}
+          size="small"
+          columns={[
+            { title: 'ID', key: 'node_id', width: 120, render: (v: string | undefined) => v ? <Text code style={{ fontSize: 11 }}>{v.slice(0, 8)}...{v.slice(-4)}</Text> : '-' },
+            { title: t('status'), dataIndex: 'online', key: 'online', width: 80, render: (v: boolean) => <Tag color={v ? 'green' : 'default'}>{v ? t('online') : t('offline')}</Tag> },
+            { title: t('nodeVersion'), dataIndex: 'node_version', key: 'version', width: 90, render: (v: string | undefined) => v ? <span className="rp-mono" style={{ fontSize: 12 }}>{v}</span> : '-' },
+            { title: t('lastSeen'), dataIndex: 'last_seen', key: 'last_seen', width: 120, render: (v: string | undefined) => v ? <span style={{ fontSize: 12 }}>{v}</span> : '-' },
+          ]}
+        />
+      </div>
+    );
+  };
 
   return (
     <>
@@ -217,21 +264,29 @@ export default function Groups() {
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>{t('addGroup')}</Button>
         </Space>
       </div>
-      <Table dataSource={groups} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 20 }} />
+      <Table
+        dataSource={groups}
+        columns={columns}
+        rowKey="id"
+        loading={loading}
+        pagination={{ pageSize: 20 }}
+        expandable={{
+          expandedRowRender,
+          rowExpandable: () => true,
+        }}
+      />
 
       <Modal title={t('addGroup')} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={() => createForm.submit()} okText={t('create')} cancelText={t('cancel')}>
         <Form form={createForm} onFinish={handleCreate} layout="vertical">
           <Form.Item name="name" label={t('name')} rules={[{ required: true }]}><Input placeholder="tokyo-node-1" /></Form.Item>
-          {/* v0.4.10: admin-only owner selector (create on behalf of another
-              user; omitted → owned by the caller). Backend ignores a non-admin
-              value. Regular users always own what they create. */}
           {isAdmin && (
             <Form.Item name="owner_uid" label={t('owner')} extra={t('ownerHint')}>
               <Select allowClear placeholder={t('ownerSelf')} options={users.map(u => ({ value: u.id, label: u.username }))} />
             </Form.Item>
           )}
+          {/* v1.0.4: new groups cannot be type 'out' (egress). */}
           <Form.Item name="group_type" label={t('type')} rules={[{ required: true }]} initialValue="in">
-            <Select options={groupTypeOptions} />
+            <Select options={createGroupTypeOptions} />
           </Form.Item>
           <Form.Item name="connect_host" label={t('connectHost')} rules={[{ required: true }]}><Input placeholder="1.2.3.4 or node.example.com" /></Form.Item>
           <Form.Item name="port_range" label={t('portRange')} rules={[{ required: true }]} initialValue="10000-65535"><Input placeholder="10000-65535" /></Form.Item>
@@ -241,19 +296,13 @@ export default function Groups() {
       <Modal title={t('editGroup')} open={editOpen} onCancel={() => setEditOpen(false)} onOk={() => editForm.submit()} okText={t('save')} cancelText={t('cancel')}>
         <Form form={editForm} onFinish={handleUpdate} layout="vertical">
           <Form.Item name="name" label={t('name')}><Input /></Form.Item>
-          <Form.Item name="group_type" label={t('type')}><Select options={groupTypeOptions} /></Form.Item>
+          <Form.Item name="group_type" label={t('type')}><Select options={allGroupTypeOptions} /></Form.Item>
           <Form.Item name="connect_host" label={t('connectHost')}><Input /></Form.Item>
           <Form.Item name="port_range" label={t('portRange')}><Input /></Form.Item>
         </Form>
       </Modal>
 
-      <Modal
-        title={cmdModalContent.title}
-        open={cmdModalOpen}
-        onCancel={() => setCmdModalOpen(false)}
-        footer={null}
-        width={580}
-      >
+      <Modal title={cmdModalContent.title} open={cmdModalOpen} onCancel={() => setCmdModalOpen(false)} footer={null} width={580}>
         {cmdModalContent.body}
       </Modal>
     </>

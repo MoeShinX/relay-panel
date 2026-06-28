@@ -29,8 +29,8 @@ export function NodeDetailDrawer({ row, open, onClose, isAdmin, panelProtocol, o
     const gid = row.group_id;
     const nid = row.node_id;
     const url = nid
-      ? `/node_status/${gid}?node_id=${encodeURIComponent(nid)}`
-      : `/node_status/${gid}`;
+      ? `/nodes/${gid}?node_id=${encodeURIComponent(nid)}`
+      : `/nodes/${gid}`;
     try {
       await api.delete(url);
       message.success(t('nodeStatusDeleted'));

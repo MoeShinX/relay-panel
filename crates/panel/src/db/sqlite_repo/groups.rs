@@ -203,6 +203,18 @@ impl GroupRepository for SqliteRepository {
         Ok(result.rows_affected())
     }
 
+    async fn count_rules_by_group(&self, id: i64) -> Result<i64, DbError> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM forward_rules \
+             WHERE device_group_in = ? OR device_group_out = ?",
+        )
+        .bind(id)
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.0)
+    }
+
     async fn delete_group(&self, id: i64, scope: &ResourceScope) -> Result<u64, DbError> {
         let result = match scope.owner_id() {
             None => sqlx::query("DELETE FROM device_groups WHERE id = ?").bind(id),

@@ -393,6 +393,11 @@ pub trait GroupRepository: Send + Sync {
         scope: &ResourceScope,
         new_token: &str,
     ) -> Result<u64, DbError>;
+    /// v1.0.4: count how many forward_rules reference this group via
+    /// device_group_in, device_group_out, or fallback_group. Used as a
+    /// pre-delete safety check so the admin sees a clear 409 instead of
+    /// a cryptic FK violation or orphaned references.
+    async fn count_rules_by_group(&self, id: i64) -> Result<i64, DbError>;
     async fn delete_group(&self, id: i64, scope: &ResourceScope) -> Result<u64, DbError>;
     async fn delete_groups_by_uid(&self, uid: i64) -> Result<u64, DbError>;
 }

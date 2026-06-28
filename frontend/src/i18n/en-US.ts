@@ -195,6 +195,13 @@ export const enUS: Dict = {
   failedCreateGroup: 'Failed to create group',
   tokenCopied: 'Token copied',
   groupHelpText: 'Each group has a node token. Run relay-node with NODE_TOKEN=<token> to enroll a forwarding node.',
+  nodes: 'Nodes',
+  nodesInGroup: 'Nodes in this group',
+  noNodesInGroup: 'No nodes in this group.',
+  addNode: 'Add node',
+  groupInUse: 'This group is still referenced by rules. Please migrate them first.',
+  failedDeleteGroup: 'Failed to delete group.',
+  // v1.0.4 end
 
   // Users page
   banned: 'banned',
