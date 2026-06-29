@@ -115,6 +115,10 @@ pub struct DeviceGroup {
     pub region: Option<String>,
     pub line_type: Option<String>,
     pub remark: Option<String>,
+    /// v1.0.8: traffic billing multiplier for this line. Real bytes are stored
+    /// on forward_rules / users; users are CHARGED `real * rate` (rounded) in
+    /// apply_traffic_batch. 1.0 = bill what you use. Range 0.1..=100.
+    pub rate: f64,
     pub created_at: String,
 }
 

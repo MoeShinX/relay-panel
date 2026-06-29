@@ -4,7 +4,7 @@ import { PlusOutlined, ReloadOutlined, EditOutlined, ApiOutlined, CopyOutlined, 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api/client';
-import type { ApiEnvelope, ForwardRule, DeviceGroup, User, RuleTargetInput, DiagnoseResponse, NodeDiagnoseStatus, DiagnoseTargetResult, SharedGroupSummary } from '../api/types';
+import type { ApiEnvelope, ForwardRule, DeviceGroup, User, UserSelf, RuleTargetInput, DiagnoseResponse, NodeDiagnoseStatus, DiagnoseTargetResult, SharedGroupSummary } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { formatBytes } from '../utils/format';
 import { useAuth } from '../auth/useAuth';
@@ -96,6 +96,10 @@ export default function Rules() {
   // of a misleading empty inbound dropdown.
   const [sharedLoadFailed, setSharedLoadFailed] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
+  // v1.0.7: a regular user's own traffic quota (admins read each owner's quota
+  // from `users` instead). Used to flag rules whose owner is out of traffic —
+  // those rules stop forwarding even though their `paused` flag stays false.
+  const [selfQuota, setSelfQuota] = useState<{ used: number; limit: number } | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -142,8 +146,17 @@ export default function Rules() {
           // Non-fatal: owner column falls back to "#uid" labels.
           setUsers([]);
         }
+        setSelfQuota(null);
       } else {
         setUsers([]);
+        // v1.0.7: a regular user only ever sees their own rules, so one /user/me
+        // read gives the quota needed to flag all of them. Non-fatal on failure.
+        try {
+          const me = await api.get<unknown, ApiEnvelope<UserSelf>>('/user/me');
+          setSelfQuota(me.data ? { used: me.data.traffic_used, limit: me.data.traffic_limit } : null);
+        } catch {
+          setSelfQuota(null);
+        }
       }
       // v0.4.12 PR1: shared inbound groups (admin-owned) for regular users.
       // The endpoint wraps the payload in ApiResponse — a non-zero code is a
@@ -175,6 +188,17 @@ export default function Rules() {
 
   // User lookup map for the "owner" column.
   const userMap = new Map(users.map(u => [u.id, u.username]));
+  // v1.0.7: owner-quota lookup for the "traffic exhausted" status tag. Admins
+  // resolve each rule's owner from `users`; a regular user uses their own quota
+  // (their rules are all self-owned). traffic_limit === 0 means unlimited.
+  const userById = useMemo(() => new Map(users.map(u => [u.id, u])), [users]);
+  const ruleOverQuota = (r: ForwardRule): boolean => {
+    if (isAdmin) {
+      const u = userById.get(r.uid);
+      return !!u && u.traffic_limit > 0 && u.traffic_used >= u.traffic_limit;
+    }
+    return !!selfQuota && selfQuota.limit > 0 && selfQuota.used >= selfQuota.limit;
+  };
   // v0.4.9: group lookup map for the "group name" column + filter. Memoized so
   // the column render + filter options share one derivation.
   const groupMap = useMemo(() => new Map(groups.map(g => [g.id, g])), [groups]);
@@ -268,6 +292,14 @@ export default function Rules() {
   /** Export all rules as JSON download. */
   const handleExportAll = () => {
     downloadText(`relaypanel-rules-${new Date().toISOString().slice(0, 10)}.json`, buildExportJSON(rules));
+    message.success(t('exported'));
+  };
+
+  /** Export only the currently-selected rules as JSON download. */
+  const handleExportSelected = () => {
+    const selected = rules.filter(r => selectedRowKeys.includes(r.id));
+    if (selected.length === 0) return;
+    downloadText(`relaypanel-rules-selected-${new Date().toISOString().slice(0, 10)}.json`, buildExportJSON(selected));
     message.success(t('exported'));
   };
 
@@ -468,6 +500,11 @@ const IMPORT_DEFAULTS = {
         <Space size={4}>
           {protoTags(p)}
           {r.paused && <Tag color="red">{t('paused')}</Tag>}
+          {!r.paused && ruleOverQuota(r) && (
+            <Tooltip title={t('quotaExhaustedHint')}>
+              <Tag color="orange">{t('quotaExhausted')}</Tag>
+            </Tooltip>
+          )}
         </Space>
       ),
     },
@@ -638,6 +675,11 @@ const IMPORT_DEFAULTS = {
                 return { value: gid, label: g ? g.name : `${t('unknownGroup')} (#${gid})` };
               })}
           />
+          {selectedRowKeys.length > 0 && (
+            <Button icon={<DownloadOutlined />} onClick={handleExportSelected}>
+              {t('batchExport')} ({selectedRowKeys.length})
+            </Button>
+          )}
           {selectedRowKeys.length > 0 && (
             <Popconfirm
               title={t('batchDeleteConfirm').replace('{count}', String(selectedRowKeys.length))}

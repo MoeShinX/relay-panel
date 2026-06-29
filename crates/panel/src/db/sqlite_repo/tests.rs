@@ -922,7 +922,7 @@ async fn rule_list_active_for_config_filters_banned_paused_overquota() {
 #[tokio::test]
 async fn group_insert_then_find_by_token_round_trip() {
     let db = repo().await;
-    db.insert_group("gin", "in", "tok-abc", 1, "1.2.3.4", "20000-30000")
+    db.insert_group("gin", "in", "tok-abc", 1, "1.2.3.4", "20000-30000", 1.0)
         .await
         .unwrap();
     let g = db.find_by_token("tok-abc").await.unwrap().unwrap();
@@ -954,7 +954,7 @@ async fn group_insert_then_find_by_token_round_trip() {
 #[tokio::test]
 async fn group_update_token_returns_rows_affected() {
     let db = repo().await;
-    db.insert_group("gin", "in", "tok-1", 1, "", "")
+    db.insert_group("gin", "in", "tok-1", 1, "", "", 1.0)
         .await
         .unwrap();
     let g = db.find_by_token("tok-1").await.unwrap().unwrap();
@@ -2143,6 +2143,7 @@ async fn update_group_fields_owner_scope_rejects_wrong_owner() {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -2154,6 +2155,7 @@ async fn update_group_fields_owner_scope_rejects_wrong_owner() {
             10,
             &ResourceScope::Owner(3),
             Some("stolen"),
+            None,
             None,
             None,
             None,
@@ -2402,4 +2404,165 @@ async fn traffic_batch_single_entry_overflow() {
         .await
         .unwrap();
     assert!(matches!(results[0], TrafficEntryResult::Overflow));
+}
+
+// ── v1.0.8: device-group billing rate ──
+// rate multiplies the bytes CHARGED to the user; the rule's own counter keeps
+// REAL bytes (upload+download). Default 1.0 = bill what you use.
+
+/// Helper: seed alice + group `gid` with `rate` + rule `rid` on group `gid`
+/// owned by alice, with both rule and user counters starting at 0.
+async fn seed_group_with_rate(db: &crate::db::sqlite_repo::SqliteRepository, gid: i64, rate: f64) {
+    db.insert_user("alice", "h", 1).await.unwrap();
+    let alice = db.find_by_username("alice").await.unwrap().unwrap().id;
+    sqlx::query(
+        "INSERT INTO device_groups (id, name, group_type, token, uid, rate) \
+         VALUES (?, 'gin', 'in', ?, ?, ?)",
+    )
+    .bind(gid)
+    .bind(format!("tok-{gid}"))
+    .bind(alice)
+    .bind(rate)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO forward_rules \
+         (id, name, uid, listen_port, device_group_in, target_addr, target_port) \
+         VALUES (100, 'r100', ?, 20000, ?, '127.0.0.1', 80)",
+    )
+    .bind(alice)
+    .bind(gid)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn traffic_batch_rate_2_charges_user_double_rule_stays_real() {
+    let db = repo().await;
+    seed_group_with_rate(&db, 50, 2.0).await;
+    let alice = db.find_by_username("alice").await.unwrap().unwrap().id;
+
+    // 1000 up + 2000 down = 3000 real bytes.
+    let results = db
+        .apply_traffic_batch(
+            50,
+            &[TrafficEntry {
+                rule_id: 100,
+                upload: 1000,
+                download: 2000,
+            }],
+        )
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(matches!(results[0], TrafficEntryResult::Ok));
+
+    // Rule counter: REAL bytes (unchanged by rate).
+    let rule_t: (i64,) = sqlx::query_as("SELECT traffic_used FROM forward_rules WHERE id = 100")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(rule_t.0, 3000);
+    // User counter: BILLED = round(3000 * 2.0) = 6000.
+    let user_t: (i64,) = sqlx::query_as("SELECT traffic_used FROM users WHERE id = ?")
+        .bind(alice)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(user_t.0, 6000);
+}
+
+#[tokio::test]
+async fn traffic_batch_rate_1_is_unchanged_billing() {
+    // Regression: rate=1.0 must charge exactly the real bytes (the historical
+    // behavior). This guards against a future refactor that double-applies rate
+    // or skips the multiply when rate is 1.0.
+    let db = repo().await;
+    seed_group_with_rate(&db, 51, 1.0).await;
+    let alice = db.find_by_username("alice").await.unwrap().unwrap().id;
+
+    let results = db
+        .apply_traffic_batch(
+            51,
+            &[TrafficEntry {
+                rule_id: 100,
+                upload: 1000,
+                download: 2000,
+            }],
+        )
+        .await
+        .unwrap();
+    assert!(matches!(results[0], TrafficEntryResult::Ok));
+
+    let rule_t: (i64,) = sqlx::query_as("SELECT traffic_used FROM forward_rules WHERE id = 100")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let user_t: (i64,) = sqlx::query_as("SELECT traffic_used FROM users WHERE id = ?")
+        .bind(alice)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(rule_t.0, 3000);
+    assert_eq!(user_t.0, 3000);
+}
+
+#[tokio::test]
+async fn traffic_batch_rate_1_5_rounds_correctly() {
+    // 1000 + 2000 = 3000 real; 3000 * 1.5 = 4500.0 → round → 4500.
+    // Also covers the non-integer-input path (rate stored as REAL).
+    let db = repo().await;
+    seed_group_with_rate(&db, 52, 1.5).await;
+    let alice = db.find_by_username("alice").await.unwrap().unwrap().id;
+
+    let results = db
+        .apply_traffic_batch(
+            52,
+            &[TrafficEntry {
+                rule_id: 100,
+                upload: 1000,
+                download: 2000,
+            }],
+        )
+        .await
+        .unwrap();
+    assert!(matches!(results[0], TrafficEntryResult::Ok));
+
+    let rule_t: (i64,) = sqlx::query_as("SELECT traffic_used FROM forward_rules WHERE id = 100")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let user_t: (i64,) = sqlx::query_as("SELECT traffic_used FROM users WHERE id = ?")
+        .bind(alice)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(rule_t.0, 3000);
+    assert_eq!(user_t.0, 4500);
+
+    // Second batch: 1 up + 1 down = 2 real; 2 * 1.5 = 3.0 → 3 billed.
+    // Verifies round() (not truncation) and accumulation across batches.
+    db.apply_traffic_batch(
+        52,
+        &[TrafficEntry {
+            rule_id: 100,
+            upload: 1,
+            download: 1,
+        }],
+    )
+    .await
+    .unwrap();
+    let rule_t2: (i64,) = sqlx::query_as("SELECT traffic_used FROM forward_rules WHERE id = 100")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let user_t2: (i64,) = sqlx::query_as("SELECT traffic_used FROM users WHERE id = ?")
+        .bind(alice)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(rule_t2.0, 3002); // 3000 + 2 real
+    assert_eq!(user_t2.0, 4503); // 4500 + 3 billed
 }

@@ -375,9 +375,11 @@ pub trait GroupRepository: Send + Sync {
         uid: i64,
         connect_host: &str,
         port_range: &str,
+        rate: f64,
     ) -> Result<(), DbError>;
     async fn find_by_token_after_insert(&self, token: &str)
         -> Result<Option<DeviceGroup>, DbError>;
+    #[allow(clippy::too_many_arguments)]
     async fn update_group_fields(
         &self,
         id: i64,
@@ -386,6 +388,7 @@ pub trait GroupRepository: Send + Sync {
         group_type: Option<&str>,
         connect_host: Option<&str>,
         port_range: Option<&str>,
+        rate: Option<f64>,
     ) -> Result<u64, DbError>;
     async fn update_group_token(
         &self,

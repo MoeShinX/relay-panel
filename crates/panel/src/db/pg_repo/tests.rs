@@ -860,7 +860,7 @@ async fn pg_group_insert_then_find_by_token_round_trip() {
     let Some(db) = repo("group_rt").await else {
         return;
     };
-    db.insert_group("gin", "in", "tok-abc", 1, "1.2.3.4", "20000-30000")
+    db.insert_group("gin", "in", "tok-abc", 1, "1.2.3.4", "20000-30000", 1.0)
         .await
         .unwrap();
     let g = db.find_by_token("tok-abc").await.unwrap().unwrap();
@@ -889,7 +889,7 @@ async fn pg_group_update_token_returns_rows_affected() {
     let Some(db) = repo("group_tok").await else {
         return;
     };
-    db.insert_group("gin", "in", "tok-1", 1, "", "")
+    db.insert_group("gin", "in", "tok-1", 1, "", "", 1.0)
         .await
         .unwrap();
     let g = db.find_by_token("tok-1").await.unwrap().unwrap();
@@ -2056,6 +2056,7 @@ async fn pg_update_group_fields_owner_scope_rejects_wrong_owner() {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -2066,6 +2067,7 @@ async fn pg_update_group_fields_owner_scope_rejects_wrong_owner() {
             10,
             &ResourceScope::Owner(3),
             Some("stolen"),
+            None,
             None,
             None,
             None,

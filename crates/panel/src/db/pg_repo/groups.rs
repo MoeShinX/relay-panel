@@ -96,9 +96,11 @@ impl GroupRepository for PgRepository {
         uid: i64,
         connect_host: &str,
         port_range: &str,
+        rate: f64,
     ) -> Result<(), DbError> {
         sqlx::query(
-            "INSERT INTO device_groups (name, group_type, token, uid, connect_host, port_range) VALUES ($1, $2, $3, $4, $5, $6)",
+            "INSERT INTO device_groups (name, group_type, token, uid, connect_host, port_range, rate) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(name)
         .bind(group_type)
@@ -106,6 +108,7 @@ impl GroupRepository for PgRepository {
         .bind(uid)
         .bind(connect_host)
         .bind(port_range)
+        .bind(rate)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -131,6 +134,7 @@ impl GroupRepository for PgRepository {
         group_type: Option<&str>,
         connect_host: Option<&str>,
         port_range: Option<&str>,
+        rate: Option<f64>,
     ) -> Result<u64, DbError> {
         let mut sets: Vec<&str> = Vec::new();
         if name.is_some() {
@@ -144,6 +148,9 @@ impl GroupRepository for PgRepository {
         }
         if port_range.is_some() {
             sets.push("port_range = ");
+        }
+        if rate.is_some() {
+            sets.push("rate = ");
         }
 
         if sets.is_empty() {
@@ -186,6 +193,9 @@ impl GroupRepository for PgRepository {
             q = q.bind(v);
         }
         if let Some(v) = port_range {
+            q = q.bind(v);
+        }
+        if let Some(v) = rate {
             q = q.bind(v);
         }
         q = q.bind(id);

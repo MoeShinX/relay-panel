@@ -63,6 +63,10 @@ CREATE TABLE IF NOT EXISTS device_groups (
     region TEXT,
     line_type TEXT,
     remark TEXT,
+    -- v1.0.8: traffic billing multiplier for this line. Real bytes are stored
+    -- on forward_rules / users; users are CHARGED `real * rate` (rounded).
+    -- Default 1.0 = bill what you use. Range 0.1..=100 enforced at the API.
+    rate REAL NOT NULL DEFAULT 1.0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -1217,6 +1221,13 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
         .await?;
 
     tracing::info!("Migration 32: user_groups layer replaced by user_device_groups + all_device_groups flag");
+
+    // ── Migration 33: v1.0.8 device-group traffic billing rate ──
+    // Adds device_groups.rate (REAL NOT NULL DEFAULT 1.0). Real bytes stay on
+    // forward_rules / users; users are CHARGED real * rate (rounded) inside
+    // apply_traffic_batch. Existing rows backfill to 1.0 (unchanged billing).
+    add_column_if_missing(pool, "device_groups", "rate", "REAL NOT NULL DEFAULT 1.0").await?;
+    tracing::info!("Migration 33: device_groups.rate column present");
 
     Ok(())
 }

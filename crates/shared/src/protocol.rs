@@ -825,6 +825,12 @@ pub struct CreateGroupRequest {
     /// the caller owns the group.
     #[serde(default)]
     pub owner_uid: Option<i64>,
+    /// v1.0.8: traffic billing multiplier for this line. Users are charged
+    /// real bytes × rate (rounded) in apply_traffic_batch; rule/user byte
+    /// counters keep real bytes. Range 0.1..=100, default 1.0. The handler
+    /// clamps `None` to 1.0 and rejects out-of-range values with 400.
+    #[serde(default)]
+    pub rate: Option<f64>,
 }
 
 /// Update an existing group. All fields optional. Token is NOT updatable
@@ -835,6 +841,9 @@ pub struct UpdateGroupRequest {
     pub group_type: Option<GroupType>,
     pub connect_host: Option<String>,
     pub port_range: Option<String>,
+    /// v1.0.8: billing rate. Range 0.1..=100 (validated at the handler).
+    #[serde(default)]
+    pub rate: Option<f64>,
 }
 
 // === Admin API — Tunnel Profiles (v0.4.0) ===

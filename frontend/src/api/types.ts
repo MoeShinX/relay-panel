@@ -108,6 +108,9 @@ export interface DeviceGroup {
   port_range: string;
   fallback_group: number | null;
   config: string;
+  /** v1.0.8: traffic billing multiplier (0.1..=100, default 1.0). Users are
+   *  charged real bytes * rate; rule/user byte counters stay real. */
+  rate: number;
   created_at: string;
 }
 

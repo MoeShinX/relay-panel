@@ -27,6 +27,21 @@ pub enum UpdateGroupError {
     Database(DbError),
 }
 
+/// v1.0.8: billing rate bounds. `rate` lives on device_groups; users are
+/// charged real bytes × rate in `apply_traffic_batch`. 1.0 = bill what you
+/// use. The same bounds are enforced inside `apply_traffic_batch` (a stray
+/// out-of-range value refuses the whole traffic batch) — this is the
+/// write-side guard so bad values never get persisted.
+pub const RATE_MIN: f64 = 0.1;
+pub const RATE_MAX: f64 = 100.0;
+pub const RATE_DEFAULT: f64 = 1.0;
+
+/// Validate a billing rate. Returns the clamped-or-passed value, or `None`
+/// when the input is out of `[RATE_MIN, RATE_MAX]` (callers map None → 400).
+pub fn validate_rate(rate: f64) -> Option<f64> {
+    (RATE_MIN..=RATE_MAX).contains(&rate).then_some(rate)
+}
+
 /// Create an admin-owned device group. Generates a fresh token, inserts, then
 /// returns the persisted row (INSERT-then-SELECT-by-token; the token is a
 /// freshly generated UUID so the SELECT is guaranteed to hit the new row).
@@ -41,6 +56,7 @@ pub async fn create_group(
     owner_uid: i64,
     connect_host: &str,
     port_range: &str,
+    rate: f64,
 ) -> Result<DeviceGroup, CreateGroupError> {
     let token = uuid::Uuid::new_v4().to_string();
     let group_type = group_type_to_str(group_type);
@@ -51,6 +67,7 @@ pub async fn create_group(
         owner_uid,
         connect_host,
         port_range,
+        rate,
     )
     .await
     .map_err(CreateGroupError::Database)?;
@@ -88,8 +105,14 @@ pub async fn update_group(
     group_type: Option<&GroupType>,
     connect_host: Option<&str>,
     port_range: Option<&str>,
+    rate: Option<f64>,
 ) -> Result<(), UpdateGroupError> {
-    if name.is_none() && group_type.is_none() && connect_host.is_none() && port_range.is_none() {
+    if name.is_none()
+        && group_type.is_none()
+        && connect_host.is_none()
+        && port_range.is_none()
+        && rate.is_none()
+    {
         return Err(UpdateGroupError::NoFields);
     }
 
@@ -101,6 +124,7 @@ pub async fn update_group(
             group_type.map(group_type_to_str),
             connect_host,
             port_range,
+            rate,
         )
         .await
         .map_err(UpdateGroupError::Database)?

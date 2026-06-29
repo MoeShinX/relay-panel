@@ -1573,6 +1573,7 @@ mod tests {
                 connect_host: "1.2.3.4".into(),
                 port_range: "20000-30000".into(),
                 owner_uid: Some(3),
+                rate: None,
             }),
         )
         .await;

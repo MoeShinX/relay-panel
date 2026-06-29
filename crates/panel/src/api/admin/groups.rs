@@ -1,7 +1,7 @@
 use super::err;
 use crate::api::middleware::{AdminOnly, AuthUser};
 use crate::api::AppState;
-use crate::service::groups::{CreateGroupError, UpdateGroupError};
+use crate::service::groups::{validate_rate, CreateGroupError, UpdateGroupError, RATE_DEFAULT};
 use axum::{
     extract::{Path, State},
     Json,
@@ -31,6 +31,19 @@ pub async fn create_group(
     // group owned by a regular user would produce a "dead" group the user
     // can't manage (AdminOnly) and that is never shared. So `owner_uid` is
     // IGNORED — the group always belongs to the creating admin.
+    // v1.0.8: clamp absent rate to the default (1.0) and reject out-of-range.
+    let rate = match req.rate {
+        Some(r) => match validate_rate(r) {
+            Some(v) => v,
+            None => {
+                return Json(err(
+                    400,
+                    "rate must be between 0.1 and 100",
+                ))
+            }
+        },
+        None => RATE_DEFAULT,
+    };
     match crate::service::groups::create_group(
         state.db.as_ref(),
         &req.name,
@@ -38,6 +51,7 @@ pub async fn create_group(
         admin.user_id,
         &req.connect_host,
         &req.port_range,
+        rate,
     )
     .await
     {
@@ -108,6 +122,14 @@ pub async fn update_group(
     Path(id): Path<i64>,
     Json(req): Json<UpdateGroupRequest>,
 ) -> Json<ApiResponse<()>> {
+    // v1.0.8: validate rate when present. Out-of-range → 400 (don't persist).
+    let rate = match req.rate {
+        Some(r) => match validate_rate(r) {
+            Some(v) => Some(v),
+            None => return Json(err(400, "rate must be between 0.1 and 100")),
+        },
+        None => None,
+    };
     match crate::service::groups::update_group(
         state.db.as_ref(),
         id,
@@ -115,6 +137,7 @@ pub async fn update_group(
         req.group_type.as_ref(),
         req.connect_host.as_deref(),
         req.port_range.as_deref(),
+        rate,
     )
     .await
     {

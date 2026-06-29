@@ -32,6 +32,33 @@ impl TrafficRepository for SqliteRepository {
     ) -> Result<Vec<TrafficEntryResult>, DbError> {
         let mut tx = self.pool.begin().await?;
 
+        // ── v1.0.8: read this group's billing rate once for the whole batch
+        // (every entry in a batch is for the SAME group_id — the node reports
+        // per-group). rate is stored on device_groups; users are CHARGED
+        // real * rate (rounded), while forward_rules keeps real bytes. A group
+        // missing here is treated as rate=1.0 (defensive: a deleted group mid-
+        // batch shouldn't crash accounting — the per-rule ownership check below
+        // will reject its rules as Unavailable anyway). ──
+        let rate: f64 = sqlx::query_scalar("SELECT rate FROM device_groups WHERE id = ?")
+            .bind(group_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            // Group deleted mid-batch → treat as rate=1.0 (its rules will be
+            // rejected as Unavailable in Pass 2 anyway; don't crash accounting).
+            .flatten()
+            .unwrap_or(1.0);
+        if !(0.1..=100.0).contains(&rate) {
+            // Out-of-range rate is a data integrity bug; refuse the batch
+            // rather than silently billing a wrong amount.
+            let _ = tx.rollback().await;
+            tracing::error!(
+                "traffic_batch: group {} has out-of-range rate {} (expected 0.1..=100)",
+                group_id,
+                rate
+            );
+            return Ok(vec![TrafficEntryResult::Overflow]);
+        }
+
         // ── Pass 1: validate u64→i64 per entry (a single entry's upload or
         // download alone can exceed i64::MAX; reject before any DB read). ──
         // Aggregate duplicate rule_ids INTO ONE delta first so the per-rule
@@ -71,6 +98,9 @@ impl TrafficRepository for SqliteRepository {
             uid: i64,
             delta_up: u64,
             delta_down: u64,
+            /// v1.0.8: billed bytes charged to the USER = round((up+down) * rate).
+            /// Kept separate from delta_up/delta_down (real bytes for the rule).
+            billed_delta: i64,
         }
         let mut resolved: Vec<Resolved> = Vec::with_capacity(rule_delta.len());
         // Track the per-USER aggregate delta (a user may own several rules in
@@ -108,13 +138,25 @@ impl TrafficRepository for SqliteRepository {
                 return Ok(vec![TrafficEntryResult::Unavailable]);
             };
             // Per-rule cumulative overflow: existing + this batch's delta.
+            // Rule statistics are REAL bytes (rate does not apply here).
             if rule_used.checked_add(rule_delta_sum).is_none() {
                 let _ = tx.rollback().await;
                 return Ok(vec![TrafficEntryResult::Overflow]);
             }
-            // Per-user cumulative: existing user total + (running user delta).
+            // v1.0.8: billed delta charged to the user = round(real * rate).
+            // f64 mul can't overflow (rule_delta_sum ≤ i64::MAX, rate ≤ 100),
+            // but the rounded result must fit in i64 — guard it.
+            let billed_raw = (rule_delta_sum as f64) * rate;
+            let billed_delta = if billed_raw.is_finite() && billed_raw <= i64::MAX as f64 {
+                billed_raw.round() as i64
+            } else {
+                let _ = tx.rollback().await;
+                return Ok(vec![TrafficEntryResult::Overflow]);
+            };
+            // Per-user cumulative: existing user total + (running user delta),
+            // charged in BILLED bytes (rate applied).
             let cur_user_delta = *user_delta.get(&uid).unwrap_or(&0);
-            let new_user_delta = match cur_user_delta.checked_add(rule_delta_sum) {
+            let new_user_delta = match cur_user_delta.checked_add(billed_delta) {
                 Some(v) => v,
                 None => {
                     let _ = tx.rollback().await;
@@ -131,6 +173,7 @@ impl TrafficRepository for SqliteRepository {
                 uid,
                 delta_up: *dup,
                 delta_down: *ddown,
+                billed_delta,
             });
         }
 
@@ -138,7 +181,9 @@ impl TrafficRepository for SqliteRepository {
         // the SAME tx, so a concurrent DELETE between passes still produces a
         // 0-rows-affected UPDATE (not an error). Duplicate rule_ids are already
         // aggregated, so each distinct rule gets ONE UPDATE (fewer SQL round
-        // trips + no double-counting). ──
+        // trips + no double-counting).
+        // v1.0.8: forward_rules += REAL bytes (up+down); users += BILLED bytes
+        // (billed_delta = round((up+down) * rate)). ──
         for r in &resolved {
             let up = r.delta_up as i64;
             let down = r.delta_down as i64;
@@ -150,9 +195,8 @@ impl TrafficRepository for SqliteRepository {
             .bind(r.rule_id)
             .execute(&mut *tx)
             .await?;
-            sqlx::query("UPDATE users SET traffic_used = traffic_used + ? + ? WHERE id = ?")
-                .bind(up)
-                .bind(down)
+            sqlx::query("UPDATE users SET traffic_used = traffic_used + ? WHERE id = ?")
+                .bind(r.billed_delta)
                 .bind(r.uid)
                 .execute(&mut *tx)
                 .await?;

@@ -73,6 +73,10 @@ CREATE TABLE IF NOT EXISTS device_groups (
     region TEXT,
     line_type TEXT,
     remark TEXT,
+    -- v1.0.8: traffic billing multiplier for this line (REAL NOT NULL DEFAULT
+    -- 1.0). Mirrors SQLite Migration 33 / baseline. Range 0.1..=100 enforced
+    -- at the API.
+    rate DOUBLE PRECISION NOT NULL DEFAULT 1.0,
     created_at TEXT NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
@@ -237,7 +241,7 @@ INSERT INTO schema_version (version) VALUES (1) ON CONFLICT (version) DO NOTHING
 /// The schema revision this build's baseline `PG_SCHEMA_SQL` represents. When a
 /// future release adds a column/table, bump this and add a matching arm in
 /// `run_pg_migrations`. `apply_pg_schema` seeds `schema_version` with revision 1.
-pub const PG_SCHEMA_VERSION: i32 = 15;
+pub const PG_SCHEMA_VERSION: i32 = 16;
 
 /// Apply PG_SCHEMA_SQL to a pool. PostgreSQL's prepared-statement protocol
 /// rejects multi-statement strings ("cannot insert multiple commands into a
@@ -894,6 +898,27 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         tracing::info!(
             "PG migration 15: user_groups layer replaced by user_device_groups + all_device_groups"
         );
+    }
+
+    // ── Revision 16: v1.0.8 device-group traffic billing rate ──
+    // Mirrors SQLite Migration 33. ADD COLUMN IF NOT EXISTS so a FRESH database
+    // (which already has rate from PG_SCHEMA_SQL baseline) replays this arm as
+    // a no-op rather than erroring — same IF-NOT-EXISTS discipline as every
+    // prior arm. Real bytes stay on forward_rules / users; users are CHARGED
+    // real * rate (rounded) inside apply_traffic_batch.
+    if current < 16 {
+        sqlx::query(
+            "ALTER TABLE device_groups \
+             ADD COLUMN IF NOT EXISTS rate DOUBLE PRECISION NOT NULL DEFAULT 1.0",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO schema_version (version) VALUES (16) ON CONFLICT (version) DO NOTHING",
+        )
+        .execute(pool)
+        .await?;
+        tracing::info!("PG migration 16: device_groups.rate column present");
     }
 
     Ok(())
