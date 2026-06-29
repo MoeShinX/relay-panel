@@ -99,13 +99,14 @@ fn resolve_bind_ipv4(config: &OutboundConfig) -> Result<Option<Ipv4Addr>, Outbou
 
 // ── platform helpers ──
 
-fn is_local_ipv4(_ip: Ipv4Addr) -> bool {
-    // Cross-platform: iterate local addresses.
-    // On Linux, we could also use `ip addr show`, but std's
-    // `UdpSocket::bind` will fail if the IP isn't local, so we
-    // rely on the bind check below instead of duplicating OS logic.
-    // Return true here; the bind call will catch non-local IPs.
-    true
+/// v1.0.5: verify an IPv4 address actually belongs to this host by trying to
+/// bind a UDP socket to it. A non-local address fails with EADDRNOTAVAIL.
+/// This is cross-platform and needs no external commands — the kernel is the
+/// authority on which addresses are local. Used at startup so a typo'd or
+/// foreign OUTBOUND_BIND_IPV4 aborts the node instead of silently sending
+/// traffic from the wrong (or no) source.
+fn is_local_ipv4(ip: Ipv4Addr) -> bool {
+    std::net::UdpSocket::bind(SocketAddrV4::new(ip, 0)).is_ok()
 }
 
 fn interface_ipv4(name: &str) -> Result<Ipv4Addr, OutboundError> {
@@ -318,6 +319,22 @@ mod tests {
         };
         let ip = init_outbound(&cfg).expect("valid local IP must succeed");
         assert_eq!(ip, Some(Ipv4Addr::new(127, 0, 0, 1)));
+    }
+
+    #[test]
+    fn non_local_ip_rejected_at_startup() {
+        // 192.0.2.1 is TEST-NET-1 (RFC 5737), never assigned to a real host,
+        // so binding to it fails → init_outbound must Err, not silently accept.
+        let cfg = OutboundConfig {
+            bind_ipv4: Some("192.0.2.1".into()),
+            interface: "auto".into(),
+        };
+        let result = init_outbound(&cfg);
+        assert!(
+            matches!(result, Err(OutboundError::IpNotLocal(_, _))),
+            "non-local IP must be rejected at startup, got {:?}",
+            result
+        );
     }
 
     #[test]

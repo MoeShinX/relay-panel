@@ -43,14 +43,17 @@ impl NodeConfig {
                 .ok()
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| "auto".to_string()),
-            listen_ipv4: std::env::var("LISTEN_IPV4")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| "0.0.0.0".to_string()),
-            listen_ipv6: std::env::var("LISTEN_IPV6")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| "::".to_string()),
+            // v1.0.5: distinguish UNSET (use default, backward compatible) from
+            // EXPLICITLY EMPTY (LISTEN_IPV6= → disable that family). std::env::var
+            // returns Err only when unset; Ok("") when set to empty.
+            listen_ipv4: match std::env::var("LISTEN_IPV4") {
+                Ok(v) => v.trim().to_string(),
+                Err(_) => "0.0.0.0".to_string(),
+            },
+            listen_ipv6: match std::env::var("LISTEN_IPV6") {
+                Ok(v) => v.trim().to_string(),
+                Err(_) => "::".to_string(),
+            },
             outbound_interface: std::env::var("OUTBOUND_INTERFACE")
                 .ok()
                 .filter(|s| !s.trim().is_empty())
