@@ -115,7 +115,13 @@ async fn handle_tcp_connection(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // v0.4.6: pick targets per the rule's load-balancing strategy. The selector
     // returns the ordered indices to attempt; we connect to the first reachable.
+    //
+    // v1.0.5: keep the REAL reason each target failed (DNS / timeout / no route /
+    // source-bind) instead of collapsing everything into "no target available".
+    // On a multi-NIC server a silent failure is impossible to diagnose, so we
+    // accumulate per-target reasons and log them together when nothing connects.
     let mut outbound = None;
+    let mut failures: Vec<String> = Vec::new();
     for idx in selector.order() {
         let Some(target) = targets.get(idx) else {
             continue;
@@ -131,9 +137,17 @@ async fn handle_tcp_connection(
                 outbound = Some(stream);
                 break;
             }
-            _ => {
+            Ok(Err(e)) => {
+                // tcp_connect already classifies the cause (InvalidIp / Connect /
+                // Bind). Preserve it verbatim so DNS vs. refused vs. source-bind
+                // failures are distinguishable in the log.
                 selector.report(idx, false);
-                continue;
+                failures.push(format!("{} -> {}", target, e));
+            }
+            Err(_) => {
+                // Outer timeout fired: the connect didn't finish within 5s.
+                selector.report(idx, false);
+                failures.push(format!("{} -> timed out after 5s", target));
             }
         }
     }
@@ -141,8 +155,18 @@ async fn handle_tcp_connection(
     let outbound = match outbound {
         Some(s) => s,
         None => {
-            tracing::warn!("TCP: no target available for {}", client_addr);
-            return Err("no target available".into());
+            let detail = if failures.is_empty() {
+                "no reachable target (all targets in circuit-break or empty)".to_string()
+            } else {
+                failures.join("; ")
+            };
+            tracing::warn!(
+                "TCP rule {}: no target available for client {} — {}",
+                rule_id,
+                client_addr,
+                detail
+            );
+            return Err(format!("no target available: {}", detail).into());
         }
     };
 
