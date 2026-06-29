@@ -1308,7 +1308,13 @@ mod tests {
         counter.add(1, 100, 50).await;
         assert!(counter.has_rule(1).await);
 
-        // Delete the rule: apply an empty config.
+        // Abort the listener so it finishes, then apply empty config.
+        // Without this, the listener is still running when apply_config
+        // checks is_finished() and won't be detected as dead.
+        let key = (40001, Protocol::Tcp, NodeTransport::Raw);
+        if let Some(m) = mgr.listeners.get(&key) {
+            m.handle.abort();
+        }
         mgr.apply_config(&NodeConfigResponse {
             listeners: Vec::new(),
         })
