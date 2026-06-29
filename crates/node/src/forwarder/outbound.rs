@@ -399,4 +399,82 @@ mod tests {
         assert!(!s.contains(":::"), "got broken addr string: {}", s);
         assert_eq!(s, "[::]:33418");
     }
+
+    // ── v1.0.5: outbound source-bind tests ──
+
+    #[tokio::test]
+    async fn tcp_connect_with_explicit_source_binds_and_connects() {
+        // #6: a TCP connection with an explicit source IPv4 must bind that
+        // source, then reach the target. Use loopback for both so the test is
+        // hermetic (127.0.0.1 is always local).
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let target = format!("127.0.0.1:{}", port);
+
+        let accept = tokio::spawn(async move { listener.accept().await.map(|(s, _)| s) });
+
+        let stream = tcp_connect(&target, Some(Ipv4Addr::LOCALHOST), 5)
+            .await
+            .expect("connect with source bind must succeed");
+        // The connection's local (source) address must be the bound 127.0.0.1.
+        assert_eq!(
+            stream.local_addr().unwrap().ip(),
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        );
+        assert!(accept.await.unwrap().is_ok(), "server must accept it");
+    }
+
+    #[tokio::test]
+    async fn tcp_connect_without_source_uses_auto_route() {
+        // #8: no source configured → system auto-route still connects.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let target = format!("127.0.0.1:{}", port);
+        let accept = tokio::spawn(async move { listener.accept().await.map(|(s, _)| s) });
+
+        let stream = tcp_connect(&target, None, 5)
+            .await
+            .expect("auto-route connect must succeed");
+        assert!(stream.peer_addr().unwrap().port() == port);
+        assert!(accept.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn udp_outbound_socket_binds_explicit_source() {
+        // #7: an explicit source IPv4 must produce a socket bound to {src}:0.
+        let sock = udp_outbound_socket(Some(Ipv4Addr::LOCALHOST))
+            .await
+            .expect("udp source bind must succeed");
+        let local = sock.local_addr().unwrap();
+        assert_eq!(local.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
+        assert_ne!(local.port(), 0, "kernel must assign an ephemeral port");
+    }
+
+    #[tokio::test]
+    async fn udp_outbound_socket_auto_binds_wildcard() {
+        // #8: no source → bind 0.0.0.0:0 (system auto), backward compatible.
+        let sock = udp_outbound_socket(None)
+            .await
+            .expect("udp auto bind must succeed");
+        assert_eq!(
+            sock.local_addr().unwrap().ip(),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        );
+    }
+
+    #[test]
+    fn nonexistent_interface_is_an_error() {
+        // #11: a typo'd / missing NIC must surface a clear error, never silently
+        // fall back to auto-route out the wrong interface.
+        let cfg = OutboundConfig {
+            bind_ipv4: None,
+            interface: "rp-no-such-nic-xyz".into(),
+        };
+        let result = init_outbound(&cfg);
+        assert!(
+            result.is_err(),
+            "missing interface must error, got {:?}",
+            result
+        );
+    }
 }

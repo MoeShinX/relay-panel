@@ -1311,9 +1311,20 @@ mod tests {
         // Abort the listener so it finishes, then apply empty config.
         // Without this, the listener is still running when apply_config
         // checks is_finished() and won't be detected as dead.
+        //
+        // abort() only REQUESTS cancellation; the task isn't actually finished
+        // until the runtime polls it once more. On a busy CI runner the gap
+        // between abort() and the task settling made apply_config's
+        // is_finished() check race (it saw the task as still alive, skipped the
+        // dead-listener path, and the counter was never pruned → flaky FAIL).
+        // Spin on is_finished(), yielding so the runtime drives the cancelled
+        // task to completion, before applying the empty config.
         let key = (40001, Protocol::Tcp, NodeTransport::Raw);
         if let Some(m) = mgr.listeners.get(&key) {
             m.handle.abort();
+            while !m.handle.is_finished() {
+                tokio::task::yield_now().await;
+            }
         }
         mgr.apply_config(&NodeConfigResponse {
             listeners: Vec::new(),

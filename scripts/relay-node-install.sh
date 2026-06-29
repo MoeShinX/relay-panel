@@ -301,9 +301,11 @@ export PANEL_URL="__PANEL_URL__"
 export NODE_TOKEN="__NODE_TOKEN__"
 export POLL_INTERVAL="${POLL_INTERVAL:-10}"
 export RUST_LOG="${RUST_LOG:-info}"
-# v0.4.1: TLS Simple certificate paths. Sourced from relay-node.env if present
-# (written by the operator or a cert-management tool). If the file doesn't
-# exist, these stay unset and tls_simple listeners are disabled (Raw/WS work).
+# Optional config sourced from relay-node.env if present (written by the
+# installer with commented examples; edit it to set LISTEN_IPV4/LISTEN_IPV6,
+# OUTBOUND_INTERFACE/OUTBOUND_BIND_IPV4, or TLS_CERT_PATH/TLS_KEY_PATH). If the
+# file doesn't exist, all of these stay unset and the node uses its defaults
+# (dual-stack listen, system-routed egress, no TLS).
 # NOTE: path is hardcoded (/opt/relay-node) because this script runs with set -u
 # and INSTALL_DIR is not defined in the generated start.sh context.
 if [ -f "/opt/relay-node/relay-node.env" ]; then
@@ -334,15 +336,32 @@ chmod 700 "$CERTS_DIR"
 # one — the operator may have configured it).
 ENV_FILE="${INSTALL_DIR}/relay-node.env"
 if [ ! -f "$ENV_FILE" ]; then
-    info "Writing example TLS env file: $ENV_FILE (edit to enable TLS Simple)"
+    info "Writing example env file: $ENV_FILE (edit to tune listen / egress / TLS)"
     cat > "$ENV_FILE" <<'ENVEOF'
-# TLS Simple certificate configuration (v0.4.1).
+# relay-node optional environment. start.sh sources this file (set -a), so any
+# variable set here is exported to relay-node. All values below are commented:
+# the defaults already enable IPv4+IPv6 listening with system-routed egress.
+
+# ── v1.0.5: dual-stack inbound listen (TCP/UDP) ──
+# By default every rule listens on BOTH 0.0.0.0 and :: (separate sockets, the
+# IPv6 one is IPV6_V6ONLY). Set a family's variable EMPTY to disable it.
+#   LISTEN_IPV4=0.0.0.0      # empty → IPv4 disabled (IPv6-only node)
+#   LISTEN_IPV6=::           # empty → IPv6 disabled (IPv4-only node)
+
+# ── v1.0.5: IPv4 outbound egress for multi-NIC servers ──
+# When inbound (e.g. public IPv6 on ens19) and outbound (e.g. IPv4 via ens18)
+# use different interfaces, force the source so connections leave the right NIC.
+# Priority: OUTBOUND_BIND_IPV4 > OUTBOUND_INTERFACE > auto (system routing).
+# The example values below are ILLUSTRATIVE — use your own server's NIC/address.
+#   OUTBOUND_INTERFACE=ens18         # node resolves this NIC's IPv4 to bind
+#   OUTBOUND_BIND_IPV4=10.0.2.61     # or pin the exact source IPv4 (overrides above)
+
+# ── TLS Simple certificate configuration (v0.4.1) ──
 # Uncomment and set these to enable TLS Simple ingress on this node.
 # The cert must be PEM format (fullchain recommended); the key must be PEM
 # (PKCS#8, PKCS#1 RSA, or SEC1 EC). The key file MUST be chmod 600.
-#
-# TLS_CERT_PATH=/opt/relay-node/certs/fullchain.pem
-# TLS_KEY_PATH=/opt/relay-node/certs/privkey.pem
+#   TLS_CERT_PATH=/opt/relay-node/certs/fullchain.pem
+#   TLS_KEY_PATH=/opt/relay-node/certs/privkey.pem
 ENVEOF
     chmod 600 "$ENV_FILE"
 fi
