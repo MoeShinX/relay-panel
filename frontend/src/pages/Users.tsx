@@ -352,7 +352,7 @@ export default function Users() {
           </Form.Item>
           {!editing?.admin && (
             <Form.Item name="group_id" label={t('userGroups')}>
-              <Select allowClear placeholder={t('selectDeviceGroups')} style={{ width: '100%' }}>
+              <Select allowClear placeholder={t('selectUserGroup')} style={{ width: '100%' }}>
                 {userGroups.map(g => <Select.Option key={g.id} value={g.id}>{g.name} (#{g.id})</Select.Option>)}
               </Select>
             </Form.Item>

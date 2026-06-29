@@ -468,6 +468,17 @@ export const zhCN = {
   yes: '是',
   no: '否',
   remark: '备注',
+  selectUserGroup: '选择权限组（可留空）',
+  userGroupHelpTitle: '使用说明',
+  userGroupHelp1: '每个用户可分配到一个权限组，权限组决定该用户可使用哪些入口分组来创建转发规则。',
+  userGroupHelp2: '「允许所有分组」开启时，该权限组下的用户可使用全部入口分组；关闭后，需在下方手动指定可用的入口分组。',
+  userGroupHelp3: '删除权限组前建议先将用户迁移到其他权限组，否则该组用户将看不到任何可用入口分组，新建规则按钮会被禁用。',
+  userGroupHelp4: '用户在创建规则时只能选择自己权限组允许的入口分组。',
+  allowedInboundGroupsLabel: '可用入口分组',
+  batchDelete: '批量删除',
+  batchDeleteConfirm: '确定删除选中的 {count} 条规则？此操作不可撤销。',
+  batchDeleteSuccess: '已删除 {count} 条规则',
+  selectedCount: '已选 {count} 条',
 };
 
 export type Dict = typeof zhCN;

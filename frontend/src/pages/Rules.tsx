@@ -81,7 +81,7 @@ function downloadText(filename: string, text: string) {
 
 export default function Rules() {
   const { t } = useI18n();
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
   const [searchParams] = useSearchParams();
   // v0.4.20: admin can manage another user's rules via /rules?owner_uid=X.
   const filterOwnerUid: number | null = isAdmin
@@ -113,6 +113,7 @@ export default function Rules() {
   // v0.4.9: group-name column + filter. selectedGroup === null means "all".
   // (Explicit null, not !selectedGroup, so a future id of 0 wouldn't be falsy.)
   const [selectedGroup, setSelectedGroup] = useState<number | null>(null);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -123,7 +124,10 @@ export default function Rules() {
       // own rules), so the users list is fetched separately and only when
       // isAdmin. A failure here leaves users empty but rules/groups still load.
       // v0.4.20: admin can filter rules by owner_uid.
-      const rulesUrl = filterOwnerUid ? `/rules?owner_uid=${filterOwnerUid}` : '/rules';
+      // Admin on own page → filter to their own rules; admin viewing another
+      // user → use filterOwnerUid; regular user → backend filters automatically.
+      const ownerUid = filterOwnerUid ?? (isAdmin ? (user?.id ?? null) : null);
+      const rulesUrl = ownerUid ? `/rules?owner_uid=${ownerUid}` : '/rules';
       const [r, g] = await Promise.all([
         api.get<unknown, ApiEnvelope<ForwardRule[]>>(rulesUrl),
         api.get<unknown, ApiEnvelope<DeviceGroup[]>>('/groups'),
@@ -165,7 +169,7 @@ export default function Rules() {
         setSharedGroups([]);
       }
     } finally { setLoading(false); }
-  }, [filterOwnerUid, isAdmin]);
+  }, [filterOwnerUid, isAdmin, user?.id]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -383,6 +387,14 @@ const IMPORT_DEFAULTS = {
   const handleDelete = async (id: number) => {
     await api.delete(`/rules/${id}`);
     message.success(t('ruleDeleted'));
+    load();
+  };
+
+  const handleBatchDelete = async () => {
+    const ids = selectedRowKeys as number[];
+    await Promise.all(ids.map(id => api.delete(`/rules/${id}`)));
+    message.success(t('batchDeleteSuccess').replace('{count}', String(ids.length)));
+    setSelectedRowKeys([]);
     load();
   };
 
@@ -619,13 +631,24 @@ const IMPORT_DEFAULTS = {
             allowClear
             placeholder={t('filterByGroup')}
             value={selectedGroup ?? undefined}
-            onChange={(v: number | undefined) => setSelectedGroup(v ?? null)}
+            onChange={(v: number | undefined) => { setSelectedGroup(v ?? null); setSelectedRowKeys([]); }}
             options={Array.from(new Set(rules.map(r => r.device_group_in)))
               .map(gid => {
                 const g = groupMap.get(gid);
                 return { value: gid, label: g ? g.name : `${t('unknownGroup')} (#${gid})` };
               })}
           />
+          {selectedRowKeys.length > 0 && (
+            <Popconfirm
+              title={t('batchDeleteConfirm').replace('{count}', String(selectedRowKeys.length))}
+              onConfirm={handleBatchDelete}
+              okButtonProps={{ danger: true }}
+            >
+              <Button danger icon={<DeleteOutlined />}>
+                {t('batchDelete')} ({selectedRowKeys.length})
+              </Button>
+            </Popconfirm>
+          )}
           <Button icon={<ReloadOutlined />} onClick={load}>{t('refresh')}</Button>
           <Dropdown menu={{ items: exportMenuItems }}>
             <Button icon={<DownloadOutlined />}>{t('exportImport')}</Button>
@@ -651,7 +674,11 @@ const IMPORT_DEFAULTS = {
           description={t('loadFailedRetry')}
         />
       )}
-      <Table dataSource={visibleRules} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 20 }} scroll={{ x: 1200 }} />
+      <Table
+        rowSelection={{ selectedRowKeys, onChange: (keys) => setSelectedRowKeys(keys as number[]) }}
+        dataSource={visibleRules} columns={columns} rowKey="id" loading={loading}
+        pagination={{ pageSize: 20 }} scroll={{ x: 1200 }}
+      />
 
       <Modal title={t('addRule')} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={() => createForm.submit()} okText={t('create')} cancelText={t('cancel')} width={620}>
         <Form form={createForm} onFinish={handleCreate} layout="vertical">
