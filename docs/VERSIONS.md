@@ -4,7 +4,7 @@ This is the **single source of truth** for every place a version number lives
 in the repo. When cutting a new release, every entry below MUST be updated to
 the same version. The release is not done until all of them match.
 
-Current target: **1.0.3**
+Current target: **1.0.4**
 
 ---
 

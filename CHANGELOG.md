@@ -5,6 +5,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [1.0.4] - 2026-06-26
+
+### Fixed
+
+- **Atomic group update + pause.** `update_user_group_with_pause` runs
+  group update and rule re-evaluation in a single transaction. On pause
+  failure, the group update is rolled back so the authorization state is
+  NOT partially changed. Previously, a pause failure returned 500 but left
+  the authorization change already written, causing some rules to continue
+  forwarding with elevated access.
+
 ## [1.0.3] - 2026-06-26
 
 ### Fixed
