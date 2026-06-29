@@ -1,6 +1,7 @@
 pub mod cert_reloader;
 pub mod limiter;
 pub mod manager;
+pub mod outbound;
 pub mod selector;
 pub mod tcp;
 pub mod tls;

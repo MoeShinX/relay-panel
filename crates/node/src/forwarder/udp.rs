@@ -17,7 +17,7 @@
 // "connections" column reflect real UDP activity instead of always 0.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
@@ -39,20 +39,26 @@ struct UdpSession {
     last_active: tokio::time::Instant,
 }
 
-pub async fn start_udp_listener(
-    listen_addr: SocketAddr,
+/// v1.0.5: serve an ALREADY-BOUND UDP socket. Binding happens in the manager
+/// (synchronously, so errors surface immediately and per-family success is
+/// known). This function only runs the receive loop.
+#[allow(clippy::too_many_arguments)]
+pub async fn serve_udp_listener(
+    inbound: Arc<UdpSocket>,
     targets: Vec<String>,
     selector: Arc<TargetSelector>,
     rate_limit: RateLimit,
     counter: Arc<TrafficCounter>,
     connections: Arc<ConnectionTracker>,
     rule_id: i64,
+    source_ipv4: Option<Ipv4Addr>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let listen_addr = inbound
+        .local_addr()
+        .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 0)));
     if targets.is_empty() {
         tracing::warn!("UDP listener on {}: no targets configured", listen_addr);
     }
-
-    let inbound = Arc::new(UdpSocket::bind(listen_addr).await?);
     tracing::info!("UDP listening on {} (rule {})", listen_addr, rule_id);
 
     let port = listen_addr.port();
@@ -156,7 +162,7 @@ pub async fn start_udp_listener(
                 s.outbound.clone()
             } else {
                 // New session: bind an ephemeral outbound socket and connect to target
-                let outbound = match UdpSocket::bind("0.0.0.0:0").await {
+                let outbound = match super::outbound::udp_outbound_socket(source_ipv4).await {
                     Ok(s) => s,
                     Err(e) => {
                         tracing::warn!("UDP port {}: failed to bind outbound: {}", port, e);

@@ -30,6 +30,8 @@ futures-util = "0.3"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
 rustls-pemfile = "2"
+# v1.0.5: low-level socket options for IPv6-only dual-stack binding.
+socket2 = "0.5"
 
 [dev-dependencies]
 # v0.4.16: test-only cert generator for the real WSS (wss://) regression test.

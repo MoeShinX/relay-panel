@@ -34,7 +34,11 @@ CMD ["./relay-panel"]
 
 # ---- Node runtime ----
 FROM debian:bookworm-slim AS node
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
+# v1.0.5: iproute2 provides the `ip` command used to resolve an interface's
+# IPv4 address when OUTBOUND_INTERFACE is set. Without it, multi-NIC egress
+# selection by interface name would fail. ca-certificates is for HTTPS to the
+# panel.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates iproute2 && \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=rust-build /app/target/release/relay-node /app/relay-node

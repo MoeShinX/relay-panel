@@ -152,6 +152,10 @@ export them before launching.
 | `POLL_INTERVAL` | HTTP poll / status-report interval in seconds | `10` |
 | `PUBLIC_IP_CHECK_URL` | URL used to detect the node's public egress IP | `https://api.ipify.org` |
 | `NETWORK_INTERFACE` | NIC counted for whole-machine traffic stats; `auto` reads the default route | `auto` |
+| `LISTEN_IPV4` | IPv4 inbound listen address for TCP/UDP rules; empty disables IPv4 | `0.0.0.0` |
+| `LISTEN_IPV6` | IPv6 inbound listen address for TCP/UDP rules; empty disables IPv6 | `::` |
+| `OUTBOUND_INTERFACE` | NIC for outbound IPv4 egress; `auto` = system routing (no source bind) | `auto` |
+| `OUTBOUND_BIND_IPV4` | Exact IPv4 source for outbound TCP/UDP; overrides `OUTBOUND_INTERFACE` | (unset) |
 | `RUST_LOG` | Log level: `error` / `warn` / `info` / `debug` | `info` |
 
 Notes:
@@ -169,6 +173,37 @@ Notes:
   pin it explicitly, e.g. `NETWORK_INTERFACE=eth0`. The "NIC" column shows the
   selected interface. This is system-wide (includes SSH, system updates, …),
   NOT RelayPanel forwarded traffic.
+
+### v1.0.5: IPv6 dual-stack + multi-NIC egress (TCP/UDP)
+
+By default the node listens on **both** IPv4 (`0.0.0.0`) and IPv6 (`::`) for
+every TCP/UDP rule, using separate sockets (the IPv6 socket is `IPV6_V6ONLY`
+so it doesn't collide with the IPv4 socket on the same port). After startup,
+`ss -lntup` shows both `0.0.0.0:<port>` and `[::]:<port>` for each rule.
+
+- Disable one family by setting its variable empty: `LISTEN_IPV6=` → IPv4 only.
+- If only one family binds (e.g. the host has no IPv6), the other keeps
+  working and a warning is logged. The rule is only marked failed when **both**
+  families fail to bind.
+
+**Multi-NIC egress** — for servers where inbound (e.g. public IPv6 on `ens19`)
+and outbound (e.g. IPv4 via `ens18`) use different interfaces, force the
+outbound source so connections leave the right NIC:
+
+```bash
+# Option A: pick the egress NIC by name (node resolves its IPv4):
+OUTBOUND_INTERFACE=ens18
+
+# Option B: set the exact source IPv4 (use YOUR server's address):
+OUTBOUND_BIND_IPV4=10.0.2.61
+```
+
+When neither is set (or `OUTBOUND_INTERFACE=auto`), the node does NOT bind a
+source address and lets the OS route normally (backward compatible). A
+misconfigured value (invalid IP, unknown NIC, non-local IP) is a **fatal
+startup error** — the node refuses to boot rather than silently sending
+traffic out the wrong interface. WS/TLS rules are IPv4-only and unaffected.
+
 
 ---
 

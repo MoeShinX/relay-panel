@@ -61,6 +61,17 @@ services:
       # from the panel UI before enabling the node profile.
       - NODE_TOKEN=${NODE_TOKEN:?NODE_TOKEN must be set to a real inbound-group token from the panel UI}
       - POLL_INTERVAL=10
+      # v1.0.5: dual-stack listen + outbound source binding. All optional —
+      # the defaults already enable IPv4+IPv6 listening with system routing.
+      # LISTEN_IPV4 / LISTEN_IPV6 set the inbound listen addresses. An empty
+      # value disables that family (e.g. LISTEN_IPV6= → IPv4 only).
+      #   - LISTEN_IPV4=0.0.0.0
+      #   - LISTEN_IPV6=::
+      # Multi-NIC servers (IPv6 ingress + IPv4 egress on different NICs): pick
+      # the egress NIC by name, OR set an exact source IPv4. The example IPs
+      # below are illustrative — use your own server's address.
+      #   - OUTBOUND_INTERFACE=ens18
+      #   - OUTBOUND_BIND_IPV4=10.0.2.61
     restart: unless-stopped
     depends_on:
       - panel
