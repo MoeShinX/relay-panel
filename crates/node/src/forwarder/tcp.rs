@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -8,16 +8,23 @@ use super::limiter::RateLimit;
 use super::selector::TargetSelector;
 use crate::reporter::{ConnectionTracker, TrafficCounter};
 
-pub async fn start_tcp_listener(
-    listen_addr: SocketAddr,
+/// v1.0.5: serve an ALREADY-BOUND TcpListener. Binding happens in the manager
+/// (synchronously, so errors surface immediately and per-family success is
+/// known). This function only runs the accept loop.
+#[allow(clippy::too_many_arguments)]
+pub async fn serve_tcp_listener(
+    listener: TcpListener,
     targets: Vec<String>,
     selector: Arc<TargetSelector>,
     rate_limit: RateLimit,
     counter: Arc<TrafficCounter>,
     connections: Arc<ConnectionTracker>,
     rule_id: i64,
+    source_ipv4: Option<Ipv4Addr>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let listener = TcpListener::bind(listen_addr).await?;
+    let listen_addr = listener
+        .local_addr()
+        .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 0)));
     tracing::info!("TCP listening on {} (rule {})", listen_addr, rule_id);
 
     // v0.3.6: accept-loop resilience. A transient accept error (EMFILE,
@@ -47,6 +54,7 @@ pub async fn start_tcp_listener(
                         rate_limit,
                         counter,
                         rule_id,
+                        source_ipv4,
                     )
                     .await
                     {
@@ -94,6 +102,7 @@ fn is_transient_accept_error(e: &std::io::Error) -> bool {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_tcp_connection(
     inbound: TcpStream,
     client_addr: SocketAddr,
@@ -102,6 +111,7 @@ async fn handle_tcp_connection(
     rate_limit: RateLimit,
     counter: Arc<TrafficCounter>,
     rule_id: i64,
+    source_ipv4: Option<Ipv4Addr>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // v0.4.6: pick targets per the rule's load-balancing strategy. The selector
     // returns the ordered indices to attempt; we connect to the first reachable.
@@ -110,7 +120,12 @@ async fn handle_tcp_connection(
         let Some(target) = targets.get(idx) else {
             continue;
         };
-        match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(target)).await {
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            super::outbound::tcp_connect(target, source_ipv4, 5),
+        )
+        .await
+        {
             Ok(Ok(stream)) => {
                 selector.report(idx, true);
                 outbound = Some(stream);
