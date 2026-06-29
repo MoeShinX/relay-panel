@@ -39,6 +39,7 @@ struct UdpSession {
     last_active: tokio::time::Instant,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn start_udp_listener(
     listen_addr: SocketAddr,
     targets: Vec<String>,

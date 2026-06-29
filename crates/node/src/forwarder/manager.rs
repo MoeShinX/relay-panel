@@ -394,6 +394,7 @@ impl ForwarderManager {
                     let ipv4_src = src_ipv4;
                     let errs = errors.clone();
                     let pstr = proto_str.clone();
+                    #[allow(clippy::single_match, unused_assignments, unused_variables)]
                     tokio::spawn(async move {
                         let v4 = tokio::spawn(tcp::start_tcp_listener(
                             a4,
@@ -453,6 +454,7 @@ impl ForwarderManager {
                     let ipv4_src = src_ipv4;
                     let errs = errors.clone();
                     let pstr = proto_str.clone();
+                    #[allow(clippy::single_match, unused_assignments, unused_variables)]
                     tokio::spawn(async move {
                         let v4 = tokio::spawn(udp::start_udp_listener(
                             a4,

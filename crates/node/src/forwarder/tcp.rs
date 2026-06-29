@@ -8,6 +8,7 @@ use super::limiter::RateLimit;
 use super::selector::TargetSelector;
 use crate::reporter::{ConnectionTracker, TrafficCounter};
 
+#[allow(clippy::too_many_arguments)]
 pub async fn start_tcp_listener(
     listen_addr: SocketAddr,
     targets: Vec<String>,
@@ -96,6 +97,7 @@ fn is_transient_accept_error(e: &std::io::Error) -> bool {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_tcp_connection(
     inbound: TcpStream,
     client_addr: SocketAddr,

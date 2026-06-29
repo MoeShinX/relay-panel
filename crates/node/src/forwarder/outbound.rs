@@ -9,11 +9,12 @@
 //! 2. OUTBOUND_INTERFACE → resolve the NIC's IPv4 address.
 //! 3. Neither / OUTBOUND_INTERFACE=auto → system auto-route (no bind).
 
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket as StdUdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use tokio::net::{TcpSocket, TcpStream, UdpSocket};
 
 // ── errors ──
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum OutboundError {
     InvalidIp(String),
@@ -174,7 +175,7 @@ async fn tcp_connect_bound(target: &str, src: Ipv4Addr) -> Result<TcpStream, Out
         .await
         .map_err(OutboundError::Connect)?
         .collect();
-    for addr in addrs {
+    if let Some(addr) = addrs.into_iter().next() {
         match addr {
             SocketAddr::V4(v4) => {
                 let sock = TcpSocket::new_v4().map_err(OutboundError::Bind)?;
