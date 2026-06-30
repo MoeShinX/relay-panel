@@ -191,6 +191,8 @@ export const enUS: Dict = {
   portRange: 'Port Range',
   rate: 'Rate',
   rateHint: 'User quota is charged at this rate; rule/node stats keep real bytes. 1.0 = bill as used.',
+  groupHidden: 'Hidden',
+  groupHiddenHint: "When on, this group is hidden only from regular users' Node Status page; admins are unaffected. Rules keep working (still selectable for new rules; existing rules forward and display normally).",
   inboundListener: 'Inbound (listener node)',
   outboundEgress: 'Outbound (egress node)',
   groupCreated: 'Group created. Copy the node token below.',

@@ -190,6 +190,8 @@ export const zhCN = {
   portRange: '端口范围',
   rate: '倍率',
   rateHint: '用户额度按倍率扣减，规则/节点统计存真实字节。1.0 = 用多少扣多少。',
+  groupHidden: '隐藏',
+  groupHiddenHint: '开启后该分组仅在普通用户的「节点状态」页隐藏，管理员不受影响；规则照常使用（新建规则仍可选、已有规则正常转发与显示）。',
   inboundListener: '入口（监听节点）',
   outboundEgress: '出口（出口节点）',
   groupCreated: '分组已创建，请复制下方节点令牌',

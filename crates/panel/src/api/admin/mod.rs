@@ -1588,6 +1588,7 @@ mod tests {
                 port_range: "20000-30000".into(),
                 owner_uid: Some(3),
                 rate: None,
+                hidden: None,
             }),
         )
         .await;

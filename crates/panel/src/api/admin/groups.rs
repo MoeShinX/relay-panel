@@ -47,6 +47,7 @@ pub async fn create_group(
         &req.connect_host,
         &req.port_range,
         rate,
+        req.hidden.unwrap_or(false),
     )
     .await
     {
@@ -133,6 +134,7 @@ pub async fn update_group(
         req.connect_host.as_deref(),
         req.port_range.as_deref(),
         rate,
+        req.hidden,
     )
     .await
     {

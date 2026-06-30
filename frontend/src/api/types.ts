@@ -115,6 +115,9 @@ export interface DeviceGroup {
   /** v1.0.8: traffic billing multiplier (0.1..=100, default 1.0). Users are
    *  charged real bytes * rate; rule/user byte counters stay real. */
   rate: number;
+  /** v1.0.7: hidden from regular users' shared views (node status / available
+   *  lines). Admins are unaffected. */
+  hidden?: boolean;
   created_at: string;
 }
 

@@ -389,6 +389,7 @@ pub trait GroupRepository: Send + Sync {
         connect_host: &str,
         port_range: &str,
         rate: f64,
+        hidden: bool,
     ) -> Result<(), DbError>;
     async fn find_by_token_after_insert(&self, token: &str)
         -> Result<Option<DeviceGroup>, DbError>;
@@ -402,6 +403,7 @@ pub trait GroupRepository: Send + Sync {
         connect_host: Option<&str>,
         port_range: Option<&str>,
         rate: Option<f64>,
+        hidden: Option<bool>,
     ) -> Result<u64, DbError>;
     async fn update_group_token(
         &self,
