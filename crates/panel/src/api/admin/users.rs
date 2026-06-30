@@ -1,13 +1,16 @@
 use super::{err, UserPublic};
 use crate::api::middleware::AdminOnly;
 use crate::api::AppState;
+use crate::db::repo::BuyPlanError;
 use crate::service::password::PasswordValidationError;
 use crate::service::users::CreateUserError;
 use axum::{
     extract::{Path, State},
     Json,
 };
-use relay_shared::protocol::{ApiResponse, UpdateUserRequest};
+use relay_shared::protocol::{
+    AdminBuyPlanRequest, AdminSetUserPlanRequest, ApiResponse, UpdateUserRequest,
+};
 // === Users ===
 pub async fn list_users(
     _admin: AdminOnly,
@@ -359,4 +362,163 @@ pub async fn get_user_device_groups(
         all_device_groups,
         device_group_ids,
     }))
+}
+
+// === v1.0.10: admin manages a user's plan ===
+
+/// POST /admin/users/{id}/buy-plan — admin assigns a plan to a user, charging
+/// the user's balance per the normal purchase rules (same atomic transaction as
+/// the self-service shop). Unlike the shop, hidden plans ARE purchasable here
+/// (an admin may grant an unlisted plan). Admin targets are rejected (a plan on
+/// an admin account is meaningless).
+pub async fn admin_buy_plan_for_user(
+    _admin: AdminOnly,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(req): Json<AdminBuyPlanRequest>,
+) -> Json<ApiResponse<()>> {
+    // Target must exist and be a non-admin.
+    match crate::db::repo::UserRepository::find_by_id(state.db.as_ref(), id).await {
+        Ok(Some(u)) if u.admin => return Json(err(400, "Cannot assign a plan to an admin user")),
+        Ok(Some(_)) => {}
+        Ok(None) => return Json(err(404, "User not found")),
+        Err(e) => {
+            tracing::error!("admin_buy_plan_for_user {}: find_by_id failed: {}", id, e);
+            return Json(err(500, "database error"));
+        }
+    }
+
+    let plan = match state.db.find_plan_by_id(req.plan_id).await {
+        Ok(Some(p)) => p,
+        Ok(None) => return Json(err(404, "Plan not found")),
+        Err(e) => {
+            tracing::error!("admin_buy_plan_for_user: plan lookup failed: {}", e);
+            return Json(err(500, "database error"));
+        }
+    };
+    if plan.plan_type == "time" && plan.duration_days <= 0 {
+        return Json(err(400, "This plan has no valid duration"));
+    }
+
+    let price_cents = match relay_shared::money::balance_to_cents(&plan.price) {
+        Some(c) => c,
+        None => {
+            tracing::error!(
+                "admin_buy_plan_for_user: plan {} has non-canonical price {:?}",
+                plan.id,
+                plan.price
+            );
+            return Json(err(500, "database error"));
+        }
+    };
+
+    let duration_days = if plan.plan_type == "time" {
+        plan.duration_days
+    } else {
+        0
+    };
+
+    let device_group_ids = if plan.grant_all_groups {
+        Vec::new()
+    } else {
+        match state.db.list_plan_device_groups(plan.id).await {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::error!(
+                    "admin_buy_plan_for_user: list_plan_device_groups failed: {}",
+                    e
+                );
+                return Json(err(500, "database error"));
+            }
+        }
+    };
+
+    match state
+        .db
+        .buy_plan(
+            id,
+            plan.id,
+            &plan.name,
+            price_cents,
+            plan.traffic,
+            plan.max_rules,
+            duration_days,
+            plan.reset_traffic,
+            plan.grant_all_groups,
+            &device_group_ids,
+        )
+        .await
+    {
+        Ok(()) => {
+            tracing::info!(
+                action = "admin_buy_plan_for_user",
+                target_user_id = id,
+                actor_admin_id = _admin.user_id,
+                plan_id = plan.id,
+                "admin assigned plan to user"
+            );
+            state
+                .node_connections
+                .broadcast_all(r#"{"type":"config_changed"}"#)
+                .await;
+            Json(ApiResponse::success(()))
+        }
+        Err(BuyPlanError::InsufficientBalance) => Json(err(400, "余额不足")),
+        Err(BuyPlanError::Database(e)) => {
+            tracing::error!("admin_buy_plan_for_user {}: db error: {}", id, e);
+            Json(err(500, "database error"))
+        }
+    }
+}
+
+/// PUT /admin/users/{id}/plan — admin edits a user's plan association + expiry
+/// WITHOUT charging. Used to remove a plan (clear=true → both NULL) or adjust
+/// the expiry (clear=false → keep the user's current plan_id, set the expiry,
+/// where a null plan_expire_at means "never expires"). Admin targets are
+/// rejected (admin_set_user_plan also guards WHERE admin=false).
+pub async fn admin_set_user_plan(
+    _admin: AdminOnly,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(req): Json<AdminSetUserPlanRequest>,
+) -> Json<ApiResponse<()>> {
+    // When clearing, both columns go NULL. Otherwise keep the existing plan_id
+    // and write the new expiry (None = no expiry). We read the current row to
+    // resolve "keep plan_id" and to 404 on a missing/admin target.
+    let (plan_id, expire) = if req.clear {
+        (None, None)
+    } else {
+        match crate::db::repo::UserRepository::find_by_id(state.db.as_ref(), id).await {
+            Ok(Some(u)) if u.admin => return Json(err(400, "Cannot edit an admin user's plan")),
+            Ok(Some(u)) => (u.plan_id, req.plan_expire_at.clone()),
+            Ok(None) => return Json(err(404, "User not found")),
+            Err(e) => {
+                tracing::error!("admin_set_user_plan {}: find_by_id failed: {}", id, e);
+                return Json(err(500, "database error"));
+            }
+        }
+    };
+
+    match state.db.admin_set_user_plan(id, plan_id, expire).await {
+        Ok(0) => Json(err(404, "User not found (or is an admin)")),
+        Ok(_) => {
+            tracing::info!(
+                action = "admin_set_user_plan",
+                target_user_id = id,
+                actor_admin_id = _admin.user_id,
+                "admin edited user plan (clear={})",
+                req.clear
+            );
+            // Expiry feeds list_active_for_config — refresh node configs.
+            state
+                .node_connections
+                .broadcast_all(r#"{"type":"config_changed"}"#)
+                .await;
+            Json(ApiResponse::success(()))
+        }
+        Err(e) => {
+            tracing::error!("admin_set_user_plan {}: db error: {}", id, e);
+            Json(err(500, "database error"))
+        }
+    }
 }

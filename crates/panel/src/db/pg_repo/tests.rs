@@ -3130,3 +3130,67 @@ async fn pg_migration_does_not_pause_cross_owner_shared_inbound_rules() {
     );
     cleanup(&db).await;
 }
+
+// ── v1.0.10: admin directly edits a user's plan association + expiry ──
+
+#[tokio::test]
+async fn pg_admin_set_user_plan_clears_and_adjusts_expiry() {
+    let Some(db) = repo("admin_set_plan").await else {
+        return;
+    };
+    let (alice, pid) = seed_buyer_and_plan(&db, "100.00", 0, "5.00", 30, false).await;
+    sqlx::query(
+        "UPDATE users SET plan_id = $1, plan_expire_at = '2030-01-01 00:00:00' WHERE id = $2",
+    )
+    .bind(pid)
+    .bind(alice)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        db.admin_set_user_plan(alice, Some(pid), Some("2099-12-31 00:00:00".into()))
+            .await
+            .unwrap(),
+        1
+    );
+    let (plan_id, expire): (Option<i64>, Option<String>) =
+        sqlx::query_as("SELECT plan_id, plan_expire_at FROM users WHERE id = $1")
+            .bind(alice)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(plan_id, Some(pid));
+    assert_eq!(expire.as_deref(), Some("2099-12-31 00:00:00"));
+
+    db.admin_set_user_plan(alice, None, None).await.unwrap();
+    let (plan_id2, expire2): (Option<i64>, Option<String>) =
+        sqlx::query_as("SELECT plan_id, plan_expire_at FROM users WHERE id = $1")
+            .bind(alice)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(plan_id2, None);
+    assert_eq!(expire2, None);
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_admin_set_user_plan_skips_admin_users() {
+    let Some(db) = repo("admin_set_plan_skip").await else {
+        return;
+    };
+    sqlx::query("INSERT INTO users (id, username, password, admin) VALUES (90, 'adm', 'x', TRUE)")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let affected = db
+        .admin_set_user_plan(90, None, Some("2099-12-31 00:00:00".into()))
+        .await
+        .unwrap();
+    assert_eq!(
+        affected, 0,
+        "admin users must be skipped (WHERE admin = false)"
+    );
+    cleanup(&db).await;
+}

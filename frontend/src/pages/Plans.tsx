@@ -35,6 +35,11 @@ export default function Plans() {
   // multi-select is disabled (the explicit list is moot). Tracked per-form.
   const [createGrantAll, setCreateGrantAll] = useState(false);
   const [editGrantAll, setEditGrantAll] = useState(false);
+  // Duration only applies to time plans — the buy path forces duration_days=0
+  // for data plans (see shop.rs). Watch plan_type so the form hides the
+  // duration field for data plans instead of offering a no-op input.
+  const createPlanType = Form.useWatch('plan_type', createForm);
+  const editPlanType = Form.useWatch('plan_type', editForm);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -197,9 +202,12 @@ export default function Plans() {
         <Form form={createForm} onFinish={handleCreate} layout="vertical" initialValues={{ plan_type: 'data', duration_days: 0, hidden: false, reset_traffic: false, description: '', grant_all_groups: false, device_group_ids: [] }}>
           <Form.Item name="name" label={t('name')} rules={[{ required: true }]}><Input placeholder="Pro 100GB" /></Form.Item>
           <Form.Item name="plan_type" label={t('type')} rules={[{ required: true }]}>
-            <Select options={[{ value: 'data', label: t('planTypeData') }, { value: 'time', label: t('planTypeTime') }]} />
+            <Select
+              options={[{ value: 'data', label: t('planTypeData') }, { value: 'time', label: t('planTypeTime') }]}
+              onChange={(v) => { if (v === 'data') createForm.setFieldValue('duration_days', 0); }}
+            />
           </Form.Item>
-          <Space style={{ display: 'flex' }}>
+          <Space align="start" style={{ display: 'flex' }}>
             <Form.Item name="traffic_gb" label={t('planTrafficGb')} rules={[{ required: true }]} style={{ flex: 1 }} extra={t('planTrafficGbHint')}>
               <InputNumber min={0} step={1} style={{ width: '100%' }} addonAfter="GB" />
             </Form.Item>
@@ -207,13 +215,15 @@ export default function Plans() {
               <InputNumber min={0} max={100000} style={{ width: '100%' }} />
             </Form.Item>
           </Space>
-          <Space style={{ display: 'flex' }}>
+          <Space align="start" style={{ display: 'flex' }}>
             <Form.Item name="price" label={t('planPrice')} rules={[{ required: true }]} style={{ flex: 1 }}>
               <Input placeholder="9.99" />
             </Form.Item>
-            <Form.Item name="duration_days" label={t('planDuration')} style={{ flex: 1 }} extra={t('planDurationHint')}>
-              <InputNumber min={0} style={{ width: '100%' }} />
-            </Form.Item>
+            {createPlanType === 'time' && (
+              <Form.Item name="duration_days" label={t('planDuration')} rules={[{ required: true, type: 'number', min: 1, message: t('planDurationHint') }]} style={{ flex: 1 }} extra={t('planDurationHint')}>
+                <InputNumber min={1} style={{ width: '100%' }} />
+              </Form.Item>
+            )}
           </Space>
           {/* v1.0.9: device-group grants. The switch disables the multi-select. */}
           <Form.Item name="grant_all_groups" label={t('planGrantAll')} valuePropName="checked" extra={t('planGrantAllHint')}>
@@ -228,7 +238,7 @@ export default function Plans() {
               options={groups.map((g) => ({ value: g.id, label: g.name }))}
             />
           </Form.Item>
-          <Space style={{ display: 'flex' }}>
+          <Space align="start" style={{ display: 'flex' }}>
             <Form.Item name="hidden" label={t('planHidden')} valuePropName="checked" style={{ flex: 1 }}>
               <Switch />
             </Form.Item>
@@ -244,9 +254,12 @@ export default function Plans() {
         <Form form={editForm} onFinish={handleUpdate} layout="vertical">
           <Form.Item name="name" label={t('name')}><Input /></Form.Item>
           <Form.Item name="plan_type" label={t('type')}>
-            <Select options={[{ value: 'data', label: t('planTypeData') }, { value: 'time', label: t('planTypeTime') }]} />
+            <Select
+              options={[{ value: 'data', label: t('planTypeData') }, { value: 'time', label: t('planTypeTime') }]}
+              onChange={(v) => { if (v === 'data') editForm.setFieldValue('duration_days', 0); }}
+            />
           </Form.Item>
-          <Space style={{ display: 'flex' }}>
+          <Space align="start" style={{ display: 'flex' }}>
             <Form.Item name="traffic_gb" label={t('planTrafficGb')} style={{ flex: 1 }} extra={t('planTrafficGbHint')}>
               <InputNumber min={0} step={1} style={{ width: '100%' }} addonAfter="GB" />
             </Form.Item>
@@ -254,11 +267,13 @@ export default function Plans() {
               <InputNumber min={0} max={100000} style={{ width: '100%' }} />
             </Form.Item>
           </Space>
-          <Space style={{ display: 'flex' }}>
+          <Space align="start" style={{ display: 'flex' }}>
             <Form.Item name="price" label={t('planPrice')} style={{ flex: 1 }}><Input /></Form.Item>
-            <Form.Item name="duration_days" label={t('planDuration')} style={{ flex: 1 }} extra={t('planDurationHint')}>
-              <InputNumber min={0} style={{ width: '100%' }} />
-            </Form.Item>
+            {editPlanType === 'time' && (
+              <Form.Item name="duration_days" label={t('planDuration')} rules={[{ required: true, type: 'number', min: 1, message: t('planDurationHint') }]} style={{ flex: 1 }} extra={t('planDurationHint')}>
+                <InputNumber min={1} style={{ width: '100%' }} />
+              </Form.Item>
+            )}
           </Space>
           {/* v1.0.9: device-group grants. */}
           <Form.Item name="grant_all_groups" label={t('planGrantAll')} valuePropName="checked" extra={t('planGrantAllHint')}>
@@ -273,7 +288,7 @@ export default function Plans() {
               options={groups.map((g) => ({ value: g.id, label: g.name }))}
             />
           </Form.Item>
-          <Space style={{ display: 'flex' }}>
+          <Space align="start" style={{ display: 'flex' }}>
             <Form.Item name="hidden" label={t('planHidden')} valuePropName="checked" style={{ flex: 1 }}><Switch /></Form.Item>
             <Form.Item name="reset_traffic" label={t('planResetTraffic')} valuePropName="checked" style={{ flex: 1 }}><Switch /></Form.Item>
           </Space>

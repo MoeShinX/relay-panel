@@ -159,6 +159,18 @@ pub trait UserRepository: Send + Sync {
         banned: Option<bool>,
         suspended: Option<bool>,
     ) -> Result<u64, DbError>;
+    /// v1.0.10: admin directly sets a user's plan association + expiry WITHOUT
+    /// charging (the "edit user plan" panel uses this for removing a plan — both
+    /// NULL — and for adjusting the expiry). Unconditionally writes both columns;
+    /// the caller composes the pair (e.g. keep plan_id, change expiry). Skips
+    /// admin users (WHERE admin = false). Returns rows affected (0 = not found
+    /// or target is an admin).
+    async fn admin_set_user_plan(
+        &self,
+        id: i64,
+        plan_id: Option<i64>,
+        plan_expire_at: Option<String>,
+    ) -> Result<u64, DbError>;
     /// Increment user traffic_used (called inside traffic batch tx).
     async fn increment_user_traffic(&self, id: i64, delta: i64) -> Result<(), DbError>;
     /// Reset traffic_used to 0 for user AND their rules (atomic).

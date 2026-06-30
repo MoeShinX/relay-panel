@@ -121,6 +121,17 @@ pub fn routes() -> Router<AppState> {
             "/admin/users/{id}/device-groups",
             axum::routing::get(admin::get_user_device_groups),
         )
+        // v1.0.10: admin manages a user's plan. POST buy-plan charges the user's
+        // balance and applies the plan (reuses the shop's buy_plan tx); PUT plan
+        // edits the association + expiry without charging (remove / change expiry).
+        .route(
+            "/admin/users/{id}/buy-plan",
+            axum::routing::post(admin::admin_buy_plan_for_user),
+        )
+        .route(
+            "/admin/users/{id}/plan",
+            axum::routing::put(admin::admin_set_user_plan),
+        )
         .route(
             "/nodes/shared",
             axum::routing::get(groups::list_shared_node_summary),

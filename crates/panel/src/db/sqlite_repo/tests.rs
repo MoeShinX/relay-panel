@@ -3094,3 +3094,58 @@ async fn expiry_does_not_revoke_granted_groups() {
         "expiry must not revoke granted device groups"
     );
 }
+
+// ── v1.0.10: admin directly edits a user's plan association + expiry ──
+
+#[tokio::test]
+async fn admin_set_user_plan_clears_and_adjusts_expiry() {
+    let db = repo().await;
+    let (alice, pid) = seed_buyer_and_plan(&db, "100.00", 0, "5.00", 30, false).await;
+    // Start with a plan + expiry on alice.
+    sqlx::query(
+        "UPDATE users SET plan_id = ?, plan_expire_at = '2030-01-01 00:00:00' WHERE id = ?",
+    )
+    .bind(pid)
+    .bind(alice)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    // Adjust expiry, keep the plan_id.
+    assert_eq!(
+        db.admin_set_user_plan(alice, Some(pid), Some("2099-12-31 00:00:00".into()))
+            .await
+            .unwrap(),
+        1
+    );
+    let (plan_id, expire): (Option<i64>, Option<String>) =
+        sqlx::query_as("SELECT plan_id, plan_expire_at FROM users WHERE id = ?")
+            .bind(alice)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(plan_id, Some(pid));
+    assert_eq!(expire.as_deref(), Some("2099-12-31 00:00:00"));
+
+    // Clear: both columns go NULL.
+    db.admin_set_user_plan(alice, None, None).await.unwrap();
+    let (plan_id2, expire2): (Option<i64>, Option<String>) =
+        sqlx::query_as("SELECT plan_id, plan_expire_at FROM users WHERE id = ?")
+            .bind(alice)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(plan_id2, None);
+    assert_eq!(expire2, None);
+}
+
+#[tokio::test]
+async fn admin_set_user_plan_skips_admin_users() {
+    let db = repo().await;
+    // The baseline seeds admin user id 1. Editing an admin's plan must be a no-op.
+    let affected = db
+        .admin_set_user_plan(1, None, Some("2099-12-31 00:00:00".into()))
+        .await
+        .unwrap();
+    assert_eq!(affected, 0, "admin users must be skipped (WHERE admin = 0)");
+}
