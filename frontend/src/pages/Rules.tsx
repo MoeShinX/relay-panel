@@ -1,6 +1,6 @@
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, message, Popconfirm, Tag, Alert, Typography, Dropdown, Switch, Tabs, Spin, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
-import { PlusOutlined, ReloadOutlined, EditOutlined, ApiOutlined, CopyOutlined, DownloadOutlined, UploadOutlined, PauseCircleOutlined, PlayCircleOutlined, DeleteOutlined, ArrowUpOutlined, ArrowDownOutlined, MedicineBoxOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, EditOutlined, ApiOutlined, CopyOutlined, DownloadOutlined, UploadOutlined, PauseCircleOutlined, PlayCircleOutlined, DeleteOutlined, ArrowUpOutlined, ArrowDownOutlined, MedicineBoxOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api/client';
@@ -574,9 +574,9 @@ const IMPORT_DEFAULTS = {
   const sharedInGroups = sharedGroups.filter(g => g.group_type === 'in');
   const allInGroups = isAdmin ? inGroups : sharedInGroups;
   const protocolOptions = [
+    { value: 'tcp_udp', label: t('tcpUdp') },
     { value: 'tcp', label: 'TCP' },
     { value: 'udp', label: 'UDP' },
-    { value: 'tcp_udp', label: t('tcpUdp') },
   ];
   const strategyOptions = [
     { value: 'first', label: t('lbFirst') },
@@ -748,7 +748,7 @@ const IMPORT_DEFAULTS = {
                 )}
                 {renderHostHint(createGroupId)}
                 <Form.Item name="listen_port" label={t('listenPort')} extra={t('listenPortHint')}><InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="auto" /></Form.Item>
-                <Form.Item name="protocol" label={t('protocol')} rules={[{ required: true }]} initialValue="tcp"
+                <Form.Item name="protocol" label={t('protocol')} rules={[{ required: true }]} initialValue="tcp_udp"
                   extra={isUdp(createProto) ? t('entryTransportUdpOnlyRaw') : undefined}>
                   <Select
                     options={protocolOptions}
@@ -785,10 +785,13 @@ const IMPORT_DEFAULTS = {
                     </div>
                   }
                 />
-                <Form.Item label={t('rateLimits')} extra={t('rateLimitsHint')}>
+                <Form.Item
+                  label={<span>{t('rateLimits')} <Tooltip title={t('rateLimitsTooltip')}><QuestionCircleOutlined style={{ color: '#999' }} /></Tooltip></span>}
+                  extra={t('rateLimitsHint')}
+                >
                   <Space>
-                    <Form.Item name="upload_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonAfter="Mbps" style={{ width: 150 }} placeholder={t('uploadLimit')} /></Form.Item>
-                    <Form.Item name="download_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonAfter="Mbps" style={{ width: 150 }} placeholder={t('downloadLimit')} /></Form.Item>
+                    <Form.Item name="upload_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('uploadLimit')} addonAfter="Mbps" style={{ width: 200 }} placeholder="0" /></Form.Item>
+                    <Form.Item name="download_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('downloadLimit')} addonAfter="Mbps" style={{ width: 200 }} placeholder="0" /></Form.Item>
                   </Space>
                 </Form.Item>
               </>),
@@ -842,10 +845,13 @@ const IMPORT_DEFAULTS = {
                     </div>
                   }
                 />
-                <Form.Item label={t('rateLimits')} extra={t('rateLimitsHint')}>
+                <Form.Item
+                  label={<span>{t('rateLimits')} <Tooltip title={t('rateLimitsTooltip')}><QuestionCircleOutlined style={{ color: '#999' }} /></Tooltip></span>}
+                  extra={t('rateLimitsHint')}
+                >
                   <Space>
-                    <Form.Item name="upload_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonAfter="Mbps" style={{ width: 150 }} placeholder={t('uploadLimit')} /></Form.Item>
-                    <Form.Item name="download_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonAfter="Mbps" style={{ width: 150 }} placeholder={t('downloadLimit')} /></Form.Item>
+                    <Form.Item name="upload_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('uploadLimit')} addonAfter="Mbps" style={{ width: 200 }} placeholder="0" /></Form.Item>
+                    <Form.Item name="download_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('downloadLimit')} addonAfter="Mbps" style={{ width: 200 }} placeholder="0" /></Form.Item>
                   </Space>
                 </Form.Item>
               </>),
