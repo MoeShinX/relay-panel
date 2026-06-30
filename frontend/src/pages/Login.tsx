@@ -43,7 +43,7 @@ export default function Login() {
       await login(res.data.token);
       message.success(t('loginSuccess'));
       // Both roles land on / — RoleHome renders Dashboard (admin) or
-      // UserDashboard (regular) based on the server-verified role.
+      // redirects regular users to /account (the regular dashboard was removed).
       navigate('/');
     } catch {
       message.error(t('loginFailed'));

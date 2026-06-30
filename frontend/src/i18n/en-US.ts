@@ -55,9 +55,6 @@ export const enUS: Dict = {
   // v0.4.11 PR2: regular user nav labels
   myRules: 'My Rules',
   availableNodes: 'Node Status',
-  // v0.4.11 PR2: user dashboard
-  availableGroups: 'Available Groups',
-  onlineNodes: 'Online Nodes',
 
   // Common actions
   add: 'Add',
@@ -418,15 +415,6 @@ export const enUS: Dict = {
   allGroups: 'All groups',
   unknownGroup: 'Unknown group',
   close: 'Close',
-  // v0.4.11 PR2: user dashboard empty states
-  noGroupsAdmin: 'No groups created by admin yet',
-  noNodesAvailable: 'No available nodes yet. Contact your administrator.',
-  allNodesOffline: 'Nodes for the available lines are offline. Please retry later or contact your administrator.',
-  createRuleButton: 'Create Forwarding Rule',
-  createRuleHint: 'Available nodes found. Click the button above to create your first rule.',
-  adminNotCreatedGroup: 'No groups created by admin yet',
-  adminNotProvidedNodes: 'No available nodes yet. Contact your administrator.',
-  allNodesOfflineHint: 'Nodes for the available lines are offline. Please retry later or contact your administrator.',
   // v0.4.12 PR1: shared lines empty + load-failure states
   adminNoLines: 'No lines are available yet. Please contact your administrator.',
   loadFailed: 'Load failed',

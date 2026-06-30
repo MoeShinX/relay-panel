@@ -28,9 +28,9 @@ export const router = createBrowserRouter([
     path: '/',
     element: <RequireAuth><MainLayout /></RequireAuth>,
     children: [
-      // v0.4.10: the index route renders RoleHome, which switches between
-      // Dashboard (admin) and UserDashboard (regular) based on the
-      // server-verified role. No RequireAdmin — regular users land here.
+      // v0.4.10: the index route renders RoleHome. Admins get the Dashboard;
+      // regular users are redirected to /account (the regular-user dashboard
+      // was removed in v1.0.7). No RequireAdmin — regular users land here.
       { index: true, element: <RoleHome /> },
       // Owner-scoped resources — any authenticated user manages their own.
       { path: 'rules', element: <Rules /> },

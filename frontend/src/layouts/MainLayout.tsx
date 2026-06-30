@@ -31,8 +31,10 @@ export default function MainLayout() {
   // v0.4.11 PR2: role-based navigation.
   // Admin: Dashboard → 个人中心, 转发规则, 设备分组, 节点状态, 隧道配置, 用户管理, 系统设置
   // Regular: 个人中心, 我的规则, 可用节点
+  // v1.0.7: 仪表盘 (/) is admin-only — the regular-user dashboard was removed
+  // (redirects to /account), so regular users no longer get this menu entry.
+  const dashboardItem = { key: '/', icon: <DashboardOutlined />, label: t('dashboard') };
   const sharedItems = [
-    { key: '/', icon: <DashboardOutlined />, label: t('dashboard') },
     { key: '/account', icon: <UserOutlined />, label: t('personalCenter') },
     { key: '/shop', icon: <ShoppingOutlined />, label: t('shop') },
     { key: '/rules', icon: <ApiOutlined />, label: t('myRules') },
@@ -44,7 +46,9 @@ export default function MainLayout() {
     { key: '/users', icon: <UserOutlined />, label: t('users') },
     { key: '/settings', icon: <SettingOutlined />, label: t('systemSettings') },
   ];
-  const menuItems = [...sharedItems, ...(isAdmin ? adminOnlyItems : [])];
+  const menuItems = isAdmin
+    ? [dashboardItem, ...sharedItems, ...adminOnlyItems]
+    : sharedItems;
 
   const logout = () => {
     authLogout();

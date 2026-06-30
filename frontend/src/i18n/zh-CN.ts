@@ -54,9 +54,6 @@ export const zhCN = {
   // v0.4.11 PR2: regular user nav labels
   myRules: '我的规则',
   availableNodes: '节点状态',
-  // v0.4.11 PR2: user dashboard
-  availableGroups: '可用分组',
-  onlineNodes: '在线节点',
 
   // Common actions
   add: '新增',
@@ -417,15 +414,6 @@ export const zhCN = {
   allGroups: '全部分组',
   unknownGroup: '未知分组',
   close: '关闭',
-  // v0.4.11 PR2: user dashboard empty states
-  noGroupsAdmin: '管理员尚未创建分组',
-  noNodesAvailable: '管理员尚未提供可用节点，请联系管理员。',
-  allNodesOffline: '当前线路节点暂未在线，请稍后重试或联系管理员。',
-  createRuleButton: '创建转发规则',
-  createRuleHint: '已有可用节点，点击上方按钮创建第一条转发规则。',
-  adminNotCreatedGroup: '管理员尚未创建分组',
-  adminNotProvidedNodes: '管理员尚未提供可用节点，请联系管理员。',
-  allNodesOfflineHint: '当前线路节点暂未在线，请稍后重试或联系管理员。',
   // v0.4.12 PR1: shared lines empty + load-failure states
   adminNoLines: '管理员暂未提供可用线路，请联系管理员。',
   loadFailed: '加载失败',
