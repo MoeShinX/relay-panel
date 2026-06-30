@@ -30,13 +30,14 @@
 
 - 🔀 **Forwarding rules** — TCP/UDP port forwarding with multi-target support, failover and round-robin load balancing
 - 🛡️ **Circuit breaker** — 3 consecutive failures → skip target for 30 s; all-down triggers probe mode for auto-recovery
-- 📊 **Dashboard** — node status overview, traffic statistics, version update check
+- 🛒 **Plan shop & billing** — self-service plan purchase (balance charge) with order history; admin plan CRUD, plans can grant device groups and auto-authorize on purchase
+- 💳 **Per-group rate billing** — each device group has a multiplier (0.1–100); users are charged `real bytes × rate`
 - 📈 **Traffic & quotas** — per-rule and per-user tracking with configurable limits (rule count, bandwidth, traffic cap)
 - 📋 **Multi-plan registration** — admins configure allowed plans; users choose on sign-up
-- 👥 **User permission groups** — admins create groups with allowed device groups; users access devices by group membership; unauthorized rules are automatically paused
-- 👤 **User management** — manage any user's rules, reset traffic, reset password, ban/unban
-- 🖥️ **Device group management** — expandable groups with node listings; node removal does not affect groups or rules
-- 🖱️ **Minimal rule import/export** — custom compact format, batch import with automatic node distribution
+- 🛡️ **Per-user device-group authorization** — a user is either unrestricted or limited to an explicit set of authorized groups; authorization only ever expands, purchasing a plan auto-grants it, and unauthorized rules are automatically paused
+- 👤 **User management** — manage any user's rules, plan (assign/charge/expiry/remove), reset traffic, reset password, ban/unban
+- 🖥️ **Device group management** — expandable groups with node listings; a "hidden" toggle hides a group from regular users' Node Status page only (rules keep working); node removal does not affect groups or rules
+- 🖱️ **Minimal rule import/export** — single-line JSON format, batch import / batch pause-resume with automatic node distribution
 - 🖥️ **Live node status** — CPU, memory, connections, version
 - 🌍 **Node region detection** — automatically identifies each node's country/region with flag display
 - 🗄️ **Dual database** — SQLite (default, zero-config) or PostgreSQL

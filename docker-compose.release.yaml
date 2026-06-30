@@ -17,7 +17,7 @@
 
 services:
   panel:
-    image: ghcr.io/moeshinx/relay-panel-panel:1.0.6
+    image: ghcr.io/moeshinx/relay-panel-panel:1.0.7
     ports:
       # RELAYPANEL_WEB_MODE controls how the panel port is published:
       #   direct         → 0.0.0.0:18888:18888  (public, default)
@@ -50,7 +50,7 @@ services:
   # separate forwarding server. To enable it on this host, use --profile node
   # and set NODE_TOKEN to a real inbound-group token from the panel UI.
   node:
-    image: ghcr.io/moeshinx/relay-panel-node:1.0.6
+    image: ghcr.io/moeshinx/relay-panel-node:1.0.7
     profiles:
       - node
     network_mode: host

@@ -5,6 +5,65 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [1.0.7] - 2026-06-30
+
+A feature release: a self-service **plan shop with billing**, a rewritten
+**per-user device-group authorization** model, admin plan management, and a
+round of rule/node UI polish.
+
+### Added
+
+- **Plan shop & billing.** Self-service plan purchase (`/shop`) with order
+  history and account balance; admin plan CRUD (`/plans`). Buying a plan is an
+  atomic balance charge.
+- **User suspension.** A suspended user can still log in and buy a plan
+  (buying does not auto-unsuspend), but forwarding is gated off.
+- **Plan-linked device groups.** A plan can grant device-group access;
+  purchasing auto-grants the authorization (append-only — it never silently
+  removes access).
+- **Device-group rate billing.** Each group has a multiplier (0.1–100); users
+  are charged `real bytes × rate` while rule/user byte counters stay real.
+- **Admin "edit user plan" panel**, embedded in the edit-user modal: assign an
+  existing plan (charges the user's balance), change or remove the plan, and
+  edit the expiry. Removing a plan also revokes the user's device-group
+  authorization and auto-pauses (but does **not** delete) their rules.
+- **Batch pause / resume** on the rules page.
+- **Hidden device groups.** A per-group `hidden` toggle hides a group from
+  regular users' Node Status page only — rules keep working (still selectable
+  for new rules; existing rules forward and display normally). Admins are
+  unaffected.
+
+### Changed
+
+- **Per-user device-group authorization replaces user permission groups.** A
+  user is either unrestricted (`all_device_groups`) or limited to an explicit
+  set of authorized groups; authorization only ever expands.
+- **Removed the regular-user dashboard.** Its rules/traffic stats duplicated
+  the 个人中心 (Account) page and its line/node counts duplicated Node Status;
+  regular users now land on `/account`.
+- **Rule form UX.** "TCP + UDP" is now first in the protocol list and the
+  default for new rules; data-type plans hide the duration field; the two
+  rate-limit inputs are labeled 上行/下行 with a tooltip explaining the
+  shared-per-rule / enforced-per-node mechanism.
+- **Node Status table** widened the IP column so IPv6 no longer misaligns the
+  other columns; status/CPU columns compacted.
+- **Rule export is now compact single-line JSON** (`[{…},{…}]`) matching the
+  import box; the per-row export button was removed.
+
+### Fixed
+
+- **Deleting a plan no longer leaves residual device-group access.** Because
+  authorization "only ever expands", a removed plan now also clears
+  `all_device_groups` + `user_device_groups` and pauses the affected rules.
+- **Resume-rule authorization bypass.** A restricted user could un-pause a rule
+  on a device group they were not authorized for; `update_rule` now re-checks
+  authorization on resume.
+- **Regular user's rule edit** showed "未配置" for a shared group's connect
+  host; it now resolves from the merged shared-group info.
+- **Batch delete, admin rule isolation, and user-group UX** fixes.
+
+---
+
 ## [1.0.6] - 2026-06-29
 
 ### Fixed
