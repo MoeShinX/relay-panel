@@ -12,6 +12,7 @@ use sqlx::SqlitePool;
 
 mod groups;
 mod kvs;
+mod orders;
 mod profiles;
 mod rules;
 mod settings;

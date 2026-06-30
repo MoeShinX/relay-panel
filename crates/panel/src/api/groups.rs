@@ -46,15 +46,6 @@ pub async fn list_shared_groups(
         return Json(ApiResponse::success(Vec::new()));
     }
 
-    // Check if the user's group allows all groups.
-    // v1.0.4: if the user has no permission group (group_id=null, legacy),
-    // fall back to showing all admin-owned inbound groups.
-    let allows_all = state
-        .db
-        .user_group_allows_all(user.user_id)
-        .await
-        .unwrap_or(true); // default to allow-all when group is null
-
     let all_groups = match state.db.list_shared_groups(user.user_id, false).await {
         Ok(groups) => groups,
         Err(e) => {
@@ -63,21 +54,19 @@ pub async fn list_shared_groups(
         }
     };
 
-    if allows_all {
-        Json(ApiResponse::success(all_groups))
-    } else {
-        // Filter to only groups assigned to the user's permission group.
-        let authorized = state
-            .db
-            .authorized_device_group_ids(user.user_id)
-            .await
-            .unwrap_or_default();
-        let filtered: Vec<_> = all_groups
-            .into_iter()
-            .filter(|g| authorized.contains(&g.id))
-            .collect();
-        Json(ApiResponse::success(filtered))
-    }
+    // v1.0.7: filter to the groups the user is authorized for. The authorized
+    // set already expands all_device_groups (→ every inbound group); an
+    // unassigned non-admin gets an empty set and sees nothing.
+    let authorized = state
+        .db
+        .authorized_device_group_ids(user.user_id)
+        .await
+        .unwrap_or_default();
+    let filtered: Vec<_> = all_groups
+        .into_iter()
+        .filter(|g| authorized.contains(&g.id))
+        .collect();
+    Json(ApiResponse::success(filtered))
 }
 
 /// GET /nodes/shared — per-NODE availability + load metrics for the shared
@@ -108,28 +97,20 @@ pub async fn list_shared_node_summary(
             }
         };
 
-    // v1.0.4: filter by user permission group (same logic as list_shared_groups).
+    // v1.0.7: filter by per-user device-group authorization (same logic as
+    // list_shared_groups). Admins are handled above (empty list).
     let groups = if user.admin {
         groups
     } else {
-        let allows_all = state
+        let authorized = state
             .db
-            .user_group_allows_all(user.user_id)
+            .authorized_device_group_ids(user.user_id)
             .await
-            .unwrap_or(true);
-        if allows_all {
-            groups
-        } else {
-            let authorized = state
-                .db
-                .authorized_device_group_ids(user.user_id)
-                .await
-                .unwrap_or_default();
-            groups
-                .into_iter()
-                .filter(|g| authorized.contains(&g.id))
-                .collect()
-        }
+            .unwrap_or_default();
+        groups
+            .into_iter()
+            .filter(|g| authorized.contains(&g.id))
+            .collect()
     };
 
     if groups.is_empty() {

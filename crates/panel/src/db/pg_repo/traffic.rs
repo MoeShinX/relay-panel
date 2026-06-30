@@ -19,6 +19,27 @@ impl TrafficRepository for PgRepository {
     ) -> Result<Vec<TrafficEntryResult>, DbError> {
         let mut tx = self.pool.begin().await?;
 
+        // ── v1.0.8: read this group's billing rate once for the whole batch
+        // (every entry in a batch is for the SAME group_id). rate lives on
+        // device_groups; users are CHARGED real * rate (rounded) while
+        // forward_rules keeps real bytes. Missing group → rate=1.0 (defensive;
+        // its rules will be rejected as Unavailable below anyway). ──
+        let rate: f64 = sqlx::query_scalar("SELECT rate FROM device_groups WHERE id = $1")
+            .bind(group_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .flatten()
+            .unwrap_or(1.0);
+        if !(0.1..=100.0).contains(&rate) {
+            let _ = tx.rollback().await;
+            tracing::error!(
+                "traffic_batch: group {} has out-of-range rate {} (expected 0.1..=100)",
+                group_id,
+                rate
+            );
+            return Ok(vec![TrafficEntryResult::Overflow]);
+        }
+
         // ── Pass 1: validate u64→i64 per entry + aggregate duplicate rule_ids
         // into one per-rule delta (so the cumulative overflow check sees the
         // true batch total, not a per-row slice). ──
@@ -55,6 +76,9 @@ impl TrafficRepository for PgRepository {
             uid: i64,
             delta_up: u64,
             delta_down: u64,
+            /// v1.0.8: billed bytes charged to the USER = round((up+down) * rate).
+            /// Separate from delta_up/delta_down (real bytes for the rule).
+            billed_delta: i64,
         }
         let mut resolved: Vec<Resolved> = Vec::with_capacity(rule_delta.len());
         let mut user_delta: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
@@ -88,14 +112,23 @@ impl TrafficRepository for PgRepository {
                 let _ = tx.rollback().await;
                 return Ok(vec![TrafficEntryResult::Unavailable]);
             };
-            // Per-rule cumulative overflow.
+            // Per-rule cumulative overflow (REAL bytes — rate does not apply).
             if rule_used.checked_add(rule_delta_sum).is_none() {
                 let _ = tx.rollback().await;
                 return Ok(vec![TrafficEntryResult::Overflow]);
             }
-            // Per-user cumulative overflow: existing total + running batch delta.
+            // v1.0.8: billed delta charged to the user = round(real * rate).
+            let billed_raw = (rule_delta_sum as f64) * rate;
+            let billed_delta = if billed_raw.is_finite() && billed_raw <= i64::MAX as f64 {
+                billed_raw.round() as i64
+            } else {
+                let _ = tx.rollback().await;
+                return Ok(vec![TrafficEntryResult::Overflow]);
+            };
+            // Per-user cumulative overflow: existing total + running batch delta
+            // (BILLED bytes).
             let cur_user_delta = *user_delta.get(&uid).unwrap_or(&0);
-            let new_user_delta = match cur_user_delta.checked_add(rule_delta_sum) {
+            let new_user_delta = match cur_user_delta.checked_add(billed_delta) {
                 Some(v) => v,
                 None => {
                     let _ = tx.rollback().await;
@@ -112,10 +145,12 @@ impl TrafficRepository for PgRepository {
                 uid,
                 delta_up: *dup,
                 delta_down: *ddown,
+                billed_delta,
             });
         }
 
-        // ── Pass 3: apply writes (one UPDATE per distinct rule + its user). ──
+        // ── Pass 3: apply writes (one UPDATE per distinct rule + its user).
+        // v1.0.8: forward_rules += REAL bytes; users += BILLED bytes. ──
         for r in &resolved {
             let up = r.delta_up as i64;
             let down = r.delta_down as i64;
@@ -127,9 +162,8 @@ impl TrafficRepository for PgRepository {
             .bind(r.rule_id)
             .execute(&mut *tx)
             .await?;
-            sqlx::query("UPDATE users SET traffic_used = traffic_used + $1 + $2 WHERE id = $3")
-                .bind(up)
-                .bind(down)
+            sqlx::query("UPDATE users SET traffic_used = traffic_used + $1 WHERE id = $2")
+                .bind(r.billed_delta)
                 .bind(r.uid)
                 .execute(&mut *tx)
                 .await?;

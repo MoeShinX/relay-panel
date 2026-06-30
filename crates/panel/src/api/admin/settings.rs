@@ -4,20 +4,7 @@ use crate::api::AppState;
 use crate::db::repo::RegistrationSettings;
 use crate::service::settings::RegistrationSettingsError;
 use axum::{extract::State, Json};
-use relay_shared::models::*;
 use relay_shared::protocol::*;
-
-// === Plans ===
-pub async fn list_plans(
-    _admin: AdminOnly,
-    State(state): State<AppState>,
-) -> Json<ApiResponse<Vec<Plan>>> {
-    let plans: Vec<Plan> = state.db.list_plans().await.unwrap_or_else(|e| {
-        tracing::error!("list_plans: db error: {}", e);
-        Vec::new()
-    });
-    Json(ApiResponse::success(plans))
-}
 
 /// v0.4.21 PR2: read the registration settings (admin-only). Returns the full
 /// row { registration_enabled, default_registration_plan_id, allowed_plan_ids }.

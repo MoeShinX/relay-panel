@@ -4,7 +4,7 @@ import { PlusOutlined, ReloadOutlined, EditOutlined, ApiOutlined, CopyOutlined, 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api/client';
-import type { ApiEnvelope, ForwardRule, DeviceGroup, User, RuleTargetInput, DiagnoseResponse, NodeDiagnoseStatus, DiagnoseTargetResult, SharedGroupSummary } from '../api/types';
+import type { ApiEnvelope, ForwardRule, DeviceGroup, User, UserSelf, RuleTargetInput, DiagnoseResponse, NodeDiagnoseStatus, DiagnoseTargetResult, SharedGroupSummary } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { formatBytes } from '../utils/format';
 import { useAuth } from '../auth/useAuth';
@@ -46,11 +46,6 @@ function payloadWithTargets<T extends Record<string, unknown>>(values: T & { tar
   };
 }
 
-/** Resolve the inbound group's connect_host for a rule. */
-function listenHostFor(rule: ForwardRule, groups: DeviceGroup[]): string {
-  return groups.find(g => g.id === rule.device_group_in)?.connect_host ?? '';
-}
-
 /** v1.0.4: simplified export format — only dest, listen_port, name.
  *  Enabled targets only. IPv6 wrapped as [addr]:port.
  *  v1.0.6: always emit a JSON array (even for a single rule) so the export
@@ -81,7 +76,7 @@ function downloadText(filename: string, text: string) {
 
 export default function Rules() {
   const { t } = useI18n();
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
   const [searchParams] = useSearchParams();
   // v0.4.20: admin can manage another user's rules via /rules?owner_uid=X.
   const filterOwnerUid: number | null = isAdmin
@@ -96,6 +91,10 @@ export default function Rules() {
   // of a misleading empty inbound dropdown.
   const [sharedLoadFailed, setSharedLoadFailed] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
+  // v1.0.7: a regular user's own traffic quota (admins read each owner's quota
+  // from `users` instead). Used to flag rules whose owner is out of traffic —
+  // those rules stop forwarding even though their `paused` flag stays false.
+  const [selfQuota, setSelfQuota] = useState<{ used: number; limit: number } | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -113,6 +112,7 @@ export default function Rules() {
   // v0.4.9: group-name column + filter. selectedGroup === null means "all".
   // (Explicit null, not !selectedGroup, so a future id of 0 wouldn't be falsy.)
   const [selectedGroup, setSelectedGroup] = useState<number | null>(null);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -123,7 +123,10 @@ export default function Rules() {
       // own rules), so the users list is fetched separately and only when
       // isAdmin. A failure here leaves users empty but rules/groups still load.
       // v0.4.20: admin can filter rules by owner_uid.
-      const rulesUrl = filterOwnerUid ? `/rules?owner_uid=${filterOwnerUid}` : '/rules';
+      // Admin on own page → filter to their own rules; admin viewing another
+      // user → use filterOwnerUid; regular user → backend filters automatically.
+      const ownerUid = filterOwnerUid ?? (isAdmin ? (user?.id ?? null) : null);
+      const rulesUrl = ownerUid ? `/rules?owner_uid=${ownerUid}` : '/rules';
       const [r, g] = await Promise.all([
         api.get<unknown, ApiEnvelope<ForwardRule[]>>(rulesUrl),
         api.get<unknown, ApiEnvelope<DeviceGroup[]>>('/groups'),
@@ -138,8 +141,17 @@ export default function Rules() {
           // Non-fatal: owner column falls back to "#uid" labels.
           setUsers([]);
         }
+        setSelfQuota(null);
       } else {
         setUsers([]);
+        // v1.0.7: a regular user only ever sees their own rules, so one /user/me
+        // read gives the quota needed to flag all of them. Non-fatal on failure.
+        try {
+          const me = await api.get<unknown, ApiEnvelope<UserSelf>>('/user/me');
+          setSelfQuota(me.data ? { used: me.data.traffic_used, limit: me.data.traffic_limit } : null);
+        } catch {
+          setSelfQuota(null);
+        }
       }
       // v0.4.12 PR1: shared inbound groups (admin-owned) for regular users.
       // The endpoint wraps the payload in ApiResponse — a non-zero code is a
@@ -165,15 +177,39 @@ export default function Rules() {
         setSharedGroups([]);
       }
     } finally { setLoading(false); }
-  }, [filterOwnerUid, isAdmin]);
+  }, [filterOwnerUid, isAdmin, user?.id]);
 
   useEffect(() => { load(); }, [load]);
 
   // User lookup map for the "owner" column.
   const userMap = new Map(users.map(u => [u.id, u.username]));
+  // v1.0.7: owner-quota lookup for the "traffic exhausted" status tag. Admins
+  // resolve each rule's owner from `users`; a regular user uses their own quota
+  // (their rules are all self-owned). traffic_limit === 0 means unlimited.
+  const userById = useMemo(() => new Map(users.map(u => [u.id, u])), [users]);
+  const ruleOverQuota = (r: ForwardRule): boolean => {
+    if (isAdmin) {
+      const u = userById.get(r.uid);
+      return !!u && u.traffic_limit > 0 && u.traffic_used >= u.traffic_limit;
+    }
+    return !!selfQuota && selfQuota.limit > 0 && selfQuota.used >= selfQuota.limit;
+  };
   // v0.4.9: group lookup map for the "group name" column + filter. Memoized so
   // the column render + filter options share one derivation.
   const groupMap = useMemo(() => new Map(groups.map(g => [g.id, g])), [groups]);
+  // v1.0.8: group-name + listen-IP lookup for the rule columns. A regular user
+  // does NOT own the (admin-owned) device groups, so GET /groups returns none
+  // for them and the columns rendered "未知分组 / 未配置". Their AUTHORIZED
+  // groups come from /groups/shared (SharedGroupSummary, which carries name +
+  // connect_host) — merge both so name/IP resolve for admins and users alike.
+  const groupInfo = useMemo(() => {
+    const m = new Map<number, { name: string; connect_host: string }>();
+    for (const g of groups) m.set(g.id, { name: g.name, connect_host: g.connect_host });
+    for (const g of sharedGroups) {
+      if (!m.has(g.id)) m.set(g.id, { name: g.name, connect_host: g.connect_host });
+    }
+    return m;
+  }, [groups, sharedGroups]);
   // The rules actually shown: filtered by the selected inbound group, or all
   // when selectedGroup === null. Computed once so the table + count stay in sync.
   const visibleRules = useMemo(
@@ -264,6 +300,14 @@ export default function Rules() {
   /** Export all rules as JSON download. */
   const handleExportAll = () => {
     downloadText(`relaypanel-rules-${new Date().toISOString().slice(0, 10)}.json`, buildExportJSON(rules));
+    message.success(t('exported'));
+  };
+
+  /** Export only the currently-selected rules as JSON download. */
+  const handleExportSelected = () => {
+    const selected = rules.filter(r => selectedRowKeys.includes(r.id));
+    if (selected.length === 0) return;
+    downloadText(`relaypanel-rules-selected-${new Date().toISOString().slice(0, 10)}.json`, buildExportJSON(selected));
     message.success(t('exported'));
   };
 
@@ -386,6 +430,14 @@ const IMPORT_DEFAULTS = {
     load();
   };
 
+  const handleBatchDelete = async () => {
+    const ids = selectedRowKeys as number[];
+    await Promise.all(ids.map(id => api.delete(`/rules/${id}`)));
+    message.success(t('batchDeleteSuccess').replace('{count}', String(ids.length)));
+    setSelectedRowKeys([]);
+    load();
+  };
+
   /** v0.4.8: run a diagnosis for a rule. The panel fans the probe out to the
    *  rule's inbound-group nodes over WS and waits up to 8s for results. */
   const handleDiagnose = async (r: ForwardRule) => {
@@ -433,7 +485,7 @@ const IMPORT_DEFAULTS = {
     {
       title: t('groupName'), key: 'group_name', width: 140, responsive: ['md' as const],
       render: (_: unknown, r: ForwardRule) => {
-        const g = groupMap.get(r.device_group_in);
+        const g = groupInfo.get(r.device_group_in);
         return g
           ? <Tag>{g.name}</Tag>
           : <Text type="secondary">{t('unknownGroup')} (#{r.device_group_in})</Text>;
@@ -443,7 +495,7 @@ const IMPORT_DEFAULTS = {
     {
       title: t('listenIp'), key: 'listen_ip', width: 160,
       render: (_: unknown, r: ForwardRule) => {
-        const host = listenHostFor(r, groups);
+        const host = groupInfo.get(r.device_group_in)?.connect_host ?? '';
         return host
           ? <span className="rp-mono">{host}</span>
           : <Text type="secondary">{t('notConfigured')}</Text>;
@@ -456,6 +508,11 @@ const IMPORT_DEFAULTS = {
         <Space size={4}>
           {protoTags(p)}
           {r.paused && <Tag color="red">{t('paused')}</Tag>}
+          {!r.paused && ruleOverQuota(r) && (
+            <Tooltip title={t('quotaExhaustedHint')}>
+              <Tag color="orange">{t('quotaExhausted')}</Tag>
+            </Tooltip>
+          )}
         </Space>
       ),
     },
@@ -619,13 +676,29 @@ const IMPORT_DEFAULTS = {
             allowClear
             placeholder={t('filterByGroup')}
             value={selectedGroup ?? undefined}
-            onChange={(v: number | undefined) => setSelectedGroup(v ?? null)}
+            onChange={(v: number | undefined) => { setSelectedGroup(v ?? null); setSelectedRowKeys([]); }}
             options={Array.from(new Set(rules.map(r => r.device_group_in)))
               .map(gid => {
                 const g = groupMap.get(gid);
                 return { value: gid, label: g ? g.name : `${t('unknownGroup')} (#${gid})` };
               })}
           />
+          {selectedRowKeys.length > 0 && (
+            <Button icon={<DownloadOutlined />} onClick={handleExportSelected}>
+              {t('batchExport')} ({selectedRowKeys.length})
+            </Button>
+          )}
+          {selectedRowKeys.length > 0 && (
+            <Popconfirm
+              title={t('batchDeleteConfirm').replace('{count}', String(selectedRowKeys.length))}
+              onConfirm={handleBatchDelete}
+              okButtonProps={{ danger: true }}
+            >
+              <Button danger icon={<DeleteOutlined />}>
+                {t('batchDelete')} ({selectedRowKeys.length})
+              </Button>
+            </Popconfirm>
+          )}
           <Button icon={<ReloadOutlined />} onClick={load}>{t('refresh')}</Button>
           <Dropdown menu={{ items: exportMenuItems }}>
             <Button icon={<DownloadOutlined />}>{t('exportImport')}</Button>
@@ -651,7 +724,11 @@ const IMPORT_DEFAULTS = {
           description={t('loadFailedRetry')}
         />
       )}
-      <Table dataSource={visibleRules} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 20 }} scroll={{ x: 1200 }} />
+      <Table
+        rowSelection={{ selectedRowKeys, onChange: (keys) => setSelectedRowKeys(keys as number[]) }}
+        dataSource={visibleRules} columns={columns} rowKey="id" loading={loading}
+        pagination={{ pageSize: 20 }} scroll={{ x: 1200 }}
+      />
 
       <Modal title={t('addRule')} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={() => createForm.submit()} okText={t('create')} cancelText={t('cancel')} width={620}>
         <Form form={createForm} onFinish={handleCreate} layout="vertical">

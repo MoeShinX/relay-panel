@@ -567,12 +567,18 @@ impl RuleRepository for SqliteRepository {
         // (warnings mode) ensures new rules satisfy the invariant at creation time;
         // the defense filter is no longer needed here and would incorrectly reject
         // valid shared-inbound rules.
+        // v1.0.8: FOUR gating conditions (banned, suspended, over-quota,
+        // expired). suspended stops forwarding WITHOUT bumping token_version
+        // (the user stays logged in). plan_expire_at is a TEXT UTC timestamp
+        // comparable lexically with datetime('now'). NULL = no expiry.
         let rules: Vec<ForwardRule> = sqlx::query_as(
             "SELECT fr.* FROM forward_rules fr \
              JOIN users u ON fr.uid = u.id \
              WHERE fr.device_group_in = ? AND fr.paused = 0 \
              AND u.banned = 0 \
-             AND (u.traffic_limit = 0 OR u.traffic_used < u.traffic_limit)",
+             AND u.suspended = 0 \
+             AND (u.traffic_limit = 0 OR u.traffic_used < u.traffic_limit) \
+             AND (u.plan_expire_at IS NULL OR u.plan_expire_at > datetime('now'))",
         )
         .bind(group_id)
         .fetch_all(&self.pool)

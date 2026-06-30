@@ -161,6 +161,7 @@ impl UserRepository for SqliteRepository {
         max_rules: Option<i32>,
         traffic_limit: Option<i64>,
         banned: Option<bool>,
+        suspended: Option<bool>,
     ) -> Result<u64, DbError> {
         let mut sets: Vec<&str> = Vec::new();
         if balance.is_some() {
@@ -174,6 +175,12 @@ impl UserRepository for SqliteRepository {
         }
         if banned.is_some() {
             sets.push("banned = ?");
+        }
+        // v1.0.8: suspension. Unlike banned, suspended does NOT bump
+        // token_version (the user stays signed in; forwarding is gated by
+        // list_active_for_config).
+        if suspended.is_some() {
+            sets.push("suspended = ?");
         }
         // v0.4.10 PR4: banning a user revokes their sessions. token_version is
         // a self-increment expression (no bind), appended only when banning.
@@ -197,6 +204,9 @@ impl UserRepository for SqliteRepository {
             q = q.bind(v);
         }
         if let Some(v) = banned {
+            q = q.bind(v);
+        }
+        if let Some(v) = suspended {
             q = q.bind(v);
         }
         q = q.bind(id);
@@ -306,22 +316,4 @@ impl UserRepository for SqliteRepository {
         Ok(())
     }
 
-    async fn set_user_group(&self, user_id: i64, group_id: Option<i64>) -> Result<u64, DbError> {
-        let r = match group_id {
-            Some(gid) => {
-                sqlx::query("UPDATE users SET group_id = ? WHERE id = ? AND admin = 0")
-                    .bind(gid)
-                    .bind(user_id)
-                    .execute(&self.pool)
-                    .await?
-            }
-            None => {
-                sqlx::query("UPDATE users SET group_id = NULL WHERE id = ? AND admin = 0")
-                    .bind(user_id)
-                    .execute(&self.pool)
-                    .await?
-            }
-        };
-        Ok(r.rows_affected())
-    }
 }

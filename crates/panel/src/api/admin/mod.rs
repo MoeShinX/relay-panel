@@ -5,18 +5,20 @@ mod auth;
 mod groups;
 mod nodes;
 mod password;
+mod plans;
 mod profiles;
 mod rules;
 mod settings;
-mod user_groups;
+mod shop;
 mod users;
 
 pub use groups::*;
 pub use password::*;
+pub use plans::*;
 pub use profiles::*;
 pub use rules::*;
 pub use settings::*;
-pub use user_groups::*;
+pub use shop::*;
 pub use users::*;
 
 /// A user WITHOUT the password hash — for API responses. Never expose the
@@ -29,7 +31,8 @@ pub struct UserPublic {
     pub username: String,
     pub balance: String,
     pub plan_id: Option<i64>,
-    pub group_id: Option<i64>,
+    /// v1.0.7: replaces group_id. true = user may use all device groups.
+    pub all_device_groups: bool,
     pub max_rules: i32,
     pub speed_limit: i32,
     pub ip_limit: i32,
@@ -38,6 +41,12 @@ pub struct UserPublic {
     pub admin: bool,
     pub banned: bool,
     pub created_at: String,
+    /// v1.0.8: plan expiry (NULL = no expiry).
+    #[serde(default)]
+    pub plan_expire_at: Option<String>,
+    /// v1.0.8: admin suspension.
+    #[serde(default)]
+    pub suspended: bool,
 }
 
 /// A user's view of THEIR OWN account (GET /user/me). Same non-password fields
@@ -69,6 +78,12 @@ pub struct UserSelf {
     /// change page (the user can only reach /user/me + /user/password until
     /// they change it). The DB column is the source of truth.
     pub must_change_password: bool,
+    /// v1.0.8: plan expiry (NULL = no expiry).
+    #[serde(default)]
+    pub plan_expire_at: Option<String>,
+    /// v1.0.8: admin suspension (login allowed; forwarding gated).
+    #[serde(default)]
+    pub suspended: bool,
 }
 
 /// Build an error ApiResponse. Accepts `&str` or `String` (or anything else
@@ -84,7 +99,6 @@ fn err<T: Serialize, S: Into<String>>(code: i32, msg: S) -> ApiResponse<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::user_groups::{update_user_group, UpdateUserGroupRequest};
     use super::{change_password, reset_user_password, ResetPasswordRequest};
     use super::{
         create_group, create_rule, create_user, delete_group, delete_rule, delete_user, err,
@@ -147,9 +161,13 @@ mod tests {
 
     async fn add_user(pool: &SqlitePool, id: i64, username: &str, admin: bool) -> String {
         let hash = bcrypt::hash(format!("old-password-{id}"), 4).unwrap();
+        // v1.0.7: default test users to all_device_groups=1 (unrestricted) so the
+        // rule-validation tests exercise the validation path, not the new
+        // "unassigned = cannot forward" default. Permission-specific tests
+        // override this via assign_user_groups().
         sqlx::query(
-            "INSERT INTO users (id, username, password, admin, balance, max_rules, traffic_used, traffic_limit, banned) \
-             VALUES (?, ?, ?, ?, '0', 5, 0, 0, 0)",
+            "INSERT INTO users (id, username, password, admin, all_device_groups, balance, max_rules, traffic_used, traffic_limit, banned) \
+             VALUES (?, ?, ?, ?, 1, '0', 5, 0, 0, 0)",
         )
         .bind(id)
         .bind(username)
@@ -1209,24 +1227,26 @@ mod tests {
         assert_eq!(resp.code, 0, "{}", resp.message);
     }
 
-    // ── v1.0.4 regression: permission-group enforcement (review blockers) ──
+    // ── v1.0.7 regression: per-user device-group authorization ──
 
-    /// Assign a user to a restricted permission group (allow_all_groups=false)
-    /// with an explicit device-group allowlist.
-    async fn add_restricted_group(pool: &SqlitePool, ug_id: i64, allowed: &[i64]) {
-        sqlx::query(
-            "INSERT INTO user_groups (id, name, remark, allow_all_groups) VALUES (?, ?, '', 0)",
-        )
-        .bind(ug_id)
-        .bind(format!("ug-{ug_id}"))
-        .execute(pool)
-        .await
-        .unwrap();
+    /// Restrict a user to an explicit device-group allowlist (all_device_groups
+    /// stays 0). An empty list = unassigned = cannot forward.
+    async fn assign_user_groups(pool: &SqlitePool, uid: i64, allowed: &[i64]) {
+        sqlx::query("UPDATE users SET all_device_groups = 0 WHERE id = ?")
+            .bind(uid)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM user_device_groups WHERE user_id = ?")
+            .bind(uid)
+            .execute(pool)
+            .await
+            .unwrap();
         for gid in allowed {
             sqlx::query(
-                "INSERT INTO user_group_device_groups (user_group_id, device_group_id) VALUES (?, ?)",
+                "INSERT INTO user_device_groups (user_id, device_group_id) VALUES (?, ?)",
             )
-            .bind(ug_id)
+            .bind(uid)
             .bind(gid)
             .execute(pool)
             .await
@@ -1234,26 +1254,16 @@ mod tests {
         }
     }
 
-    async fn set_user_group_id(pool: &SqlitePool, uid: i64, ug_id: i64) {
-        sqlx::query("UPDATE users SET group_id = ? WHERE id = ?")
-            .bind(ug_id)
-            .bind(uid)
-            .execute(pool)
-            .await
-            .unwrap();
-    }
-
-    /// REGRESSION: a user whose permission group authorizes group 1 must NOT be
-    /// able to create a rule on group 2 (the bug allowed it).
+    /// REGRESSION: a user authorized for group 1 must NOT be able to create a
+    /// rule on group 2.
     #[tokio::test]
     async fn create_rule_rejects_group_outside_user_authorization() {
         let (state, pool) = test_state().await;
         add_user(&pool, 2, "alice", false).await;
         add_group(&pool, 1, 1, "admin-in-1").await;
         add_group(&pool, 2, 1, "admin-in-2").await;
-        // Alice's group authorizes ONLY device group 1.
-        add_restricted_group(&pool, 10, &[1]).await;
-        set_user_group_id(&pool, 2, 10).await;
+        // Alice is authorized for ONLY device group 1.
+        assign_user_groups(&pool, 2, &[1]).await;
 
         // Group 1 → allowed.
         let Json(ok) = create_rule(
@@ -1284,9 +1294,8 @@ mod tests {
         let (state, pool) = test_state().await;
         add_user(&pool, 2, "alice", false).await;
         add_group(&pool, 1, 1, "admin-in-1").await;
-        // Alice's group authorizes NOTHING.
-        add_restricted_group(&pool, 10, &[]).await;
-        set_user_group_id(&pool, 2, 10).await;
+        // Alice is authorized for NOTHING (default: restricted, no assignments).
+        assign_user_groups(&pool, 2, &[]).await;
 
         let Json(deny) = create_rule(
             auth(2, false),
@@ -1305,19 +1314,18 @@ mod tests {
         add_user(&pool, 2, "alice", false).await;
         add_group(&pool, 1, 1, "admin-in-1").await;
         add_group(&pool, 2, 1, "admin-in-2").await;
-        add_restricted_group(&pool, 10, &[1, 2]).await; // initially both allowed
-        add_restricted_group(&pool, 11, &[1]).await; // only group 1
-        set_user_group_id(&pool, 2, 10).await;
+        // Alice initially authorized for both groups.
+        assign_user_groups(&pool, 2, &[1, 2]).await;
         // Alice has a rule on group 2.
         add_rule(&pool, 100, 2, 2, 20002, 0).await;
 
-        // Move Alice to group 11 (which no longer authorizes group 2).
+        // Re-assign Alice to ONLY group 1 (group 2 no longer authorized).
         let Json(resp) = update_user(
             AdminOnly { user_id: 1 },
             State(state.clone()),
             Path(2),
             Json(UpdateUserRequest {
-                group_id: Some(11),
+                device_group_ids: Some(vec![1]),
                 ..Default::default()
             }),
         )
@@ -1333,36 +1341,30 @@ mod tests {
         assert!(row.1, "rule on now-unauthorized group must be paused");
     }
 
-    /// REGRESSION (review round 2): flipping a permission group from
-    /// allow_all_groups=true to false must pause the group members' rules on
-    /// groups that are no longer authorized — via the update_user_group
-    /// endpoint, not just set_user_group_device_groups.
+    /// REGRESSION (review round 2): flipping a user from all_device_groups=true
+    /// to false must pause their rules on groups that are no longer authorized.
     #[tokio::test]
-    async fn flipping_group_to_restricted_pauses_unauthorized_rules() {
+    async fn flipping_user_to_restricted_pauses_unauthorized_rules() {
         let (state, pool) = test_state().await;
         add_user(&pool, 2, "alice", false).await;
         add_group(&pool, 1, 1, "admin-in-1").await;
         add_group(&pool, 2, 1, "admin-in-2").await;
-        // Group 10 initially allows ALL groups.
-        sqlx::query(
-            "INSERT INTO user_groups (id, name, remark, allow_all_groups) VALUES (10, 'ug-10', '', 1)",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        set_user_group_id(&pool, 2, 10).await;
-        // Alice has a rule on group 2 (allowed while allow_all=true).
+        // Alice initially may use ALL device groups.
+        sqlx::query("UPDATE users SET all_device_groups = 1 WHERE id = 2")
+            .execute(&pool)
+            .await
+            .unwrap();
+        // Alice has a rule on group 2 (allowed while all_device_groups=true).
         add_rule(&pool, 100, 2, 2, 20002, 0).await;
 
-        // Admin flips the group to restricted (allow_all_groups=false). With no
-        // explicit device-group allowlist, ALL of Alice's rules become
-        // unauthorized and must be paused.
-        let Json(resp) = update_user_group(
+        // Admin flips Alice to restricted (all_device_groups=false). With no
+        // explicit assignments, ALL of her rules become unauthorized → paused.
+        let Json(resp) = update_user(
             AdminOnly { user_id: 1 },
             State(state.clone()),
-            Path(10),
-            Json(UpdateUserGroupRequest {
-                allow_all_groups: Some(false),
+            Path(2),
+            Json(UpdateUserRequest {
+                all_device_groups: Some(false),
                 ..Default::default()
             }),
         )
@@ -1376,24 +1378,24 @@ mod tests {
                 .unwrap();
         assert!(
             row.1,
-            "rule must be paused after group flipped to restricted (allow_all=false)"
+            "rule must be paused after user flipped to restricted (all_device_groups=false)"
         );
     }
 
-    /// REGRESSION: updating group_id together with balance/quota must apply ALL
-    /// fields (the bug early-returned after group_id, dropping the rest).
+    /// REGRESSION: updating the device-group authorization together with
+    /// balance/quota must apply ALL fields (the bug early-returned, dropping the
+    /// rest).
     #[tokio::test]
-    async fn update_user_applies_group_id_and_other_fields_together() {
+    async fn update_user_applies_authz_and_other_fields_together() {
         let (state, pool) = test_state().await;
         add_user(&pool, 2, "alice", false).await;
-        add_restricted_group(&pool, 10, &[]).await;
 
         let Json(resp) = update_user(
             AdminOnly { user_id: 1 },
             State(state.clone()),
             Path(2),
             Json(UpdateUserRequest {
-                group_id: Some(10),
+                all_device_groups: Some(true),
                 max_rules: Some(99),
                 balance: Some("50.00".into()),
                 ..Default::default()
@@ -1402,12 +1404,12 @@ mod tests {
         .await;
         assert_eq!(resp.code, 0, "{}", resp.message);
 
-        let row: (i64, i64, String) =
-            sqlx::query_as("SELECT group_id, max_rules, balance FROM users WHERE id = 2")
+        let row: (bool, i64, String) =
+            sqlx::query_as("SELECT all_device_groups, max_rules, balance FROM users WHERE id = 2")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(row.0, 10, "group_id must be set");
+        assert!(row.0, "all_device_groups must be set");
         assert_eq!(row.1, 99, "max_rules must ALSO be applied (not dropped)");
         assert_eq!(row.2, "50.00", "balance must ALSO be applied (not dropped)");
     }
@@ -1587,6 +1589,7 @@ mod tests {
                 connect_host: "1.2.3.4".into(),
                 port_range: "20000-30000".into(),
                 owner_uid: Some(3),
+                rate: None,
             }),
         )
         .await;

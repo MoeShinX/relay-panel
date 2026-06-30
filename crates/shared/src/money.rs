@@ -120,6 +120,58 @@ fn exceeds_max(int_part: &str, frac_part: &str) -> bool {
     f > "99"
 }
 
+/// v1.0.8: convert a canonical balance string ("12.34" / "12" / "0") to integer
+/// cents (1234). Used by the purchase path to compare/deduct balances in
+/// integer arithmetic (no floating point). Input MUST be canonical (no leading
+/// zeros except "0", at most 2 fraction digits, no sign) — every balance in
+/// the DB is canonical because parse_balance canonicalizes on write. Returns
+/// None on a non-canonical string (the caller treats that as a data-integrity
+/// error and refuses the purchase rather than silently mis-billing).
+pub fn balance_to_cents(s: &str) -> Option<i64> {
+    if s.is_empty() {
+        return None;
+    }
+    let (int_part, frac_part) = s.split_once('.').unwrap_or((s, ""));
+    if int_part.is_empty() || frac_part.len() > 2 {
+        return None;
+    }
+    // Reject non-canonical leading zeros ("012") except the single "0".
+    if int_part.len() > 1 && int_part.starts_with('0') {
+        return None;
+    }
+    if int_part.bytes().any(|b| !b.is_ascii_digit()) || frac_part.bytes().any(|b| !b.is_ascii_digit())
+    {
+        return None;
+    }
+    let int_cents: i64 = int_part.parse().ok()?;
+    let frac_cents: i64 = match frac_part.len() {
+        0 => 0,
+        1 => frac_part.parse::<i64>().ok()? * 10,
+        2 => frac_part.parse::<i64>().ok()?,
+        _ => return None,
+    };
+    Some(int_cents * 100 + frac_cents)
+}
+
+/// v1.0.8: convert integer cents back to a canonical balance string. The
+/// inverse of [`balance_to_cents`]. Used to persist the post-deduction balance.
+pub fn cents_to_balance(cents: i64) -> String {
+    let neg = cents < 0;
+    let abs = cents.unsigned_abs();
+    let int_part = abs / 100;
+    let frac = abs % 100;
+    let s = if frac == 0 {
+        int_part.to_string()
+    } else {
+        format!("{}.{:02}", int_part, frac)
+    };
+    if neg {
+        format!("-{}", s)
+    } else {
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

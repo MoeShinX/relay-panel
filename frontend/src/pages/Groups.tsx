@@ -1,4 +1,4 @@
-import { Table, Button, Modal, Form, Input, Select, Space, message, Popconfirm, Typography, Tag, Tooltip, Alert } from 'antd';
+import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, message, Popconfirm, Typography, Tag, Tooltip, Alert } from 'antd';
 import { PlusOutlined, ReloadOutlined, CopyOutlined, EditOutlined, CloudServerOutlined, CodeOutlined, ApiOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import api from '../api/client';
@@ -70,9 +70,11 @@ export default function Groups() {
   const nodeCount = useCallback((groupId: number) => nodesByGroup(groupId).length, [nodesByGroup]);
   const onlineCount = useCallback((groupId: number) => nodesByGroup(groupId).filter(n => n.online).length, [nodesByGroup]);
 
-  const handleCreate = async (values: { name: string; group_type: string; connect_host: string; port_range: string; owner_uid?: number | null }) => {
+  const handleCreate = async (values: { name: string; group_type: string; connect_host: string; port_range: string; rate?: number; owner_uid?: number | null }) => {
     try {
-      const payload = { ...values, owner_uid: values.owner_uid || undefined };
+      // v1.0.8: rate defaults to 1.0 on the server when omitted; send it
+      // explicitly so the value the admin picked is what gets persisted.
+      const payload = { ...values, rate: values.rate ?? 1.0, owner_uid: values.owner_uid || undefined };
       const res = await api.post<unknown, ApiEnvelope<DeviceGroup>>('/groups', payload);
       if (res.code !== 0) { message.error(res.message); return; }
       message.success(t('groupCreated'));
@@ -84,17 +86,20 @@ export default function Groups() {
 
   const handleEdit = (g: DeviceGroup) => {
     setEditing(g);
-    editForm.setFieldsValue({ name: g.name, group_type: g.group_type, connect_host: g.connect_host, port_range: g.port_range });
+    editForm.setFieldsValue({ name: g.name, group_type: g.group_type, connect_host: g.connect_host, port_range: g.port_range, rate: g.rate });
     setEditOpen(true);
   };
 
-  const handleUpdate = async (values: { name?: string; group_type?: string; connect_host?: string; port_range?: string }) => {
+  const handleUpdate = async (values: { name?: string; group_type?: string; connect_host?: string; port_range?: string; rate?: number }) => {
     if (!editing) return;
     const payload: Record<string, unknown> = {};
     if (values.name !== undefined && values.name !== editing.name) payload.name = values.name;
     if (values.group_type !== undefined && values.group_type !== editing.group_type) payload.group_type = values.group_type;
     if (values.connect_host !== undefined && values.connect_host !== editing.connect_host) payload.connect_host = values.connect_host;
     if (values.port_range !== undefined && values.port_range !== editing.port_range) payload.port_range = values.port_range;
+    // v1.0.8: only send rate when it actually changed (avoid no-op 400s and
+    // keep the diff-based payload pattern used for the other fields).
+    if (values.rate !== undefined && values.rate !== editing.rate) payload.rate = values.rate;
     if (Object.keys(payload).length === 0) { setEditOpen(false); return; }
     try {
       const res = await api.put<unknown, ApiEnvelope<null>>(`/groups/${editing.id}`, payload);
@@ -209,6 +214,19 @@ export default function Groups() {
     { title: t('connectHost'), dataIndex: 'connect_host', key: 'connect_host', render: (v: string) => <span className="rp-mono">{v}</span> },
     { title: t('portRange'), dataIndex: 'port_range', key: 'port_range', render: (v: string) => <span className="rp-mono">{v}</span> },
     {
+      // v1.0.8: billing rate. Only show a tag when it differs from 1.0 — a 1x
+      // column on every row is noise. The tag color reflects the multiplier
+      // direction (gold = premium line, no tag = bill-as-used).
+      title: t('rate'), dataIndex: 'rate', key: 'rate', width: 80,
+      render: (rate: number) => {
+        const r = typeof rate === 'number' ? rate : 1.0;
+        if (Math.abs(r - 1.0) < 1e-9) return <span style={{ color: 'var(--rp-text-tertiary)' }}>1x</span>;
+        // Trim trailing zeros: 2.0 → "2x", 1.5 → "1.5x".
+        const label = Number.isInteger(r) ? `${r}x` : `${r}x`;
+        return <Tag color="gold">{label}</Tag>;
+      },
+    },
+    {
       title: t('action'), key: 'action', width: 120,
       render: (_: unknown, g: DeviceGroup) => (
         <Space>
@@ -290,6 +308,11 @@ export default function Groups() {
           </Form.Item>
           <Form.Item name="connect_host" label={t('connectHost')} rules={[{ required: true }]}><Input placeholder="1.2.3.4 or node.example.com" /></Form.Item>
           <Form.Item name="port_range" label={t('portRange')} rules={[{ required: true }]} initialValue="10000-65535"><Input placeholder="10000-65535" /></Form.Item>
+          {/* v1.0.8: billing rate. Users are charged real bytes × rate; the
+              rule/user byte counters keep real bytes. 1.0 = bill as used. */}
+          <Form.Item name="rate" label={t('rate')} initialValue={1.0} extra={t('rateHint')} rules={[{ required: true }]}>
+            <InputNumber min={0.1} max={100} step={0.1} style={{ width: '100%' }} />
+          </Form.Item>
         </Form>
       </Modal>
 
@@ -299,6 +322,9 @@ export default function Groups() {
           <Form.Item name="group_type" label={t('type')}><Select options={allGroupTypeOptions} /></Form.Item>
           <Form.Item name="connect_host" label={t('connectHost')}><Input /></Form.Item>
           <Form.Item name="port_range" label={t('portRange')}><Input /></Form.Item>
+          <Form.Item name="rate" label={t('rate')} extra={t('rateHint')}>
+            <InputNumber min={0.1} max={100} step={0.1} style={{ width: '100%' }} />
+          </Form.Item>
         </Form>
       </Modal>
 

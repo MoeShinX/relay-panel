@@ -215,6 +215,8 @@ pub async fn get_me(user: AuthUser, State(state): State<AppState>) -> Json<ApiRe
         traffic_limit: u.traffic_limit,
         registered_at: u.created_at,
         must_change_password: u.must_change_password,
+        plan_expire_at: u.plan_expire_at,
+        suspended: u.suspended,
     }))
 }
 

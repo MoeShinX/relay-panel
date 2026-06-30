@@ -11,7 +11,12 @@ pub struct User {
     pub password: String,
     pub balance: String,
     pub plan_id: Option<i64>,
-    pub group_id: Option<i64>,
+    /// v1.0.7: replaces the old `group_id` permission-group link. When true the
+    /// user may use ALL device groups (admins are always treated as true). When
+    /// false the user is limited to the device groups in `user_device_groups`;
+    /// none assigned = cannot forward.
+    #[serde(default)]
+    pub all_device_groups: bool,
     pub max_rules: i32,
     pub speed_limit: i32,
     pub ip_limit: i32,
@@ -27,6 +32,14 @@ pub struct User {
     /// admin reset / ban to instantly revoke previously-issued tokens.
     #[serde(default)]
     pub token_version: i64,
+    /// v1.0.8: plan expiry (TEXT 'YYYY-MM-DD HH:MM:SS' UTC, NULL = no expiry).
+    #[serde(default)]
+    pub plan_expire_at: Option<String>,
+    /// v1.0.8: admin suspension. true = forwarding gated off via
+    /// list_active_for_config (login still allowed; no token_version bump).
+    /// Admins can never be suspended.
+    #[serde(default)]
+    pub suspended: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -110,6 +123,10 @@ pub struct DeviceGroup {
     pub region: Option<String>,
     pub line_type: Option<String>,
     pub remark: Option<String>,
+    /// v1.0.8: traffic billing multiplier for this line. Real bytes are stored
+    /// on forward_rules / users; users are CHARGED `real * rate` (rounded) in
+    /// apply_traffic_batch. 1.0 = bill what you use. Range 0.1..=100.
+    pub rate: f64,
     pub created_at: String,
 }
 
@@ -229,24 +246,43 @@ pub struct Plan {
     pub speed_limit: i32,
     pub ip_limit: i32,
     pub price: String,
+    /// v1.0.8: 'data' = traffic-quota plan, 'time' = time-limited plan.
+    #[serde(default = "default_plan_type")]
+    pub plan_type: String,
+    /// v1.0.8: validity in days (0 = unlimited). Only meaningful for time plans.
+    #[serde(default)]
+    pub duration_days: i32,
+    /// v1.0.8: hidden from the public plan list + not self-purchasable.
+    #[serde(default)]
+    pub hidden: bool,
+    /// v1.0.8: buying resets traffic_used to 0.
+    #[serde(default)]
+    pub reset_traffic: bool,
+    /// v1.0.8: free-form line shown under the plan name in the shop.
+    #[serde(default)]
+    pub description: String,
+    /// v1.0.9: when true, buying this plan grants access to ALL inbound groups
+    /// (sets the user's all_device_groups flag). When false, buying grants the
+    /// groups in plan_device_groups (appended to the user's existing set).
+    #[serde(default)]
+    pub grant_all_groups: bool,
     pub created_at: String,
 }
 
-// ── v1.0.4: user permission groups ──
+fn default_plan_type() -> String {
+    "data".to_string()
+}
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct UserGroup {
+/// v1.0.8: a purchase order. plan_name + price are SNAPSHOTS at buy time so
+/// the history stays accurate after a plan is renamed/retired/deleted.
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Order {
     pub id: i64,
-    pub name: String,
-    pub remark: String,
-    pub allow_all_groups: bool,
+    pub user_id: i64,
+    pub plan_id: Option<i64>,
+    pub plan_name: String,
+    pub price: String,
     pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct UserGroupDeviceGroup {
-    pub user_group_id: i64,
-    pub device_group_id: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]

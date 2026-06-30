@@ -96,9 +96,11 @@ impl GroupRepository for SqliteRepository {
         uid: i64,
         connect_host: &str,
         port_range: &str,
+        rate: f64,
     ) -> Result<(), DbError> {
         sqlx::query(
-            "INSERT INTO device_groups (name, group_type, token, uid, connect_host, port_range) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO device_groups (name, group_type, token, uid, connect_host, port_range, rate) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(name)
         .bind(group_type)
@@ -106,6 +108,7 @@ impl GroupRepository for SqliteRepository {
         .bind(uid)
         .bind(connect_host)
         .bind(port_range)
+        .bind(rate)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -133,6 +136,7 @@ impl GroupRepository for SqliteRepository {
         group_type: Option<&str>,
         connect_host: Option<&str>,
         port_range: Option<&str>,
+        rate: Option<f64>,
     ) -> Result<u64, DbError> {
         // Token is NOT updatable here (rotation is a separate endpoint). Build
         // the SET clause from the present fields; binding order matches below.
@@ -148,6 +152,9 @@ impl GroupRepository for SqliteRepository {
         }
         if port_range.is_some() {
             sets.push("port_range = ?");
+        }
+        if rate.is_some() {
+            sets.push("rate = ?");
         }
 
         if sets.is_empty() {
@@ -172,6 +179,9 @@ impl GroupRepository for SqliteRepository {
             q = q.bind(v);
         }
         if let Some(v) = port_range {
+            q = q.bind(v);
+        }
+        if let Some(v) = rate {
             q = q.bind(v);
         }
         q = q.bind(id);

@@ -182,7 +182,7 @@ async fn pg_user_update_fields_only_touches_present_columns() {
     db.insert_user("alice", "h", 1).await.unwrap();
     let uid = db.find_by_username("alice").await.unwrap().unwrap().id;
     assert_eq!(
-        db.update_user_fields(uid, None, Some(7), None, None)
+        db.update_user_fields(uid, None, Some(7), None, None, None)
             .await
             .unwrap(),
         1
@@ -197,7 +197,7 @@ async fn pg_user_update_fields_only_touches_present_columns() {
     assert_eq!(row.1, 0);
     assert!(!row.2);
     assert_eq!(
-        db.update_user_fields(uid, None, None, None, None)
+        db.update_user_fields(uid, None, None, None, None, None)
             .await
             .unwrap(),
         0
@@ -860,7 +860,7 @@ async fn pg_group_insert_then_find_by_token_round_trip() {
     let Some(db) = repo("group_rt").await else {
         return;
     };
-    db.insert_group("gin", "in", "tok-abc", 1, "1.2.3.4", "20000-30000")
+    db.insert_group("gin", "in", "tok-abc", 1, "1.2.3.4", "20000-30000", 1.0)
         .await
         .unwrap();
     let g = db.find_by_token("tok-abc").await.unwrap().unwrap();
@@ -889,7 +889,7 @@ async fn pg_group_update_token_returns_rows_affected() {
     let Some(db) = repo("group_tok").await else {
         return;
     };
-    db.insert_group("gin", "in", "tok-1", 1, "", "")
+    db.insert_group("gin", "in", "tok-1", 1, "", "", 1.0)
         .await
         .unwrap();
     let g = db.find_by_token("tok-1").await.unwrap().unwrap();
@@ -1829,7 +1829,7 @@ async fn pg_ban_bumps_token_version() {
     .execute(&db.pool)
     .await
     .unwrap();
-    db.update_user_fields(2, None, None, None, Some(true))
+    db.update_user_fields(2, None, None, None, Some(true), None)
         .await
         .unwrap();
     let s = db.find_auth_state_by_id(2).await.unwrap().unwrap();
@@ -1850,7 +1850,7 @@ async fn pg_unban_does_not_bump_token_version() {
     .execute(&db.pool)
     .await
     .unwrap();
-    db.update_user_fields(2, None, None, None, Some(false))
+    db.update_user_fields(2, None, None, None, Some(false), None)
         .await
         .unwrap();
     let s = db.find_auth_state_by_id(2).await.unwrap().unwrap();
@@ -2056,6 +2056,7 @@ async fn pg_update_group_fields_owner_scope_rejects_wrong_owner() {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -2066,6 +2067,7 @@ async fn pg_update_group_fields_owner_scope_rejects_wrong_owner() {
             10,
             &ResourceScope::Owner(3),
             Some("stolen"),
+            None,
             None,
             None,
             None,

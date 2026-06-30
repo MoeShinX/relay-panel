@@ -28,6 +28,7 @@ use sqlx::PgPool;
 
 mod groups;
 mod kvs;
+mod orders;
 mod profiles;
 mod rules;
 mod settings;

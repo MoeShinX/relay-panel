@@ -160,6 +160,7 @@ impl UserRepository for PgRepository {
         max_rules: Option<i32>,
         traffic_limit: Option<i64>,
         banned: Option<bool>,
+        suspended: Option<bool>,
     ) -> Result<u64, DbError> {
         // Build SET clause + bind values in the same field order as SQLite.
         // PG needs numbered placeholders; we accumulate binds in a Vec and
@@ -176,6 +177,10 @@ impl UserRepository for PgRepository {
         }
         if banned.is_some() {
             sets.push("banned = ");
+        }
+        // v1.0.8: suspension (no token_version bump — user stays signed in).
+        if suspended.is_some() {
+            sets.push("suspended = ");
         }
 
         if sets.is_empty() {
@@ -216,6 +221,9 @@ impl UserRepository for PgRepository {
             q = q.bind(v);
         }
         if let Some(v) = banned {
+            q = q.bind(v);
+        }
+        if let Some(v) = suspended {
             q = q.bind(v);
         }
         q = q.bind(id);
@@ -317,22 +325,4 @@ impl UserRepository for PgRepository {
         Ok(())
     }
 
-    async fn set_user_group(&self, user_id: i64, group_id: Option<i64>) -> Result<u64, DbError> {
-        let r = match group_id {
-            Some(gid) => {
-                sqlx::query("UPDATE users SET group_id = $1 WHERE id = $2 AND admin = FALSE")
-                    .bind(gid)
-                    .bind(user_id)
-                    .execute(&self.pool)
-                    .await?
-            }
-            None => {
-                sqlx::query("UPDATE users SET group_id = NULL WHERE id = $1 AND admin = FALSE")
-                    .bind(user_id)
-                    .execute(&self.pool)
-                    .await?
-            }
-        };
-        Ok(r.rows_affected())
-    }
 }

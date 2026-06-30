@@ -4,11 +4,12 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import Rules from './pages/Rules';
 import Groups from './pages/Groups';
-import UserGroups from './pages/UserGroups';
 import Users from './pages/Users';
 import NodeStatus from './pages/NodeStatus';
 import Account from './pages/Account';
 import SystemSettings from './pages/SystemSettings';
+import Plans from './pages/Plans';
+import Shop from './pages/Shop';
 import ForcePasswordChange from './pages/ForcePasswordChange';
 import Forbidden from './pages/Forbidden';
 import RoleHome from './RoleHome';
@@ -34,9 +35,12 @@ export const router = createBrowserRouter([
       // Owner-scoped resources — any authenticated user manages their own.
       { path: 'rules', element: <Rules /> },
 	      { path: 'groups', element: <Groups /> },
-	      { path: 'user-groups', element: <UserGroups /> },
       { path: 'nodes', element: <NodeStatus /> },
       { path: 'node-status', element: <NodeStatus /> },
+      // v1.0.8: self-service shop (plan purchase + order history).
+      { path: 'shop', element: <Shop /> },
+      // v1.0.8: admin plan management (CRUD).
+      { path: 'plans', element: <RequireAdmin><Plans /></RequireAdmin> },
       // v0.4.20: tunnel-profiles route hidden; component kept for future recovery.
       { path: 'users', element: <RequireAdmin><Users /></RequireAdmin> },
       { path: 'settings', element: <RequireAdmin><SystemSettings /></RequireAdmin> },

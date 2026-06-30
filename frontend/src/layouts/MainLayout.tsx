@@ -9,7 +9,7 @@ import {
   LogoutOutlined,
   LockOutlined,
   SettingOutlined,
-  TeamOutlined,
+  ShoppingOutlined,
 } from '@ant-design/icons';
 import { useI18n } from '../i18n/context';
 import api from '../api/client';
@@ -34,12 +34,13 @@ export default function MainLayout() {
   const sharedItems = [
     { key: '/', icon: <DashboardOutlined />, label: t('dashboard') },
     { key: '/account', icon: <UserOutlined />, label: t('personalCenter') },
+    { key: '/shop', icon: <ShoppingOutlined />, label: t('shop') },
     { key: '/rules', icon: <ApiOutlined />, label: t('myRules') },
     { key: '/nodes', icon: <CloudServerOutlined />, label: t('availableNodes') },
   ];
   const adminOnlyItems = [
     { key: '/groups', icon: <CloudServerOutlined />, label: t('deviceGroups') },
-    { key: '/user-groups', icon: <TeamOutlined />, label: t('userGroups') },
+    { key: '/plans', icon: <ShoppingOutlined />, label: t('planManagement') },
     { key: '/users', icon: <UserOutlined />, label: t('users') },
     { key: '/settings', icon: <SettingOutlined />, label: t('systemSettings') },
   ];

@@ -32,6 +32,14 @@ CREATE TABLE IF NOT EXISTS plans (
     speed_limit INTEGER NOT NULL DEFAULT 0,
     ip_limit INTEGER NOT NULL DEFAULT 3,
     price TEXT NOT NULL DEFAULT '0',
+    -- v1.0.8: plan lifecycle + visibility (mirrors SQLite baseline + Migration 34).
+    plan_type TEXT NOT NULL DEFAULT 'data',
+    duration_days INTEGER NOT NULL DEFAULT 0,
+    hidden BOOLEAN NOT NULL DEFAULT FALSE,
+    reset_traffic BOOLEAN NOT NULL DEFAULT FALSE,
+    description TEXT NOT NULL DEFAULT '',
+    -- v1.0.9: grant ALL inbound groups on purchase (mirrors SQLite Migration 35).
+    grant_all_groups BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TEXT NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
@@ -41,7 +49,9 @@ CREATE TABLE IF NOT EXISTS users (
     password TEXT NOT NULL,
     balance TEXT NOT NULL DEFAULT '0',
     plan_id BIGINT REFERENCES plans(id),
-    group_id BIGINT,
+    -- v1.0.7: replaces group_id. TRUE = user may use ALL device groups; FALSE =
+    -- limited to user_device_groups (none = cannot forward). Admins always all.
+    all_device_groups BOOLEAN NOT NULL DEFAULT FALSE,
     max_rules INTEGER NOT NULL DEFAULT 5,
     speed_limit INTEGER NOT NULL DEFAULT 0,
     ip_limit INTEGER NOT NULL DEFAULT 3,
@@ -54,7 +64,11 @@ CREATE TABLE IF NOT EXISTS users (
     -- (see schema.rs for the rationale). token_version is BIGINT to match the
     -- i64 the JWT carries.
     must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
-    token_version BIGINT NOT NULL DEFAULT 0
+    token_version BIGINT NOT NULL DEFAULT 0,
+    -- v1.0.8: plan expiry (TEXT 'YYYY-MM-DD HH:MM:SS' UTC, NULL = no expiry)
+    -- and admin suspension. Mirrors SQLite baseline + Migration 34.
+    plan_expire_at TEXT,
+    suspended BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS device_groups (
@@ -71,6 +85,10 @@ CREATE TABLE IF NOT EXISTS device_groups (
     region TEXT,
     line_type TEXT,
     remark TEXT,
+    -- v1.0.8: traffic billing multiplier for this line (REAL NOT NULL DEFAULT
+    -- 1.0). Mirrors SQLite Migration 33 / baseline. Range 0.1..=100 enforced
+    -- at the API.
+    rate DOUBLE PRECISION NOT NULL DEFAULT 1.0,
     created_at TEXT NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
@@ -137,6 +155,24 @@ CREATE TABLE IF NOT EXISTS statistics (
     stat_key TEXT NOT NULL,
     time TEXT NOT NULL,
     number BIGINT NOT NULL DEFAULT 0
+);
+
+-- v1.0.8: purchase history (mirrors SQLite baseline + Migration 34).
+CREATE TABLE IF NOT EXISTS orders (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    plan_id BIGINT,
+    plan_name TEXT NOT NULL,
+    price TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
+);
+CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
+
+-- v1.0.9: plan ↔ device_group grant map (mirrors SQLite baseline + Migration 35).
+CREATE TABLE IF NOT EXISTS plan_device_groups (
+    plan_id BIGINT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    device_group_id BIGINT NOT NULL REFERENCES device_groups(id) ON DELETE CASCADE,
+    PRIMARY KEY (plan_id, device_group_id)
 );
 
 CREATE TABLE IF NOT EXISTS kvs (
@@ -220,31 +256,11 @@ CREATE TABLE IF NOT EXISTS app_settings (
     registration_allowed_plan_ids TEXT NOT NULL DEFAULT '[1]'
 );
 
--- v1.0.4: user permission groups.
-CREATE TABLE IF NOT EXISTS user_groups (
-    id BIGSERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
-    remark TEXT NOT NULL DEFAULT '',
-    allow_all_groups BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TEXT NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
-);
-
-CREATE TABLE IF NOT EXISTS user_group_device_groups (
-    user_group_id BIGINT NOT NULL REFERENCES user_groups(id) ON DELETE CASCADE,
+-- v1.0.7: per-user device-group authorization (replaces the user_groups layer).
+CREATE TABLE IF NOT EXISTS user_device_groups (
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     device_group_id BIGINT NOT NULL REFERENCES device_groups(id) ON DELETE CASCADE,
-    PRIMARY KEY (user_group_id, device_group_id)
-);
-
-INSERT INTO user_groups (id, name, remark, allow_all_groups)
-VALUES (1, 'default', 'Default group - all device groups allowed', TRUE)
-ON CONFLICT (id) DO NOTHING;
-
--- v1.0.4: the explicit id=1 INSERT above does NOT advance the BIGSERIAL
--- sequence, so the next admin-created group would also try id=1 and hit a
--- duplicate-key error. Bump the sequence past the highest existing id.
-SELECT setval(
-    pg_get_serial_sequence('user_groups', 'id'),
-    GREATEST((SELECT MAX(id) FROM user_groups), 1)
+    PRIMARY KEY (user_id, device_group_id)
 );
 
 -- Record the baseline schema revision. ON CONFLICT DO NOTHING keeps re-runs
@@ -255,7 +271,7 @@ INSERT INTO schema_version (version) VALUES (1) ON CONFLICT (version) DO NOTHING
 /// The schema revision this build's baseline `PG_SCHEMA_SQL` represents. When a
 /// future release adds a column/table, bump this and add a matching arm in
 /// `run_pg_migrations`. `apply_pg_schema` seeds `schema_version` with revision 1.
-pub const PG_SCHEMA_VERSION: i32 = 14;
+pub const PG_SCHEMA_VERSION: i32 = 18;
 
 /// Apply PG_SCHEMA_SQL to a pool. PostgreSQL's prepared-statement protocol
 /// rejects multi-statement strings ("cannot insert multiple commands into a
@@ -835,9 +851,20 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
 
-        sqlx::query("UPDATE users SET group_id = 1 WHERE group_id IS NULL")
-            .execute(pool)
-            .await?;
+        // v1.0.7: guard the legacy group_id backfill — on a FRESH DB the baseline
+        // schema no longer has users.group_id (it was replaced by
+        // all_device_groups), yet this arm still replays. Skip the UPDATE when the
+        // column is absent so fresh installs don't error here.
+        sqlx::query(
+            "DO $$ BEGIN \
+               IF EXISTS (SELECT 1 FROM information_schema.columns \
+                          WHERE table_name = 'users' AND column_name = 'group_id') THEN \
+                 UPDATE users SET group_id = 1 WHERE group_id IS NULL; \
+               END IF; \
+             END $$",
+        )
+        .execute(pool)
+        .await?;
 
         sqlx::query(
             "INSERT INTO schema_version (version) VALUES (13) ON CONFLICT (version) DO NOTHING",
@@ -861,6 +888,160 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
         tracing::info!("PG migration 14: default user_group remark normalized to ASCII");
+    }
+
+    // ── Revision 15: v1.0.7 drop the user_groups named-entity layer ──
+    // Mirrors SQLite Migration 32: per-user all_device_groups flag + direct
+    // user ↔ device_group link, no backfill (every non-admin starts unassigned;
+    // admins are always all-allowed in code). The dormant users.group_id column
+    // is left in place (unread) to avoid a risky table rewrite.
+    if current < 15 {
+        sqlx::query(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS all_device_groups BOOLEAN NOT NULL DEFAULT FALSE",
+        )
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS user_device_groups (
+                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                device_group_id BIGINT NOT NULL REFERENCES device_groups(id) ON DELETE CASCADE,
+                PRIMARY KEY (user_id, device_group_id)
+            )",
+        )
+        .execute(pool)
+        .await?;
+
+        // Drop the legacy named-entity tables (child first for the FK).
+        sqlx::query("DROP TABLE IF EXISTS user_group_device_groups")
+            .execute(pool)
+            .await?;
+        sqlx::query("DROP TABLE IF EXISTS user_groups")
+            .execute(pool)
+            .await?;
+
+        sqlx::query(
+            "INSERT INTO schema_version (version) VALUES (15) ON CONFLICT (version) DO NOTHING",
+        )
+        .execute(pool)
+        .await?;
+        tracing::info!(
+            "PG migration 15: user_groups layer replaced by user_device_groups + all_device_groups"
+        );
+    }
+
+    // ── Revision 16: v1.0.8 device-group traffic billing rate ──
+    // Mirrors SQLite Migration 33. ADD COLUMN IF NOT EXISTS so a FRESH database
+    // (which already has rate from PG_SCHEMA_SQL baseline) replays this arm as
+    // a no-op rather than erroring — same IF-NOT-EXISTS discipline as every
+    // prior arm. Real bytes stay on forward_rules / users; users are CHARGED
+    // real * rate (rounded) inside apply_traffic_batch.
+    if current < 16 {
+        sqlx::query(
+            "ALTER TABLE device_groups \
+             ADD COLUMN IF NOT EXISTS rate DOUBLE PRECISION NOT NULL DEFAULT 1.0",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO schema_version (version) VALUES (16) ON CONFLICT (version) DO NOTHING",
+        )
+        .execute(pool)
+        .await?;
+        tracing::info!("PG migration 16: device_groups.rate column present");
+    }
+
+    // ── Revision 17: v1.0.8 plan management + user suspension ──
+    // Mirrors SQLite Migration 34. Every ALTER uses ADD COLUMN IF NOT EXISTS
+    // and the table uses CREATE ... IF NOT EXISTS so a FRESH database (which
+    // already has all of these from PG_SCHEMA_SQL baseline) replays this arm as
+    // a no-op — the same IF-NOT-EXISTS discipline that prevents the mig15-style
+    // fresh-DB replay crash.
+    if current < 17 {
+        sqlx::query(
+            "ALTER TABLE plans ADD COLUMN IF NOT EXISTS plan_type TEXT NOT NULL DEFAULT 'data'",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "ALTER TABLE plans ADD COLUMN IF NOT EXISTS duration_days INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "ALTER TABLE plans ADD COLUMN IF NOT EXISTS hidden BOOLEAN NOT NULL DEFAULT FALSE",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "ALTER TABLE plans ADD COLUMN IF NOT EXISTS reset_traffic BOOLEAN NOT NULL DEFAULT FALSE",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "ALTER TABLE plans ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT ''",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_expire_at TEXT")
+            .execute(pool)
+            .await?;
+        sqlx::query(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended BOOLEAN NOT NULL DEFAULT FALSE",
+        )
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS orders (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                plan_id BIGINT,
+                plan_name TEXT NOT NULL,
+                price TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
+            )",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id)")
+            .execute(pool)
+            .await?;
+        sqlx::query(
+            "INSERT INTO schema_version (version) VALUES (17) ON CONFLICT (version) DO NOTHING",
+        )
+        .execute(pool)
+        .await?;
+        tracing::info!(
+            "PG migration 17: plans lifecycle cols + users suspension + orders table"
+        );
+    }
+
+    // ── Revision 18: v1.0.9 plan ↔ device-group grants ──
+    // Mirrors SQLite Migration 35. ADD COLUMN IF NOT EXISTS + CREATE TABLE IF
+    // NOT EXISTS so a FRESH database (which already has both from the baseline)
+    // replays this arm as a no-op.
+    if current < 18 {
+        sqlx::query(
+            "ALTER TABLE plans ADD COLUMN IF NOT EXISTS grant_all_groups BOOLEAN NOT NULL DEFAULT FALSE",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS plan_device_groups (
+                plan_id BIGINT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+                device_group_id BIGINT NOT NULL REFERENCES device_groups(id) ON DELETE CASCADE,
+                PRIMARY KEY (plan_id, device_group_id)
+            )",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO schema_version (version) VALUES (18) ON CONFLICT (version) DO NOTHING",
+        )
+        .execute(pool)
+        .await?;
+        tracing::info!("PG migration 18: plans.grant_all_groups + plan_device_groups table");
     }
 
     Ok(())

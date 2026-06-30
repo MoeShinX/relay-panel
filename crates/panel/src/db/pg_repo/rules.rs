@@ -590,12 +590,17 @@ impl RuleRepository for PgRepository {
 
     async fn list_active_for_config(&self, group_id: i64) -> Result<Vec<ForwardRule>, DbError> {
         // v0.4.11 PR3: REMOVED cross-owner defense filter. See SQLite impl comment.
+        // v1.0.8: FOUR gating conditions (banned, suspended, over-quota,
+        // expired). Mirrors the SQLite WHERE clause. PG uses now() for the
+        // expiry comparison; plan_expire_at is TEXT UTC 'YYYY-MM-DD HH:MM:SS'.
         let rules: Vec<ForwardRule> = sqlx::query_as(
             "SELECT fr.* FROM forward_rules fr \
              JOIN users u ON fr.uid = u.id \
              WHERE fr.device_group_in = $1 AND fr.paused = FALSE \
              AND u.banned = FALSE \
-             AND (u.traffic_limit = 0 OR u.traffic_used < u.traffic_limit)",
+             AND u.suspended = FALSE \
+             AND (u.traffic_limit = 0 OR u.traffic_used < u.traffic_limit) \
+             AND (u.plan_expire_at IS NULL OR u.plan_expire_at > to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))",
         )
         .bind(group_id)
         .fetch_all(&self.pool)

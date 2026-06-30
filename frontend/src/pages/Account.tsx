@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Card, Descriptions, Spin, Button, Space, Modal, Form, Input, message, Typography, Result } from 'antd';
+import { Card, Descriptions, Spin, Button, Space, Modal, Form, Input, message, Typography, Result, Progress, Alert } from 'antd';
 import { LockOutlined, LogoutOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
@@ -99,6 +99,17 @@ export default function Account() {
 
   return (
     <>
+      {/* v1.0.8: suspended banner — the user can still log in and buy a plan
+          (buying does NOT auto-unsuspend), but forwarding is gated off. */}
+      {me.suspended && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={t('accountSuspended')}
+          description={t('accountSuspendedHint')}
+        />
+      )}
       <Card
         title={t('myAccount')}
         extra={
@@ -116,17 +127,30 @@ export default function Account() {
           <Descriptions.Item label={t('accountPlan')}>
             {me.plan_name || '-'}
           </Descriptions.Item>
+          {/* v1.0.8: plan expiry (null = no expiry). */}
+          <Descriptions.Item label={t('accountPlanExpiry')}>
+            {me.plan_expire_at ? <span className="rp-mono">{me.plan_expire_at}</span> : t('unlimited')}
+          </Descriptions.Item>
           <Descriptions.Item label={t('accountBalance')}>
             <span className="rp-mono">{me.balance}</span>
           </Descriptions.Item>
           <Descriptions.Item label={t('accountRulesLimit')}>
             {me.current_rules} / {me.max_rules}
           </Descriptions.Item>
+          {/* v1.0.8: traffic usage with a progress bar (used / limit). */}
           <Descriptions.Item label={t('accountTrafficUsed')}>
-            {formatBytes(me.traffic_used)}
-          </Descriptions.Item>
-          <Descriptions.Item label={t('accountTrafficLimit')}>
-            {me.traffic_limit > 0 ? formatBytes(me.traffic_limit) : t('unlimited')}
+            {me.traffic_limit > 0 ? (
+              <Space direction="vertical" style={{ width: '100%', maxWidth: 360 }}>
+                <span>{formatBytes(me.traffic_used)} / {formatBytes(me.traffic_limit)}</span>
+                <Progress
+                  percent={Math.min(100, Math.round((me.traffic_used / me.traffic_limit) * 100))}
+                  size="small"
+                  status={me.traffic_used >= me.traffic_limit ? 'exception' : 'active'}
+                />
+              </Space>
+            ) : (
+              <span>{formatBytes(me.traffic_used)} / {t('unlimited')}</span>
+            )}
           </Descriptions.Item>
           <Descriptions.Item label={t('accountMemberSince')}>
             <span className="rp-mono">{me.registered_at || '-'}</span>

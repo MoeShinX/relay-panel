@@ -139,14 +139,17 @@ pub async fn update_user(
     Path(id): Path<i64>,
     Json(req): Json<UpdateUserRequest>,
 ) -> Json<ApiResponse<()>> {
-    // v1.0.4: group_id is handled ALONGSIDE the other fields (not early-return,
-    // which dropped any balance/quota/banned submitted in the same request).
-    // All fields optional — if nothing provided, bail early.
+    // v1.0.7: device-group authorization (all_device_groups / device_group_ids)
+    // is handled ALONGSIDE the other fields (not early-return, which would drop
+    // any balance/quota/banned submitted in the same request). All fields
+    // optional — if nothing provided, bail early.
     if req.balance.is_none()
         && req.max_rules.is_none()
         && req.traffic_limit.is_none()
         && req.banned.is_none()
-        && req.group_id.is_none()
+        && req.suspended.is_none()
+        && req.all_device_groups.is_none()
+        && req.device_group_ids.is_none()
     {
         return Json(err(400, "No fields to update"));
     }
@@ -191,13 +194,28 @@ pub async fn update_user(
         }
     }
 
+    // v1.0.8: cannot suspend an admin user either (same privilege protection).
+    if req.suspended == Some(true) {
+        let is_admin = match state.db.is_admin(id).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!("update_user {}: is_admin lookup failed: {}", id, e);
+                return Json(err(500, "database error"));
+            }
+        };
+        if is_admin {
+            return Json(err(400, "Cannot suspend an admin user"));
+        }
+    }
+
     // v1.0.4: apply field updates only when field-update args are present
     // (a group_id-only request must NOT hit update_user_fields, whose all-None
     // UPDATE would return 0 rows and be misread as "User not found").
     let has_field_update = req.balance.is_some()
         || req.max_rules.is_some()
         || req.traffic_limit.is_some()
-        || req.banned.is_some();
+        || req.banned.is_some()
+        || req.suspended.is_some();
 
     if has_field_update {
         match state
@@ -208,6 +226,7 @@ pub async fn update_user(
                 req.max_rules,
                 req.traffic_limit,
                 req.banned,
+                req.suspended,
             )
             .await
         {
@@ -221,6 +240,14 @@ pub async fn update_user(
                         "destructive admin op"
                     );
                 }
+                if let Some(suspended) = req.suspended {
+                    tracing::warn!(
+                        action = if suspended { "suspend_user" } else { "unsuspend_user" },
+                        target_user_id = id,
+                        actor_admin_id = _admin.user_id,
+                        "admin op"
+                    );
+                }
             }
             Err(e) => {
                 tracing::error!("update_user {}: update_user_fields failed: {}", id, e);
@@ -229,19 +256,26 @@ pub async fn update_user(
         }
     }
 
-    // v1.0.4: group_id change is applied here (alongside the field updates
-    // above, not as an early return). After re-assigning the permission group,
-    // pause any of the user's rules whose inbound group is no longer authorized
-    // — the rules + their data are kept so an admin can re-authorize and resume.
-    if let Some(gid) = req.group_id {
-        match state.db.set_user_group(id, Some(gid)).await {
-            Ok(0) => return Json(err(404, "User not found or is admin")),
-            Ok(_) => {}
-            Err(e) => {
-                tracing::error!("update_user {}: set_user_group failed: {}", id, e);
-                return Json(err(500, "database error"));
-            }
+    // v1.0.7: device-group authorization change. The per-user all_device_groups
+    // flag and/or the explicit device-group assignments are applied here. After
+    // re-authorizing, pause any of the user's rules whose inbound group is no
+    // longer allowed — the rules + their data are kept so an admin can
+    // re-authorize and resume. (set_user_all_device_groups is a no-op for admins,
+    // who are always all-allowed.)
+    let authz_changed = req.all_device_groups.is_some() || req.device_group_ids.is_some();
+    if let Some(all) = req.all_device_groups {
+        if let Err(e) = state.db.set_user_all_device_groups(id, all).await {
+            tracing::error!("update_user {}: set_user_all_device_groups failed: {}", id, e);
+            return Json(err(500, "database error"));
         }
+    }
+    if let Some(ref ids) = req.device_group_ids {
+        if let Err(e) = state.db.set_user_device_groups(id, ids).await {
+            tracing::error!("update_user {}: set_user_device_groups failed: {}", id, e);
+            return Json(err(500, "database error"));
+        }
+    }
+    if authz_changed {
         // Pause rules outside the user's NEW authorization.
         let allowed = match state.db.authorized_device_group_ids(id).await {
             Ok(a) => a,
@@ -270,11 +304,52 @@ pub async fn update_user(
         }
     }
 
-    // A field update (ban) or a group change (pause) both alter what nodes
-    // should forward, so refresh node config once at the end.
+    // A field update (ban) or an authorization change (pause) both alter what
+    // nodes should forward, so refresh node config once at the end.
     state
         .node_connections
         .broadcast_all(r#"{"type":"config_changed"}"#)
         .await;
     Json(ApiResponse::success(()))
+}
+
+// === v1.0.7: per-user device-group authorization ===
+
+/// A user's current device-group authorization, for preloading the admin
+/// editor. `all_device_groups` short-circuits `device_group_ids` (when true the
+/// user may use every group regardless of the explicit list).
+#[derive(Debug, serde::Serialize)]
+pub struct UserDeviceGroups {
+    pub all_device_groups: bool,
+    pub device_group_ids: Vec<i64>,
+}
+
+/// GET /users/{id}/device-groups — the explicit assignments + the all flag.
+/// Updates go through PUT /users/{id} (update_user).
+pub async fn get_user_device_groups(
+    _admin: AdminOnly,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Json<ApiResponse<UserDeviceGroups>> {
+    let all_device_groups = match crate::db::repo::UserRepository::find_by_id(state.db.as_ref(), id)
+        .await
+    {
+        Ok(Some(u)) => u.all_device_groups,
+        Ok(None) => return Json(err(404, "User not found")),
+        Err(e) => {
+            tracing::error!("get_user_device_groups {}: find_by_id failed: {}", id, e);
+            return Json(err(500, "database error"));
+        }
+    };
+    let device_group_ids = match state.db.list_user_device_groups(id).await {
+        Ok(ids) => ids,
+        Err(e) => {
+            tracing::error!("get_user_device_groups {}: list failed: {}", id, e);
+            return Json(err(500, "database error"));
+        }
+    };
+    Json(ApiResponse::success(UserDeviceGroups {
+        all_device_groups,
+        device_group_ids,
+    }))
 }

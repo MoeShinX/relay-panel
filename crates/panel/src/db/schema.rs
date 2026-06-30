@@ -5,7 +5,10 @@ CREATE TABLE IF NOT EXISTS users (
     password TEXT NOT NULL,
     balance TEXT NOT NULL DEFAULT '0',
     plan_id INTEGER REFERENCES plans(id),
-    group_id INTEGER,
+    -- v1.0.7: replaces group_id. 1 = user may use ALL device groups; 0 = limited
+    -- to the device groups in user_device_groups (none = cannot forward). Admins
+    -- are always treated as all-allowed regardless of this flag.
+    all_device_groups INTEGER NOT NULL DEFAULT 0,
     -- v0.3.0: SINGLE-TENANT. max_rules is advisory only (not enforced per-user;
     -- see the forward_rules.uid note above). Enforced only for the admin user
     -- (uid=1, max_rules=999) in practice.
@@ -27,7 +30,13 @@ CREATE TABLE IF NOT EXISTS users (
     -- after created_at to match the column order Migration 26 produces on
     -- upgraded databases.
     must_change_password INTEGER NOT NULL DEFAULT 0,
-    token_version INTEGER NOT NULL DEFAULT 0
+    token_version INTEGER NOT NULL DEFAULT 0,
+    -- v1.0.8: plan expiry (TEXT 'YYYY-MM-DD HH:MM:SS' UTC, NULL = no expiry)
+    -- and admin suspension. suspended does NOT block login or bump
+    -- token_version (so the user stays signed in); it gates forwarding via
+    -- list_active_for_config. Admins can never be suspended.
+    plan_expire_at TEXT,
+    suspended INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS plans (
@@ -39,6 +48,21 @@ CREATE TABLE IF NOT EXISTS plans (
     speed_limit INTEGER NOT NULL DEFAULT 0,
     ip_limit INTEGER NOT NULL DEFAULT 3,
     price TEXT NOT NULL DEFAULT '0',
+    -- v1.0.8: plan lifecycle + visibility.
+    -- plan_type: 'data' = traffic quota, 'time' = time-limited (duration_days).
+    -- duration_days: 0 = unlimited (only meaningful for time plans).
+    -- hidden: 1 = hidden from the public plan list + not self-purchasable.
+    -- reset_traffic: 1 = buying resets traffic_used to 0.
+    -- description: free-form line shown under the plan name in the shop.
+    plan_type TEXT NOT NULL DEFAULT 'data',
+    duration_days INTEGER NOT NULL DEFAULT 0,
+    hidden INTEGER NOT NULL DEFAULT 0,
+    reset_traffic INTEGER NOT NULL DEFAULT 0,
+    description TEXT NOT NULL DEFAULT '',
+    -- v1.0.9: when 1, buying this plan sets the user's all_device_groups flag
+    -- (access to EVERY inbound group). When 0, buying grants only the groups
+    -- in plan_device_groups (appended to the user's existing authorizations).
+    grant_all_groups INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -60,6 +84,10 @@ CREATE TABLE IF NOT EXISTS device_groups (
     region TEXT,
     line_type TEXT,
     remark TEXT,
+    -- v1.0.8: traffic billing multiplier for this line. Real bytes are stored
+    -- on forward_rules / users; users are CHARGED `real * rate` (rounded).
+    -- Default 1.0 = bill what you use. Range 0.1..=100 enforced at the API.
+    rate REAL NOT NULL DEFAULT 1.0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -154,6 +182,27 @@ CREATE TABLE IF NOT EXISTS statistics (
     number INTEGER NOT NULL DEFAULT 0
 );
 
+-- v1.0.8: purchase history. plan_name + price are SNAPSHOTS at buy time so
+-- the history stays accurate after a plan is later renamed/retired/deleted.
+CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    plan_id INTEGER,
+    plan_name TEXT NOT NULL,
+    price TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
+
+-- v1.0.9: plan ↔ device_group grant map. Buying a plan (with grant_all_groups=0)
+-- appends these groups to the user's user_device_groups. FK cascade so deleting
+-- a plan or device_group cleans up the mapping rows.
+CREATE TABLE IF NOT EXISTS plan_device_groups (
+    plan_id INTEGER NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    device_group_id INTEGER NOT NULL REFERENCES device_groups(id) ON DELETE CASCADE,
+    PRIMARY KEY (plan_id, device_group_id)
+);
+
 CREATE TABLE IF NOT EXISTS kvs (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -197,25 +246,15 @@ CREATE TABLE IF NOT EXISTS app_settings (
     registration_allowed_plan_ids TEXT NOT NULL DEFAULT '[1]'
 );
 
--- v1.0.4: user permission groups — control which device groups a user can use.
-CREATE TABLE IF NOT EXISTS user_groups (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    remark TEXT NOT NULL DEFAULT '',
-    allow_all_groups INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS user_group_device_groups (
-    user_group_id INTEGER NOT NULL REFERENCES user_groups(id) ON DELETE CASCADE,
+-- v1.0.7: per-user device-group authorization. Replaces the user_groups /
+-- user_group_device_groups named-entity layer with a direct user ↔ device_group
+-- many-to-many. A user with all_device_groups=0 may only use the device groups
+-- listed here; no rows = cannot forward.
+CREATE TABLE IF NOT EXISTS user_device_groups (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     device_group_id INTEGER NOT NULL REFERENCES device_groups(id) ON DELETE CASCADE,
-    PRIMARY KEY (user_group_id, device_group_id)
+    PRIMARY KEY (user_id, device_group_id)
 );
-
--- Seed the default user group (allow_all_groups=true) so existing users
--- retain unrestricted access after upgrade.
-INSERT OR IGNORE INTO user_groups (id, name, remark, allow_all_groups)
-VALUES (1, 'default', 'Default group - all device groups allowed', 1);
 "#;
 
 /// Run schema migrations for existing databases (v0.1.0/v0.1.1 → v0.1.2).
@@ -1185,6 +1224,113 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
     .await?;
     tracing::info!("Migration 31: default user_group remark normalized to ASCII");
 
+    // ── Migration 32: v1.0.7 drop the user_groups named-entity layer ──
+    // Replaces user_groups / user_group_device_groups (a user → named group →
+    // device-group allowlist chain) with a direct user ↔ device_group link plus
+    // a per-user `all_device_groups` flag. Per the refactor decision, existing
+    // authorizations are NOT backfilled: every non-admin starts unassigned
+    // (all_device_groups=0, no rows) and admins re-assign. Admins are always
+    // treated as all-allowed in code, so no flag flip is needed for them.
+    //
+    // The legacy `users.group_id` column is left in place (dormant, unread) —
+    // dropping it would require a full users-table rebuild, which is not worth
+    // the risk since nothing reads it anymore.
+    add_column_if_missing(
+        pool,
+        "users",
+        "all_device_groups",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS user_device_groups (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            device_group_id INTEGER NOT NULL REFERENCES device_groups(id) ON DELETE CASCADE,
+            PRIMARY KEY (user_id, device_group_id)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Drop the legacy named-entity tables (self-contained; FK-referenced only by
+    // each other, so dropping is safe and loses no still-used data).
+    sqlx::query("DROP TABLE IF EXISTS user_group_device_groups")
+        .execute(pool)
+        .await?;
+    sqlx::query("DROP TABLE IF EXISTS user_groups")
+        .execute(pool)
+        .await?;
+
+    tracing::info!("Migration 32: user_groups layer replaced by user_device_groups + all_device_groups flag");
+
+    // ── Migration 33: v1.0.8 device-group traffic billing rate ──
+    // Adds device_groups.rate (REAL NOT NULL DEFAULT 1.0). Real bytes stay on
+    // forward_rules / users; users are CHARGED real * rate (rounded) inside
+    // apply_traffic_batch. Existing rows backfill to 1.0 (unchanged billing).
+    add_column_if_missing(pool, "device_groups", "rate", "REAL NOT NULL DEFAULT 1.0").await?;
+    tracing::info!("Migration 33: device_groups.rate column present");
+
+    // ── Migration 34: v1.0.8 plan management + user suspension ──
+    // Adds:
+    //   plans: plan_type / duration_days / hidden / reset_traffic / description
+    //   users: plan_expire_at (TEXT, NULL = no expiry) / suspended (0/1)
+    //   orders: purchase history (snapshots plan_name + price at buy time)
+    // Every column + the table use add_column_if_missing / IF NOT EXISTS so the
+    // arm is idempotent (re-runnable) and safe on a fresh-schema DB.
+    add_column_if_missing(pool, "plans", "plan_type", "TEXT NOT NULL DEFAULT 'data'").await?;
+    add_column_if_missing(pool, "plans", "duration_days", "INTEGER NOT NULL DEFAULT 0").await?;
+    add_column_if_missing(pool, "plans", "hidden", "INTEGER NOT NULL DEFAULT 0").await?;
+    add_column_if_missing(
+        pool,
+        "plans",
+        "reset_traffic",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    .await?;
+    add_column_if_missing(pool, "plans", "description", "TEXT NOT NULL DEFAULT ''").await?;
+    add_column_if_missing(pool, "users", "plan_expire_at", "TEXT").await?;
+    add_column_if_missing(pool, "users", "suspended", "INTEGER NOT NULL DEFAULT 0").await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            plan_id INTEGER,
+            plan_name TEXT NOT NULL,
+            price TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id)")
+        .execute(pool)
+        .await?;
+    tracing::info!("Migration 34: plans lifecycle cols + users suspension + orders table");
+
+    // ── Migration 35: v1.0.9 plan ↔ device-group grants ──
+    // Adds plans.grant_all_groups + the plan_device_groups map table. Buying a
+    // plan grants these device groups to the user (see buy_plan). Idempotent:
+    // add_column_if_missing + CREATE TABLE IF NOT EXISTS.
+    add_column_if_missing(
+        pool,
+        "plans",
+        "grant_all_groups",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS plan_device_groups (
+            plan_id INTEGER NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+            device_group_id INTEGER NOT NULL REFERENCES device_groups(id) ON DELETE CASCADE,
+            PRIMARY KEY (plan_id, device_group_id)
+        )",
+    )
+    .execute(pool)
+    .await?;
+    tracing::info!("Migration 35: plans.grant_all_groups + plan_device_groups table");
+
     Ok(())
 }
 
@@ -1202,6 +1348,12 @@ async fn add_column_if_missing(
     type_def: &str,
 ) -> Result<(), sqlx::Error> {
     // pragma_table_info is parameterised by table name via the bound argument.
+    // A column count of 0 means EITHER the column is absent (the normal case
+    // → add it) OR the TABLE itself is absent (e.g. an ancient test DB that
+    // pre-dates the table). In the latter case there's nothing to ALTER — the
+    // table will be created elsewhere (SCHEMA_SQL on fresh boot) and the
+    // column ships with it. Skip rather than error so migrations stay
+    // idempotent on minimal test schemas.
     let count_sql = format!(
         "SELECT COUNT(*) FROM pragma_table_info('{}') WHERE name = ?",
         table
@@ -1212,6 +1364,16 @@ async fn add_column_if_missing(
         .await?;
 
     if exists.0 == 0 {
+        // Is the table itself present? If not, there's nothing to ALTER.
+        let table_present: (i64,) = sqlx::query_as(&format!(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '{}'",
+            table
+        ))
+        .fetch_one(pool)
+        .await?;
+        if table_present.0 == 0 {
+            return Ok(());
+        }
         // NOTE: table/column/type_def are all compile-time literals from this
         // file — never user input — so the formatted SQL is safe from injection.
         let sql = format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, type_def);
