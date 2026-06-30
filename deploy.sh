@@ -201,6 +201,13 @@ else
                 ;;
             2)
                 info "Selected: PostgreSQL (embedded Docker)"
+                # v1.0.7 fix: set the SHELL var (not just .env) so this same run's
+                # pre-flight (2c) and profile decision (step 3) actually start the
+                # postgres container + add --profile postgres. Without this, a fresh
+                # interactive PG install wrote embedded-postgres to .env but left the
+                # shell var empty, so postgres never started and the panel crash-looped
+                # ("Panel did not become reachable") trying to resolve host `postgres`.
+                RELAYPANEL_DB_MODE=embedded-postgres
                 printf "  Database name [relaypanel]: "
                 read -r PG_DB
                 PG_DB="${PG_DB:-relaypanel}"
