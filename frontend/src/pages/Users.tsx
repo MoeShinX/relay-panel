@@ -102,7 +102,7 @@ export default function Users() {
   const planName = (id: number | null): string =>
     id == null ? t('noPlan') : (plans.find(p => p.id === id)?.name ?? `#${id}`);
 
-  // v1.0.10: plan management is embedded in the edit-user modal, so these act on
+  // v1.0.7: plan management is embedded in the edit-user modal, so these act on
   // the `editing` user. Admin assigns a plan, charging the user's balance.
   const handleBuyPlanForUser = async () => {
     if (!editing || planChoice == null) return;
@@ -142,7 +142,7 @@ export default function Users() {
 
   const openEdit = async (u: User) => {
     setEditing(u);
-    // v1.0.10: preload the embedded plan panel (assign choice + expiry picker).
+    // v1.0.7: preload the embedded plan panel (assign choice + expiry picker).
     setPlanChoice(undefined);
     setPlanExpire(u.plan_expire_at ? dayjs(u.plan_expire_at) : null);
     form.setFieldsValue({
@@ -484,7 +484,7 @@ export default function Users() {
           )}
         </Form>
 
-        {/* v1.0.10: plan management embedded in the edit-user modal (non-admin
+        {/* v1.0.7: plan management embedded in the edit-user modal (non-admin
             only). Assign a plan (charges balance), adjust expiry, or remove the
             plan. These act outside the form and refresh the list on success. */}
         {editing && !editing.admin && (

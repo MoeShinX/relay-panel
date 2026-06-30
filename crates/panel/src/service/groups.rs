@@ -49,6 +49,7 @@ pub fn validate_rate(rate: f64) -> Option<f64> {
 /// v0.4.12 PR1: device groups are admin-managed shared infrastructure — the
 /// caller passes the creating admin's id as `owner_uid` (the handler ignores
 /// any client-supplied owner_uid).
+#[allow(clippy::too_many_arguments)]
 pub async fn create_group(
     db: &dyn Repository,
     name: &str,
@@ -57,6 +58,7 @@ pub async fn create_group(
     connect_host: &str,
     port_range: &str,
     rate: f64,
+    hidden: bool,
 ) -> Result<DeviceGroup, CreateGroupError> {
     let token = uuid::Uuid::new_v4().to_string();
     let group_type = group_type_to_str(group_type);
@@ -68,6 +70,7 @@ pub async fn create_group(
         connect_host,
         port_range,
         rate,
+        hidden,
     )
     .await
     .map_err(CreateGroupError::Database)?;
@@ -98,6 +101,7 @@ pub async fn rotate_group_token(db: &dyn Repository, id: i64) -> Result<Option<S
 /// Update an admin-owned device group. Enforces the no-fields guard and
 /// 404-on-zero-rows. The token is NOT updatable here (rotation is a separate
 /// endpoint).
+#[allow(clippy::too_many_arguments)]
 pub async fn update_group(
     db: &dyn Repository,
     id: i64,
@@ -106,12 +110,14 @@ pub async fn update_group(
     connect_host: Option<&str>,
     port_range: Option<&str>,
     rate: Option<f64>,
+    hidden: Option<bool>,
 ) -> Result<(), UpdateGroupError> {
     if name.is_none()
         && group_type.is_none()
         && connect_host.is_none()
         && port_range.is_none()
         && rate.is_none()
+        && hidden.is_none()
     {
         return Err(UpdateGroupError::NoFields);
     }
@@ -125,6 +131,7 @@ pub async fn update_group(
             connect_host,
             port_range,
             rate,
+            hidden,
         )
         .await
         .map_err(UpdateGroupError::Database)?

@@ -50,7 +50,7 @@ function payloadWithTargets<T extends Record<string, unknown>>(values: T & { tar
  *  Enabled targets only. IPv6 wrapped as [addr]:port.
  *  v1.0.6: always emit a JSON array (even for a single rule) so the export
  *  round-trips into the import box, which documents the `[{...}]` array form.
- *  v1.0.10: emit COMPACT single-line JSON (no pretty-printing) so the export is
+ *  v1.0.7: emit COMPACT single-line JSON (no pretty-printing) so the export is
  *  exactly the one-line `[{"dest":[...],"listen_port":...,"name":"..."}]` shape
  *  shown in the import hint — ready to copy-paste straight back in. */
 function buildExportJSON(rules: ForwardRule[]): string {
@@ -612,7 +612,7 @@ const IMPORT_DEFAULTS = {
 
   const hostForForm = (gid?: number) => {
     if (!gid) return '';
-    // v1.0.10: a regular user doesn't own the admin device groups, so `groups`
+    // v1.0.7: a regular user doesn't own the admin device groups, so `groups`
     // is empty for them — resolve the connect host from the merged groupInfo
     // (which also folds in their authorized shared groups) instead.
     return groupInfo.get(gid)?.connect_host ?? '';

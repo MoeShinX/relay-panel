@@ -116,6 +116,41 @@ async fn shared_groups_excludes_other_regular_users_groups() {
     );
 }
 
+/// v1.0.7: list_shared_groups still RETURNS a hidden group (carrying the
+/// `hidden` flag) — the node-status handler is the only place that drops it,
+/// so the rule dropdown / shop keep listing hidden lines. Admins see it too.
+#[tokio::test]
+async fn shared_groups_carries_hidden_flag_and_still_lists_hidden() {
+    let db = repo().await; // uid=1 admin is seeded
+    seed_user(&db, 2, false).await; // alice (regular)
+    seed_group_typed(&db, 10, 1, "in").await; // admin-owned inbound, visible
+    seed_group_typed(&db, 11, 1, "in").await; // admin-owned inbound, to hide
+    sqlx::query("UPDATE device_groups SET hidden = 1 WHERE id = 11")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    // Regular user: BOTH groups are listed; the hidden one carries hidden=true
+    // so the node-status path can drop it while the rule dropdown keeps it.
+    let shared = db.list_shared_groups(2, false).await.unwrap();
+    assert_eq!(
+        shared.len(),
+        2,
+        "hidden group must STILL be listed for rules"
+    );
+    assert!(shared.iter().any(|g| g.id == 11 && g.hidden));
+    assert!(shared.iter().any(|g| g.id == 10 && !g.hidden));
+
+    // Admin: list_groups (unscoped) returns BOTH — hidden does not affect the
+    // admin management view.
+    let all = db.list_groups(&ResourceScope::All).await.unwrap();
+    assert!(
+        all.iter().any(|g| g.id == 11 && g.hidden),
+        "admin must still see the hidden group, flagged hidden=true"
+    );
+    assert!(all.iter().any(|g| g.id == 10 && !g.hidden));
+}
+
 /// An admin caller gets an empty shared list (admins manage groups directly).
 #[tokio::test]
 async fn shared_groups_empty_for_admin() {
@@ -922,9 +957,18 @@ async fn rule_list_active_for_config_filters_banned_paused_overquota() {
 #[tokio::test]
 async fn group_insert_then_find_by_token_round_trip() {
     let db = repo().await;
-    db.insert_group("gin", "in", "tok-abc", 1, "1.2.3.4", "20000-30000", 1.0)
-        .await
-        .unwrap();
+    db.insert_group(
+        "gin",
+        "in",
+        "tok-abc",
+        1,
+        "1.2.3.4",
+        "20000-30000",
+        1.0,
+        false,
+    )
+    .await
+    .unwrap();
     let g = db.find_by_token("tok-abc").await.unwrap().unwrap();
     assert_eq!(g.name, "gin");
     assert_eq!(g.group_type, "in");
@@ -954,7 +998,7 @@ async fn group_insert_then_find_by_token_round_trip() {
 #[tokio::test]
 async fn group_update_token_returns_rows_affected() {
     let db = repo().await;
-    db.insert_group("gin", "in", "tok-1", 1, "", "", 1.0)
+    db.insert_group("gin", "in", "tok-1", 1, "", "", 1.0, false)
         .await
         .unwrap();
     let g = db.find_by_token("tok-1").await.unwrap().unwrap();
@@ -2144,6 +2188,7 @@ async fn update_group_fields_owner_scope_rejects_wrong_owner() {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -2155,6 +2200,7 @@ async fn update_group_fields_owner_scope_rejects_wrong_owner() {
             10,
             &ResourceScope::Owner(3),
             Some("stolen"),
+            None,
             None,
             None,
             None,

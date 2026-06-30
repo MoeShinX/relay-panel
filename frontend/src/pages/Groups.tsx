@@ -1,4 +1,4 @@
-import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, message, Popconfirm, Typography, Tag, Tooltip, Alert } from 'antd';
+import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, message, Popconfirm, Typography, Tag, Tooltip, Alert, Switch } from 'antd';
 import { PlusOutlined, ReloadOutlined, CopyOutlined, EditOutlined, CloudServerOutlined, CodeOutlined, ApiOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import api from '../api/client';
@@ -70,11 +70,11 @@ export default function Groups() {
   const nodeCount = useCallback((groupId: number) => nodesByGroup(groupId).length, [nodesByGroup]);
   const onlineCount = useCallback((groupId: number) => nodesByGroup(groupId).filter(n => n.online).length, [nodesByGroup]);
 
-  const handleCreate = async (values: { name: string; group_type: string; connect_host: string; port_range: string; rate?: number; owner_uid?: number | null }) => {
+  const handleCreate = async (values: { name: string; group_type: string; connect_host: string; port_range: string; rate?: number; hidden?: boolean; owner_uid?: number | null }) => {
     try {
       // v1.0.8: rate defaults to 1.0 on the server when omitted; send it
       // explicitly so the value the admin picked is what gets persisted.
-      const payload = { ...values, rate: values.rate ?? 1.0, owner_uid: values.owner_uid || undefined };
+      const payload = { ...values, rate: values.rate ?? 1.0, hidden: values.hidden ?? false, owner_uid: values.owner_uid || undefined };
       const res = await api.post<unknown, ApiEnvelope<DeviceGroup>>('/groups', payload);
       if (res.code !== 0) { message.error(res.message); return; }
       message.success(t('groupCreated'));
@@ -86,11 +86,11 @@ export default function Groups() {
 
   const handleEdit = (g: DeviceGroup) => {
     setEditing(g);
-    editForm.setFieldsValue({ name: g.name, group_type: g.group_type, connect_host: g.connect_host, port_range: g.port_range, rate: g.rate });
+    editForm.setFieldsValue({ name: g.name, group_type: g.group_type, connect_host: g.connect_host, port_range: g.port_range, rate: g.rate, hidden: !!g.hidden });
     setEditOpen(true);
   };
 
-  const handleUpdate = async (values: { name?: string; group_type?: string; connect_host?: string; port_range?: string; rate?: number }) => {
+  const handleUpdate = async (values: { name?: string; group_type?: string; connect_host?: string; port_range?: string; rate?: number; hidden?: boolean }) => {
     if (!editing) return;
     const payload: Record<string, unknown> = {};
     if (values.name !== undefined && values.name !== editing.name) payload.name = values.name;
@@ -100,6 +100,8 @@ export default function Groups() {
     // v1.0.8: only send rate when it actually changed (avoid no-op 400s and
     // keep the diff-based payload pattern used for the other fields).
     if (values.rate !== undefined && values.rate !== editing.rate) payload.rate = values.rate;
+    // v1.0.7: only send hidden when it actually changed.
+    if (values.hidden !== undefined && values.hidden !== !!editing.hidden) payload.hidden = values.hidden;
     if (Object.keys(payload).length === 0) { setEditOpen(false); return; }
     try {
       const res = await api.put<unknown, ApiEnvelope<null>>(`/groups/${editing.id}`, payload);
@@ -227,6 +229,12 @@ export default function Groups() {
       },
     },
     {
+      // v1.0.7: hidden flag — only tag when hidden, to keep the column quiet.
+      title: t('groupHidden'), dataIndex: 'hidden', key: 'hidden', width: 80,
+      render: (hidden: boolean) =>
+        hidden ? <Tag>{t('yes')}</Tag> : <span style={{ color: 'var(--rp-text-tertiary)' }}>-</span>,
+    },
+    {
       title: t('action'), key: 'action', width: 120,
       render: (_: unknown, g: DeviceGroup) => (
         <Space>
@@ -313,6 +321,11 @@ export default function Groups() {
           <Form.Item name="rate" label={t('rate')} initialValue={1.0} extra={t('rateHint')} rules={[{ required: true }]}>
             <InputNumber min={0.1} max={100} step={0.1} style={{ width: '100%' }} />
           </Form.Item>
+          {/* v1.0.7: hide this group from regular users' node-status / available
+              lines. Admins always see it. */}
+          <Form.Item name="hidden" label={t('groupHidden')} valuePropName="checked" initialValue={false} extra={t('groupHiddenHint')}>
+            <Switch />
+          </Form.Item>
         </Form>
       </Modal>
 
@@ -324,6 +337,9 @@ export default function Groups() {
           <Form.Item name="port_range" label={t('portRange')}><Input /></Form.Item>
           <Form.Item name="rate" label={t('rate')} extra={t('rateHint')}>
             <InputNumber min={0.1} max={100} step={0.1} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="hidden" label={t('groupHidden')} valuePropName="checked" extra={t('groupHiddenHint')}>
+            <Switch />
           </Form.Item>
         </Form>
       </Modal>

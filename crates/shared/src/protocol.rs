@@ -837,6 +837,9 @@ pub struct CreateGroupRequest {
     /// clamps `None` to 1.0 and rejects out-of-range values with 400.
     #[serde(default)]
     pub rate: Option<f64>,
+    /// v1.0.7: hide this group from regular users' shared views. Default false.
+    #[serde(default)]
+    pub hidden: Option<bool>,
 }
 
 /// Update an existing group. All fields optional. Token is NOT updatable
@@ -850,6 +853,9 @@ pub struct UpdateGroupRequest {
     /// v1.0.8: billing rate. Range 0.1..=100 (validated at the handler).
     #[serde(default)]
     pub rate: Option<f64>,
+    /// v1.0.7: hide from regular users' shared views. None = leave unchanged.
+    #[serde(default)]
+    pub hidden: Option<bool>,
 }
 
 // === Admin API — Plans (v1.0.8) ===

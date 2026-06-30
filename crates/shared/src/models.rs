@@ -127,6 +127,10 @@ pub struct DeviceGroup {
     /// on forward_rules / users; users are CHARGED `real * rate` (rounded) in
     /// apply_traffic_batch. 1.0 = bill what you use. Range 0.1..=100.
     pub rate: f64,
+    /// v1.0.7: hidden from regular users' shared views (node status / available
+    /// lines). Admins are unaffected. Default false.
+    #[serde(default)]
+    pub hidden: bool,
     pub created_at: String,
 }
 
@@ -143,6 +147,11 @@ pub struct SharedGroupSummary {
     pub capabilities: String,
     pub region: Option<String>,
     pub line_type: Option<String>,
+    /// v1.0.7: admin "hidden" flag. Carried here so the node-status path can
+    /// filter it out (regular users don't see hidden lines in node status),
+    /// while the rule dropdown / shop still list it. Default false.
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 /// v0.4.13 PR2 / v0.4.14 PR1: per-NODE availability + load metrics for a shared

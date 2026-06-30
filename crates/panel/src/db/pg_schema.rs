@@ -89,6 +89,8 @@ CREATE TABLE IF NOT EXISTS device_groups (
     -- 1.0). Mirrors SQLite Migration 33 / baseline. Range 0.1..=100 enforced
     -- at the API.
     rate DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    -- v1.0.7: hide from regular users' shared views (mirrors SQLite Migration 36).
+    hidden BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TEXT NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
@@ -271,7 +273,7 @@ INSERT INTO schema_version (version) VALUES (1) ON CONFLICT (version) DO NOTHING
 /// The schema revision this build's baseline `PG_SCHEMA_SQL` represents. When a
 /// future release adds a column/table, bump this and add a matching arm in
 /// `run_pg_migrations`. `apply_pg_schema` seeds `schema_version` with revision 1.
-pub const PG_SCHEMA_VERSION: i32 = 18;
+pub const PG_SCHEMA_VERSION: i32 = 19;
 
 /// Apply PG_SCHEMA_SQL to a pool. PostgreSQL's prepared-statement protocol
 /// rejects multi-statement strings ("cannot insert multiple commands into a
@@ -1040,6 +1042,23 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
         tracing::info!("PG migration 18: plans.grant_all_groups + plan_device_groups table");
+    }
+
+    // ── Revision 19: v1.0.7 device-group hidden flag ──
+    // Mirrors SQLite Migration 36. ADD COLUMN IF NOT EXISTS so a FRESH database
+    // (which already has hidden from the baseline) replays this arm as a no-op.
+    if current < 19 {
+        sqlx::query(
+            "ALTER TABLE device_groups ADD COLUMN IF NOT EXISTS hidden BOOLEAN NOT NULL DEFAULT FALSE",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO schema_version (version) VALUES (19) ON CONFLICT (version) DO NOTHING",
+        )
+        .execute(pool)
+        .await?;
+        tracing::info!("PG migration 19: device_groups.hidden column present");
     }
 
     Ok(())

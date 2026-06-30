@@ -860,9 +860,18 @@ async fn pg_group_insert_then_find_by_token_round_trip() {
     let Some(db) = repo("group_rt").await else {
         return;
     };
-    db.insert_group("gin", "in", "tok-abc", 1, "1.2.3.4", "20000-30000", 1.0)
-        .await
-        .unwrap();
+    db.insert_group(
+        "gin",
+        "in",
+        "tok-abc",
+        1,
+        "1.2.3.4",
+        "20000-30000",
+        1.0,
+        false,
+    )
+    .await
+    .unwrap();
     let g = db.find_by_token("tok-abc").await.unwrap().unwrap();
     assert_eq!(g.name, "gin");
     assert_eq!(g.group_type, "in");
@@ -889,7 +898,7 @@ async fn pg_group_update_token_returns_rows_affected() {
     let Some(db) = repo("group_tok").await else {
         return;
     };
-    db.insert_group("gin", "in", "tok-1", 1, "", "", 1.0)
+    db.insert_group("gin", "in", "tok-1", 1, "", "", 1.0, false)
         .await
         .unwrap();
     let g = db.find_by_token("tok-1").await.unwrap().unwrap();
@@ -2057,6 +2066,7 @@ async fn pg_update_group_fields_owner_scope_rejects_wrong_owner() {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -2067,6 +2077,7 @@ async fn pg_update_group_fields_owner_scope_rejects_wrong_owner() {
             10,
             &ResourceScope::Owner(3),
             Some("stolen"),
+            None,
             None,
             None,
             None,
@@ -2188,6 +2199,43 @@ async fn pg_shared_groups_excludes_other_regular_users_groups() {
         shared.is_empty(),
         "alice must NOT see bob's inbound group (PG)"
     );
+    cleanup(&db).await;
+}
+
+/// v1.0.7: list_shared_groups still RETURNS a hidden group (carrying the
+/// `hidden` flag); only the node-status handler drops it, so the rule dropdown
+/// / shop keep listing hidden lines. Admins see it too (PG).
+#[tokio::test]
+async fn pg_shared_groups_carries_hidden_flag_and_still_lists_hidden() {
+    let Some(db) = repo("shgrp_hidden").await else {
+        return;
+    };
+    sqlx::query("INSERT INTO users (id, username, password, admin) VALUES (2, 'u2', 'x', FALSE)")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO device_groups (id, name, group_type, token, uid) VALUES (10, 'g10', 'in', 'tok10', 1)")
+        .execute(&db.pool).await.unwrap();
+    sqlx::query("INSERT INTO device_groups (id, name, group_type, token, uid, hidden) VALUES (11, 'g11', 'in', 'tok11', 1, TRUE)")
+        .execute(&db.pool).await.unwrap();
+
+    // Regular user: BOTH groups listed; the hidden one carries hidden=true.
+    let shared = db.list_shared_groups(2, false).await.unwrap();
+    assert_eq!(
+        shared.len(),
+        2,
+        "hidden group must STILL be listed for rules (PG)"
+    );
+    assert!(shared.iter().any(|g| g.id == 11 && g.hidden));
+    assert!(shared.iter().any(|g| g.id == 10 && !g.hidden));
+
+    // Admin: list_groups (unscoped) returns BOTH, with the flag set.
+    let all = db.list_groups(&ResourceScope::All).await.unwrap();
+    assert!(
+        all.iter().any(|g| g.id == 11 && g.hidden),
+        "admin must still see the hidden group, flagged hidden=true (PG)"
+    );
+    assert!(all.iter().any(|g| g.id == 10 && !g.hidden));
     cleanup(&db).await;
 }
 

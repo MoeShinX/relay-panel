@@ -98,7 +98,10 @@ pub async fn list_shared_node_summary(
         };
 
     // v1.0.7: filter by per-user device-group authorization (same logic as
-    // list_shared_groups). Admins are handled above (empty list).
+    // list_shared_groups), AND drop admin-hidden groups — this is the ONLY path
+    // that honors `hidden` (the node-status page). The rule dropdown / shop
+    // (list_shared_groups) intentionally keep listing hidden groups so existing
+    // and new rules work normally. Admins are handled above (empty list).
     let groups = if user.admin {
         groups
     } else {
@@ -109,7 +112,7 @@ pub async fn list_shared_node_summary(
             .unwrap_or_default();
         groups
             .into_iter()
-            .filter(|g| authorized.contains(&g.id))
+            .filter(|g| !g.hidden && authorized.contains(&g.id))
             .collect()
     };
 
@@ -292,6 +295,7 @@ mod tests {
             capabilities: "[]".into(),
             region: None,
             line_type: None,
+            hidden: false,
         }
     }
 

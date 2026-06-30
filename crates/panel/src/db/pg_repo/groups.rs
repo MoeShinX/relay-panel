@@ -32,8 +32,12 @@ impl GroupRepository for PgRepository {
         // v0.4.12 PR1: regular users see ALL ADMIN-owned inbound groups,
         // independent of whether they already have rules. group_type uses the
         // stable machine value 'in' (the old LIKE 'inbound%' never matched).
+        // v1.0.7: `g.hidden` is SELECTED (not filtered here) so the caller
+        // decides. Only the node-status path (`list_shared_node_summary`) hides
+        // it; the rule dropdown / shop still list hidden groups so existing and
+        // new rules keep working. Admins get [] above and are unaffected.
         let groups: Vec<SharedGroupSummary> = sqlx::query_as(
-            "SELECT g.id, g.name, g.group_type, g.connect_host, g.capabilities, g.region, g.line_type \
+            "SELECT g.id, g.name, g.group_type, g.connect_host, g.capabilities, g.region, g.line_type, g.hidden \
              FROM device_groups g \
              JOIN users u ON u.id = g.uid \
              WHERE g.uid != $1 AND u.admin = TRUE AND g.group_type = 'in' \
@@ -97,10 +101,11 @@ impl GroupRepository for PgRepository {
         connect_host: &str,
         port_range: &str,
         rate: f64,
+        hidden: bool,
     ) -> Result<(), DbError> {
         sqlx::query(
-            "INSERT INTO device_groups (name, group_type, token, uid, connect_host, port_range, rate) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            "INSERT INTO device_groups (name, group_type, token, uid, connect_host, port_range, rate, hidden) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(name)
         .bind(group_type)
@@ -109,6 +114,7 @@ impl GroupRepository for PgRepository {
         .bind(connect_host)
         .bind(port_range)
         .bind(rate)
+        .bind(hidden)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -135,6 +141,7 @@ impl GroupRepository for PgRepository {
         connect_host: Option<&str>,
         port_range: Option<&str>,
         rate: Option<f64>,
+        hidden: Option<bool>,
     ) -> Result<u64, DbError> {
         let mut sets: Vec<&str> = Vec::new();
         if name.is_some() {
@@ -151,6 +158,9 @@ impl GroupRepository for PgRepository {
         }
         if rate.is_some() {
             sets.push("rate = ");
+        }
+        if hidden.is_some() {
+            sets.push("hidden = ");
         }
 
         if sets.is_empty() {
@@ -196,6 +206,9 @@ impl GroupRepository for PgRepository {
             q = q.bind(v);
         }
         if let Some(v) = rate {
+            q = q.bind(v);
+        }
+        if let Some(v) = hidden {
             q = q.bind(v);
         }
         q = q.bind(id);

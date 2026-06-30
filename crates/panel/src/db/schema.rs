@@ -88,6 +88,10 @@ CREATE TABLE IF NOT EXISTS device_groups (
     -- on forward_rules / users; users are CHARGED `real * rate` (rounded).
     -- Default 1.0 = bill what you use. Range 0.1..=100 enforced at the API.
     rate REAL NOT NULL DEFAULT 1.0,
+    -- v1.0.7: hide this group from regular users' shared views (node status /
+    -- available lines). 1 = hidden. Admins are unaffected (they read /groups,
+    -- not the shared endpoints). Default 0 keeps existing groups visible.
+    hidden INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -1326,6 +1330,19 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
     .execute(pool)
     .await?;
     tracing::info!("Migration 35: plans.grant_all_groups + plan_device_groups table");
+
+    // ── Migration 36: v1.0.7 device-group hidden flag ──
+    // Hides a group from regular users' shared views (node status / available
+    // lines) without affecting admins. Idempotent: add_column_if_missing.
+    // Default 0 keeps every existing group visible.
+    add_column_if_missing(
+        pool,
+        "device_groups",
+        "hidden",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    .await?;
+    tracing::info!("Migration 36: device_groups.hidden column present");
 
     Ok(())
 }
