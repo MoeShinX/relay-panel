@@ -481,6 +481,8 @@ export const enUS: Dict = {
   allDeviceGroups: 'Allow all device groups',
   allDeviceGroupsHint: 'When on, the user may use every inbound group (including ones created later). When off, only the groups selected below.',
   deviceGroupsHint: 'Inbound groups this user can use to create forwarding rules. Empty = cannot forward.',
+  // v1.0.8: when the user has a plan, device groups are managed by the plan and the manual selector is disabled.
+  deviceGroupsManagedByPlan: 'This user has a plan — available groups are managed by the plan automatically. To set them manually, remove the plan first.',
   batchDelete: 'Batch Delete',
   batchExport: 'Batch Export',
   batchDeleteConfirm: 'Delete {count} selected rules? This cannot be undone.',
@@ -521,7 +523,7 @@ export const enUS: Dict = {
   planGrantAll: 'Grant All Groups',
   planGrantAllHint: 'When on, buying this plan grants access to ALL inbound groups (including ones created later).',
   planGrantGroups: 'Granted Lines',
-  planGrantGroupsHint: 'Buying this plan appends these inbound groups to the user (never removes existing; not revoked on expiry).',
+  planGrantGroupsHint: "Buying/assigning this plan REPLACES the user's current authorization with these groups (not appended); not revoked on expiry. Once a user has a plan, the manual \"Device Groups\" control is locked — this is the only place to manage it.",
   planGrantGroupsPlaceholder: 'Select inbound groups to grant',
   days: 'days',
   buyNow: 'Buy Now',

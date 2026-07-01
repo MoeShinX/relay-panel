@@ -480,6 +480,8 @@ export const zhCN = {
   allDeviceGroups: '允许所有设备分组',
   allDeviceGroupsHint: '开启后该用户可使用全部入口分组（含日后新建的）；关闭后只能使用下方指定的分组。',
   deviceGroupsHint: '该用户可用于创建转发规则的入口分组。留空 = 不能转发。',
+  // v1.0.8: 用户挂了套餐时，设备分组改由套餐自动管理，手动入口禁用。
+  deviceGroupsManagedByPlan: '该用户已开通套餐，可用分组由套餐自动管理。如需手动指定，请先移除套餐。',
   batchDelete: '批量删除',
   batchExport: '批量导出',
   batchDeleteConfirm: '确定删除选中的 {count} 条规则？此操作不可撤销。',
@@ -520,7 +522,7 @@ export const zhCN = {
   planGrantAll: '授权全部设备组',
   planGrantAllHint: '开启后购买此套餐将授权用户使用全部入口分组（含日后新建的）。',
   planGrantGroups: '授权线路',
-  planGrantGroupsHint: '购买此套餐将把这些入口分组追加到用户授权（不覆盖已有，到期不撤销）。',
+  planGrantGroupsHint: '购买/开通此套餐将用这些分组替换用户当前的授权（不是追加）；到期不自动撤销。用户挂了套餐后，「设备分组」手动入口会被锁定，全部由套餐这里管理。',
   planGrantGroupsPlaceholder: '选择授权的入口分组',
   days: '天',
   buyNow: '立即购买',

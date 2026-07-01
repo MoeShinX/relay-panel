@@ -1,4 +1,4 @@
-import { Table, Button, Tag, Popconfirm, message, Progress, Tooltip, Modal, Form, Input, InputNumber, Switch, Space, Select, DatePicker, Divider } from 'antd';
+import { Table, Button, Tag, Popconfirm, message, Progress, Tooltip, Modal, Form, Input, InputNumber, Switch, Space, Select, DatePicker, Divider, Alert } from 'antd';
 import { EditOutlined, ReloadOutlined, UndoOutlined, UserOutlined, PlusOutlined, KeyOutlined, ApiOutlined, ShoppingOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -191,7 +191,13 @@ export default function Users() {
     }
     // v1.0.7: send the per-user device-group authorization. Admins are always
     // all-allowed, so the editor hides these and we skip sending them.
-    if (!editing.admin) {
+    // v1.0.8: a plan-holding user's groups are owned by the plan (buy_plan
+    // REPLACEs them); the fields are disabled in the form for these users, but
+    // we ALSO skip sending them here — the form always carries a value for
+    // every field regardless of whether the disabled control was touched, and
+    // sending it would let a routine balance/max_rules save silently re-run
+    // the group write for no reason.
+    if (!editing.admin && !editing.plan_id) {
       payload.all_device_groups = values.all_device_groups;
       // When all_device_groups is on the explicit list is moot, but sending it
       // is harmless (the backend ignores it for authorization). Send [] then so
@@ -458,13 +464,27 @@ export default function Users() {
           </Form.Item>
           {!editing?.admin && (
             <>
+              {/* v1.0.8: a plan now owns device-group authorization end to end
+                  (buy_plan REPLACEs it, auto-pauses/resumes affected rules).
+                  Letting the manual selector below ALSO write user_device_groups
+                  created a silent last-write-wins conflict with whichever the
+                  admin touched second. Lock the manual controls whenever the
+                  user has a plan — remove the plan first to hand-manage groups. */}
+              {!!editing?.plan_id && (
+                <Alert
+                  type="info"
+                  showIcon
+                  message={t('deviceGroupsManagedByPlan')}
+                  style={{ marginBottom: 12 }}
+                />
+              )}
               <Form.Item
                 name="all_device_groups"
                 label={t('allDeviceGroups')}
                 tooltip={t('allDeviceGroupsHint')}
                 valuePropName="checked"
               >
-                <Switch />
+                <Switch disabled={!!editing?.plan_id} />
               </Form.Item>
               <Form.Item
                 name="device_group_ids"
@@ -474,7 +494,7 @@ export default function Users() {
                 <Select
                   mode="multiple"
                   allowClear
-                  disabled={allDeviceGroups}
+                  disabled={allDeviceGroups || !!editing?.plan_id}
                   placeholder={t('selectDeviceGroups')}
                   style={{ width: '100%' }}
                   options={deviceGroups.map(g => ({ value: g.id, label: `${g.name} (#${g.id})` }))}
