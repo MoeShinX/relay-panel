@@ -423,6 +423,13 @@ pub trait GroupRepository: Send + Sync {
     /// — in that mode the user gains access to every inbound group, so rules
     /// bound to inbound groups are NOT paused.
     async fn list_all_inbound_group_ids(&self) -> Result<Vec<i64>, DbError>;
+    /// v1.0.8: resolve device-group NAMES for the given ids, for display (e.g.
+    /// the account page's "可用线路" and the shop's plan-grant hint). Unlike
+    /// `list_shared_groups`, this is NOT filtered by ownership/authorization —
+    /// callers already know the ids are safe to show to the caller (their own
+    /// authorized set, or a plan's grant set). Order is not guaranteed; callers
+    /// that need it presented in `ids` order should sort client-side.
+    async fn list_group_names_by_ids(&self, ids: &[i64]) -> Result<Vec<String>, DbError>;
 }
 
 // ── v1.0.7: per-user device-group authorization ──

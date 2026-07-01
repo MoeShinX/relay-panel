@@ -84,6 +84,16 @@ pub struct UserSelf {
     /// v1.0.8: admin suspension (login allowed; forwarding gated).
     #[serde(default)]
     pub suspended: bool,
+    /// v1.0.8: true when this user is unrestricted (admin, or
+    /// all_device_groups=1) — every inbound line is usable. When false,
+    /// `available_groups` lists the specific lines they're authorized for.
+    #[serde(default)]
+    pub all_groups: bool,
+    /// v1.0.8: names of the device groups (lines) this user can currently use.
+    /// Empty when `all_groups` is true (nothing to enumerate) or when the user
+    /// has no authorization at all.
+    #[serde(default)]
+    pub available_groups: Vec<String>,
 }
 
 /// Build an error ApiResponse. Accepts `&str` or `String` (or anything else

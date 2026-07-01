@@ -252,6 +252,13 @@ export interface UserSelf {
   plan_expire_at?: string | null;
   /** v1.0.8: admin suspension (login allowed; forwarding gated). */
   suspended?: boolean;
+  /** v1.0.8: true when unrestricted (admin, or all_device_groups) — every
+   *  inbound line is usable. False = `available_groups` lists the specific
+   *  lines this user is authorized for. */
+  all_groups?: boolean;
+  /** v1.0.8: names of the device groups (lines) this user can currently use.
+   *  Empty when `all_groups` is true or the user has no authorization. */
+  available_groups?: string[];
 }
 
 /** v0.4.10 PR4: admin password reset body (PUT /admin/users/{id}/password). */

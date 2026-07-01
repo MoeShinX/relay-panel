@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Card, Descriptions, Spin, Button, Space, Modal, Form, Input, message, Typography, Result, Progress, Alert } from 'antd';
+import { Card, Descriptions, Spin, Button, Space, Modal, Form, Input, message, Typography, Result, Progress, Alert, Tag } from 'antd';
 import { LockOutlined, LogoutOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
@@ -130,6 +130,19 @@ export default function Account() {
           {/* v1.0.8: plan expiry (null = no expiry). */}
           <Descriptions.Item label={t('accountPlanExpiry')}>
             {me.plan_expire_at ? <span className="rp-mono">{me.plan_expire_at}</span> : t('unlimited')}
+          </Descriptions.Item>
+          {/* v1.0.8: available lines — "全部" when unrestricted (admin or
+              all_device_groups), otherwise the specific authorized group names. */}
+          <Descriptions.Item label={t('accountAvailableGroups')}>
+            {me.all_groups ? (
+              <Tag color="green">{t('allGroups')}</Tag>
+            ) : me.available_groups && me.available_groups.length > 0 ? (
+              <Space wrap>
+                {me.available_groups.map((name) => <Tag key={name}>{name}</Tag>)}
+              </Space>
+            ) : (
+              <Text type="secondary">{t('noneAssigned')}</Text>
+            )}
           </Descriptions.Item>
           <Descriptions.Item label={t('accountBalance')}>
             <span className="rp-mono">{me.balance}</span>

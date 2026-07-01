@@ -202,6 +202,58 @@ pub async fn get_me(user: AuthUser, State(state): State<AppState>) -> Json<ApiRe
             }
         };
 
+    // v1.0.8: resolve which lines this user can use, for the account page's
+    // "可用线路" row. Admins and all_device_groups users are unrestricted
+    // (all_groups=true, nothing to enumerate); everyone else gets the names of
+    // their explicitly authorized groups.
+    let (all_groups, available_groups) = if u.admin {
+        (true, Vec::new())
+    } else {
+        match state.db.is_user_restricted(user.user_id).await {
+            Ok(false) => (true, Vec::new()),
+            Ok(true) => {
+                let ids = match state.db.authorized_device_group_ids(user.user_id).await {
+                    Ok(ids) => ids,
+                    Err(e) => {
+                        tracing::error!(
+                            "get_me {}: authorized_device_group_ids failed: {}",
+                            user.user_id,
+                            e
+                        );
+                        return Json(ApiResponse {
+                            code: 500,
+                            message: "数据库错误".into(),
+                            data: None,
+                        });
+                    }
+                };
+                match state.db.list_group_names_by_ids(&ids).await {
+                    Ok(names) => (false, names),
+                    Err(e) => {
+                        tracing::error!(
+                            "get_me {}: list_group_names_by_ids failed: {}",
+                            user.user_id,
+                            e
+                        );
+                        return Json(ApiResponse {
+                            code: 500,
+                            message: "数据库错误".into(),
+                            data: None,
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!("get_me {}: is_user_restricted failed: {}", user.user_id, e);
+                return Json(ApiResponse {
+                    code: 500,
+                    message: "数据库错误".into(),
+                    data: None,
+                });
+            }
+        }
+    };
+
     Json(ApiResponse::success(UserSelf {
         id: u.id,
         username: u.username,
@@ -217,6 +269,8 @@ pub async fn get_me(user: AuthUser, State(state): State<AppState>) -> Json<ApiRe
         must_change_password: u.must_change_password,
         plan_expire_at: u.plan_expire_at,
         suspended: u.suspended,
+        all_groups,
+        available_groups,
     }))
 }
 

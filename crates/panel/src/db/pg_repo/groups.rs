@@ -280,4 +280,24 @@ impl GroupRepository for PgRepository {
                 .await?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
+
+    async fn list_group_names_by_ids(&self, ids: &[i64]) -> Result<Vec<String>, DbError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = (1..=ids.len())
+            .map(|i| format!("${}", i))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT name FROM device_groups WHERE id IN ({}) ORDER BY name",
+            placeholders
+        );
+        let mut q = sqlx::query_as(&sql);
+        for id in ids {
+            q = q.bind(id);
+        }
+        let rows: Vec<(String,)> = q.fetch_all(&self.pool).await?;
+        Ok(rows.into_iter().map(|(name,)| name).collect())
+    }
 }

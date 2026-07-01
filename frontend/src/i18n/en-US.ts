@@ -52,6 +52,9 @@ export const enUS: Dict = {
   accountTrafficLimit: 'Traffic quota',
   accountMemberSince: 'Member since',
   accountLoadFailed: 'Failed to load account info',
+  // v1.0.8: account page "Available Lines" row
+  accountAvailableGroups: 'Available Lines',
+  noneAssigned: 'None assigned',
   // v0.4.11 PR2: regular user nav labels
   myRules: 'My Rules',
   availableNodes: 'Node Status',

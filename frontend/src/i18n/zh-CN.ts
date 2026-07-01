@@ -51,6 +51,9 @@ export const zhCN = {
   accountTrafficLimit: '流量额度',
   accountMemberSince: '注册时间',
   accountLoadFailed: '加载账户信息失败',
+  // v1.0.8: account page "可用线路" row
+  accountAvailableGroups: '可用线路',
+  noneAssigned: '未分配',
   // v0.4.11 PR2: regular user nav labels
   myRules: '我的规则',
   availableNodes: '节点状态',

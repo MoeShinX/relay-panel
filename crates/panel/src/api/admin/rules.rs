@@ -147,10 +147,7 @@ pub async fn update_rule(
                         }
                     };
                     if !allowed.contains(&rule.device_group_in) {
-                        return Json(err(
-                            403,
-                            "cannot resume a rule on a device group you are not authorized for",
-                        ));
+                        return Json(err(403, "无法启动未被授权设备分组下的规则"));
                     }
                 }
                 Ok(None) => return Json(err(404, "规则不存在")),
