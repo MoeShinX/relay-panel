@@ -99,6 +99,9 @@ export default function Users() {
   const editingPlan = editing ? plans.find(p => p.id === editing.plan_id) : undefined;
   const isTimePlan = editingPlan?.plan_type === 'time';
   const hasPlan = editing?.plan_id != null;
+  // The user already has this exact plan — re-assigning it would re-charge
+  // and re-stack traffic for no configuration change, so block it.
+  const isSameAsCurrentPlan = hasPlan && planChoice != null && planChoice === editing?.plan_id;
 
   // v1.0.7: plan management is embedded in the edit-user modal, so these act on
   // the `editing` user. Admin assigns a plan, charging the user's balance.
@@ -470,10 +473,13 @@ export default function Users() {
                   label: `${p.name} · ${p.price} · ${p.plan_type === 'time' ? `${p.duration_days}${t('days')}` : t('planTypeData')}`,
                 }))}
               />
-              <Button type="primary" loading={planBusy} disabled={planChoice == null} onClick={handleBuyPlanForUser}>
+              <Button type="primary" loading={planBusy} disabled={planChoice == null || isSameAsCurrentPlan} onClick={handleBuyPlanForUser}>
                 {t('assignAndCharge')}
               </Button>
             </Space.Compact>
+            {isSameAsCurrentPlan && (
+              <div style={{ color: '#faad14', fontSize: 12, marginTop: 4 }}>{t('planAlreadyAssigned')}</div>
+            )}
 
             <Divider style={{ margin: '12px 0' }} />
 

@@ -307,14 +307,17 @@ impl PlanRepository for PgRepository {
         .execute(&mut *tx)
         .await?;
 
-        // v1.0.8: grant device-group authorization in the SAME tx (mirrors the
-        // SQLite impl). Purchase REPLACES the user's authorization — BOTH
-        // dimensions are reset so exactly the new plan's grant remains:
-        //   - grant_all_groups → set all_device_groups=TRUE AND clear explicit
-        //     user_device_groups rows.
-        //   - else → clear all_device_groups=FALSE AND replace user_device_groups.
-        //     Resetting the flag is the fix for the grant-all → per-group
-        //     downgrade case (without it the user stayed unrestricted).
+        // v1.0.9: grant device-group authorization in the SAME tx (mirrors the
+        // SQLite impl). Purchase is ADDITIVE — the plan's grants are UNIONed into
+        // the user's existing authorization; a purchase NEVER removes access
+        // (this supersedes v1.0.8's replace semantics):
+        //   - grant_all_groups → set all_device_groups=TRUE (union with "all" is
+        //     "all"). Existing explicit rows are left in place (moot under the
+        //     flag; purchase never deletes).
+        //   - else → INSERT the plan's groups (ON CONFLICT DO NOTHING dedups the
+        //     overlap), leaving the all-groups flag and existing rows untouched.
+        // The caller passes new_authorized_group_ids = the user's FULL set after
+        // this purchase (existing ∪ plan), which drives the resume step below.
         if grant_all_groups {
             sqlx::query(
                 "UPDATE users SET all_device_groups = TRUE WHERE id = $1 AND admin = FALSE",
@@ -322,26 +325,11 @@ impl PlanRepository for PgRepository {
             .bind(user_id)
             .execute(&mut *tx)
             .await?;
-            sqlx::query("DELETE FROM user_device_groups WHERE user_id = $1")
-                .bind(user_id)
-                .execute(&mut *tx)
-                .await?;
         } else {
-            // REPLACE semantics: reset the all-groups flag, clear old explicit
-            // assignments, then insert the plan's.
-            sqlx::query(
-                "UPDATE users SET all_device_groups = FALSE WHERE id = $1 AND admin = FALSE",
-            )
-            .bind(user_id)
-            .execute(&mut *tx)
-            .await?;
-            sqlx::query("DELETE FROM user_device_groups WHERE user_id = $1")
-                .bind(user_id)
-                .execute(&mut *tx)
-                .await?;
             for dg_id in device_group_ids {
                 sqlx::query(
-                    "INSERT INTO user_device_groups (user_id, device_group_id) VALUES ($1, $2)",
+                    "INSERT INTO user_device_groups (user_id, device_group_id) VALUES ($1, $2) \
+                     ON CONFLICT DO NOTHING",
                 )
                 .bind(user_id)
                 .bind(dg_id)
@@ -350,12 +338,14 @@ impl PlanRepository for PgRepository {
             }
         }
 
-        // Pause rules outside the new authorization (same logic as SQLite).
+        // Defensive: pause any active rule bound to a group the user is (still)
+        // NOT authorized for. v1.0.9: under ADDITIVE purchase this is normally a
+        // no-op (new_authorized ⊇ the previous set). It stays as a safety net.
         // Inline the pause logic inside the transaction (using &mut *tx) to
         // avoid acquiring a separate pool connection while the transaction is
         // still open — that would risk a pool-exhaustion deadlock.
-        // v1.0.8: auto_paused=TRUE marks these as SYSTEM pauses (see the resume
-        // step below and the column doc on forward_rules.auto_paused).
+        // auto_paused=TRUE marks these as SYSTEM pauses (see the resume step
+        // below and the column doc on forward_rules.auto_paused).
         let n = if new_authorized_group_ids.is_empty() {
             let r = sqlx::query(
                 "UPDATE forward_rules SET paused = TRUE, auto_paused = TRUE \

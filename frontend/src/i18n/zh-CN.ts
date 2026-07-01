@@ -233,6 +233,7 @@ export const zhCN = {
   assignPlan: '开通 / 更换套餐',
   assignPlanHint: '选择一个套餐为该用户开通，按套餐价格从其余额扣费（与用户自助购买规则一致）。',
   assignAndCharge: '开通并扣费',
+  planAlreadyAssigned: '该用户已开通此套餐，无需重复开通',
   planAssigned: '套餐已开通',
   editExpiry: '修改到期时间',
   expiryOnlyForTimePlan: '仅限时套餐可修改到期时间；流量套餐为无限时长。',

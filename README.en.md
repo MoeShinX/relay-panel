@@ -34,7 +34,7 @@
 - 💳 **Per-group rate billing** — each device group has a multiplier (0.1–100); users are charged `real bytes × rate`
 - 📈 **Traffic & quotas** — per-rule and per-user tracking with configurable limits (rule count, bandwidth, traffic cap)
 - 📋 **Multi-plan registration** — admins configure allowed plans; users choose on sign-up
-- 🛡️ **Per-user device-group authorization** — a user is either unrestricted or limited to an explicit set of authorized groups; buying a plan replaces authorization with exactly what the plan grants (switching plans switches access), and system-paused rules auto-resume once authorization is restored
+- 🛡️ **Per-user device-group authorization** — a user is either unrestricted or limited to an explicit set of authorized groups; buying a plan **adds** the plan's lines to the user's existing authorization (additive — never replaces), stacks traffic (used traffic still counts), and system-paused rules auto-resume once authorization is restored
 - 👤 **User management** — manage any user's rules, plan (assign/charge/expiry/remove), reset traffic, reset password, ban/unban
 - 🖥️ **Device group management** — expandable groups with node listings; a "hidden" toggle hides a group from regular users' Node Status page only (rules keep working); node removal does not affect groups or rules
 - 🖱️ **Minimal rule import/export** — single-line JSON format, batch import / batch pause-resume with automatic node distribution

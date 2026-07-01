@@ -146,6 +146,10 @@ export interface Plan {
   /** v1.0.9: device groups this plan grants on purchase (when not grant_all).
    *  Populated by GET /admin/plans and the shop list; sent on create/update. */
   device_group_ids?: number[];
+  /** v1.0.9: resolved names for device_group_ids (server-side). The shop shows
+   *  these directly — it can't resolve ids for groups the buyer isn't
+   *  authorized for yet (the shared-group list only returns visible groups). */
+  device_group_names?: string[];
   created_at: string;
 }
 

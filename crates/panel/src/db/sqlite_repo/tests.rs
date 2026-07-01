@@ -3051,10 +3051,10 @@ async fn plan_device_groups_round_trip_and_replace() {
     assert_eq!(db.list_plan_device_groups(pid).await.unwrap(), vec![50, 51]);
 }
 
-/// v1.0.8: purchase REPLACES authorization, so a group the user already had
-/// that ALSO appears in the new plan's grant set must end up exactly once
-/// (the replace is a clean delete-then-insert of the new set, not a
-/// dedup-on-append) — no duplicate row, no unique-constraint error.
+/// v1.0.9: purchase UNIONs the plan's grants into the user's set, so a group the
+/// user already had that ALSO appears in the new plan's grant set must end up
+/// exactly once — the additive INSERT OR IGNORE dedups the overlap (no duplicate
+/// row, no unique-constraint error).
 #[tokio::test]
 async fn buy_plan_new_authorized_set_has_no_duplicate_groups() {
     let db = repo().await;
@@ -3098,11 +3098,11 @@ async fn buy_plan_new_authorized_set_has_no_duplicate_groups() {
     assert!(!all.0);
 }
 
-/// v1.0.8: purchase REPLACES authorization — old groups are cleared.
-/// If the user previously had groups not in the new plan, those are removed
-/// and rules bound to them are paused.
+/// v1.0.9: purchase is ADDITIVE — the plan's grants are UNIONed into the user's
+/// existing authorization. Old groups are KEPT (a purchase never removes access)
+/// and a rule bound to a previously-authorized group keeps running.
 #[tokio::test]
-async fn buy_plan_replaces_authorization_clears_old_groups() {
+async fn buy_plan_unions_authorization_keeps_old_groups() {
     let db = repo().await;
     let (alice, pid) = seed_buyer_and_plan(&db, "100.00", 1000, "5.00", 0, false).await;
     seed_device_group(&db, 50, alice).await;
@@ -3113,7 +3113,7 @@ async fn buy_plan_replaces_authorization_clears_old_groups() {
     // Plan grants only group 52.
     db.set_plan_device_groups(pid, &[52]).await.unwrap();
 
-    // Create a rule bound to group 50 (will be paused after purchase).
+    // Create a rule bound to group 50 (must STAY active after purchase).
     sqlx::query(
         "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, \
          target_addr, target_port, paused) VALUES (100, 'r100', ?, 20000, 50, '127.0.0.1', 80, 0)",
@@ -3123,7 +3123,7 @@ async fn buy_plan_replaces_authorization_clears_old_groups() {
     .await
     .unwrap();
 
-    // v1.0.8: new_authorized = {52} (the plan's grants).
+    // v1.0.9: new_authorized = existing {50,51} ∪ plan {52} = {50,51,52}.
     db.buy_plan(
         alice,
         pid,
@@ -3135,27 +3135,32 @@ async fn buy_plan_replaces_authorization_clears_old_groups() {
         false,
         false,
         &[52],
-        &[52],
+        &[50, 51, 52],
     )
     .await
     .unwrap();
 
-    // Result: {52} — old groups 50, 51 are cleared.
-    assert_eq!(db.list_user_device_groups(alice).await.unwrap(), vec![52]);
-    // The rule bound to group 50 is now paused.
+    // Result: {50, 51, 52} — old groups kept, the plan's group added.
+    assert_eq!(
+        db.list_user_device_groups(alice).await.unwrap(),
+        vec![50, 51, 52]
+    );
+    // The rule bound to group 50 stays active (not paused).
     let paused: (bool,) = sqlx::query_as("SELECT paused FROM forward_rules WHERE id = 100")
         .fetch_one(&db.pool)
         .await
         .unwrap();
-    assert!(paused.0, "rule bound to removed group should be paused");
+    assert!(
+        !paused.0,
+        "additive purchase must not pause a rule on a kept group"
+    );
 }
 
-/// v1.0.8 regression: downgrading from a grant-all plan to a per-group plan
-/// must RESET all_device_groups back to 0. Without the reset the user stays
-/// effectively unrestricted (all_device_groups=1 overrides the explicit set),
-/// so the "replace to only the new plan's lines" never takes effect.
+/// v1.0.9: additive purchase — buying a per-group plan while already unrestricted
+/// (all_device_groups=1) KEEPS the user unrestricted (union with "all" is "all").
+/// A purchase can never downgrade access.
 #[tokio::test]
-async fn buy_plan_grant_all_then_per_group_resets_all_flag() {
+async fn buy_plan_grant_all_then_per_group_stays_unrestricted() {
     let db = repo().await;
     let (alice, pid) = seed_buyer_and_plan(&db, "100.00", 1000, "5.00", 0, false).await;
     seed_device_group(&db, 50, alice).await;
@@ -3172,7 +3177,7 @@ async fn buy_plan_grant_all_then_per_group_resets_all_flag() {
         .unwrap();
     assert!(all.0, "grant-all purchase must set the flag");
 
-    // 2) Downgrade to a per-group plan granting only {52}.
+    // 2) Buy a per-group plan granting only {52}. Additive: still unrestricted.
     db.buy_plan(
         alice,
         pid,
@@ -3184,91 +3189,44 @@ async fn buy_plan_grant_all_then_per_group_resets_all_flag() {
         false,
         false,
         &[52],
-        &[52],
+        &[50, 52],
     )
     .await
     .unwrap();
 
-    // The flag must be cleared, and the authorized set is exactly {52}.
+    // The flag STAYS set — buying a smaller plan cannot revoke "all".
     let all: (bool,) = sqlx::query_as("SELECT all_device_groups FROM users WHERE id = ?")
         .bind(alice)
         .fetch_one(&db.pool)
         .await
         .unwrap();
-    assert!(
-        !all.0,
-        "downgrade to a per-group plan must reset all_device_groups to 0"
-    );
-    assert_eq!(db.list_user_device_groups(alice).await.unwrap(), vec![52]);
+    assert!(all.0, "additive purchase must not clear all_device_groups");
 }
 
-/// v1.0.8: re-buying a plan that re-grants a group must auto-resume a rule
-/// this system previously auto-paused on that group (not just fix the
-/// authorization set) — otherwise the user pays for the line again but it
-/// stays dark until someone manually clicks resume.
+/// v1.0.9: buying a plan that grants a group must auto-resume a rule the SYSTEM
+/// previously auto-paused on that group (e.g. after the admin removed the user's
+/// plan) — otherwise the user pays for the line but it stays dark until someone
+/// manually clicks resume. (Additive purchase never pauses, so we seed the
+/// system-paused state directly.)
 #[tokio::test]
 async fn buy_plan_resumes_auto_paused_rules_when_group_reauthorized() {
     let db = repo().await;
     let (alice, pid_a) = seed_buyer_and_plan(&db, "100.00", 1000, "5.00", 0, false).await;
     seed_device_group(&db, 50, alice).await;
-    seed_device_group(&db, 51, alice).await;
-    let pid_b = db
-        .insert_plan("pB", 10, 1000, "5.00", "data", 0, false, false, "", false)
-        .await
-        .unwrap();
     db.set_plan_device_groups(pid_a, &[50]).await.unwrap();
-    db.set_plan_device_groups(pid_b, &[51]).await.unwrap();
 
-    // 1) Buy plan A (grants 50) — rule on group 50 is unpaused.
+    // A rule on group 50 the SYSTEM auto-paused (paused=1, auto_paused=1).
     sqlx::query(
         "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, \
-         target_addr, target_port, paused) VALUES (200, 'r200', ?, 20000, 50, '127.0.0.1', 80, 0)",
+         target_addr, target_port, paused, auto_paused) \
+         VALUES (200, 'r200', ?, 20000, 50, '127.0.0.1', 80, 1, 1)",
     )
     .bind(alice)
     .execute(&db.pool)
     .await
     .unwrap();
-    db.buy_plan(
-        alice,
-        pid_a,
-        "pA",
-        500,
-        1000,
-        10,
-        0,
-        false,
-        false,
-        &[50],
-        &[50],
-    )
-    .await
-    .unwrap();
 
-    // 2) Buy plan B (grants only 51) — REPLACE revokes group 50, so buy_plan
-    // itself auto-pauses rule 200 (auto_paused=1).
-    db.buy_plan(
-        alice,
-        pid_b,
-        "pB",
-        500,
-        1000,
-        10,
-        0,
-        false,
-        false,
-        &[51],
-        &[51],
-    )
-    .await
-    .unwrap();
-    let (paused, auto_paused): (bool, bool) =
-        sqlx::query_as("SELECT paused, auto_paused FROM forward_rules WHERE id = 200")
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
-    assert!(paused && auto_paused, "buy_plan must auto-pause rule 200");
-
-    // 3) Buy plan A again (re-grants 50) — the rule must AUTO-RESUME.
+    // Buy plan A (grants 50) — the system-paused rule must AUTO-RESUME.
     db.buy_plan(
         alice,
         pid_a,
@@ -3291,104 +3249,32 @@ async fn buy_plan_resumes_auto_paused_rules_when_group_reauthorized() {
             .unwrap();
     assert!(
         !paused && !auto_paused,
-        "re-authorizing group 50 must auto-resume the rule buy_plan itself paused"
+        "authorizing group 50 must auto-resume the system-paused rule"
     );
 }
 
-/// v1.0.8: a rule the user paused THEMSELVES (via the on/off switch, which
-/// clears auto_paused) must NOT be silently revived by a later purchase, even
-/// if that purchase happens to re-grant the rule's group. Only rules the
-/// SYSTEM paused (auto_paused=1) are eligible for buy_plan's auto-resume.
+/// v1.0.9: a rule the user paused THEMSELVES (auto_paused=0) must NOT be revived
+/// by a later purchase, even if that purchase grants the rule's group. Only
+/// rules the SYSTEM paused (auto_paused=1) are eligible for buy_plan's resume.
 #[tokio::test]
 async fn buy_plan_does_not_resume_manually_paused_rules() {
     let db = repo().await;
     let (alice, pid_a) = seed_buyer_and_plan(&db, "100.00", 1000, "5.00", 0, false).await;
     seed_device_group(&db, 50, alice).await;
-    seed_device_group(&db, 51, alice).await;
-    let pid_b = db
-        .insert_plan("pB", 10, 1000, "5.00", "data", 0, false, false, "", false)
-        .await
-        .unwrap();
     db.set_plan_device_groups(pid_a, &[50]).await.unwrap();
-    db.set_plan_device_groups(pid_b, &[51]).await.unwrap();
 
+    // A rule on group 50 the USER paused themselves (paused=1, auto_paused=0).
     sqlx::query(
         "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, \
-         target_addr, target_port, paused) VALUES (201, 'r201', ?, 20001, 50, '127.0.0.1', 80, 0)",
+         target_addr, target_port, paused, auto_paused) \
+         VALUES (201, 'r201', ?, 20001, 50, '127.0.0.1', 80, 1, 0)",
     )
     .bind(alice)
     .execute(&db.pool)
     .await
     .unwrap();
-    db.buy_plan(
-        alice,
-        pid_a,
-        "pA",
-        500,
-        1000,
-        10,
-        0,
-        false,
-        false,
-        &[50],
-        &[50],
-    )
-    .await
-    .unwrap();
 
-    // buy_plan B auto-pauses rule 201 (group 50 revoked).
-    db.buy_plan(
-        alice,
-        pid_b,
-        "pB",
-        500,
-        1000,
-        10,
-        0,
-        false,
-        false,
-        &[51],
-        &[51],
-    )
-    .await
-    .unwrap();
-
-    // The user explicitly re-confirms the pause via the on/off switch
-    // (update_rule_fields) — this clears auto_paused, marking it as a HUMAN
-    // decision regardless of the rule already being paused.
-    let scope = crate::db::repo::ResourceScope::All;
-    db.update_rule_fields(
-        201,
-        &scope,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        Some(true),
-    )
-    .await
-    .unwrap();
-    let (_, auto_paused): (bool, bool) =
-        sqlx::query_as("SELECT paused, auto_paused FROM forward_rules WHERE id = 201")
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
-    assert!(
-        !auto_paused,
-        "an explicit paused write must clear auto_paused"
-    );
-
-    // Buy plan A again (re-grants 50) — the rule must STAY paused, since it is
-    // no longer flagged as a system pause.
+    // Buy plan A (grants 50) — the manually-paused rule must STAY paused.
     db.buy_plan(
         alice,
         pid_a,
@@ -3410,7 +3296,7 @@ async fn buy_plan_does_not_resume_manually_paused_rules() {
         .unwrap();
     assert!(
         paused,
-        "a manually-paused rule must NOT be auto-resumed by a later purchase"
+        "a manually-paused rule must NOT be auto-resumed by a purchase"
     );
 }
 
@@ -3437,11 +3323,11 @@ async fn buy_plan_grant_all_sets_flag() {
     );
 }
 
-/// v1.0.8: REPLACE semantics — buying a second (different) plan replaces the
-/// first plan's authorization rather than stacking it. After both purchases
-/// the user is left with ONLY plan B's groups.
+/// v1.0.9: ADDITIVE semantics — buying a second (different) plan STACKS its
+/// groups onto the first plan's rather than replacing them. After buying plan A
+/// (grants 50) then plan B (grants 51), the user holds BOTH {50, 51}.
 #[tokio::test]
-async fn second_plan_purchase_replaces_first_plan_groups() {
+async fn second_plan_purchase_unions_group_sets() {
     let db = repo().await;
     let (alice, pid_a) = seed_buyer_and_plan(&db, "100.00", 1000, "5.00", 0, false).await;
     seed_device_group(&db, 50, alice).await;
@@ -3454,6 +3340,7 @@ async fn second_plan_purchase_replaces_first_plan_groups() {
     db.set_plan_device_groups(pid_a, &[50]).await.unwrap();
     db.set_plan_device_groups(pid_b, &[51]).await.unwrap();
 
+    // Buy plan A (grants 50). new_authorized = {50}.
     db.buy_plan(
         alice,
         pid_a,
@@ -3469,6 +3356,7 @@ async fn second_plan_purchase_replaces_first_plan_groups() {
     )
     .await
     .unwrap();
+    // Buy plan B (grants 51). new_authorized = existing {50} ∪ {51} = {50, 51}.
     db.buy_plan(
         alice,
         pid_b,
@@ -3480,14 +3368,16 @@ async fn second_plan_purchase_replaces_first_plan_groups() {
         false,
         false,
         &[51],
-        &[51],
+        &[50, 51],
     )
     .await
     .unwrap();
 
-    // User now has only the groups from plan B — plan A's grant was replaced,
-    // not stacked.
-    assert_eq!(db.list_user_device_groups(alice).await.unwrap(), vec![51]);
+    // User holds BOTH plan A's and plan B's groups — stacked, not replaced.
+    assert_eq!(
+        db.list_user_device_groups(alice).await.unwrap(),
+        vec![50, 51]
+    );
 }
 
 #[tokio::test]

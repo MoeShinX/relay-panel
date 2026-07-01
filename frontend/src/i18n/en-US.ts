@@ -234,6 +234,7 @@ export const enUS: Dict = {
   assignPlan: 'Assign / Change Plan',
   assignPlanHint: 'Assign a plan to this user, charging their balance at the plan price (same rules as a self-purchase).',
   assignAndCharge: 'Assign & Charge',
+  planAlreadyAssigned: 'This user already has this plan — no need to assign it again',
   planAssigned: 'Plan assigned',
   editExpiry: 'Edit Expiry',
   expiryOnlyForTimePlan: 'Only time-limited plans have an editable expiry; data plans are unlimited duration.',

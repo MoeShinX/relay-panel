@@ -2,7 +2,7 @@ import { Card, Row, Col, Button, Spin, Tag, Modal, Table, Typography, message, R
 import { ShoppingOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState } from 'react';
 import api from '../api/client';
-import type { ApiEnvelope, Plan, Order, UserSelf, SharedGroupSummary } from '../api/types';
+import type { ApiEnvelope, Plan, Order, UserSelf } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { formatBytes } from '../utils/format';
 
@@ -20,7 +20,6 @@ export default function Shop() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [me, setMe] = useState<UserSelf | null>(null);
-  const [groups, setGroups] = useState<SharedGroupSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [buying, setBuying] = useState<Plan | null>(null);
@@ -38,12 +37,6 @@ export default function Shop() {
       setPlans(plansRes.data || []);
       setOrders(ordersRes.data || []);
       setMe(meRes.data || null);
-      // v1.0.9: shared inbound groups → resolve grant ids to names on the cards.
-      // Non-fatal: a failure just shows ids instead of names.
-      try {
-        const sg = await api.get<unknown, ApiEnvelope<SharedGroupSummary[]>>('/groups/shared');
-        setGroups(sg.data || []);
-      } catch { setGroups([]); }
     } catch {
       setLoadFailed(true);
     } finally {
@@ -52,11 +45,6 @@ export default function Shop() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
-
-  const groupName = useCallback(
-    (id: number) => groups.find((g) => g.id === id)?.name ?? `#${id}`,
-    [groups],
-  );
 
   const handleBuy = async () => {
     if (!buying) return;
@@ -144,11 +132,14 @@ export default function Shop() {
                 <div>{t('planTraffic')}: {p.traffic > 0 ? formatBytes(p.traffic) : t('unlimited')}</div>
                 <div>{t('planMaxRules')}: {p.max_rules}</div>
                 {p.duration_days > 0 && <div>{t('planDuration')}: {p.duration_days} {t('days')}</div>}
-                {/* v1.0.9: device groups this plan grants on purchase. */}
+                {/* v1.0.9: device groups this plan grants on purchase. Names are
+                    resolved server-side (device_group_names) — the buyer isn't
+                    authorized for these groups yet, so the client can't resolve
+                    the ids itself. */}
                 {p.grant_all_groups ? (
                   <div>{t('planGrantGroups')}: <Tag color="gold">{t('planGrantAll')}</Tag></div>
-                ) : (p.device_group_ids && p.device_group_ids.length > 0) ? (
-                  <div>{t('planGrantGroups')}: {p.device_group_ids.map(groupName).join(', ')}</div>
+                ) : (p.device_group_names && p.device_group_names.length > 0) ? (
+                  <div>{t('planGrantGroups')}: {p.device_group_names.join(', ')}</div>
                 ) : null}
                 {p.reset_traffic && <div><Tag color="green">{t('planResetTraffic')}</Tag></div>}
               </div>

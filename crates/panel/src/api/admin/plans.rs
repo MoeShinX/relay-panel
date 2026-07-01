@@ -22,6 +22,12 @@ pub struct PlanWithGroups {
     #[serde(flatten)]
     pub plan: Plan,
     pub device_group_ids: Vec<i64>,
+    /// v1.0.9: resolved names for `device_group_ids`. The shop needs these
+    /// because a plan grants groups the buyer isn't authorized for yet, so the
+    /// shared-group endpoint (visible groups only) can't resolve the ids — it
+    /// would fall back to "#<id>". Resolving server-side fixes that. Order is
+    /// by name (not id); it's a display-only set.
+    pub device_group_names: Vec<String>,
 }
 
 /// Validate the invariant fields shared by create + update. Returns the
@@ -110,9 +116,15 @@ pub async fn list_plans(
                 );
                 Vec::new()
             });
+        let device_group_names = state
+            .db
+            .list_group_names_by_ids(&device_group_ids)
+            .await
+            .unwrap_or_default();
         out.push(PlanWithGroups {
             plan,
             device_group_ids,
+            device_group_names,
         });
     }
     Json(ApiResponse::success(out))

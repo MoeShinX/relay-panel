@@ -210,9 +210,10 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
 
 -- v1.0.9: plan ↔ device_group grant map. Buying a plan (with grant_all_groups=0)
--- REPLACES the user's user_device_groups with these groups (v1.0.8: purchase is
--- replace, not append — the plan's grant becomes the user's whole authorized
--- set). FK cascade so deleting a plan or device_group cleans up the mapping rows.
+-- UNIONs these groups into the user's user_device_groups — purchase is additive
+-- (a purchase never removes access; the plan's grant is added to whatever the
+-- user already had). FK cascade so deleting a plan or device_group cleans up the
+-- mapping rows.
 CREATE TABLE IF NOT EXISTS plan_device_groups (
     plan_id INTEGER NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
     device_group_id INTEGER NOT NULL REFERENCES device_groups(id) ON DELETE CASCADE,
