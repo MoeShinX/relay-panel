@@ -3150,6 +3150,58 @@ async fn buy_plan_replaces_authorization_clears_old_groups() {
     assert!(paused.0, "rule bound to removed group should be paused");
 }
 
+/// v1.0.8 regression: downgrading from a grant-all plan to a per-group plan
+/// must RESET all_device_groups back to 0. Without the reset the user stays
+/// effectively unrestricted (all_device_groups=1 overrides the explicit set),
+/// so the "replace to only the new plan's lines" never takes effect.
+#[tokio::test]
+async fn buy_plan_grant_all_then_per_group_resets_all_flag() {
+    let db = repo().await;
+    let (alice, pid) = seed_buyer_and_plan(&db, "100.00", 1000, "5.00", 0, false).await;
+    seed_device_group(&db, 50, alice).await;
+    seed_device_group(&db, 52, alice).await;
+
+    // 1) Buy a grant-all plan → all_device_groups = 1.
+    db.buy_plan(alice, pid, "all", 100, 1000, 10, 0, false, true, &[], &[])
+        .await
+        .unwrap();
+    let all: (bool,) = sqlx::query_as("SELECT all_device_groups FROM users WHERE id = ?")
+        .bind(alice)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert!(all.0, "grant-all purchase must set the flag");
+
+    // 2) Downgrade to a per-group plan granting only {52}.
+    db.buy_plan(
+        alice,
+        pid,
+        "ltd",
+        100,
+        1000,
+        10,
+        0,
+        false,
+        false,
+        &[52],
+        &[52],
+    )
+    .await
+    .unwrap();
+
+    // The flag must be cleared, and the authorized set is exactly {52}.
+    let all: (bool,) = sqlx::query_as("SELECT all_device_groups FROM users WHERE id = ?")
+        .bind(alice)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert!(
+        !all.0,
+        "downgrade to a per-group plan must reset all_device_groups to 0"
+    );
+    assert_eq!(db.list_user_device_groups(alice).await.unwrap(), vec![52]);
+}
+
 #[tokio::test]
 async fn buy_plan_grant_all_sets_flag() {
     let db = repo().await;

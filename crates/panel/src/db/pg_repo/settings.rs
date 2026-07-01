@@ -308,8 +308,13 @@ impl PlanRepository for PgRepository {
         .await?;
 
         // v1.0.8: grant device-group authorization in the SAME tx (mirrors the
-        // SQLite impl). Purchase REPLACES the user's authorization — old grants
-        // are cleared so rules bound to groups no longer in the plan are paused.
+        // SQLite impl). Purchase REPLACES the user's authorization — BOTH
+        // dimensions are reset so exactly the new plan's grant remains:
+        //   - grant_all_groups → set all_device_groups=TRUE AND clear explicit
+        //     user_device_groups rows.
+        //   - else → clear all_device_groups=FALSE AND replace user_device_groups.
+        //     Resetting the flag is the fix for the grant-all → per-group
+        //     downgrade case (without it the user stayed unrestricted).
         if grant_all_groups {
             sqlx::query(
                 "UPDATE users SET all_device_groups = TRUE WHERE id = $1 AND admin = FALSE",
@@ -317,8 +322,19 @@ impl PlanRepository for PgRepository {
             .bind(user_id)
             .execute(&mut *tx)
             .await?;
+            sqlx::query("DELETE FROM user_device_groups WHERE user_id = $1")
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await?;
         } else {
-            // REPLACE semantics: clear old assignments, then insert the plan's.
+            // REPLACE semantics: reset the all-groups flag, clear old explicit
+            // assignments, then insert the plan's.
+            sqlx::query(
+                "UPDATE users SET all_device_groups = FALSE WHERE id = $1 AND admin = FALSE",
+            )
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
             sqlx::query("DELETE FROM user_device_groups WHERE user_id = $1")
                 .bind(user_id)
                 .execute(&mut *tx)

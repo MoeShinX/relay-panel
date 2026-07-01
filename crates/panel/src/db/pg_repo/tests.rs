@@ -3188,6 +3188,58 @@ async fn pg_buy_plan_grant_all_sets_flag() {
     cleanup(&db).await;
 }
 
+/// v1.0.8 regression (PG): downgrading from a grant-all plan to a per-group
+/// plan must RESET all_device_groups back to FALSE. Mirrors the SQLite test.
+#[tokio::test]
+async fn pg_buy_plan_grant_all_then_per_group_resets_all_flag() {
+    let Some(db) = repo("buy_grant_all_downgrade").await else {
+        return;
+    };
+    let (alice, pid) = seed_buyer_and_plan(&db, "100.00", 1000, "5.00", 0, false).await;
+    seed_device_group(&db, 50, alice).await;
+    seed_device_group(&db, 52, alice).await;
+
+    // 1) Buy a grant-all plan → all_device_groups = TRUE.
+    db.buy_plan(alice, pid, "all", 100, 1000, 10, 0, false, true, &[], &[])
+        .await
+        .unwrap();
+    let all: (bool,) = sqlx::query_as("SELECT all_device_groups FROM users WHERE id = $1")
+        .bind(alice)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert!(all.0, "grant-all purchase must set the flag (PG)");
+
+    // 2) Downgrade to a per-group plan granting only {52}.
+    db.buy_plan(
+        alice,
+        pid,
+        "ltd",
+        100,
+        1000,
+        10,
+        0,
+        false,
+        false,
+        &[52],
+        &[52],
+    )
+    .await
+    .unwrap();
+
+    let all: (bool,) = sqlx::query_as("SELECT all_device_groups FROM users WHERE id = $1")
+        .bind(alice)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert!(
+        !all.0,
+        "downgrade to a per-group plan must reset all_device_groups to FALSE (PG)"
+    );
+    assert_eq!(db.list_user_device_groups(alice).await.unwrap(), vec![52]);
+    cleanup(&db).await;
+}
+
 /// v1.0.8: REPLACE semantics — buying a second (different) plan replaces the
 /// first plan's authorization rather than stacking it. Mirrors the SQLite
 /// test.

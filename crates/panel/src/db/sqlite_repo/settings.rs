@@ -305,16 +305,32 @@ impl PlanRepository for SqliteRepository {
             .await?;
 
         // v1.0.8: grant device-group authorization in the SAME tx. Purchase
-        // REPLACES the user's authorization — old grants are cleared so rules
-        // bound to groups no longer in the plan are paused (the caller computes
-        // new_authorized_group_ids to drive the pause).
+        // REPLACES the user's authorization — BOTH dimensions are reset so the
+        // user is left with EXACTLY the new plan's grant, nothing lingering:
+        //   - grant_all_groups → set all_device_groups=1 AND clear the explicit
+        //     user_device_groups rows (redundant under the flag; clearing them
+        //     avoids stale grants resurfacing if the user later downgrades).
+        //   - else → clear all_device_groups=0 AND replace user_device_groups
+        //     with the plan's set. Resetting the flag is the fix for the
+        //     grant-all → per-group downgrade case: without it the user kept
+        //     all_device_groups=1 and stayed effectively unrestricted.
+        // The caller's new_authorized_group_ids drives the rule-pause below.
         if grant_all_groups {
             sqlx::query("UPDATE users SET all_device_groups = 1 WHERE id = ? AND admin = 0")
                 .bind(user_id)
                 .execute(&mut *tx)
                 .await?;
+            sqlx::query("DELETE FROM user_device_groups WHERE user_id = ?")
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await?;
         } else {
-            // REPLACE semantics: clear old assignments, then insert the plan's.
+            // REPLACE semantics: reset the all-groups flag, clear old explicit
+            // assignments, then insert the plan's.
+            sqlx::query("UPDATE users SET all_device_groups = 0 WHERE id = ? AND admin = 0")
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await?;
             sqlx::query("DELETE FROM user_device_groups WHERE user_id = ?")
                 .bind(user_id)
                 .execute(&mut *tx)
