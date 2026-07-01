@@ -359,21 +359,32 @@ impl ForwarderManager {
                 );
                 continue;
             }
-            // v0.4.1: TlsSimple requires a configured TLS acceptor. If none is
-            // set (no TLS_CERT_PATH/TLS_KEY_PATH), skip the listener + report
-            // an error so the operator knows why it's not forwarding. Raw/WS
-            // listeners are completely unaffected.
-            if listener.node_transport == NodeTransport::TlsSimple && self.tls_acceptor.is_none() {
+            // v1.0.8: WS / TLS entry transports are DISABLED at runtime. The
+            // panel hid them in v0.4.20 (every rule is `raw`), and having the
+            // NODE terminate WS/TLS is fundamentally incompatible with
+            // transparently relaying an end-to-end tunnel — VLESS+WS+TLS,
+            // Trojan, VMess, etc. MUST be raw-forwarded, because the client's
+            // WS/TLS handshake is meant for the FINAL server, not this relay.
+            // The implementations (ws.rs / tls.rs / cert_reloader.rs) are kept
+            // for possible future revival but are never served. A stray ws/tls
+            // config is skipped + reported so the operator can see why the port
+            // isn't forwarding (the `(Tcp, Ws)` / `(Tcp, TlsSimple)` match arms
+            // below are consequently unreachable at runtime — kept on purpose).
+            if matches!(
+                listener.node_transport,
+                NodeTransport::Ws | NodeTransport::TlsSimple
+            ) {
                 tracing::warn!(
-                    "rule {}: tls_simple listener on {} skipped — no TLS cert configured \
-                     (set TLS_CERT_PATH + TLS_KEY_PATH)",
+                    "rule {}: node_transport {:?} is disabled and will not be served — \
+                     skipping listener on port {} (use raw; WS/TLS entry transport is retired)",
                     rule_id,
+                    listener.node_transport,
                     port
                 );
                 errors.lock().await.push(ListenerError {
                     port,
                     protocol: proto_str.clone(),
-                    error: "tls_simple skipped: no TLS certificate configured".into(),
+                    error: format!("{:?} entry transport is disabled", listener.node_transport),
                 });
                 continue;
             }
@@ -776,32 +787,36 @@ mod tests {
         assert!(keys.contains(&(40002, Protocol::Udp, NodeTransport::Raw)));
     }
 
+    /// v1.0.8: WS entry transport is disabled — a ws rule must NOT start a
+    /// listener, and a listener_error must be reported so the panel shows why.
     #[tokio::test]
-    async fn ws_ingress_is_scheduled() {
+    async fn ws_ingress_is_disabled() {
         let mut mgr = fresh_mgr();
         mgr.apply_config(&one_rule(40010, Protocol::Tcp, NodeTransport::Ws))
             .await;
-        assert!(mgr
-            .listener_keys()
-            .contains(&(40010, Protocol::Tcp, NodeTransport::Ws)));
+        assert!(
+            mgr.listener_keys().is_empty(),
+            "ws entry transport is disabled — no listener must start"
+        );
+        let errs = mgr.take_listener_errors().await;
+        assert_eq!(errs.len(), 1, "a listener_error must be pushed");
+        assert!(errs[0].error.contains("disabled"), "got: {}", errs[0].error);
     }
 
+    /// v1.0.8: TLS entry transport is disabled — a tls_simple rule is skipped
+    /// (regardless of whether a cert is configured) with a reported error.
     #[tokio::test]
-    async fn tls_simple_skipped_when_no_cert_configured() {
-        // v0.4.1: without a TLS acceptor (no TLS_CERT_PATH), a tls_simple rule
-        // is skipped + an error is pushed. Raw/WS listeners are unaffected.
+    async fn tls_simple_is_disabled() {
         let mut mgr = fresh_mgr();
-        // tls_acceptor is None by default (fresh_mgr doesn't set it).
         mgr.apply_config(&one_rule(40030, Protocol::Tcp, NodeTransport::TlsSimple))
             .await;
         assert!(
             mgr.listener_keys().is_empty(),
-            "tls_simple without cert must not start"
+            "tls_simple is disabled — no listener must start"
         );
-        // The error must be reported so the panel shows it.
         let errs = mgr.take_listener_errors().await;
         assert_eq!(errs.len(), 1, "a listener_error must be pushed");
-        assert!(errs[0].error.contains("no TLS certificate configured"));
+        assert!(errs[0].error.contains("disabled"), "got: {}", errs[0].error);
     }
 
     #[tokio::test]
@@ -812,8 +827,11 @@ mod tests {
         assert!(mgr.listener_keys().is_empty());
     }
 
+    /// The ListenerKey includes the protocol, so a TCP and a UDP raw listener
+    /// on the SAME port are two distinct listeners. (v1.0.8: this used to pair
+    /// raw+ws, but ws is disabled now; tcp+udp is the remaining same-port case.)
     #[tokio::test]
-    async fn same_port_different_transport_are_distinct_listeners() {
+    async fn same_port_tcp_and_udp_are_distinct_listeners() {
         let mut mgr = fresh_mgr();
         let c = NodeConfigResponse {
             listeners: vec![
@@ -831,8 +849,8 @@ mod tests {
                 ListenerConfig {
                     rule_id: 2,
                     port: 40050,
-                    protocol: Protocol::Tcp,
-                    node_transport: NodeTransport::Ws,
+                    protocol: Protocol::Udp,
+                    node_transport: NodeTransport::Raw,
                     ws_path: None,
                     targets: vec!["127.0.0.1:1".into()],
                     load_balance_strategy: relay_shared::protocol::LoadBalanceStrategy::First,
@@ -972,12 +990,12 @@ mod tests {
         assert_eq!(fp2.load_balance_strategy, LoadBalanceStrategy::RoundRobin);
     }
 
-    /// v0.4.7: a node_transport change (e.g. raw→ws via a tunnel profile) must
-    /// restart the listener so the right forwarder is spawned. The fingerprint
-    /// now includes node_transport, so a transport flip is a different
-    /// fingerprint even when targets/ws_path are unchanged.
+    /// v1.0.8: flipping a raw listener to a now-DISABLED transport (ws) must
+    /// tear the raw listener down and serve nothing — the disabled transport is
+    /// skipped, so no new key appears. (Before ws was disabled this tested the
+    /// raw→ws restart; ws.rs is kept but no longer served.)
     #[tokio::test]
-    async fn transport_change_restarts_listener() {
+    async fn transport_change_to_disabled_stops_listener() {
         let mut mgr = fresh_mgr();
         let mk = |transport: NodeTransport| NodeConfigResponse {
             listeners: vec![ListenerConfig {
@@ -993,12 +1011,11 @@ mod tests {
             }],
         };
         mgr.apply_config(&mk(NodeTransport::Raw)).await;
-        // raw listener keyed under Raw transport.
         assert!(mgr
             .fingerprint(&(40066, Protocol::Tcp, NodeTransport::Raw))
             .is_some());
-        // Flip transport to Ws on the same port. The old Raw key must be gone
-        // and a new Ws key must exist — i.e. the listener was restarted.
+        // Flip to ws (disabled): the old raw listener is stopped, and ws is
+        // skipped, so NO listener remains for this port.
         mgr.apply_config(&mk(NodeTransport::Ws)).await;
         assert!(
             mgr.fingerprint(&(40066, Protocol::Tcp, NodeTransport::Raw))
@@ -1007,42 +1024,12 @@ mod tests {
         );
         assert!(
             mgr.fingerprint(&(40066, Protocol::Tcp, NodeTransport::Ws))
-                .is_some(),
-            "new ws listener must be started after transport flip"
+                .is_none(),
+            "ws is disabled — no ws listener may start"
         );
-    }
-
-    /// ws_path change on a WS listener must restart it.
-    #[tokio::test]
-    async fn ws_path_change_restarts_listener() {
-        let mut mgr = fresh_mgr();
-        let c1 = cfg(
-            40063,
-            Protocol::Tcp,
-            NodeTransport::Ws,
-            vec!["127.0.0.1:9"],
-            Some("/a"),
-        );
-        mgr.apply_config(&c1).await;
-        assert_eq!(
-            mgr.fingerprint(&(40063, Protocol::Tcp, NodeTransport::Ws))
-                .unwrap()
-                .ws_path,
-            Some("/a".to_string())
-        );
-        let c2 = cfg(
-            40063,
-            Protocol::Tcp,
-            NodeTransport::Ws,
-            vec!["127.0.0.1:9"],
-            Some("/b"),
-        );
-        mgr.apply_config(&c2).await;
-        assert_eq!(
-            mgr.fingerprint(&(40063, Protocol::Tcp, NodeTransport::Ws))
-                .unwrap()
-                .ws_path,
-            Some("/b".to_string())
+        assert!(
+            mgr.listener_keys().is_empty(),
+            "no listener should remain for the port"
         );
     }
 

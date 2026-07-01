@@ -159,17 +159,30 @@ fn interface_ipv4(name: &str) -> Result<Ipv4Addr, OutboundError> {
 
 /// Create a TCP stream connected to `target`, optionally binding to
 /// `source_ipv4:0` first.
+///
+/// v1.0.8: TCP_NODELAY is set on the outbound stream. This node is a relay —
+/// disabling Nagle's algorithm is essential. With Nagle ON, small writes are
+/// buffered until an ACK returns, and combined with the peer's delayed-ACK
+/// (~40ms) this adds up to ~40ms of variable latency PER HOP. On a long relay
+/// chain that compounds into severe jitter and makes interactive traffic
+/// (SSH/RDP/gaming/request-response) unusable. Every serious proxy sets
+/// TCP_NODELAY on both ends; the inbound (accept) side is set in tcp.rs.
 pub async fn tcp_connect(
     target: &str,
     source_ipv4: Option<Ipv4Addr>,
     _timeout_secs: u64,
 ) -> Result<TcpStream, OutboundError> {
-    match source_ipv4 {
+    let stream = match source_ipv4 {
         None => TcpStream::connect(target)
             .await
-            .map_err(OutboundError::Connect),
-        Some(src) => tcp_connect_bound(target, src).await,
+            .map_err(OutboundError::Connect)?,
+        Some(src) => tcp_connect_bound(target, src).await?,
+    };
+    // Non-fatal: a socket that just connected virtually never rejects this.
+    if let Err(e) = stream.set_nodelay(true) {
+        tracing::debug!("outbound: set_nodelay(true) failed for {}: {}", target, e);
     }
+    Ok(stream)
 }
 
 async fn tcp_connect_bound(target: &str, src: Ipv4Addr) -> Result<TcpStream, OutboundError> {
@@ -437,6 +450,39 @@ mod tests {
             .expect("auto-route connect must succeed");
         assert!(stream.peer_addr().unwrap().port() == port);
         assert!(accept.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn tcp_connect_sets_nodelay() {
+        // v1.0.8: the outbound stream MUST have TCP_NODELAY enabled (Nagle off)
+        // — the core of the long-chain jitter fix. Verify via the getter for
+        // both the auto-route and the source-bound paths.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let target = format!("127.0.0.1:{}", port);
+        let accept = tokio::spawn(async move {
+            // Accept twice (auto + bound connects below).
+            let a = listener.accept().await.map(|(s, _)| s);
+            let b = listener.accept().await.map(|(s, _)| s);
+            (a, b)
+        });
+
+        let auto = tcp_connect(&target, None, 5).await.expect("auto connect");
+        assert!(
+            auto.nodelay().unwrap(),
+            "auto-route stream must have NODELAY"
+        );
+
+        let bound = tcp_connect(&target, Some(Ipv4Addr::LOCALHOST), 5)
+            .await
+            .expect("bound connect");
+        assert!(
+            bound.nodelay().unwrap(),
+            "source-bound stream must have NODELAY"
+        );
+
+        let (ra, rb) = accept.await.unwrap();
+        assert!(ra.is_ok() && rb.is_ok());
     }
 
     #[tokio::test]
