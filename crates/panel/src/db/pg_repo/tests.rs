@@ -2981,7 +2981,17 @@ async fn pg_buy_plan_switch_replaces_traffic_and_resets_used() {
         .unwrap();
 
     db.buy_plan(
-        alice, pid_b, "pB", 500, 5_000, 20, 0, false, false, &[], &[],
+        alice,
+        pid_b,
+        "pB",
+        500,
+        5_000,
+        20,
+        0,
+        false,
+        false,
+        &[],
+        &[],
     )
     .await
     .unwrap();
