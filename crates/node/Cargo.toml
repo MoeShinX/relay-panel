@@ -40,6 +40,8 @@ libc = "0.2"
 # lookups take a per-shard lock instead of one listener-wide mutex, removing
 # session-lock contention on the hot UDP path.
 dashmap = "6"
+# v1.0.10: verify the sha256 of a self-upgrade binary download before swapping.
+sha2 = "0.10"
 
 [dev-dependencies]
 # v0.4.16: test-only cert generator for the real WSS (wss://) regression test.

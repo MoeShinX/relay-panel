@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Spin, Result, Empty } from 'antd';
+import { Spin, Result, Empty, Modal, message } from 'antd';
 import { LineChartOutlined } from '@ant-design/icons';
 import api from '../api/client';
 import type { ApiEnvelope, NodeStatus, SharedNodeSummary, NodeDisplayRow } from '../api/types';
@@ -109,6 +109,28 @@ export default function NodeStatus() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
 
+  // v1.0.10: admin triggers a directed node self-upgrade. Confirm first (the
+  // node restarts, so its forwarding blips for a few seconds).
+  const handleUpgrade = (row: AnyNodeRow) => {
+    if (!row.node_id) return;
+    Modal.confirm({
+      title: t('nodeUpgradeConfirmTitle'),
+      content: t('nodeUpgradeConfirm').replace('{v}', currentVersion || 'latest'),
+      okText: t('nodeUpgradeOk'),
+      cancelText: t('cancel'),
+      onOk: async () => {
+        try {
+          const res = await api.post<unknown, ApiEnvelope<null>>(
+            `/nodes/${row.group_id}/upgrade/${row.node_id}`,
+            {},
+          );
+          if (res.code !== 0) { message.error(res.message); return; }
+          message.success(t('nodeUpgradeSent'));
+        } catch { message.error(t('nodeUpgradeFailed')); }
+      },
+    });
+  };
+
   const rows: AnyNodeRow[] | null = isAdmin ? adminRows : userRows;
   const groups = useMemo(() => (rows ? stableGroupedRows(rows) : null), [rows]);
 
@@ -155,6 +177,7 @@ export default function NodeStatus() {
           isMobile={isMobile}
           t={t}
           openDetail={setDetailRow}
+          onUpgrade={isAdmin ? handleUpgrade : undefined}
         />
       ))}
       <NodeDetailDrawer

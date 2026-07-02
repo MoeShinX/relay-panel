@@ -584,6 +584,22 @@ pub struct DiagnoseRuleMessage {
     pub challenge: String,
 }
 
+/// v1.0.10: Panel → node, over the WS control channel (delivered via
+/// `send_node`, so only the targeted node receives it). Asks the node to
+/// self-upgrade: download the latest official release binary for its arch,
+/// verify its sha256, swap its own binary, and restart. The message carries NO
+/// URL or binary — the node only ever pulls from the hardcoded official GitHub
+/// release, so a compromised panel can at most force an upgrade to an official
+/// build, never run arbitrary code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpgradeNodeMessage {
+    #[serde(rename = "type")]
+    pub msg_type: String, // "upgrade_node"
+    /// The intended target's node_id (informational — send_node already routed
+    /// this only to the matching connection; the node may re-check as defence).
+    pub node_id: String,
+}
+
 impl DiagnoseRuleMessage {
     pub fn new(request_id: String, rule_id: i64, challenge: String) -> Self {
         Self {

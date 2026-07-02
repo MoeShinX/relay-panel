@@ -3,6 +3,7 @@ mod diagnose;
 mod forwarder;
 mod poller;
 mod reporter;
+mod updater;
 mod ws_client;
 
 use config::NodeConfig;

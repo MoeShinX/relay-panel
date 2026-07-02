@@ -1,5 +1,6 @@
  
-import { Table, Tag, Typography, Button } from 'antd';
+import { Table, Tag, Typography, Button, Tooltip } from 'antd';
+import { CloudDownloadOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import type { Tfn } from './types';
 import type { NodeDisplayRow } from '../../api/types';
 import { NodeResourceBar, NodeDiskBar } from './NodeResourceBar';
@@ -13,12 +14,16 @@ interface Props {
   currentVersion: string;
   t: Tfn;
   openDetail: (row: NodeDisplayRow) => void;
+  /** v1.0.10: admin-only. When set, a "节点更新" column shows a per-node upgrade
+   *  icon (active when the node is behind the panel version). Absent for the
+   *  regular-user view. */
+  onUpgrade?: (row: NodeDisplayRow) => void;
 }
 
 /** Desktop table for one group's nodes. Both admin and user share the same
  *  columns — the permission difference is in the data source (admin reads
  *  /nodes, user reads /nodes/shared) and the detail drawer. */
-export function NodeDesktopTable({ rows, panelProtocol, currentVersion, t, openDetail }: Props) {
+export function NodeDesktopTable({ rows, panelProtocol, currentVersion, t, openDetail, onUpgrade }: Props) {
   const labels = { d: t('uptimeDay'), h: t('uptimeHour'), m: t('uptimeMinute'), s: t('uptimeSecond') };
 
   const columns = [
@@ -32,10 +37,7 @@ export function NodeDesktopTable({ rows, panelProtocol, currentVersion, t, openD
         return r.online ? <Tag color="green">{t('online')}</Tag> : <Tag>{t('offline')}</Tag>;
       },
     },
-    {
-      title: t('network'), key: 'network', width: 300,
-      render: (_: unknown, r: NodeDisplayRow) => <NetworkCell row={r} t={t} />,
-    },
+    // v1.0.10: node version moved forward, with the upgrade action right after it.
     {
       title: t('nodeVersion'), dataIndex: 'node_version', key: 'node_version', width: 100,
       render: (v: string | null) => {
@@ -44,6 +46,26 @@ export function NodeDesktopTable({ rows, panelProtocol, currentVersion, t, openD
         const label = rel === 'behind' ? `v${v} ↑` : `v${v}`;
         return <Tag color={versionTagColor(rel)}>{label}</Tag>;
       },
+    },
+    // v1.0.10: admin-only per-node upgrade icon. Active when the node is behind
+    // the panel version; a green check when it's already current.
+    ...(onUpgrade ? [{
+      title: t('nodeUpgrade'), key: 'upgrade', width: 72,
+      render: (_: unknown, r: NodeDisplayRow) => {
+        if (!r.node_id || !r.node_version) return <Typography.Text type="secondary">-</Typography.Text>;
+        if (versionRelation(r.node_version, currentVersion) !== 'behind') {
+          return <Tooltip title={t('nodeUpgradeLatest')}><CheckCircleOutlined style={{ color: '#52c41a' }} /></Tooltip>;
+        }
+        return (
+          <Tooltip title={r.online ? t('nodeUpgradeTip').replace('{v}', currentVersion) : t('offline')}>
+            <Button size="small" type="link" icon={<CloudDownloadOutlined />} disabled={!r.online} onClick={() => onUpgrade(r)} />
+          </Tooltip>
+        );
+      },
+    }] : []),
+    {
+      title: t('network'), key: 'network', width: 300,
+      render: (_: unknown, r: NodeDisplayRow) => <NetworkCell row={r} t={t} />,
     },
     {
       title: t('connections'), dataIndex: 'connections', key: 'connections', width: 70,

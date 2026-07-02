@@ -349,6 +349,58 @@ pub struct DeleteStatusQuery {
     pub node_id: Option<String>,
 }
 
+/// v1.0.10: POST /nodes/{group_id}/upgrade/{node_id} — admin triggers a directed
+/// self-upgrade on ONE node. The command goes over the WS control channel
+/// (`send_node` reaches only that node's live connection); the node then pulls
+/// the latest official release for its arch, verifies its sha256, swaps its
+/// binary, and restarts. Returns 409 when the node has no live WS connection.
+pub async fn upgrade_node(
+    _admin: AdminOnly,
+    State(state): State<AppState>,
+    axum::extract::Path((group_id, node_id)): axum::extract::Path<(i64, String)>,
+) -> Json<ApiResponse<()>> {
+    let node_id = node_id.trim().to_string();
+    if node_id.is_empty() {
+        return Json(ApiResponse {
+            code: 400,
+            message: "node_id required".into(),
+            data: None,
+        });
+    }
+    let msg = match serde_json::to_string(&relay_shared::protocol::UpgradeNodeMessage {
+        msg_type: "upgrade_node".into(),
+        node_id: node_id.clone(),
+    }) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("upgrade_node: serialize failed: {}", e);
+            return Json(ApiResponse {
+                code: 500,
+                message: "serialize error".into(),
+                data: None,
+            });
+        }
+    };
+    let sent = state
+        .node_connections
+        .send_node(group_id, &node_id, &msg)
+        .await;
+    if sent == 0 {
+        return Json(ApiResponse {
+            code: 409,
+            message: "节点当前无 WS 控制通道（离线或旧版本不支持远程升级），无法下发升级".into(),
+            data: None,
+        });
+    }
+    tracing::info!(
+        action = "upgrade_node",
+        group_id,
+        node_id = %node_id,
+        "sent self-upgrade command to node"
+    );
+    Json(ApiResponse::success(()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_status_key;
