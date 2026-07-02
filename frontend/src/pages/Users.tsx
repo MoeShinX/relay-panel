@@ -99,22 +99,41 @@ export default function Users() {
   const editingPlan = editing ? plans.find(p => p.id === editing.plan_id) : undefined;
   const isTimePlan = editingPlan?.plan_type === 'time';
   const hasPlan = editing?.plan_id != null;
-  // The user already has this exact plan — re-assigning it would re-charge
-  // and re-stack traffic for no configuration change, so block it.
-  const isSameAsCurrentPlan = hasPlan && planChoice != null && planChoice === editing?.plan_id;
+  // Selecting the user's current plan again is a RENEW (extend time / add
+  // traffic), not a no-op — it's allowed. Show a hint so the admin knows the
+  // charge stacks rather than switches.
+  const isRenewSamePlan = hasPlan && planChoice != null && planChoice === editing?.plan_id;
 
   // v1.0.7: plan management is embedded in the edit-user modal, so these act on
   // the `editing` user. Admin assigns a plan, charging the user's balance.
-  const handleBuyPlanForUser = async () => {
+  // v1.0.9: switching to a DIFFERENT plan wipes the user's current traffic +
+  // expiry (REPLACE semantics), so confirm first. Renew (same plan) / first
+  // assignment proceed directly.
+  const handleBuyPlanForUser = () => {
     if (!editing || planChoice == null) return;
-    setPlanBusy(true);
-    try {
-      const res = await api.post<unknown, ApiEnvelope<null>>(`/admin/users/${editing.id}/buy-plan`, { plan_id: planChoice });
-      if (res.code !== 0) { message.error(res.message); return; }
-      message.success(t('planAssigned'));
-      setEditing(null);
-      load();
-    } finally { setPlanBusy(false); }
+    const target = editing;
+    const doBuy = async () => {
+      setPlanBusy(true);
+      try {
+        const res = await api.post<unknown, ApiEnvelope<null>>(`/admin/users/${target.id}/buy-plan`, { plan_id: planChoice });
+        if (res.code !== 0) { message.error(res.message); return; }
+        message.success(t('planAssigned'));
+        setEditing(null);
+        load();
+      } finally { setPlanBusy(false); }
+    };
+    const isSwitch = target.plan_id != null && planChoice !== target.plan_id;
+    if (isSwitch) {
+      Modal.confirm({
+        title: t('switchPlanConfirmTitle'),
+        content: t('adminSwitchPlanWarning'),
+        okText: t('assignAndCharge'),
+        cancelText: t('cancel'),
+        onOk: doBuy,
+      });
+    } else {
+      doBuy();
+    }
   };
 
   // Edit the plan association/expiry without charging. clear=true removes the
@@ -473,12 +492,12 @@ export default function Users() {
                   label: `${p.name} · ${p.price} · ${p.plan_type === 'time' ? `${p.duration_days}${t('days')}` : t('planTypeData')}`,
                 }))}
               />
-              <Button type="primary" loading={planBusy} disabled={planChoice == null || isSameAsCurrentPlan} onClick={handleBuyPlanForUser}>
-                {t('assignAndCharge')}
+              <Button type="primary" loading={planBusy} disabled={planChoice == null} onClick={handleBuyPlanForUser}>
+                {isRenewSamePlan ? t('renewAndCharge') : t('assignAndCharge')}
               </Button>
             </Space.Compact>
-            {isSameAsCurrentPlan && (
-              <div style={{ color: '#faad14', fontSize: 12, marginTop: 4 }}>{t('planAlreadyAssigned')}</div>
+            {isRenewSamePlan && (
+              <div style={{ color: '#999', fontSize: 12, marginTop: 4 }}>{t('renewSamePlanHint')}</div>
             )}
 
             <Divider style={{ margin: '12px 0' }} />

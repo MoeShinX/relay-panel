@@ -132,11 +132,9 @@ pub async fn buy_plan(
         }
     };
 
-    // v1.0.9: compute the user's authorized set AFTER this purchase. Purchase is
-    // ADDITIVE (union), so the new set = the user's EXISTING authorization plus
-    // the plan's grants. This drives the resume step inside buy_plan (and keeps
-    // the defensive pause step a no-op, since authorization only grows).
-    // grant_all_groups → all inbound groups.
+    // v1.0.8: compute the new authorized set that will drive pause_rules_outside
+    // _groups inside buy_plan. grant_all_groups → all inbound groups (nothing
+    // paused), else the plan's own groups.
     let new_authorized_group_ids: Vec<i64> = if plan.grant_all_groups {
         match state.db.list_all_inbound_group_ids().await {
             Ok(ids) => ids,
@@ -150,23 +148,7 @@ pub async fn buy_plan(
             }
         }
     } else {
-        let mut set = match state.db.authorized_device_group_ids(user.user_id).await {
-            Ok(ids) => ids,
-            Err(e) => {
-                tracing::error!(
-                    "buy_plan {}: authorized_device_group_ids failed: {}",
-                    plan.id,
-                    e
-                );
-                return Json(err(500, "数据库错误"));
-            }
-        };
-        for id in &device_group_ids {
-            if !set.contains(id) {
-                set.push(*id);
-            }
-        }
-        set
+        device_group_ids.clone()
     };
 
     match state

@@ -178,7 +178,14 @@ export default function Shop() {
             <p>{t('planName')}: <Text strong>{buying.name}</Text></p>
             <p>{t('planPrice')}: <span className="rp-mono">{buying.price}</span></p>
             {me && <p>{t('accountBalance')}: <span className="rp-mono">{me.balance}</span></p>}
-            <Alert type="info" showIcon style={{ marginTop: 8 }} message={t('shopTrafficStacksHint')} />
+            {/* v1.0.9: buying a DIFFERENT plan is a switch — the current plan's
+                remaining traffic and expiry are wiped. Warn explicitly. Buying
+                the SAME plan (or having none) just renews/stacks. */}
+            {me?.plan_id != null && buying.id !== me.plan_id ? (
+              <Alert type="warning" showIcon style={{ marginTop: 8 }} message={t('shopSwitchPlanWarning')} />
+            ) : (
+              <Alert type="info" showIcon style={{ marginTop: 8 }} message={t('shopTrafficStacksHint')} />
+            )}
           </div>
         )}
       </Modal>

@@ -265,12 +265,13 @@ impl PlanRepository for PgRepository {
         let mut tx = self.pool.begin().await?;
 
         // FOR UPDATE locks the user row for the tx's duration.
-        let row: Option<(String, Option<String>)> =
-            sqlx::query_as("SELECT balance, plan_expire_at FROM users WHERE id = $1 FOR UPDATE")
-                .bind(user_id)
-                .fetch_optional(&mut *tx)
-                .await?;
-        let Some((balance_str, current_expire)) = row else {
+        let row: Option<(String, Option<String>, Option<i64>)> = sqlx::query_as(
+            "SELECT balance, plan_expire_at, plan_id FROM users WHERE id = $1 FOR UPDATE",
+        )
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some((balance_str, current_expire, current_plan_id)) = row else {
             let _ = tx.rollback().await;
             return Err(BuyPlanError::Database(DbError::NotFound));
         };
@@ -290,14 +291,30 @@ impl PlanRepository for PgRepository {
         }
         let new_balance = relay_shared::money::cents_to_balance(balance_cents - price_cents);
 
-        // Compute the new expiry. duration_days=0 → NULL. Otherwise
-        // max(now, current) + duration_days (renewals stack). PG:
-        //   GREATEST(now_utc, COALESCE(current, now_utc)) + N * interval '1 day'
-        // cast to TEXT in the canonical 'YYYY-MM-DD HH:MM:SS' format so it
-        // compares lexically (same as created_at).
+        // Renew (same plan) vs switch (different plan, or none). See the sqlite
+        // impl for the full rationale:
+        //   - switch: traffic_limit = new, traffic_used = 0, expiry = now + days
+        //             (fresh start, no carry-over).
+        //   - renew:  traffic_limit += new, traffic_used kept, expiry stacks
+        //             from max(now, current) + days.
+        let is_switch = current_plan_id != Some(plan_id);
+
+        // Compute the new expiry. duration_days=0 → NULL. Canonical TEXT
+        // 'YYYY-MM-DD HH:MM:SS' UTC (lexically comparable, same as created_at).
         let new_expire: Option<String> = if duration_days <= 0 {
             None
+        } else if is_switch {
+            // Switch: fresh expiry = now + duration_days.
+            let row: (String,) = sqlx::query_as(
+                "SELECT to_char(now() AT TIME ZONE 'UTC' + make_interval(days => $1), \
+                   'YYYY-MM-DD HH24:MI:SS')",
+            )
+            .bind(duration_days)
+            .fetch_one(&mut *tx)
+            .await?;
+            Some(row.0)
         } else {
+            // Renew: base = max(now, current_expire) so remaining time stacks.
             let row: (String,) = sqlx::query_as(
                 "SELECT to_char( \
                    GREATEST(now() AT TIME ZONE 'UTC', \
@@ -312,11 +329,28 @@ impl PlanRepository for PgRepository {
             Some(row.0)
         };
 
-        if reset_traffic {
+        if is_switch {
+            // Switch: traffic_limit = new quota, traffic_used reset to 0.
             sqlx::query(
                 "UPDATE users SET \
-                 balance = $1, traffic_limit = traffic_limit + $2, max_rules = $3, \
-                 plan_id = $4, plan_expire_at = $5, traffic_used = 0 \
+                 balance = $1, traffic_limit = $2, traffic_used = 0, max_rules = $3, \
+                 plan_id = $4, plan_expire_at = $5 \
+                 WHERE id = $6",
+            )
+            .bind(&new_balance)
+            .bind(traffic_to_add)
+            .bind(plan_max_rules)
+            .bind(plan_id)
+            .bind(&new_expire)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        } else if reset_traffic {
+            // Renew + the plan's reset_traffic flag: stack quota, zero usage.
+            sqlx::query(
+                "UPDATE users SET \
+                 balance = $1, traffic_limit = traffic_limit + $2, traffic_used = 0, \
+                 max_rules = $3, plan_id = $4, plan_expire_at = $5 \
                  WHERE id = $6",
             )
             .bind(&new_balance)
@@ -328,6 +362,7 @@ impl PlanRepository for PgRepository {
             .execute(&mut *tx)
             .await?;
         } else {
+            // Renew: stack quota, keep usage.
             sqlx::query(
                 "UPDATE users SET \
                  balance = $1, traffic_limit = traffic_limit + $2, max_rules = $3, \
@@ -355,17 +390,14 @@ impl PlanRepository for PgRepository {
         .execute(&mut *tx)
         .await?;
 
-        // v1.0.9: grant device-group authorization in the SAME tx (mirrors the
-        // SQLite impl). Purchase is ADDITIVE — the plan's grants are UNIONed into
-        // the user's existing authorization; a purchase NEVER removes access
-        // (this supersedes v1.0.8's replace semantics):
-        //   - grant_all_groups → set all_device_groups=TRUE (union with "all" is
-        //     "all"). Existing explicit rows are left in place (moot under the
-        //     flag; purchase never deletes).
-        //   - else → INSERT the plan's groups (ON CONFLICT DO NOTHING dedups the
-        //     overlap), leaving the all-groups flag and existing rows untouched.
-        // The caller passes new_authorized_group_ids = the user's FULL set after
-        // this purchase (existing ∪ plan), which drives the resume step below.
+        // v1.0.8: grant device-group authorization in the SAME tx (mirrors the
+        // SQLite impl). Purchase REPLACES the user's authorization — BOTH
+        // dimensions are reset so exactly the new plan's grant remains:
+        //   - grant_all_groups → set all_device_groups=TRUE AND clear explicit
+        //     user_device_groups rows.
+        //   - else → clear all_device_groups=FALSE AND replace user_device_groups.
+        //     Resetting the flag is the fix for the grant-all → per-group
+        //     downgrade case (without it the user stayed unrestricted).
         if grant_all_groups {
             sqlx::query(
                 "UPDATE users SET all_device_groups = TRUE WHERE id = $1 AND admin = FALSE",
@@ -373,11 +405,26 @@ impl PlanRepository for PgRepository {
             .bind(user_id)
             .execute(&mut *tx)
             .await?;
+            sqlx::query("DELETE FROM user_device_groups WHERE user_id = $1")
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await?;
         } else {
+            // REPLACE semantics: reset the all-groups flag, clear old explicit
+            // assignments, then insert the plan's.
+            sqlx::query(
+                "UPDATE users SET all_device_groups = FALSE WHERE id = $1 AND admin = FALSE",
+            )
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("DELETE FROM user_device_groups WHERE user_id = $1")
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await?;
             for dg_id in device_group_ids {
                 sqlx::query(
-                    "INSERT INTO user_device_groups (user_id, device_group_id) VALUES ($1, $2) \
-                     ON CONFLICT DO NOTHING",
+                    "INSERT INTO user_device_groups (user_id, device_group_id) VALUES ($1, $2)",
                 )
                 .bind(user_id)
                 .bind(dg_id)
@@ -386,14 +433,12 @@ impl PlanRepository for PgRepository {
             }
         }
 
-        // Defensive: pause any active rule bound to a group the user is (still)
-        // NOT authorized for. v1.0.9: under ADDITIVE purchase this is normally a
-        // no-op (new_authorized ⊇ the previous set). It stays as a safety net.
+        // Pause rules outside the new authorization (same logic as SQLite).
         // Inline the pause logic inside the transaction (using &mut *tx) to
         // avoid acquiring a separate pool connection while the transaction is
         // still open — that would risk a pool-exhaustion deadlock.
-        // auto_paused=TRUE marks these as SYSTEM pauses (see the resume step
-        // below and the column doc on forward_rules.auto_paused).
+        // v1.0.8: auto_paused=TRUE marks these as SYSTEM pauses (see the resume
+        // step below and the column doc on forward_rules.auto_paused).
         let n = if new_authorized_group_ids.is_empty() {
             let r = sqlx::query(
                 "UPDATE forward_rules SET paused = TRUE, auto_paused = TRUE \

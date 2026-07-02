@@ -255,13 +255,14 @@ impl PlanRepository for SqliteRepository {
     ) -> Result<(), BuyPlanError> {
         let mut tx = self.pool.begin().await?;
 
-        // Read the user's current balance (canonical TEXT) + current expiry.
-        let row: Option<(String, Option<String>)> =
-            sqlx::query_as("SELECT balance, plan_expire_at FROM users WHERE id = ?")
+        // Read the user's current balance (canonical TEXT) + expiry + plan_id.
+        // plan_id decides renew-vs-switch below.
+        let row: Option<(String, Option<String>, Option<i64>)> =
+            sqlx::query_as("SELECT balance, plan_expire_at, plan_id FROM users WHERE id = ?")
                 .bind(user_id)
                 .fetch_optional(&mut *tx)
                 .await?;
-        let Some((balance_str, current_expire)) = row else {
+        let Some((balance_str, current_expire, current_plan_id)) = row else {
             let _ = tx.rollback().await;
             // A missing user mid-purchase is a DB integrity issue, not a
             // balance issue — surface as a 500.
@@ -286,17 +287,30 @@ impl PlanRepository for SqliteRepository {
         }
         let new_balance = relay_shared::money::cents_to_balance(balance_cents - price_cents);
 
-        // Compute the new expiry. duration_days=0 → NULL (no expiry). Otherwise
-        // the new expiry = max(now, current) + duration_days, so renewals stack
-        // rather than being clipped to "now + days" when the user still has
-        // time left. Stored as 'YYYY-MM-DD HH:MM:SS' UTC (lexically comparable,
-        // same format as created_at). SQLite's datetime() does the civil-
-        // calendar math for us — the base is chosen via max() in SQL.
+        // Renew (buying the SAME plan again) vs switch (a different plan, or the
+        // user had none). These diverge on traffic + expiry:
+        //   - switch: quota REPLACES the old (traffic_limit = new, traffic_used
+        //     = 0) and the expiry is recomputed from now — the new plan starts
+        //     fresh, old usage/time does NOT carry over.
+        //   - renew:  quota STACKS (traffic_limit += new, traffic_used kept) and
+        //     the expiry extends from max(now, current) — 加流量/延期.
+        // A missing current plan (None) is treated as a switch (fresh start).
+        let is_switch = current_plan_id != Some(plan_id);
+
+        // Compute the new expiry. duration_days=0 → NULL (no expiry). Stored as
+        // 'YYYY-MM-DD HH:MM:SS' UTC (lexically comparable, same as created_at).
+        // SQLite's datetime() does the civil-calendar math.
         let new_expire: Option<String> = if duration_days <= 0 {
             None
+        } else if is_switch {
+            // Switch: fresh expiry = now + duration_days (no carry-over).
+            let row: (String,) = sqlx::query_as("SELECT datetime('now', ? || ' days')")
+                .bind(format!("+{}", duration_days))
+                .fetch_one(&mut *tx)
+                .await?;
+            Some(row.0)
         } else {
-            // base = max(now, current_expire). A NULL current_expire → now.
-            // datetime(base, '+N days') yields 'YYYY-MM-DD HH:MM:SS' UTC.
+            // Renew: base = max(now, current_expire) so remaining time stacks.
             let row: (String,) = sqlx::query_as(
                 "SELECT datetime(MAX(datetime('now'), COALESCE(?, datetime('now'))), ? || ' days')",
             )
@@ -307,14 +321,29 @@ impl PlanRepository for SqliteRepository {
             Some(row.0)
         };
 
-        // Apply the user update. traffic_limit += traffic_to_add (stacks on top
-        // of any remaining quota — the "购买=累加流量" contract). reset_traffic
-        // zeros traffic_used in the same UPDATE.
-        if reset_traffic {
+        // Apply the user update per the renew/switch split above.
+        if is_switch {
+            // Switch: traffic_limit = new quota, traffic_used reset to 0.
             sqlx::query(
                 "UPDATE users SET \
-                 balance = ?, traffic_limit = traffic_limit + ?, max_rules = ?, \
-                 plan_id = ?, plan_expire_at = ?, traffic_used = 0 \
+                 balance = ?, traffic_limit = ?, traffic_used = 0, max_rules = ?, \
+                 plan_id = ?, plan_expire_at = ? \
+                 WHERE id = ?",
+            )
+            .bind(&new_balance)
+            .bind(traffic_to_add)
+            .bind(plan_max_rules)
+            .bind(plan_id)
+            .bind(&new_expire)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        } else if reset_traffic {
+            // Renew + the plan's reset_traffic flag: stack quota, zero usage.
+            sqlx::query(
+                "UPDATE users SET \
+                 balance = ?, traffic_limit = traffic_limit + ?, traffic_used = 0, \
+                 max_rules = ?, plan_id = ?, plan_expire_at = ? \
                  WHERE id = ?",
             )
             .bind(&new_balance)
@@ -326,6 +355,7 @@ impl PlanRepository for SqliteRepository {
             .execute(&mut *tx)
             .await?;
         } else {
+            // Renew: stack quota, keep usage.
             sqlx::query(
                 "UPDATE users SET \
                  balance = ?, traffic_limit = traffic_limit + ?, max_rules = ?, \
@@ -352,27 +382,40 @@ impl PlanRepository for SqliteRepository {
             .execute(&mut *tx)
             .await?;
 
-        // v1.0.9: grant device-group authorization in the SAME tx. Purchase is
-        // ADDITIVE — the plan's grants are UNIONed into the user's existing
-        // authorization; a purchase NEVER removes access (this supersedes
-        // v1.0.8's replace semantics). Traffic/expiry stack independently above.
-        //   - grant_all_groups → set all_device_groups=1 (union with "all" is
-        //     "all"). Existing explicit rows are left in place — under the flag
-        //     they're moot, and purchase never deletes.
-        //   - else → INSERT the plan's groups (OR IGNORE dedups the overlap),
-        //     leaving the all-groups flag and existing rows untouched. If the
-        //     user was already unrestricted (all=1), the new rows are redundant.
-        // The caller passes new_authorized_group_ids = the user's FULL set after
-        // this purchase (existing ∪ plan), which drives the resume step below.
+        // v1.0.8: grant device-group authorization in the SAME tx. Purchase
+        // REPLACES the user's authorization — BOTH dimensions are reset so the
+        // user is left with EXACTLY the new plan's grant, nothing lingering:
+        //   - grant_all_groups → set all_device_groups=1 AND clear the explicit
+        //     user_device_groups rows (redundant under the flag; clearing them
+        //     avoids stale grants resurfacing if the user later downgrades).
+        //   - else → clear all_device_groups=0 AND replace user_device_groups
+        //     with the plan's set. Resetting the flag is the fix for the
+        //     grant-all → per-group downgrade case: without it the user kept
+        //     all_device_groups=1 and stayed effectively unrestricted.
+        // The caller's new_authorized_group_ids drives the rule-pause below.
         if grant_all_groups {
             sqlx::query("UPDATE users SET all_device_groups = 1 WHERE id = ? AND admin = 0")
                 .bind(user_id)
                 .execute(&mut *tx)
                 .await?;
+            sqlx::query("DELETE FROM user_device_groups WHERE user_id = ?")
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await?;
         } else {
+            // REPLACE semantics: reset the all-groups flag, clear old explicit
+            // assignments, then insert the plan's.
+            sqlx::query("UPDATE users SET all_device_groups = 0 WHERE id = ? AND admin = 0")
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM user_device_groups WHERE user_id = ?")
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await?;
             for dg_id in device_group_ids {
                 sqlx::query(
-                    "INSERT OR IGNORE INTO user_device_groups (user_id, device_group_id) \
+                    "INSERT INTO user_device_groups (user_id, device_group_id) \
                      VALUES (?, ?)",
                 )
                 .bind(user_id)
@@ -382,16 +425,16 @@ impl PlanRepository for SqliteRepository {
             }
         }
 
-        // Defensive: pause any active rule bound to a group the user is (still)
-        // NOT authorized for. v1.0.9: under ADDITIVE purchase this is normally a
-        // no-op — new_authorized ⊇ the user's previous set, so a purchase never
-        // pauses a rule it didn't already invalidate. It stays as a safety net
-        // for a rule left bound to a group the user was never authorized for.
+        // Pause rules outside the new authorization. This is the key change from
+        // the old append-only behavior: a new purchase can revoke access to
+        // groups the user previously had, and those rules stop forwarding.
+        // When grant_all_groups=true, new_authorized = all inbound groups, so
+        // no rules are paused (the user still has full access).
         // Inline the pause logic inside the transaction (using &mut *tx) to
         // avoid acquiring a separate pool connection while the transaction is
         // still open — that would risk a pool-exhaustion deadlock.
-        // auto_paused=1 marks these as SYSTEM pauses (see the resume step below
-        // and the column doc on forward_rules.auto_paused).
+        // v1.0.8: auto_paused=1 marks these as SYSTEM pauses (see the resume
+        // step below and the column doc on forward_rules.auto_paused).
         let n = if new_authorized_group_ids.is_empty() {
             let r = sqlx::query(
                 "UPDATE forward_rules SET paused = 1, auto_paused = 1 \

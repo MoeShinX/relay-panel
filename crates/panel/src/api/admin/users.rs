@@ -427,9 +427,7 @@ pub async fn admin_buy_plan_for_user(
         }
     };
 
-    // v1.0.9: compute the user's authorized set AFTER this purchase (mirrors
-    // shop.rs buy_plan). Purchase is ADDITIVE (union): existing authorization ∪
-    // the plan's grants. grant_all_groups → all inbound groups.
+    // v1.0.8: compute the new authorized set (mirrors shop.rs buy_plan).
     let new_authorized_group_ids: Vec<i64> = if plan.grant_all_groups {
         match state.db.list_all_inbound_group_ids().await {
             Ok(ids) => ids,
@@ -443,23 +441,7 @@ pub async fn admin_buy_plan_for_user(
             }
         }
     } else {
-        let mut set = match state.db.authorized_device_group_ids(id).await {
-            Ok(ids) => ids,
-            Err(e) => {
-                tracing::error!(
-                    "admin_buy_plan_for_user {}: authorized_device_group_ids failed: {}",
-                    id,
-                    e
-                );
-                return Json(err(500, "数据库错误"));
-            }
-        };
-        for gid in &device_group_ids {
-            if !set.contains(gid) {
-                set.push(*gid);
-            }
-        }
-        set
+        device_group_ids.clone()
     };
 
     match state
