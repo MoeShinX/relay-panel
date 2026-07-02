@@ -883,6 +883,12 @@ const IMPORT_DEFAULTS = {
             },
             {
               key: 'forward',
+              // v1.0.9: force-render so the targets Form.List mounts even while
+              // the Basic tab is active. Without this, editing only a Basic field
+              // (e.g. listen_port) and submitting without opening this tab left
+              // `values.targets` unregistered — handleUpdate then read it as
+              // "targets cleared" and rejected with "add at least one target".
+              forceRender: true,
               label: t('tabForward'),
               children: (<>
                 {renderTargetsEditor()}
