@@ -36,6 +36,10 @@ socket2 = "0.5"
 # TCP rules — data moves inside the kernel via a pipe, never copied to
 # userspace. Only used on Linux; other targets fall back to the userspace copy.
 libc = "0.2"
+# v1.0.9: sharded concurrent map for per-listener UDP sessions — per-packet
+# lookups take a per-shard lock instead of one listener-wide mutex, removing
+# session-lock contention on the hot UDP path.
+dashmap = "6"
 
 [dev-dependencies]
 # v0.4.16: test-only cert generator for the real WSS (wss://) regression test.

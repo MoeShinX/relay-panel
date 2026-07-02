@@ -16,12 +16,12 @@
 // UDP_SESSION_TIMEOUT (60s) of inactivity. This makes the panel's
 // "connections" column reflect real UDP activity instead of always 0.
 
-use std::collections::HashMap;
+use dashmap::mapref::entry::Entry;
+use dashmap::DashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
-use tokio::sync::Mutex;
 use tokio::time;
 
 use super::limiter::RateLimit;
@@ -95,8 +95,10 @@ pub async fn serve_udp_listener(
         return Err("no resolvable target".into());
     }
 
-    let sessions: Arc<Mutex<HashMap<SocketAddr, UdpSession>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    // v1.0.9: sharded concurrent map — per-packet lookups take a per-shard lock
+    // (keyed by client addr) instead of one listener-wide mutex, so datagrams
+    // from different clients don't serialize on each other.
+    let sessions: Arc<DashMap<SocketAddr, UdpSession>> = Arc::new(DashMap::new());
 
     // Background cleanup of expired local session entries (outbound sockets).
     // This mirrors the ConnectionTracker's own expiry; together they make sure
@@ -113,10 +115,11 @@ pub async fn serve_udp_listener(
             // Drop our local outbound sockets for clients whose local entry is
             // older than the timeout. The tracker already stopped counting
             // them; here we release the socket resources too.
-            let mut sessions = sessions_clone.lock().await;
-            let before = sessions.len();
-            sessions.retain(|_, s| s.last_active.elapsed() < UDP_SESSION_TIMEOUT);
-            let removed = before - sessions.len();
+            let before = sessions_clone.len();
+            sessions_clone.retain(|_, s| s.last_active.elapsed() < UDP_SESSION_TIMEOUT);
+            // saturating: len() is read across shards without a global lock, so a
+            // concurrent insert between the two reads must not underflow usize.
+            let removed = before.saturating_sub(sessions_clone.len());
             if removed > 0 {
                 tracing::debug!(
                     "UDP port {}: cleaned up {} expired outbound sockets",
@@ -148,29 +151,25 @@ pub async fn serve_udp_listener(
             Err(e) => return Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
         };
 
-        // Register/refresh this client as an active UDP session so the panel
-        // counts it. Returns true on the FIRST datagram from this client.
-        let opened = connections.udp_touch(src, rule_id).await;
+        // Register/refresh this client with the tracker on EVERY datagram. The
+        // tracker is a sharded DashMap (keyed by client+rule), so this is a cheap
+        // per-shard op — not a process-wide lock — and keeps the panel's count
+        // accurate without any throttling.
+        connections.udp_touch(src, rule_id).await;
 
-        // Pick or create a local session (with its own outbound socket) for
-        // this client.
-        // v1.0.9: the outbound bind + connect (network ops) run WITHOUT holding
-        // the session-map lock, so slow setup for one new client no longer
-        // serializes every other packet on this listener. Fast path (existing
-        // session) takes and releases the lock immediately.
-        let sessions_arc = sessions.clone();
-        let existing = {
-            let mut map = sessions_arc.lock().await;
-            map.get_mut(&src).map(|s| {
-                s.last_active = tokio::time::Instant::now();
-                s.outbound.clone()
-            })
-        };
+        // Fast path: existing session. The session map is a sharded DashMap, so
+        // this per-packet lookup takes only a per-shard lock (sync guard, dropped
+        // before any .await).
+        let existing = sessions.get_mut(&src).map(|mut s| {
+            s.last_active = tokio::time::Instant::now();
+            s.outbound.clone()
+        });
+
         let outbound_sock = if let Some(sock) = existing {
             sock
         } else {
             // New session: bind an ephemeral outbound socket + pick/connect the
-            // target, all OUTSIDE the map lock.
+            // target, all WITHOUT holding any map guard.
             let outbound = match super::outbound::udp_outbound_socket(source_ipv4).await {
                 Ok(s) => s,
                 Err(e) => {
@@ -204,30 +203,38 @@ pub async fn serve_udp_listener(
             }
             let outbound = Arc::new(outbound);
 
-            // Re-acquire the lock ONLY to publish the session. Double-check for a
-            // concurrent datagram from the same client that won the race while we
-            // were connecting — if one did, use the winner and drop ours.
-            let (chosen, we_won) = {
-                let mut map = sessions_arc.lock().await;
-                if let Some(s) = map.get_mut(&src) {
-                    s.last_active = tokio::time::Instant::now();
-                    (s.outbound.clone(), false)
-                } else {
-                    map.insert(
-                        src,
-                        UdpSession {
-                            outbound: outbound.clone(),
-                            last_active: tokio::time::Instant::now(),
-                        },
-                    );
+            // Publish via the entry API (per-shard lock, sync — no .await while
+            // the guard is held). Double-check for a concurrent datagram from the
+            // same client that won the race while we were connecting: if one did,
+            // use the winner and drop ours.
+            let now = tokio::time::Instant::now();
+            let (chosen, we_won) = match sessions.entry(src) {
+                Entry::Occupied(mut e) => {
+                    e.get_mut().last_active = now;
+                    (e.get().outbound.clone(), false)
+                }
+                Entry::Vacant(e) => {
+                    e.insert(UdpSession {
+                        outbound: outbound.clone(),
+                        last_active: now,
+                    });
                     (outbound.clone(), true)
                 }
             };
 
             if we_won {
+                // The tracker was already refreshed at the top of the loop; just
+                // log the new session (the target is known only on this path).
+                tracing::debug!(
+                    "UDP port {}: new session {} -> {} (rule {})",
+                    port,
+                    src,
+                    target,
+                    rule_id
+                );
                 // Spawn the target -> client reader for OUR socket.
                 let inbound_c = inbound.clone();
-                let sessions_c = sessions_arc.clone();
+                let sessions_c = sessions.clone();
                 let connections_c = connections.clone();
                 let counter_c = counter.clone();
                 let rl_c = rate_limit.clone();
@@ -244,14 +251,14 @@ pub async fn serve_udp_listener(
                                 // forwarding back to the client.
                                 rl_c.acquire_download(m as u64).await;
                                 counter_c.add(rule_id, 0, m as u64).await;
-                                // A reply from the target counts as activity too
-                                // — refresh the session so a long-lived
-                                // request/response flow isn't expired mid-flight.
+                                // A reply is activity too: refresh the tracker
+                                // (cheap, sharded) and the session's last_active
+                                // so a long request/response flow isn't expired.
                                 connections_c.udp_touch(src_c, rule_id).await;
                                 if inbound_c.send_to(&rbuf[..m], src_c).await.is_err() {
                                     break;
                                 }
-                                if let Some(s) = sessions_c.lock().await.get_mut(&src_c) {
+                                if let Some(mut s) = sessions_c.get_mut(&src_c) {
                                     s.last_active = tokio::time::Instant::now();
                                 }
                             }
@@ -263,18 +270,9 @@ pub async fn serve_udp_listener(
                     }
                     // Outbound side ended (target closed / error): release this
                     // client's session immediately rather than waiting for timeout.
-                    sessions_c.lock().await.remove(&src_c);
+                    sessions_c.remove(&src_c);
                     connections_c.udp_close(src_c, rule_id).await;
                 });
-                if opened {
-                    tracing::debug!(
-                        "UDP port {}: new session {} -> {} (rule {})",
-                        port,
-                        src,
-                        target,
-                        rule_id
-                    );
-                }
             }
             chosen
         };

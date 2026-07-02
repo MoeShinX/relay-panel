@@ -1,4 +1,6 @@
 use crate::config::NodeConfig;
+use dashmap::mapref::entry::Entry;
+use dashmap::DashMap;
 use relay_shared::protocol::{
     ApiResponse, ListenerError, StatusReport, TrafficEntry, TrafficReport,
 };
@@ -151,10 +153,10 @@ pub const UDP_SESSION_TIMEOUT: Duration = Duration::from_secs(60);
 /// - **UDP**: there is no "connection"; instead we count active UDP sessions,
 ///   keyed by `(client_addr, rule_id)`. A session is created on the first
 ///   datagram from a client and considered expired after
-///   `UDP_SESSION_TIMEOUT` with no further traffic. v1.0.9: `touch` no longer
-///   prunes (it runs per packet); expiry is handled by `current()` and the UDP
-///   listener's periodic sweeper (`udp_prune_expired`), so the count still
-///   converges on zero shortly after traffic stops.
+///   `UDP_SESSION_TIMEOUT` with no further traffic. `touch` runs per datagram
+///   but does NOT prune (that's O(sessions) per packet); expiry is handled by
+///   `current()` and the UDP listener's periodic sweeper (`udp_prune_expired`),
+///   so the count still converges on zero shortly after traffic stops.
 ///
 /// `current()` reports `active_tcp + active_udp_sessions`.
 ///
@@ -162,11 +164,12 @@ pub const UDP_SESSION_TIMEOUT: Duration = Duration::from_secs(60);
 /// from the plain-HTTP `report_status` loop, so connection counts keep
 /// updating even if WS is down.
 ///
-/// Locking: TCP uses an `AtomicU64` (lock-free), UDP uses a `Mutex<HashMap>`.
-/// Both are fine-grained — neither is a global lock that could block forwarding.
+/// Locking: TCP uses an `AtomicU64` (lock-free); UDP uses a sharded `DashMap`
+/// keyed by (client, rule), so a per-packet `udp_touch` takes only that shard's
+/// lock (v1.0.9) — never a process-wide lock that could block forwarding.
 pub struct ConnectionTracker {
     tcp: Arc<AtomicU64>,
-    udp: Arc<Mutex<HashMap<UdpSessionKey, Instant>>>,
+    udp: DashMap<UdpSessionKey, Instant>,
 }
 
 /// Identity of a single UDP "connection". A client's source port plus the
@@ -181,7 +184,7 @@ impl ConnectionTracker {
     pub fn new() -> Self {
         Self {
             tcp: Arc::new(AtomicU64::new(0)),
-            udp: Arc::new(Mutex::new(HashMap::new())),
+            udp: DashMap::new(),
         }
     }
 
@@ -205,31 +208,31 @@ impl ConnectionTracker {
             client_addr,
             rule_id,
         };
-        // v1.0.9: do NOT prune here. udp_touch runs on EVERY datagram (both
-        // directions); a full-table `retain` scan per packet is O(sessions) per
-        // packet and dominates cost on busy links. Expiry is handled by the
-        // periodic sweeper (udp_prune_expired, called from the UDP listener's
-        // cleanup interval) and by current(); the map just holds a few stale
-        // entries between sweeps, which is harmless.
-        let mut map = self.udp.lock().await;
-        use std::collections::hash_map::Entry;
-        match map.entry(key) {
+        // Sharded map (keyed by client+rule): this takes only the target shard's
+        // lock, so per-packet touching doesn't serialize on a process-wide lock.
+        // We do NOT prune here (an O(sessions) scan per packet); expiry is
+        // handled by the periodic sweeper (udp_prune_expired) and current().
+        let is_new = match self.udp.entry(key) {
             Entry::Occupied(mut e) => {
                 *e.get_mut() = Instant::now();
                 false
             }
             Entry::Vacant(e) => {
                 e.insert(Instant::now());
-                let active = map.len();
-                tracing::debug!(
-                    "udp session opened (client={}, rule={}), udp_active={}",
-                    client_addr,
-                    rule_id,
-                    active
-                );
                 true
             }
+        };
+        // len() locks shards briefly; call it only AFTER the entry guard above
+        // is released (holding a shard guard across len() would deadlock).
+        if is_new {
+            tracing::debug!(
+                "udp session opened (client={}, rule={}), udp_active={}",
+                client_addr,
+                rule_id,
+                self.udp.len()
+            );
         }
+        is_new
     }
 
     /// Remove a single UDP session (e.g. when its outbound recv loop ends).
@@ -238,13 +241,12 @@ impl ConnectionTracker {
             client_addr,
             rule_id,
         };
-        let mut map = self.udp.lock().await;
-        if map.remove(&key).is_some() {
+        if self.udp.remove(&key).is_some() {
             tracing::debug!(
                 "udp session closed (client={}, rule={}), udp_active={}",
                 client_addr,
                 rule_id,
-                map.len()
+                self.udp.len()
             );
         }
     }
@@ -252,8 +254,7 @@ impl ConnectionTracker {
     /// Drop every UDP session older than `UDP_SESSION_TIMEOUT`. Called both by
     /// the UDP listener's periodic sweeper and as part of `current()`.
     pub async fn udp_prune_expired(&self) -> usize {
-        let mut map = self.udp.lock().await;
-        prune_expired_locked(&mut map)
+        prune_expired(&self.udp)
     }
 
     /// Total active connections reported to the panel:
@@ -262,22 +263,21 @@ impl ConnectionTracker {
         // TCP count is exact; UDP count is pruned-of-expired first so a quiet
         // node reports 0 shortly after traffic stops.
         let tcp = self.tcp.load(Ordering::Relaxed) as u32;
-        let udp = {
-            let mut map = self.udp.lock().await;
-            prune_expired_locked(&mut map);
-            map.len() as u32
-        };
+        prune_expired(&self.udp);
+        let udp = self.udp.len() as u32;
         tcp.saturating_add(udp)
     }
 }
 
-/// Prune sessions whose `last_active` is older than the timeout. Borrowed
-/// mutably so callers don't need to re-lock. Returns how many were removed.
-fn prune_expired_locked(map: &mut HashMap<UdpSessionKey, Instant>) -> usize {
+/// Prune sessions whose `last_active` is older than the timeout. Returns how
+/// many were removed. `retain` runs per shard; `before`/`after` are read across
+/// shards without a global lock, so use saturating_sub in case a concurrent
+/// insert lands between the two reads.
+fn prune_expired(map: &DashMap<UdpSessionKey, Instant>) -> usize {
     let now = Instant::now();
     let before = map.len();
     map.retain(|_, last_active| now.duration_since(*last_active) < UDP_SESSION_TIMEOUT);
-    let removed = before - map.len();
+    let removed = before.saturating_sub(map.len());
     if removed > 0 {
         tracing::debug!(
             "udp: pruned {} expired sessions, udp_active={}",
@@ -1172,16 +1172,13 @@ mod tests {
         let tracker = ConnectionTracker::new();
         // Manually backdate a session to simulate "no traffic for longer than
         // the timeout" — we can't sleep 60s in a unit test.
-        {
-            let mut map = tracker.udp.lock().await;
-            map.insert(
-                UdpSessionKey {
-                    client_addr: addr(6000),
-                    rule_id: 7,
-                },
-                Instant::now() - (UDP_SESSION_TIMEOUT + Duration::from_secs(1)),
-            );
-        }
+        tracker.udp.insert(
+            UdpSessionKey {
+                client_addr: addr(6000),
+                rule_id: 7,
+            },
+            Instant::now() - (UDP_SESSION_TIMEOUT + Duration::from_secs(1)),
+        );
         // The expired session must NOT be counted by current().
         assert_eq!(tracker.current().await, 0);
     }
