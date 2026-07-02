@@ -526,6 +526,7 @@ export const enUS: Dict = {
   planResetTrafficHint: 'Zero traffic_used on purchase',
   planDescription: 'Description',
   planGrantAll: 'Grant All Groups',
+  planGrantNone: 'None',
   planGrantAllHint: 'When on, buying this plan grants access to ALL inbound groups (including ones created later).',
   planGrantGroups: 'Granted Lines',
   planGrantGroupsHint: "Buying/assigning this plan REPLACES the user's current authorization with these groups (not appended); not revoked on expiry. Device-group authorization is managed entirely by the plan (there is no manual assignment in the edit-user modal).",

@@ -525,6 +525,7 @@ export const zhCN = {
   planResetTrafficHint: '购买后清零已用流量',
   planDescription: '说明',
   planGrantAll: '授权全部设备组',
+  planGrantNone: '无',
   planGrantAllHint: '开启后购买此套餐将授权用户使用全部入口分组（含日后新建的）。',
   planGrantGroups: '授权线路',
   planGrantGroupsHint: '购买/开通此套餐将用这些分组替换用户当前的授权（不是追加）；到期不自动撤销。设备分组授权完全由套餐管理（编辑用户里已无手动分配入口）。',
