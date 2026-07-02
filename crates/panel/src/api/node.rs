@@ -663,6 +663,7 @@ mod tests {
             node_version: None,
             config_protocol_version: None,
             listener_errors: None,
+            install_method: None,
         };
         let Json(resp) = report_status(State(state.clone()), h, Json(req)).await;
         assert_eq!(resp.code, 401, "missing token → business 401, not HTTP 401");

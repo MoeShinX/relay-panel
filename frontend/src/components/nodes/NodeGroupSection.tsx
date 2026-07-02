@@ -16,6 +16,8 @@ interface Props {
   isMobile: boolean;
   t: Tfn;
   openDetail: (row: NodeDisplayRow) => void;
+  /** v1.0.10: admin-only per-node upgrade trigger (desktop table only). */
+  onUpgrade?: (row: NodeDisplayRow) => void;
 }
 
 /** Per-group summary: online/total (placeholders excluded) + aggregate live
@@ -34,7 +36,7 @@ function groupSummary(rows: NodeDisplayRow[]) {
 /** One group block: header bar (name · ID · online/total · aggregate ↑↓) +
  *  either a desktop table or mobile list. Collapsible. A group with only a
  *  placeholder row shows "no node reporting". */
-export function NodeGroupSection({ rows, panelProtocol, currentVersion, isMobile, t, openDetail }: Props) {
+export function NodeGroupSection({ rows, panelProtocol, currentVersion, isMobile, t, openDetail, onUpgrade }: Props) {
   const head = rows[0];
   const { total, online, up, down } = groupSummary(rows);
   const region = head.region;
@@ -65,7 +67,7 @@ export function NodeGroupSection({ rows, panelProtocol, currentVersion, isMobile
       <NodeMobileList rows={rows} panelProtocol={panelProtocol} t={t} openDetail={openDetail} />
     </div>
   ) : (
-    <NodeDesktopTable rows={rows} panelProtocol={panelProtocol} currentVersion={currentVersion} t={t} openDetail={openDetail} />
+    <NodeDesktopTable rows={rows} panelProtocol={panelProtocol} currentVersion={currentVersion} t={t} openDetail={openDetail} onUpgrade={onUpgrade} />
   );
 
   return (

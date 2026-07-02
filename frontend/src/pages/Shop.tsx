@@ -136,11 +136,15 @@ export default function Shop() {
                     resolved server-side (device_group_names) — the buyer isn't
                     authorized for these groups yet, so the client can't resolve
                     the ids itself. */}
+                {/* v1.0.10: always render this row (show "无" when a plan grants
+                    no lines) so plan cards stay vertically aligned. */}
                 {p.grant_all_groups ? (
                   <div>{t('planGrantGroups')}: <Tag color="gold">{t('planGrantAll')}</Tag></div>
                 ) : (p.device_group_names && p.device_group_names.length > 0) ? (
                   <div>{t('planGrantGroups')}: {p.device_group_names.join(', ')}</div>
-                ) : null}
+                ) : (
+                  <div>{t('planGrantGroups')}: <Text type="secondary">{t('planGrantNone')}</Text></div>
+                )}
                 {p.reset_traffic && <div><Tag color="green">{t('planResetTraffic')}</Tag></div>}
               </div>
               <Button type="primary" block style={{ marginTop: 16 }} onClick={() => setBuying(p)}>

@@ -513,6 +513,13 @@ pub struct StatusReport {
     /// Older nodes don't send this; the panel renders "ok" for them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listener_errors: Option<Vec<ListenerError>>,
+    /// v1.0.10: how this node is run — "systemd" | "docker" | "manual". Drives
+    /// the panel's one-click upgrade affordance: only systemd nodes can safely
+    /// self-replace their binary and be restarted; docker nodes must update the
+    /// image; manual runs have no supervisor to restart them. Older nodes don't
+    /// send this; the panel treats a missing value as "unknown" (no self-upgrade).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_method: Option<String>,
 }
 
 /// One listener bind failure reported by a node. Carries enough context for the
@@ -582,6 +589,28 @@ pub struct DiagnoseRuleMessage {
     /// to a <0.4.9 node anyway, so this is belt-and-suspenders.
     #[serde(default)]
     pub challenge: String,
+}
+
+/// v1.0.10: Panel → node, over the WS control channel (delivered via
+/// `send_node`, so only the targeted node receives it). Asks the node to
+/// self-upgrade to a SPECIFIC version. The node downloads that exact release
+/// tag's binary for its arch, verifies its sha256, swaps its own binary, and
+/// restarts. The message carries the version string but NO URL/binary — the
+/// node only ever pulls from the hardcoded official GitHub release for that
+/// version (and validates the version is a plain semver), so a compromised
+/// panel can at most force an upgrade to an official build, never run arbitrary
+/// code. Pinning the version (rather than "latest") keeps the node at the same
+/// version as the panel, avoiding a node jumping ahead of an older panel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpgradeNodeMessage {
+    #[serde(rename = "type")]
+    pub msg_type: String, // "upgrade_node"
+    /// The intended target's node_id (informational — send_node already routed
+    /// this only to the matching connection; the node may re-check as defence).
+    pub node_id: String,
+    /// Target version WITHOUT a leading "v" (e.g. "1.0.10"). The node validates
+    /// this is a plain semver before building the download URL.
+    pub version: String,
 }
 
 impl DiagnoseRuleMessage {

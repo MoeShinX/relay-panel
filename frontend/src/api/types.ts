@@ -182,6 +182,9 @@ export interface NodeStatus {
   group_name?: string;
   /** relay-node binary version; missing on older nodes. */
   node_version?: string | null;
+  /** v1.0.10: how the node is run — "systemd" | "docker" | "manual". Gates the
+   *  one-click upgrade affordance. Missing on older nodes. */
+  install_method?: string | null;
   /** v0.4.0: config-protocol version the node speaks. Missing/old →
    *  "配置协议不兼容，请升级节点". Compared against the panel's current version. */
   config_protocol_version?: number | null;
@@ -409,6 +412,8 @@ export interface NodeDisplayRow {
   node_id?: string | null;
   online?: boolean;
   node_version?: string | null;
+  /** v1.0.10: "systemd" | "docker" | "manual" — gates one-click upgrade. */
+  install_method?: string | null;
   config_protocol_version?: number | null;
   connections?: number | null;
   cpu?: number | null;

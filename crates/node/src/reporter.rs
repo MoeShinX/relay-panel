@@ -842,6 +842,9 @@ pub async fn report_status(
         } else {
             Some(listener_errors)
         },
+        // v1.0.10: how this node is run, so the panel only offers a one-click
+        // self-upgrade to systemd nodes (docker → update image; manual → none).
+        install_method: Some(crate::updater::install_method().to_string()),
     };
 
     // debug, not info: this runs every poll cycle (default 10s). Keeping it

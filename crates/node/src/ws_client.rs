@@ -293,6 +293,43 @@ async fn connect_and_run(
                                 )
                                 .await;
                             });
+                        } else if let Ok(um) = serde_json::from_str::<
+                            relay_shared::protocol::UpgradeNodeMessage,
+                        >(&text)
+                        {
+                            // v1.0.10: directed self-upgrade command. send_node
+                            // already routed this to only this node; re-check the
+                            // node_id as defence in depth, then run the upgrade on
+                            // a detached task so the WS loop keeps draining. On
+                            // success the task exits the process → systemd restarts
+                            // into the new binary; on failure the node keeps running.
+                            if um.msg_type == "upgrade_node" && um.node_id != node_id {
+                                tracing::warn!(
+                                    "websocket: ignoring upgrade for {} (I am {})",
+                                    um.node_id,
+                                    node_id
+                                );
+                            } else if um.msg_type == "upgrade_node" {
+                                let version = um.version.clone();
+                                tracing::warn!(
+                                    "websocket: self-upgrade to v{} requested; starting",
+                                    version
+                                );
+                                tokio::spawn(async move {
+                                    match crate::updater::self_upgrade(&version).await {
+                                        Ok(()) => {
+                                            tracing::warn!(
+                                                "self-upgrade done; exiting to restart into new binary"
+                                            );
+                                            std::process::exit(0);
+                                        }
+                                        Err(e) => tracing::error!(
+                                            "self-upgrade failed: {} (keeping current binary)",
+                                            e
+                                        ),
+                                    }
+                                });
+                            }
                         } else {
                             tracing::debug!("websocket: received text: {}", &text[..text.len().min(100)]);
                         }

@@ -182,6 +182,11 @@ pub fn routes() -> Router<AppState> {
             "/nodes/{group_id}",
             axum::routing::delete(stats::delete_node_status),
         )
+        // v1.0.10: admin triggers a directed self-upgrade on one node.
+        .route(
+            "/nodes/{group_id}/upgrade/{node_id}",
+            axum::routing::post(stats::upgrade_node),
+        )
         // System
         .route("/system/version", axum::routing::get(system::get_version))
         // Public, unauthenticated health probe (status + version only). Used by
