@@ -223,10 +223,13 @@ INSERT INTO users (id, username, password, admin, max_rules)
 VALUES (1, 'admin', '$2b$12$PLACEHOLDER_WILL_BE_HASHED_ON_INIT', TRUE, 999)
 ON CONFLICT (id) DO NOTHING;
 
--- Default plan. Same id-pinning + ON CONFLICT DO NOTHING idempotency.
+-- Default plan. v1.1.0: seed ONLY when the plans table is empty (fresh DB), so
+-- an admin who deletes the default plan doesn't see it reappear on every panel
+-- update. (The old VALUES + ON CONFLICT DO NOTHING re-created it whenever id=1
+-- was absent.)
 INSERT INTO plans (id, name, max_rules, traffic, speed_limit, ip_limit, price)
-VALUES (1, 'free', 5, 107374182400, 0, 3, '0')
-ON CONFLICT (id) DO NOTHING;
+SELECT 1, 'free', 5, 107374182400, 0, 3, '0'
+WHERE NOT EXISTS (SELECT 1 FROM plans);
 
 -- Builtin tunnel profiles (is_builtin=TRUE). Same five as the SQLite seed
 -- (Migration 6 minus the deleted wss-via-caddy). name is UNIQUE so

@@ -3081,6 +3081,58 @@ async fn pg_buy_plan_renew_keeps_traffic_used() {
     cleanup(&db).await;
 }
 
+// ── v1.1.0: default plan is not re-seeded on restart ──
+
+/// Postgres parity for [`default_plan_not_reseeded_on_restart`].
+#[tokio::test]
+async fn pg_default_plan_not_reseeded_on_restart() {
+    let Some(db) = repo("default_plan_reseed").await else {
+        return;
+    };
+    assert!(
+        db.list_plans()
+            .await
+            .unwrap()
+            .iter()
+            .any(|p| p.name == "free"),
+        "a fresh DB seeds the default free plan"
+    );
+
+    let keep = db
+        .insert_plan(
+            "keep", 10, 1_000, "5.00", "data", 0, false, false, "d", false,
+        )
+        .await
+        .unwrap();
+    sqlx::query("UPDATE app_settings SET default_registration_plan_id = $1")
+        .bind(keep)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM plans WHERE id = 1")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    // Simulate a restart: re-apply the baseline schema.
+    apply_pg_schema(&db.pool).await.expect("re-apply schema");
+
+    let names: Vec<String> = db
+        .list_plans()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+    assert!(
+        !names.contains(&"free".to_string()),
+        "deleted default plan must not reappear after restart"
+    );
+    assert!(names.contains(&"keep".to_string()), "other plans survive");
+
+    cleanup(&db).await;
+}
+
 // ── v1.0.8: plan CRUD ──
 
 #[tokio::test]

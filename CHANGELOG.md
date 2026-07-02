@@ -31,6 +31,9 @@ capping off the plan-model / performance / correctness work of the 1.0.x line.
 
 ### Fixed
 
+- The default "free" plan no longer reappears in the shop after every panel
+  update. It is now seeded only on a fresh (empty) database, so an admin who
+  deletes it (once other plans exist) won't see it come back on restart.
 - Shop plan cards no longer render ragged when a plan grants no lines — the
   "granted lines" row now shows "无 / None" so all cards stay aligned.
 

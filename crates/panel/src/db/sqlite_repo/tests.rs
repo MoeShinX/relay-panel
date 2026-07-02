@@ -3058,6 +3058,57 @@ async fn buy_plan_renew_keeps_traffic_used() {
     assert_eq!(traffic_used, 400, "renew keeps usage");
 }
 
+// ── v1.1.0: default plan is not re-seeded on restart ──
+
+/// Regression (v1.1.0): once an admin deletes the seeded "free" plan and other
+/// plans exist, re-applying the schema (what every panel start/update does) must
+/// NOT bring it back. The seed now runs only when the plans table is empty.
+#[tokio::test]
+async fn default_plan_not_reseeded_on_restart() {
+    let db = repo().await;
+    assert!(
+        db.list_plans()
+            .await
+            .unwrap()
+            .iter()
+            .any(|p| p.name == "free"),
+        "a fresh DB seeds the default free plan"
+    );
+
+    // Admin adds a real plan, repoints registration off the default, deletes it.
+    let keep = db
+        .insert_plan(
+            "keep", 10, 1_000, "5.00", "data", 0, false, false, "d", false,
+        )
+        .await
+        .unwrap();
+    sqlx::query("UPDATE app_settings SET default_registration_plan_id = ?")
+        .bind(keep)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM plans WHERE id = 1")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    // Simulate a restart: re-apply the baseline schema.
+    sqlx::query(SCHEMA_SQL).execute(&db.pool).await.unwrap();
+
+    let names: Vec<String> = db
+        .list_plans()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+    assert!(
+        !names.contains(&"free".to_string()),
+        "deleted default plan must not reappear after restart"
+    );
+    assert!(names.contains(&"keep".to_string()), "other plans survive");
+}
+
 // ── v1.0.8: plan CRUD ──
 
 #[tokio::test]

@@ -247,9 +247,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_fr_port_udp
 INSERT OR IGNORE INTO users (id, username, password, admin, max_rules)
 VALUES (1, 'admin', '$2b$12$PLACEHOLDER_WILL_BE_HASHED_ON_INIT', 1, 999);
 
--- Default plan
-INSERT OR IGNORE INTO plans (id, name, max_rules, traffic, speed_limit, ip_limit, price)
-VALUES (1, 'free', 5, 107374182400, 0, 3, '0');
+-- Default plan. v1.1.0: seed ONLY when the plans table is completely empty
+-- (fresh DB). The old `INSERT OR IGNORE ... VALUES (1, ...)` re-created the
+-- 'free' plan on EVERY startup whenever id=1 was absent — so an admin who
+-- deleted the default plan saw it reappear after every panel update. Seeding by
+-- emptiness respects the deletion once any other plan exists.
+INSERT INTO plans (id, name, max_rules, traffic, speed_limit, ip_limit, price)
+SELECT 1, 'free', 5, 107374182400, 0, 3, '0'
+WHERE NOT EXISTS (SELECT 1 FROM plans);
 
 -- v0.4.10 PR3: application settings (registration config). Single-row table
 -- (id is fixed to 1). The row is NOT seeded here — main.rs seeds it via
