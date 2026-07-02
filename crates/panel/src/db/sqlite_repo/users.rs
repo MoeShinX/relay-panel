@@ -232,6 +232,38 @@ impl UserRepository for SqliteRepository {
         Ok(result.rows_affected())
     }
 
+    async fn clear_user_plan(&self, user_id: i64) -> Result<u64, DbError> {
+        let mut tx = self.pool.begin().await?;
+        // Clear plan association + revoke the all-groups flag in one UPDATE.
+        let r = sqlx::query(
+            "UPDATE users SET plan_id = NULL, plan_expire_at = NULL, all_device_groups = 0 \
+             WHERE id = ? AND admin = 0",
+        )
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+        let affected = r.rows_affected();
+        if affected == 0 {
+            // Missing user or an admin target — nothing to clear.
+            let _ = tx.rollback().await;
+            return Ok(0);
+        }
+        // Drop explicit group grants, then system-pause every active rule
+        // (auto_paused=1) since the user now has no authorized groups.
+        sqlx::query("DELETE FROM user_device_groups WHERE user_id = ?")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "UPDATE forward_rules SET paused = 1, auto_paused = 1 WHERE uid = ? AND paused = 0",
+        )
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(affected)
+    }
+
     async fn increment_user_traffic(&self, id: i64, delta: i64) -> Result<(), DbError> {
         sqlx::query("UPDATE users SET traffic_used = traffic_used + ? WHERE id = ?")
             .bind(delta)

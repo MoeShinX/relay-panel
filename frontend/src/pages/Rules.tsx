@@ -429,8 +429,23 @@ const IMPORT_DEFAULTS = {
 
   const handleBatchDelete = async () => {
     const ids = selectedRowKeys as number[];
-    await Promise.all(ids.map(id => api.delete(`/rules/${id}`)));
-    message.success(t('batchDeleteSuccess').replace('{count}', String(ids.length)));
+    if (ids.length === 0) return;
+    // v1.0.9: tally per-rule success/failure instead of assuming Promise.all
+    // means everything worked — a delete can fail (e.g. 404/permission) and the
+    // old code still reported the full count as deleted.
+    const results = await Promise.all(ids.map(async id => {
+      try {
+        const res = await api.delete<unknown, ApiEnvelope<null>>(`/rules/${id}`);
+        return res.code === 0;
+      } catch { return false; }
+    }));
+    const ok = results.filter(Boolean).length;
+    const fail = results.length - ok;
+    if (fail === 0) {
+      message.success(t('batchDeleteSuccess').replace('{count}', String(ok)));
+    } else {
+      message.warning(t('batchPartial').replace('{ok}', String(ok)).replace('{fail}', String(fail)));
+    }
     setSelectedRowKeys([]);
     load();
   };
@@ -539,14 +554,24 @@ const IMPORT_DEFAULTS = {
     },
     {
       title: t('target'), key: 'target',
-      render: (_: unknown, r: ForwardRule) => (
-        <Space size={4} wrap>
-          <span className="rp-mono">{targetSummary(r)}</span>
-          {r.load_balance_strategy && r.load_balance_strategy !== 'first' && (
-            <Tag color="cyan">{r.load_balance_strategy === 'round_robin' ? t('lbRoundRobin') : t('lbFailover')}</Tag>
-          )}
-        </Space>
-      ),
+      render: (_: unknown, r: ForwardRule) => {
+        // v1.0.9: a multi-target rule shows "first (+N)"; hovering lists every
+        // enabled target IP so the admin can see the failover/round-robin pool.
+        const all = ruleTargets(r).filter(t => t.enabled).map(t => `${t.host}:${t.port}`);
+        const summary = <span className="rp-mono">{targetSummary(r)}</span>;
+        return (
+          <Space size={4} wrap>
+            {all.length > 1 ? (
+              <Tooltip title={<div>{all.map((s, i) => <div key={i} className="rp-mono">{s}</div>)}</div>}>
+                {summary}
+              </Tooltip>
+            ) : summary}
+            {r.load_balance_strategy && r.load_balance_strategy !== 'first' && (
+              <Tag color="cyan">{r.load_balance_strategy === 'round_robin' ? t('lbRoundRobin') : t('lbFailover')}</Tag>
+            )}
+          </Space>
+        );
+      },
     },
     {
       // v0.4.14 PR3: owner is the rule's OWN uid — NOT the inbound group's uid.
@@ -792,7 +817,7 @@ const IMPORT_DEFAULTS = {
                 {/* v0.4.20: forward_mode always direct. */}
                 <Form.Item name="forward_mode" hidden initialValue="direct"><Input /></Form.Item>
                 <Form.Item name="device_group_in" label={t('inboundGroup')} rules={[{ required: true }]}>
-                  <Select options={allInGroups.map(g => ({ value: g.id, label: g.name + (sharedInGroups.some(sg => sg.id === g.id) ? ` (${t('shared')})` : '') }))} placeholder={allInGroups.length ? t('select') : t('createGroupFirst')} />
+                  <Select options={allInGroups.map(g => ({ value: g.id, label: g.name }))} placeholder={allInGroups.length ? t('select') : t('createGroupFirst')} />
                 </Form.Item>
               </>),
             },
@@ -853,7 +878,7 @@ const IMPORT_DEFAULTS = {
                 <Form.Item name="public_transport" hidden initialValue="raw"><Input /></Form.Item>
                 {/* v0.4.20: forward_mode always direct. */}
                 <Form.Item name="forward_mode" hidden initialValue="direct"><Input /></Form.Item>
-                <Form.Item name="device_group_in" label={t('inboundGroup')}><Select options={allInGroups.map(g => ({ value: g.id, label: g.name + (sharedInGroups.some(sg => sg.id === g.id) ? ` (${t('shared')})` : '') }))} /></Form.Item>
+                <Form.Item name="device_group_in" label={t('inboundGroup')}><Select options={allInGroups.map(g => ({ value: g.id, label: g.name }))} /></Form.Item>
               </>),
             },
             {

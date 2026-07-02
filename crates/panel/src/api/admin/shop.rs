@@ -23,8 +23,10 @@ pub async fn list_public_plans(
     let plans: Vec<Plan> = match state.db.list_visible_plans().await {
         Ok(p) => p,
         Err(e) => {
+            // v1.0.9: a DB failure returns 500, not an empty "success" that the
+            // shop would render as "no plans available".
             tracing::error!("list_public_plans: db error: {}", e);
-            return Json(ApiResponse::success(Vec::new()));
+            return Json(err(500, "数据库错误"));
         }
     };
     let mut out = Vec::with_capacity(plans.len());

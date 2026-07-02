@@ -10,8 +10,12 @@
 //! 3. Neither / OUTBOUND_INTERFACE=auto → system auto-route (no bind).
 
 use socket2::{Domain, Protocol as S2Protocol, Socket, Type};
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpSocket, TcpStream, UdpSocket};
+use tokio::sync::Mutex as AsyncMutex;
 
 // ── errors ──
 
@@ -172,11 +176,20 @@ pub async fn tcp_connect(
     source_ipv4: Option<Ipv4Addr>,
     _timeout_secs: u64,
 ) -> Result<TcpStream, OutboundError> {
+    // v1.0.9: resolve through the DNS cache instead of re-resolving on every
+    // connection. The caller (tcp.rs) still wraps this in a per-attempt timeout.
+    let addrs = resolve_cached(target)
+        .await
+        .map_err(OutboundError::Connect)?;
+    if addrs.is_empty() {
+        return Err(OutboundError::Connect(std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            "could not resolve target",
+        )));
+    }
     let stream = match source_ipv4 {
-        None => TcpStream::connect(target)
-            .await
-            .map_err(OutboundError::Connect)?,
-        Some(src) => tcp_connect_bound(target, src).await?,
+        None => connect_first(&addrs).await?,
+        Some(src) => tcp_connect_bound(&addrs, src).await?,
     };
     // Non-fatal: a socket that just connected virtually never rejects this.
     if let Err(e) = stream.set_nodelay(true) {
@@ -185,50 +198,135 @@ pub async fn tcp_connect(
     Ok(stream)
 }
 
-async fn tcp_connect_bound(target: &str, src: Ipv4Addr) -> Result<TcpStream, OutboundError> {
-    let addrs: Vec<SocketAddr> = tokio::net::lookup_host(target)
-        .await
-        .map_err(OutboundError::Connect)?
-        .collect();
-    if let Some(addr) = addrs.into_iter().next() {
-        match addr {
-            SocketAddr::V4(v4) => {
-                let sock = TcpSocket::new_v4().map_err(OutboundError::Bind)?;
-                sock.bind(SocketAddrV4::new(src, 0).into())
-                    .map_err(OutboundError::Bind)?;
-                return sock
-                    .connect(SocketAddr::from(v4))
-                    .await
-                    .map_err(OutboundError::Connect);
-            }
-            SocketAddr::V6(_) => {
-                // IPv6 target: source binding doesn't apply, fall through to auto.
-                return TcpStream::connect(target)
-                    .await
-                    .map_err(OutboundError::Connect);
+/// Try each resolved address in order until one connects — mirrors
+/// `TcpStream::connect(host:port)`'s multi-address behavior over our cached
+/// resolution.
+async fn connect_first(addrs: &[SocketAddr]) -> Result<TcpStream, OutboundError> {
+    let mut last_err = None;
+    for addr in addrs {
+        match TcpStream::connect(addr).await {
+            Ok(s) => return Ok(s),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(OutboundError::Connect(last_err.unwrap_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::AddrNotAvailable, "no address")
+    })))
+}
+
+async fn tcp_connect_bound(
+    addrs: &[SocketAddr],
+    src: Ipv4Addr,
+) -> Result<TcpStream, OutboundError> {
+    // Use the first resolved address (matches the previous behavior). An IPv4
+    // target uses the source bind; an IPv6 target can't (the source is IPv4),
+    // so it falls back to a plain connect.
+    let Some(&addr) = addrs.first() else {
+        return Err(OutboundError::Connect(std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            "could not resolve target",
+        )));
+    };
+    match addr {
+        SocketAddr::V4(v4) => {
+            let sock = TcpSocket::new_v4().map_err(OutboundError::Bind)?;
+            sock.bind(SocketAddrV4::new(src, 0).into())
+                .map_err(OutboundError::Bind)?;
+            sock.connect(SocketAddr::from(v4))
+                .await
+                .map_err(OutboundError::Connect)
+        }
+        SocketAddr::V6(_) => TcpStream::connect(addr)
+            .await
+            .map_err(OutboundError::Connect),
+    }
+}
+
+// ── DNS cache ──
+
+/// How long a resolved target is reused before re-resolving. Short enough to
+/// follow DNS changes within a minute, long enough to spare a lookup on every
+/// new connection to a domain target.
+const DNS_CACHE_TTL: Duration = Duration::from_secs(30);
+
+struct CachedDns {
+    addrs: Vec<SocketAddr>,
+    at: Instant,
+}
+
+fn dns_cache() -> &'static AsyncMutex<HashMap<String, CachedDns>> {
+    static CACHE: OnceLock<AsyncMutex<HashMap<String, CachedDns>>> = OnceLock::new();
+    CACHE.get_or_init(|| AsyncMutex::new(HashMap::new()))
+}
+
+/// Resolve `target` ("host:port") to socket addresses, caching for
+/// `DNS_CACHE_TTL`. On a resolver error a stale cached entry (if any) is reused
+/// rather than failing the connection outright — DNS blips shouldn't drop links.
+async fn resolve_cached(target: &str) -> std::io::Result<Vec<SocketAddr>> {
+    {
+        let cache = dns_cache().lock().await;
+        if let Some(c) = cache.get(target) {
+            if c.at.elapsed() < DNS_CACHE_TTL {
+                return Ok(c.addrs.clone());
             }
         }
     }
-    Err(OutboundError::Connect(std::io::Error::new(
-        std::io::ErrorKind::AddrNotAvailable,
-        "could not resolve target",
-    )))
+    match tokio::net::lookup_host(target).await {
+        Ok(it) => {
+            let addrs: Vec<SocketAddr> = it.collect();
+            if !addrs.is_empty() {
+                dns_cache().lock().await.insert(
+                    target.to_string(),
+                    CachedDns {
+                        addrs: addrs.clone(),
+                        at: Instant::now(),
+                    },
+                );
+            }
+            Ok(addrs)
+        }
+        Err(e) => {
+            if let Some(c) = dns_cache().lock().await.get(target) {
+                tracing::debug!(
+                    "outbound: DNS for {} failed ({}); using stale cached addrs",
+                    target,
+                    e
+                );
+                return Ok(c.addrs.clone());
+            }
+            Err(e)
+        }
+    }
 }
 
 // ── UDP ──
+
+/// v1.0.9: requested UDP socket buffer size (bytes) for both send and receive.
+/// Absorbs bursts / high packet rates so the kernel drops fewer datagrams. The
+/// OS clamps this to net.core.{r,w}mem_max, so requesting more than the cap is
+/// harmless (best-effort — a failure to set never fails the bind).
+const UDP_SOCKET_BUFFER_BYTES: usize = 4 * 1024 * 1024;
 
 /// Bind a UDP socket for outbound traffic. When `source_ipv4` is set,
 /// binds to `{src}:0`; otherwise binds to `0.0.0.0:0` (system auto).
 pub async fn udp_outbound_socket(
     source_ipv4: Option<Ipv4Addr>,
 ) -> Result<UdpSocket, OutboundError> {
-    let bind_addr = match source_ipv4 {
+    let bind_addr: SocketAddr = match source_ipv4 {
         Some(src) => SocketAddr::V4(SocketAddrV4::new(src, 0)),
         None => "0.0.0.0:0".parse().unwrap(),
     };
-    UdpSocket::bind(bind_addr)
-        .await
-        .map_err(OutboundError::Bind)
+    // v1.0.9: build via socket2 so we can enlarge the send/recv buffers before
+    // the socket goes live. (IPv4 outbound only — unchanged from the previous
+    // 0.0.0.0/src bind.)
+    let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(S2Protocol::UDP))
+        .map_err(OutboundError::Bind)?;
+    sock.set_nonblocking(true).map_err(OutboundError::Bind)?;
+    let _ = sock.set_recv_buffer_size(UDP_SOCKET_BUFFER_BYTES);
+    let _ = sock.set_send_buffer_size(UDP_SOCKET_BUFFER_BYTES);
+    sock.bind(&bind_addr.into()).map_err(OutboundError::Bind)?;
+    let std_sock: std::net::UdpSocket = sock.into();
+    UdpSocket::from_std(std_sock).map_err(OutboundError::Bind)
 }
 
 // ── dual-stack listener binding ──
@@ -274,6 +372,9 @@ pub fn bind_udp_socket(ip: IpAddr, port: u16) -> Result<UdpSocket, OutboundError
     }
     sock.set_reuse_address(true).map_err(OutboundError::Bind)?;
     sock.set_nonblocking(true).map_err(OutboundError::Bind)?;
+    // v1.0.9: enlarge inbound UDP buffers to absorb bursts (best-effort).
+    let _ = sock.set_recv_buffer_size(UDP_SOCKET_BUFFER_BYTES);
+    let _ = sock.set_send_buffer_size(UDP_SOCKET_BUFFER_BYTES);
     sock.bind(&addr.into()).map_err(OutboundError::Bind)?;
     let std_sock: std::net::UdpSocket = sock.into();
     UdpSocket::from_std(std_sock).map_err(OutboundError::Bind)
@@ -305,6 +406,18 @@ pub fn init_outbound(config: &OutboundConfig) -> Result<Option<Ipv4Addr>, Outbou
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// v1.0.9: resolve_cached returns an IP target verbatim (lookup_host on an
+    /// IP:port is local, no network) and a second call is served identically —
+    /// exercising the cache-hit path.
+    #[tokio::test]
+    async fn dns_cache_resolves_and_reuses_ip_target() {
+        let want: SocketAddr = "127.0.0.1:9".parse().unwrap();
+        let a = resolve_cached("127.0.0.1:9").await.expect("resolve ok");
+        assert_eq!(a, vec![want]);
+        let b = resolve_cached("127.0.0.1:9").await.expect("cached ok");
+        assert_eq!(a, b);
+    }
 
     #[test]
     fn auto_mode_no_bind() {

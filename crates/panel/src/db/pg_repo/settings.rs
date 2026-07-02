@@ -75,6 +75,54 @@ impl PlanRepository for PgRepository {
     }
 
     #[allow(clippy::too_many_arguments)]
+    async fn create_plan_with_groups(
+        &self,
+        name: &str,
+        max_rules: i32,
+        traffic: i64,
+        price: &str,
+        plan_type: &str,
+        duration_days: i32,
+        hidden: bool,
+        reset_traffic: bool,
+        description: &str,
+        grant_all_groups: bool,
+        device_group_ids: &[i64],
+    ) -> Result<i64, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let row: (i64,) = sqlx::query_as(
+            "INSERT INTO plans \
+             (name, max_rules, traffic, price, plan_type, duration_days, hidden, reset_traffic, description, grant_all_groups) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
+        )
+        .bind(name)
+        .bind(max_rules)
+        .bind(traffic)
+        .bind(price)
+        .bind(plan_type)
+        .bind(duration_days)
+        .bind(hidden)
+        .bind(reset_traffic)
+        .bind(description)
+        .bind(grant_all_groups)
+        .fetch_one(&mut *tx)
+        .await?;
+        let id = row.0;
+        for dg in device_group_ids {
+            sqlx::query(
+                "INSERT INTO plan_device_groups (plan_id, device_group_id) \
+                 VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            )
+            .bind(id)
+            .bind(dg)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn update_plan_fields(
         &self,
         id: i64,

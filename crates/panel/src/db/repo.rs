@@ -171,6 +171,14 @@ pub trait UserRepository: Send + Sync {
         plan_id: Option<i64>,
         plan_expire_at: Option<String>,
     ) -> Result<u64, DbError>;
+    /// v1.0.9: remove a user's plan AND revoke device-group authorization AND
+    /// pause their now-unauthorized rules, all in ONE transaction — the clear
+    /// path used to do these as 4 separate calls, which could half-complete.
+    /// Clears plan_id/plan_expire_at, sets all_device_groups=0, deletes the
+    /// user's user_device_groups rows, and system-pauses (auto_paused=1) every
+    /// active rule. No-op for admins. Returns rows affected on the user row
+    /// (0 = not found or admin).
+    async fn clear_user_plan(&self, user_id: i64) -> Result<u64, DbError>;
     /// Increment user traffic_used (called inside traffic batch tx).
     async fn increment_user_traffic(&self, id: i64, delta: i64) -> Result<(), DbError>;
     /// Reset traffic_used to 0 for user AND their rules (atomic).
@@ -651,6 +659,24 @@ pub trait PlanRepository: Send + Sync {
         reset_traffic: bool,
         description: &str,
         grant_all_groups: bool,
+    ) -> Result<i64, DbError>;
+    /// v1.0.9: insert a plan AND its device-group grant set in ONE transaction,
+    /// so a failure mid-way can't leave a plan row with no grants (the two-call
+    /// insert_plan + set_plan_device_groups sequence could). Returns the new id.
+    #[allow(clippy::too_many_arguments)]
+    async fn create_plan_with_groups(
+        &self,
+        name: &str,
+        max_rules: i32,
+        traffic: i64,
+        price: &str,
+        plan_type: &str,
+        duration_days: i32,
+        hidden: bool,
+        reset_traffic: bool,
+        description: &str,
+        grant_all_groups: bool,
+        device_group_ids: &[i64],
     ) -> Result<i64, DbError>;
     /// v1.0.8: update a plan's mutable fields. Returns rows affected (0 = not
     /// found). speed_limit/ip_limit are intentionally NOT updatable here

@@ -75,6 +75,54 @@ impl PlanRepository for SqliteRepository {
     }
 
     #[allow(clippy::too_many_arguments)]
+    async fn create_plan_with_groups(
+        &self,
+        name: &str,
+        max_rules: i32,
+        traffic: i64,
+        price: &str,
+        plan_type: &str,
+        duration_days: i32,
+        hidden: bool,
+        reset_traffic: bool,
+        description: &str,
+        grant_all_groups: bool,
+        device_group_ids: &[i64],
+    ) -> Result<i64, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let result = sqlx::query(
+            "INSERT INTO plans \
+             (name, max_rules, traffic, price, plan_type, duration_days, hidden, reset_traffic, description, grant_all_groups) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(name)
+        .bind(max_rules)
+        .bind(traffic)
+        .bind(price)
+        .bind(plan_type)
+        .bind(duration_days)
+        .bind(hidden)
+        .bind(reset_traffic)
+        .bind(description)
+        .bind(grant_all_groups)
+        .execute(&mut *tx)
+        .await?;
+        let id = result.last_insert_rowid();
+        for dg in device_group_ids {
+            sqlx::query(
+                "INSERT OR IGNORE INTO plan_device_groups (plan_id, device_group_id) \
+                 VALUES (?, ?)",
+            )
+            .bind(id)
+            .bind(dg)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn update_plan_fields(
         &self,
         id: i64,

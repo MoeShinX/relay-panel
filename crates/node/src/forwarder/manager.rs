@@ -41,6 +41,11 @@ type ListenerKey = (u16, Protocol, NodeTransport);
 /// `speed_limit` / `ip_limit` are deliberately NOT here: they are placeholder
 /// fields that are always None in v0.3.x (the node has no limiter), so they
 /// never change behaviour and must not trigger spurious restarts.
+///
+/// `upload_limit_bps` / `download_limit_bps` ARE here (v1.0.9): the rate limiter
+/// is captured by the listener task when it spawns, so a limit change with no
+/// other change would otherwise leave the running task on the OLD cap until the
+/// node restarts. Including them forces a restart that re-reads the new cap.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ListenerFingerprint {
     rule_id: i64,
@@ -53,6 +58,11 @@ struct ListenerFingerprint {
     /// so the right forwarder (tcp/ws/tls) is spawned. Derived from a tunnel
     /// profile, so it can change without the rule's listen port moving.
     node_transport: NodeTransport,
+    /// v1.0.9: per-rule rate caps (BYTES/sec, None = unlimited). A change here
+    /// (including clearing a limit) must restart the listener so the new cap
+    /// takes effect without a node restart.
+    upload_limit_bps: Option<u64>,
+    download_limit_bps: Option<u64>,
 }
 
 impl ListenerFingerprint {
@@ -63,6 +73,8 @@ impl ListenerFingerprint {
             ws_path: l.ws_path.clone(),
             load_balance_strategy: l.load_balance_strategy,
             node_transport: l.node_transport,
+            upload_limit_bps: l.upload_limit_bps,
+            download_limit_bps: l.download_limit_bps,
         }
     }
 }
@@ -752,6 +764,33 @@ mod tests {
         )
     }
 
+    /// v1.0.9: a rate-limit change (set OR cleared) must change the listener
+    /// fingerprint so apply() restarts the listener and the new cap takes
+    /// effect — without this, a running task keeps its captured old cap until
+    /// the node restarts.
+    #[test]
+    fn rate_limit_change_alters_fingerprint() {
+        let mut l = one_rule(40050, Protocol::Tcp, NodeTransport::Raw)
+            .listeners
+            .pop()
+            .unwrap();
+        let unlimited = ListenerFingerprint::from_listener(&l);
+
+        l.upload_limit_bps = Some(1_000_000);
+        let up_limited = ListenerFingerprint::from_listener(&l);
+        assert_ne!(
+            unlimited, up_limited,
+            "setting an upload cap must change the fingerprint"
+        );
+
+        // Clearing the upload cap and setting a download cap: still distinct.
+        l.upload_limit_bps = None;
+        l.download_limit_bps = Some(2_000_000);
+        let down_limited = ListenerFingerprint::from_listener(&l);
+        assert_ne!(up_limited, down_limited);
+        assert_ne!(unlimited, down_limited);
+    }
+
     #[tokio::test]
     async fn raw_tcp_and_udp_are_scheduled() {
         let mut mgr = fresh_mgr();
@@ -1164,6 +1203,8 @@ mod tests {
                     ws_path: None,
                     load_balance_strategy: LoadBalanceStrategy::First,
                     node_transport: NodeTransport::Raw,
+                    upload_limit_bps: None,
+                    download_limit_bps: None,
                 },
             },
         );
@@ -1221,6 +1262,8 @@ mod tests {
                     ws_path: None,
                     load_balance_strategy: LoadBalanceStrategy::First,
                     node_transport: NodeTransport::Raw,
+                    upload_limit_bps: None,
+                    download_limit_bps: None,
                 },
             },
         );
@@ -1234,6 +1277,8 @@ mod tests {
                     ws_path: None,
                     load_balance_strategy: LoadBalanceStrategy::First,
                     node_transport: NodeTransport::Raw,
+                    upload_limit_bps: None,
+                    download_limit_bps: None,
                 },
             },
         );
@@ -1270,6 +1315,8 @@ mod tests {
                     ws_path: None,
                     load_balance_strategy: LoadBalanceStrategy::First,
                     node_transport: NodeTransport::Raw,
+                    upload_limit_bps: None,
+                    download_limit_bps: None,
                 },
             },
         );

@@ -154,49 +154,78 @@ pub async fn serve_udp_listener(
 
         // Pick or create a local session (with its own outbound socket) for
         // this client.
+        // v1.0.9: the outbound bind + connect (network ops) run WITHOUT holding
+        // the session-map lock, so slow setup for one new client no longer
+        // serializes every other packet on this listener. Fast path (existing
+        // session) takes and releases the lock immediately.
         let sessions_arc = sessions.clone();
-        let outbound_sock = {
+        let existing = {
             let mut map = sessions_arc.lock().await;
-            if let Some(s) = map.get_mut(&src) {
+            map.get_mut(&src).map(|s| {
                 s.last_active = tokio::time::Instant::now();
                 s.outbound.clone()
-            } else {
-                // New session: bind an ephemeral outbound socket and connect to target
-                let outbound = match super::outbound::udp_outbound_socket(source_ipv4).await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        tracing::warn!("UDP port {}: failed to bind outbound: {}", port, e);
-                        continue;
-                    }
-                };
-                // v0.4.6: pick a target per the rule's load-balance strategy.
-                // The selector yields target indices in priority order; we use
-                // the first one that resolved to an address. UDP affinity: this
-                // pick happens once per NEW session, so all datagrams from the
-                // same client stay pinned to the chosen target.
-                let target = match selector
-                    .order()
-                    .into_iter()
-                    .find_map(|idx| resolved.get(idx).copied().flatten())
-                {
-                    Some(t) => t,
-                    None => {
-                        tracing::warn!("UDP port {}: no resolvable target for session", port);
-                        continue;
-                    }
-                };
-                if let Err(e) = outbound.connect(target).await {
-                    tracing::warn!(
-                        "UDP port {}: failed to connect to target {}: {}",
-                        port,
-                        target,
-                        e
-                    );
+            })
+        };
+        let outbound_sock = if let Some(sock) = existing {
+            sock
+        } else {
+            // New session: bind an ephemeral outbound socket + pick/connect the
+            // target, all OUTSIDE the map lock.
+            let outbound = match super::outbound::udp_outbound_socket(source_ipv4).await {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("UDP port {}: failed to bind outbound: {}", port, e);
                     continue;
                 }
-                let outbound = Arc::new(outbound);
+            };
+            // v0.4.6: pick a target per the rule's load-balance strategy. The
+            // selector yields target indices in priority order; we use the first
+            // that resolved. UDP affinity: this pick happens once per NEW
+            // session, so all datagrams from the same client stay pinned.
+            let target = match selector
+                .order()
+                .into_iter()
+                .find_map(|idx| resolved.get(idx).copied().flatten())
+            {
+                Some(t) => t,
+                None => {
+                    tracing::warn!("UDP port {}: no resolvable target for session", port);
+                    continue;
+                }
+            };
+            if let Err(e) = outbound.connect(target).await {
+                tracing::warn!(
+                    "UDP port {}: failed to connect to target {}: {}",
+                    port,
+                    target,
+                    e
+                );
+                continue;
+            }
+            let outbound = Arc::new(outbound);
 
-                // Spawn a forwarder: outbound -> inbound (target replies back to client)
+            // Re-acquire the lock ONLY to publish the session. Double-check for a
+            // concurrent datagram from the same client that won the race while we
+            // were connecting — if one did, use the winner and drop ours.
+            let (chosen, we_won) = {
+                let mut map = sessions_arc.lock().await;
+                if let Some(s) = map.get_mut(&src) {
+                    s.last_active = tokio::time::Instant::now();
+                    (s.outbound.clone(), false)
+                } else {
+                    map.insert(
+                        src,
+                        UdpSession {
+                            outbound: outbound.clone(),
+                            last_active: tokio::time::Instant::now(),
+                        },
+                    );
+                    (outbound.clone(), true)
+                }
+            };
+
+            if we_won {
+                // Spawn the target -> client reader for OUR socket.
                 let inbound_c = inbound.clone();
                 let sessions_c = sessions_arc.clone();
                 let connections_c = connections.clone();
@@ -215,8 +244,8 @@ pub async fn serve_udp_listener(
                                 // forwarding back to the client.
                                 rl_c.acquire_download(m as u64).await;
                                 counter_c.add(rule_id, 0, m as u64).await;
-                                // A reply from the target counts as activity
-                                // too — refresh the session so a long-lived
+                                // A reply from the target counts as activity too
+                                // — refresh the session so a long-lived
                                 // request/response flow isn't expired mid-flight.
                                 connections_c.udp_touch(src_c, rule_id).await;
                                 if inbound_c.send_to(&rbuf[..m], src_c).await.is_err() {
@@ -232,20 +261,11 @@ pub async fn serve_udp_listener(
                             }
                         }
                     }
-                    // Outbound side ended (target closed / error): release
-                    // this client's session immediately rather than waiting
-                    // for timeout.
+                    // Outbound side ended (target closed / error): release this
+                    // client's session immediately rather than waiting for timeout.
                     sessions_c.lock().await.remove(&src_c);
                     connections_c.udp_close(src_c, rule_id).await;
                 });
-
-                map.insert(
-                    src,
-                    UdpSession {
-                        outbound: outbound.clone(),
-                        last_active: tokio::time::Instant::now(),
-                    },
-                );
                 if opened {
                     tracing::debug!(
                         "UDP port {}: new session {} -> {} (rule {})",
@@ -255,8 +275,8 @@ pub async fn serve_udp_listener(
                         rule_id
                     );
                 }
-                outbound.clone()
             }
+            chosen
         };
 
         // Forward client datagram to target via the connected outbound socket.

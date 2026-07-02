@@ -25,6 +25,13 @@
 #
 set -euo pipefail
 
+# v1.0.9: move off the invocation directory immediately. If the script is run
+# from a directory that has since been deleted (common when piping via
+# `bash <(curl ...)` from a scratch dir), child processes inherit a dead cwd and
+# fail with "shell-init: error retrieving current directory: getcwd". Anchoring
+# to / (all work uses absolute paths anyway) avoids that class of error.
+cd / 2>/dev/null || true
+
 # Bump this when releasing a new version. The binary is downloaded from
 # GitHub Releases assets.
 SCRIPT_VERSION="1.0.8"

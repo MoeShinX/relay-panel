@@ -96,8 +96,11 @@ pub async fn list_plans(
     let plans: Vec<Plan> = match state.db.list_plans().await {
         Ok(p) => p,
         Err(e) => {
+            // v1.0.9: surface DB failures as 500 instead of masquerading as an
+            // empty (but "successful") list — the admin UI would otherwise show
+            // "no plans" on a transient DB error.
             tracing::error!("list_plans: db error: {}", e);
-            return Json(ApiResponse::success(Vec::new()));
+            return Json(err(500, "数据库错误"));
         }
     };
     // Attach each plan's grant set. N+1 over the (small) plan list — fine for an
@@ -148,9 +151,11 @@ pub async fn create_plan(
         Err(msg) => return Json(err(400, msg)),
     };
 
+    // v1.0.9: insert the plan AND its device-group grant set atomically, so a
+    // failure can't leave a plan row with no grants (was two separate calls).
     let id = match state
         .db
-        .insert_plan(
+        .create_plan_with_groups(
             &req.name,
             req.max_rules,
             req.traffic,
@@ -161,6 +166,7 @@ pub async fn create_plan(
             req.reset_traffic,
             &req.description,
             req.grant_all_groups,
+            &req.device_group_ids,
         )
         .await
     {
@@ -170,20 +176,6 @@ pub async fn create_plan(
             return Json(err(500, "数据库错误"));
         }
     };
-
-    // v1.0.9: persist the device-group grant set. Only meaningful when
-    // grant_all_groups=false, but storing it regardless keeps the set intact if
-    // the admin later flips grant_all off. Failure here would leave a plan with
-    // no grants — log + 500 so the admin retries rather than silently shipping
-    // a plan that grants nothing.
-    if let Err(e) = state
-        .db
-        .set_plan_device_groups(id, &req.device_group_ids)
-        .await
-    {
-        tracing::error!("create_plan {}: set_plan_device_groups failed: {}", id, e);
-        return Json(err(500, "数据库错误"));
-    }
 
     Json(ApiResponse::success(id))
 }
@@ -247,6 +239,22 @@ pub async fn update_plan(
                     tracing::error!("update_plan {}: lookup failed: {}", id, e);
                     return Json(err(500, "数据库错误"));
                 }
+            }
+        }
+    } else if req.duration_days == Some(0) && req.plan_type.is_none() {
+        // v1.0.9: the reverse gap — setting duration_days=0 WITHOUT touching
+        // plan_type. validate_plan_fields only checks the time+0 rule when
+        // plan_type is present, so a caller could quietly zero out an existing
+        // TIME plan's duration. Read the stored type and reject if it's time.
+        match state.db.find_plan_by_id(id).await {
+            Ok(Some(p)) if p.plan_type == "time" => {
+                return Json(err(400, "限时套餐的时长天数必须大于 0"));
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => return Json(err(404, "套餐不存在")),
+            Err(e) => {
+                tracing::error!("update_plan {}: lookup failed: {}", id, e);
+                return Json(err(500, "数据库错误"));
             }
         }
     }

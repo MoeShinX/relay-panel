@@ -249,6 +249,35 @@ impl UserRepository for PgRepository {
         Ok(result.rows_affected())
     }
 
+    async fn clear_user_plan(&self, user_id: i64) -> Result<u64, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let r = sqlx::query(
+            "UPDATE users SET plan_id = NULL, plan_expire_at = NULL, all_device_groups = FALSE \
+             WHERE id = $1 AND admin = FALSE",
+        )
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+        let affected = r.rows_affected();
+        if affected == 0 {
+            let _ = tx.rollback().await;
+            return Ok(0);
+        }
+        sqlx::query("DELETE FROM user_device_groups WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "UPDATE forward_rules SET paused = TRUE, auto_paused = TRUE \
+             WHERE uid = $1 AND paused = FALSE",
+        )
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(affected)
+    }
+
     async fn increment_user_traffic(&self, id: i64, delta: i64) -> Result<(), DbError> {
         sqlx::query("UPDATE users SET traffic_used = traffic_used + $1 WHERE id = $2")
             .bind(delta)

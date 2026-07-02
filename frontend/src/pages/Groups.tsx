@@ -177,13 +177,10 @@ export default function Groups() {
   };
 
   // v1.0.4: create form only shows in/monitor (no out/egress).
-  const createGroupTypeOptions = [
+  // v1.0.9: the edit form uses the same set — outbound/egress groups are no
+  // longer offered anywhere in the UI.
+  const groupTypeOptions = [
     { value: 'in', label: t('inboundListener') },
-    { value: 'monitor', label: t('typeMonitor') },
-  ];
-  const allGroupTypeOptions = [
-    { value: 'in', label: t('inboundListener') },
-    { value: 'out', label: t('outboundEgress') },
     { value: 'monitor', label: t('typeMonitor') },
   ];
 
@@ -312,7 +309,7 @@ export default function Groups() {
           )}
           {/* v1.0.4: new groups cannot be type 'out' (egress). */}
           <Form.Item name="group_type" label={t('type')} rules={[{ required: true }]} initialValue="in">
-            <Select options={createGroupTypeOptions} />
+            <Select options={groupTypeOptions} />
           </Form.Item>
           <Form.Item name="connect_host" label={t('connectHost')} rules={[{ required: true }]}><Input placeholder="1.2.3.4 or node.example.com" /></Form.Item>
           <Form.Item name="port_range" label={t('portRange')} rules={[{ required: true }]} initialValue="10000-65535"><Input placeholder="10000-65535" /></Form.Item>
@@ -332,7 +329,7 @@ export default function Groups() {
       <Modal title={t('editGroup')} open={editOpen} onCancel={() => setEditOpen(false)} onOk={() => editForm.submit()} okText={t('save')} cancelText={t('cancel')}>
         <Form form={editForm} onFinish={handleUpdate} layout="vertical">
           <Form.Item name="name" label={t('name')}><Input /></Form.Item>
-          <Form.Item name="group_type" label={t('type')}><Select options={allGroupTypeOptions} /></Form.Item>
+          <Form.Item name="group_type" label={t('type')}><Select options={groupTypeOptions} /></Form.Item>
           <Form.Item name="connect_host" label={t('connectHost')}><Input /></Form.Item>
           <Form.Item name="port_range" label={t('portRange')}><Input /></Form.Item>
           <Form.Item name="rate" label={t('rate')} extra={t('rateHint')}>
