@@ -151,9 +151,11 @@ pub async fn create_plan(
         Err(msg) => return Json(err(400, msg)),
     };
 
+    // v1.0.9: insert the plan AND its device-group grant set atomically, so a
+    // failure can't leave a plan row with no grants (was two separate calls).
     let id = match state
         .db
-        .insert_plan(
+        .create_plan_with_groups(
             &req.name,
             req.max_rules,
             req.traffic,
@@ -164,6 +166,7 @@ pub async fn create_plan(
             req.reset_traffic,
             &req.description,
             req.grant_all_groups,
+            &req.device_group_ids,
         )
         .await
     {
@@ -173,20 +176,6 @@ pub async fn create_plan(
             return Json(err(500, "数据库错误"));
         }
     };
-
-    // v1.0.9: persist the device-group grant set. Only meaningful when
-    // grant_all_groups=false, but storing it regardless keeps the set intact if
-    // the admin later flips grant_all off. Failure here would leave a plan with
-    // no grants — log + 500 so the admin retries rather than silently shipping
-    // a plan that grants nothing.
-    if let Err(e) = state
-        .db
-        .set_plan_device_groups(id, &req.device_group_ids)
-        .await
-    {
-        tracing::error!("create_plan {}: set_plan_device_groups failed: {}", id, e);
-        return Json(err(500, "数据库错误"));
-    }
 
     Json(ApiResponse::success(id))
 }

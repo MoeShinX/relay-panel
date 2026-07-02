@@ -10,25 +10,46 @@ use std::time::{Duration, Instant};
 use sysinfo::{Disks, Networks, System};
 use tokio::sync::{Mutex, RwLock};
 
+/// Per-rule (upload, download) byte counters. Shared behind an Arc so the
+/// per-packet add() path can clone-free `fetch_add` after a shared read lock.
+type RuleCounters = Arc<(AtomicU64, AtomicU64)>;
+
 pub struct TrafficCounter {
-    // rule_id -> (upload, download). Keyed by rule id (not listen port) so
-    // traffic is always attributed to the correct rule even when two inbound
-    // groups listen on the same port.
-    pub data: Arc<Mutex<HashMap<i64, (u64, u64)>>>,
+    // rule_id -> (upload, download) as lock-free atomic counters. Keyed by rule
+    // id (not listen port) so traffic is attributed to the right rule even when
+    // two inbound groups listen on the same port.
+    //
+    // v1.0.9: the RwLock guards only the MAP shape (insert on a rule's first
+    // bytes). Concurrent add()s to an already-present rule take a SHARED read
+    // lock and do a lock-free atomic fetch_add, so they never serialize on each
+    // other — this is the per-packet path for both TCP and UDP forwarding.
+    data: Arc<RwLock<HashMap<i64, RuleCounters>>>,
 }
 
 impl TrafficCounter {
     pub fn new() -> Self {
         Self {
-            data: Arc::new(Mutex::new(HashMap::new())),
+            data: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     pub async fn add(&self, rule_id: i64, upload: u64, download: u64) {
-        let mut data = self.data.lock().await;
-        let entry = data.entry(rule_id).or_insert((0, 0));
-        entry.0 += upload;
-        entry.1 += download;
+        // Fast path: rule already present → shared read lock + atomic add.
+        {
+            let map = self.data.read().await;
+            if let Some(c) = map.get(&rule_id) {
+                c.0.fetch_add(upload, Ordering::Relaxed);
+                c.1.fetch_add(download, Ordering::Relaxed);
+                return;
+            }
+        }
+        // Slow path: first bytes for this rule → write lock to insert, then add.
+        let mut map = self.data.write().await;
+        let c = map
+            .entry(rule_id)
+            .or_insert_with(|| Arc::new((AtomicU64::new(0), AtomicU64::new(0))));
+        c.0.fetch_add(upload, Ordering::Relaxed);
+        c.1.fetch_add(download, Ordering::Relaxed);
     }
 
     /// Take a snapshot and return a guard whose `commit()` subtracts exactly
@@ -39,13 +60,13 @@ impl TrafficCounter {
     /// Bytes that arrive BETWEEN snapshot and commit are preserved (subtract,
     /// not clear), so no traffic is ever lost.
     pub async fn snapshot(&self) -> TrafficSnapshot<'_> {
-        let data = self.data.lock().await;
-        let entries: Vec<TrafficEntry> = data
+        let map = self.data.read().await;
+        let entries: Vec<TrafficEntry> = map
             .iter()
-            .map(|(rule_id, (upload, download))| TrafficEntry {
+            .map(|(rule_id, c)| TrafficEntry {
                 rule_id: *rule_id,
-                upload: *upload,
-                download: *download,
+                upload: c.0.load(Ordering::Relaxed),
+                download: c.1.load(Ordering::Relaxed),
             })
             .collect();
         TrafficSnapshot {
@@ -60,12 +81,12 @@ impl TrafficCounter {
     /// failed upload retries instead of dropping traffic.
     #[allow(dead_code)]
     pub async fn drain(&self) -> Vec<TrafficEntry> {
-        let mut data = self.data.lock().await;
-        data.drain()
-            .map(|(rule_id, (upload, download))| TrafficEntry {
+        let mut map = self.data.write().await;
+        map.drain()
+            .map(|(rule_id, c)| TrafficEntry {
                 rule_id,
-                upload,
-                download,
+                upload: c.0.load(Ordering::Relaxed),
+                download: c.1.load(Ordering::Relaxed),
             })
             .collect()
     }
@@ -75,13 +96,13 @@ impl TrafficCounter {
     /// config) so that orphaned bytes don't poison future traffic batches — a
     /// stale rule_id causes the panel to atomically reject the entire batch.
     pub async fn prune_rule(&self, rule_id: i64) {
-        self.data.lock().await.remove(&rule_id);
+        self.data.write().await.remove(&rule_id);
     }
 
     /// Test-only: check whether a rule_id has any accumulated bytes.
     #[cfg(test)]
     pub async fn has_rule(&self, rule_id: i64) -> bool {
-        self.data.lock().await.contains_key(&rule_id)
+        self.data.read().await.contains_key(&rule_id)
     }
 }
 
@@ -97,16 +118,22 @@ impl TrafficSnapshot<'_> {
     /// Subtract the snapshotted bytes from the live counters. Bytes counted
     /// after the snapshot was taken are untouched. Safe to call once.
     pub async fn commit(self) {
-        let mut data = self.counter.data.lock().await;
+        // Periodic (not the hot path): take the write lock so fetch_sub AND the
+        // zero-entry cleanup happen without racing an add(). Only the exact
+        // snapshotted bytes are subtracted; bytes counted after the snapshot are
+        // preserved (they show up as a larger prev value → entry not removed).
+        let mut map = self.counter.data.write().await;
         for e in &self.entries {
-            if let Some((u, d)) = data.get_mut(&e.rule_id) {
-                *u = u.saturating_sub(e.upload);
-                *d = d.saturating_sub(e.download);
-                // Remove the entry if it's fully drained, so the map doesn't
-                // accumulate zero-only entries for idle rules.
-                if *u == 0 && *d == 0 {
-                    data.remove(&e.rule_id);
-                }
+            let drained = if let Some(c) = map.get(&e.rule_id) {
+                let prev_up = c.0.fetch_sub(e.upload, Ordering::Relaxed);
+                let prev_down = c.1.fetch_sub(e.download, Ordering::Relaxed);
+                // new == 0 iff prev == snapshotted (no adds since the snapshot).
+                prev_up == e.upload && prev_down == e.download
+            } else {
+                false
+            };
+            if drained {
+                map.remove(&e.rule_id);
             }
         }
     }
@@ -124,10 +151,10 @@ pub const UDP_SESSION_TIMEOUT: Duration = Duration::from_secs(60);
 /// - **UDP**: there is no "connection"; instead we count active UDP sessions,
 ///   keyed by `(client_addr, rule_id)`. A session is created on the first
 ///   datagram from a client and considered expired after
-///   `UDP_SESSION_TIMEOUT` with no further traffic. Expired sessions are
-///   pruned lazily on every `touch`/`current` call AND by the UDP listener's
-///   periodic sweeper, so the count converges on zero shortly after traffic
-///   stops even without new datagrams arriving.
+///   `UDP_SESSION_TIMEOUT` with no further traffic. v1.0.9: `touch` no longer
+///   prunes (it runs per packet); expiry is handled by `current()` and the UDP
+///   listener's periodic sweeper (`udp_prune_expired`), so the count still
+///   converges on zero shortly after traffic stops.
 ///
 /// `current()` reports `active_tcp + active_udp_sessions`.
 ///

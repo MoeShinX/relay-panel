@@ -512,65 +512,36 @@ pub async fn admin_set_user_plan(
     Path(id): Path<i64>,
     Json(req): Json<AdminSetUserPlanRequest>,
 ) -> Json<ApiResponse<()>> {
-    // When clearing, both columns go NULL. Otherwise keep the existing plan_id
-    // and write the new expiry (None = no expiry). We read the current row to
-    // resolve "keep plan_id" and to 404 on a missing/admin target.
-    let (plan_id, expire) = if req.clear {
-        (None, None)
-    } else {
-        match crate::db::repo::UserRepository::find_by_id(state.db.as_ref(), id).await {
-            Ok(Some(u)) if u.admin => return Json(err(400, "无法修改管理员用户的套餐")),
-            Ok(Some(u)) => (u.plan_id, req.plan_expire_at.clone()),
-            Ok(None) => return Json(err(404, "用户不存在")),
+    // v1.0.9: the clear path (remove plan) is now ONE atomic op — null the
+    // plan, revoke device-group authorization, and system-pause the user's
+    // rules together, so a mid-operation failure can't leave a half-revoked
+    // user. The non-clear path just keeps the current plan_id and writes the
+    // new expiry (None = no expiry).
+    if req.clear {
+        match state.db.clear_user_plan(id).await {
+            Ok(0) => return Json(err(404, "用户不存在（或为管理员）")),
+            Ok(_) => {}
             Err(e) => {
-                tracing::error!("admin_set_user_plan {}: find_by_id failed: {}", id, e);
+                tracing::error!("admin_set_user_plan {}: clear_user_plan failed: {}", id, e);
                 return Json(err(500, "数据库错误"));
             }
         }
-    };
-
-    match state.db.admin_set_user_plan(id, plan_id, expire).await {
-        Ok(0) => return Json(err(404, "用户不存在（或为管理员）")),
-        Ok(_) => {}
-        Err(e) => {
-            tracing::error!("admin_set_user_plan {}: db error: {}", id, e);
-            return Json(err(500, "数据库错误"));
-        }
-    }
-
-    // v1.0.7: removing the plan also REVOKES device-group authorization — the
-    // user returns to a bare account with no usable lines. Without this, the
-    // grants from the old plan (device-group auth is "only ever expands") would
-    // linger after the plan is gone and stack with the next purchase. Clear the
-    // all-groups flag + explicit assignments, then pause any rules that now
-    // reference an unauthorized group (data kept; resumes when re-authorized).
-    if req.clear {
-        if let Err(e) = state.db.set_user_all_device_groups(id, false).await {
-            tracing::error!(
-                "admin_set_user_plan {}: clear all_device_groups failed: {}",
-                id,
-                e
-            );
-            return Json(err(500, "数据库错误"));
-        }
-        if let Err(e) = state.db.set_user_device_groups(id, &[]).await {
-            tracing::error!(
-                "admin_set_user_plan {}: clear device groups failed: {}",
-                id,
-                e
-            );
-            return Json(err(500, "数据库错误"));
-        }
-        // Allowed set is now empty → pause ALL of the user's active rules.
-        match state.db.pause_rules_outside_groups(id, &[]).await {
-            Ok(n) if n > 0 => tracing::warn!(
-                "admin_set_user_plan {}: paused {} rule(s) after plan removal",
-                id,
-                n
-            ),
+    } else {
+        let (plan_id, expire) =
+            match crate::db::repo::UserRepository::find_by_id(state.db.as_ref(), id).await {
+                Ok(Some(u)) if u.admin => return Json(err(400, "无法修改管理员用户的套餐")),
+                Ok(Some(u)) => (u.plan_id, req.plan_expire_at.clone()),
+                Ok(None) => return Json(err(404, "用户不存在")),
+                Err(e) => {
+                    tracing::error!("admin_set_user_plan {}: find_by_id failed: {}", id, e);
+                    return Json(err(500, "数据库错误"));
+                }
+            };
+        match state.db.admin_set_user_plan(id, plan_id, expire).await {
+            Ok(0) => return Json(err(404, "用户不存在（或为管理员）")),
             Ok(_) => {}
             Err(e) => {
-                tracing::error!("admin_set_user_plan {}: pause rules failed: {}", id, e);
+                tracing::error!("admin_set_user_plan {}: db error: {}", id, e);
                 return Json(err(500, "数据库错误"));
             }
         }

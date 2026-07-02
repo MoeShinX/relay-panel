@@ -3043,6 +3043,84 @@ async fn seed_device_group(db: &PgRepository, gid: i64, uid: i64) {
 }
 
 #[tokio::test]
+async fn pg_create_plan_with_groups_persists_plan_and_grants() {
+    let Some(db) = repo("create_plan_grp").await else {
+        return;
+    };
+    seed_device_group(&db, 60, 1).await;
+    seed_device_group(&db, 61, 1).await;
+    let id = db
+        .create_plan_with_groups(
+            "combo",
+            5,
+            1000,
+            "5.00",
+            "data",
+            0,
+            false,
+            false,
+            "d",
+            false,
+            &[60, 61],
+        )
+        .await
+        .unwrap();
+    let p = db.find_plan_by_id(id).await.unwrap().expect("plan created");
+    assert_eq!(p.name, "combo");
+    assert_eq!(db.list_plan_device_groups(id).await.unwrap(), vec![60, 61]);
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_clear_user_plan_revokes_groups_and_pauses_rules() {
+    let Some(db) = repo("clear_user_plan").await else {
+        return;
+    };
+    let (alice, pid) = seed_buyer_and_plan(&db, "100.00", 1000, "5.00", 0, false).await;
+    seed_device_group(&db, 70, alice).await;
+    sqlx::query("UPDATE users SET plan_id = $1, all_device_groups = TRUE WHERE id = $2")
+        .bind(pid)
+        .bind(alice)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    db.set_user_device_groups(alice, &[70]).await.unwrap();
+    sqlx::query(
+        "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, \
+         target_addr, target_port, paused) VALUES (300, 'r', $1, 21000, 70, '127.0.0.1', 80, FALSE)",
+    )
+    .bind(alice)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let affected = db.clear_user_plan(alice).await.unwrap();
+    assert_eq!(affected, 1);
+
+    let (plan_id, all): (Option<i64>, bool) =
+        sqlx::query_as("SELECT plan_id, all_device_groups FROM users WHERE id = $1")
+            .bind(alice)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(plan_id, None);
+    assert!(!all, "all_device_groups must be cleared (PG)");
+    assert!(db.list_user_device_groups(alice).await.unwrap().is_empty());
+    let (paused, auto): (bool, bool) =
+        sqlx::query_as("SELECT paused, auto_paused FROM forward_rules WHERE id = 300")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert!(
+        paused && auto,
+        "rule must be system-paused after clear (PG)"
+    );
+
+    assert_eq!(db.clear_user_plan(1).await.unwrap(), 0);
+    cleanup(&db).await;
+}
+
+#[tokio::test]
 async fn pg_plan_device_groups_round_trip_and_replace() {
     let Some(db) = repo("plan_dg_rtrip").await else {
         return;
