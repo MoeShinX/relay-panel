@@ -7,6 +7,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Creating a forward rule no longer cross-writes into a different rule when
+  two inbound groups reuse the same listen port.** Previously, after the rule
+  row was inserted, the new rule's id was recovered by re-querying
+  `(owner_uid, listen_port)` — which ignored `device_group_in`. Because the
+  port-uniqueness constraint is *per inbound group*, two rules on two groups
+  can legally share a port, and the lookup returned the wrong (first) rule,
+  so its targets, load-balance strategy and rate limits were overwritten. Rule
+  creation now does the row INSERT + targets + load-balance strategy + rate
+  limits + tunnel profile in a **single transaction** and takes the new id
+  directly from the INSERT (SQLite `last_insert_rowid()` / PostgreSQL
+  `RETURNING id`), so any mid-creation failure rolls back completely (no
+  half-rule) and the side-tables always land on the right row. Existing
+  port-conflict, `max_rules` quota and ownership checks are unchanged.
+  (`create_rule_full` on the Repository trait, used by `create_rule`.)
+- **Every password input now enforces the backend's 8–72 UTF-8-byte rule.**
+  Previously MainLayout / Account change-password and the admin create-user form
+  used an antd `min: 6` *character* rule (UTF-16 code units, no upper bound),
+  while Register / ForcePasswordChange / admin-reset used a copy-pasted
+  TextEncoder byte check — so a 6-char password could be set via change-password
+  but never re-set via self-service, and a >72-byte password passed the client
+  only to be rejected by bcrypt. All six inputs now share one
+  `validatePassword` util (`frontend/src/utils/password.ts`) that counts UTF-8
+  bytes via `TextEncoder` (exactly matching `password.len()` in Rust), and the
+  zh/en hint text is unified to "8–72 bytes (UTF-8)".
+
 ### Security
 
 - **Security response headers are now set on every panel response** (API + the
@@ -21,19 +48,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   HSTS is intentionally NOT set by the panel — it belongs to the HTTPS / reverse
   proxy layer (Caddy). Each header is `if_not_present`, so a stricter header set
   by an edge proxy is preserved.
-
-### Fixed — password rules are now consistent everywhere
-
-- **Every password input now enforces the backend's 8–72 UTF-8-byte rule.**
-  Previously MainLayout / Account change-password and the admin create-user form
-  used an antd `min: 6` *character* rule (UTF-16 code units, no upper bound),
-  while Register / ForcePasswordChange / admin-reset used a copy-pasted
-  TextEncoder byte check — so a 6-char password could be set via change-password
-  but never re-set via self-service, and a >72-byte password passed the client
-  only to be rejected by bcrypt. All six inputs now share one
-  `validatePassword` util (`frontend/src/utils/password.ts`) that counts UTF-8
-  bytes via `TextEncoder` (exactly matching `password.len()` in Rust), and the
-  zh/en hint text is unified to "8–72 bytes (UTF-8)".
+- Pinned by regression test: a freshly-registered user has **no usable device
+  groups** by design (`all_device_groups = false`, `user_device_groups` empty),
+  so they cannot forward until a plan or admin grants authorization. Covered
+  on both SQLite and PostgreSQL to guard against a future auto-grant-on-register
+  change flipping this silently.
 
 ---
 
