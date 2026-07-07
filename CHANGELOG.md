@@ -5,6 +5,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+### Changed — rule export/import is now unit-tested
+
+- **The minimal share-export now has a regression test pinning its round-trip.**
+  The export format (`[{"dest":["host:port"],"listen_port":10000,"name":"…"}]`,
+  enabled targets only, IPv6 bracketed) and the import validation previously
+  lived as private functions inside `Rules.tsx`, so a future change could have
+  silently broken the "export pastes straight back into import" property. They
+  are extracted into a pure `frontend/src/utils/rulesIO.ts` module
+  (`buildExportJSON`, `validateImportEntry`, `parseDest`, `ruleTargets`) and
+  covered by `rulesIO.test.ts`, which asserts that a rule exported by
+  `buildExportJSON` always re-imports cleanly (every entry passes
+  `validateImportEntry`, and the parsed targets match the original enabled
+  targets) for single/multi target, IPv4/IPv6, disabled-target filtering, and
+  whitespace-trim cases. `Rules.tsx` now imports the shared helpers (removing
+  the duplicated dest regex).
+
+---
+
 ## [1.1.0] - 2026-07-02
 
 Minor release headlined by **one-click remote node upgrades** from the panel,
