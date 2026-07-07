@@ -31,7 +31,11 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
 rustls-pemfile = "2"
 # v1.0.4: low-level socket options for IPv6-only dual-stack binding.
-socket2 = "0.5"
+# v1.2: the "all" feature unlocks the extra keepalive tuning methods
+# (TcpKeepalive::with_retries / TCP_KEEPCNT) used by the forwarder's
+# apply_keepalive; with_time/with_interval are available without it, but
+# with_retries is gated behind `feature = "all"`.
+socket2 = { version = "0.5", features = ["all"] }
 # v1.0.8: Linux splice(2) zero-copy forwarding for unlimited (non-rate-limited)
 # TCP rules — data moves inside the kernel via a pipe, never copied to
 # userspace. Only used on Linux; other targets fall back to the userspace copy.
