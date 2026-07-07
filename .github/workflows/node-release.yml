@@ -126,11 +126,13 @@ jobs:
           name: ${{ steps.ver.outputs.tag }}
           body_path: RELEASE_BODY.md
 
-  # Build + push the node Docker image. Separate job so a binary-build failure
-  # doesn't block it (and vice versa); both must succeed for a complete node
-  # release, but the image push is independent of the asset upload.
+  # Build + push the node Docker image, VERSION TAG ONLY (:X.Y.Z). The :latest
+  # tag is moved separately by `promote-latest` AFTER `verify` passes, so a
+  # release that fails verification never repoints :latest at a broken image.
+  # Separate job from build-and-upload so a binary-build failure doesn't block
+  # the image (and vice versa).
   docker-node:
-    name: Build + push node image
+    name: Build + push node image (:X.Y.Z)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -144,7 +146,7 @@ jobs:
             VERSION="${GITHUB_REF_NAME#node-v}"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Publishing NODE image version $VERSION"
+          echo "Publishing NODE image version $VERSION (version tag only; :latest promoted after verify)"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -158,15 +160,16 @@ jobs:
 
       # v1.2: NODE-ONLY. target: node selects the node stage of the Dockerfile
       # (which now compiles only relay-node). The panel image is NOT built here.
-      - name: Build and push node image
+      # NOTE: only the explicit version tag is pushed here. :latest is moved by
+      # the `promote-latest` job after `verify` passes — a failed release must
+      # never repoint :latest at a broken image.
+      - name: Build and push node image (version tag only)
         uses: docker/build-push-action@v6
         with:
           context: .
           target: node
           push: true
-          tags: |
-            ghcr.io/moeshinx/relay-panel-node:${{ steps.ver.outputs.version }}
-            ghcr.io/moeshinx/relay-panel-node:latest
+          tags: ghcr.io/moeshinx/relay-panel-node:${{ steps.ver.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -224,3 +227,44 @@ jobs:
           # The version constant is baked at compile time, so this catches a
           # release built from a branch where Cargo.toml wasn't bumped.
           echo "$OUT" | grep -q "$VERSION" || { echo "::error::image version does not match tag $VERSION"; exit 1; }
+
+  # v1.2 (release gate): promote :latest ONLY after verify passes. The previous
+  # shape pushed :X.Y.Z and :latest in one build-push step, so a release whose
+  # image reported the wrong version (or whose binary failed sha256) had ALREADY
+  # moved :latest at a broken image. Now :latest is re-tagged from the verified
+  # :X.Y.Z image, so a failed release can never repoint :latest.
+  promote-latest:
+    name: Promote :latest (after verify)
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: ver
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#node-v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Re-tag the already-pushed, already-verified :X.Y.Z image as :latest via
+      # the registry API (CRAB /container/blobs — pull the manifest of :X.Y.Z
+      # and PUT it under :latest). Using `docker buildx imagetools` avoids a
+      # full re-pull/re-push and preserves the exact verified digest.
+      - name: Re-tag :X.Y.Z as :latest
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          IMAGE="ghcr.io/moeshinx/relay-panel-node"
+          echo "Promoting $IMAGE:$VERSION -> $IMAGE:latest (verified image)"
+          docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE:$VERSION"
+          echo "::notice::Promoted $IMAGE:$VERSION to :latest after verify passed"

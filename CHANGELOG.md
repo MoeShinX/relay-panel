@@ -57,6 +57,25 @@ independent `v*` / `node-v*` tracks since this release).
   skips re-download/restart when the installed binary already reports that
   version.
 
+### Fixed — node release gating & installer re-bind
+
+- **`:latest` is now promoted only AFTER verification passes.** The node
+  release workflow previously pushed `:X.Y.Z` and `:latest` in one build step,
+  so a release whose image reported the wrong version (or whose binary failed
+  sha256) had already repointed `:latest` at a broken image. Now `docker-node`
+  pushes the version tag only; `verify` runs (sha256 + binary `--version` +
+  image `--version`); only then does a separate `promote-latest` job re-tag the
+  verified `:X.Y.Z` image as `:latest` (`docker buildx imagetools create`). A
+  failed release can never move `:latest`.
+- **Re-running the installer at the same version now refreshes the panel binding
+  and systemd unit instead of exiting.** Previously an "already at version X"
+  detection exited immediately, so re-running with a new `-t`/`-u` (to repoint
+  the node at a different panel or rotate its token) silently did nothing. Now
+  only the binary download/swap is skipped; the start script (PANEL_URL /
+  NODE_TOKEN), the env file, and the systemd unit are rewritten and the service
+  is restarted, so the new panel address/token take effect without touching the
+  binary.
+
 ---
 
 ## [1.1.0] - 2026-07-02

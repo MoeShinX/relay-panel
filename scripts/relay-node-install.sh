@@ -162,18 +162,27 @@ else
 fi
 
 # ---------- Already-latest check ----------
-# v1.2: if the installed binary already reports this version, don't re-download,
-# re-swap, or restart the service — just report "already up to date".
+# v1.2: if the installed binary already reports this version, do NOT re-download
+# or replace the binary (avoids a needless stop/swap/restart of a working node).
+# BUT the operator may be re-running the installer to point the node at a NEW
+# panel URL / token or to refresh the systemd unit — so we still rewrite
+# start.sh, the env file, and the service file, then restart, below. The binary
+# download/swap is the only step skipped (gated by ALREADY_AT_VERSION).
+ALREADY_AT_VERSION=0
 if [ -x "$BINARY" ]; then
     INSTALLED_VERSION="$("$BINARY" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
     if [ -n "$INSTALLED_VERSION" ] && [ "$INSTALLED_VERSION" = "$TARGET_VERSION" ]; then
-        info "Already at node version $TARGET_VERSION — nothing to do."
-        # Re-apply/ensure the service file + token still point at the panel, but
-        # do NOT replace the binary or restart for an unchanged version. Exit 0.
-        exit 0
+        info "Already at node version $TARGET_VERSION — skipping binary download; refreshing panel/token/service config."
+        ALREADY_AT_VERSION=1
+    else
+        [ -n "$INSTALLED_VERSION" ] && info "Installed version: $INSTALLED_VERSION → upgrading to $TARGET_VERSION"
     fi
-    [ -n "$INSTALLED_VERSION" ] && info "Installed version: $INSTALLED_VERSION → upgrading to $TARGET_VERSION"
 fi
+
+# v1.2: skip the binary download/verify/swap entirely when already at the
+# target version (ALREADY_AT_VERSION=1). The config/service rewrite below still
+# runs so a re-invocation with a new -t/-u refreshes the node's panel binding.
+if [ "$ALREADY_AT_VERSION" != "1" ]; then
 
 # ---------- Build download URL ----------
 # v1.2: node binaries live under node-v{version} from 1.1.1 onward. Versions
@@ -373,6 +382,8 @@ fi
 mv -f "$TMP_BINARY" "$BINARY"
 chmod +x "$BINARY"
 info "Binary installed: ${BINARY} ($(( FILE_SIZE / 1024 / 1024 )) MB, ELF ${ARCH})"
+
+fi  # end ALREADY_AT_VERSION skip (binary download/swap)
 
 # ---------- Write start.sh ----------
 # IMPORTANT: the here-doc uses quoted 'EOF' delimiter so NOTHING is expanded
