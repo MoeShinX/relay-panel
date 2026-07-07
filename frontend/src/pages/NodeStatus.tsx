@@ -14,6 +14,14 @@ type AnyNodeRow = NodeDisplayRow;
 interface VersionInfo {
   current_version: string;
   config_protocol_version?: number;
+  /** v1.2: the latest NODE release (bare, e.g. "1.1.0"), resolved from the
+   *  highest node-v* GitHub release. Nodes compare their version against THIS,
+   *  not the panel version. Empty when no node release exists. */
+  latest_node_version?: string;
+  /** v1.2: true when the node-version lookup failed. The UI must show an
+   *  "unknown / check failed" state instead of a green "up to date" or an
+   *  upgrade button. */
+  node_version_check_failed?: boolean;
 }
 
 /** Hook: is the viewport mobile-width? Re-evaluates on resize. */
@@ -41,7 +49,11 @@ export default function NodeStatus() {
   const [adminRows, setAdminRows] = useState<NodeStatus[] | null>(null);
   const [userRows, setUserRows] = useState<SharedNodeSummary[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
-  const [currentVersion, setCurrentVersion] = useState('');
+  // v1.2: nodes compare against the latest NODE release (latest_node_version),
+  // NOT the panel's current_version. Renamed from currentVersion to make the
+  // semantics obvious at every call site.
+  const [latestNodeVersion, setLatestNodeVersion] = useState('');
+  const [nodeVersionCheckFailed, setNodeVersionCheckFailed] = useState(false);
   const [panelProtocol, setPanelProtocol] = useState(0);
   const [detailRow, setDetailRow] = useState<AnyNodeRow | null>(null);
   // Guards against overlapping polls: on a slow network (axios 10s timeout vs
@@ -80,8 +92,12 @@ export default function NodeStatus() {
   const loadVersion = async () => {
     try {
       const res = await api.get<unknown, VersionInfo>('/system/version');
-      setCurrentVersion(res.current_version || '');
       setPanelProtocol(res.config_protocol_version || 0);
+      // v1.2: the node upgrade target is the latest node release, not the
+      // panel version. A failed lookup sets the "check failed" flag so the UI
+      // shows an unknown state instead of a wrong upgrade button.
+      setLatestNodeVersion(res.latest_node_version || '');
+      setNodeVersionCheckFailed(!!res.node_version_check_failed);
     } catch { /* ignore */ }
   };
 
@@ -115,7 +131,7 @@ export default function NodeStatus() {
     if (!row.node_id) return;
     Modal.confirm({
       title: t('nodeUpgradeConfirmTitle'),
-      content: t('nodeUpgradeConfirm').replace('{v}', currentVersion || 'latest'),
+      content: t('nodeUpgradeConfirm').replace('{v}', latestNodeVersion || 'latest'),
       okText: t('nodeUpgradeOk'),
       cancelText: t('cancel'),
       onOk: async () => {
@@ -173,7 +189,8 @@ export default function NodeStatus() {
           key={gid}
           rows={groupRows}
           panelProtocol={panelProtocol}
-          currentVersion={currentVersion}
+          latestNodeVersion={latestNodeVersion}
+          nodeVersionCheckFailed={nodeVersionCheckFailed}
           isMobile={isMobile}
           t={t}
           openDetail={setDetailRow}

@@ -2,10 +2,16 @@
 //!
 //! Triggered by a directed `UpgradeNodeMessage` on the WS control channel. The
 //! node downloads the official `relay-node` release binary for the REQUESTED
-//! version (pinned by the panel to its own version, so the node never jumps
-//! ahead of the panel) and this node's architecture, verifies its published
-//! sha256, backs up + atomically swaps its own binary, and returns Ok — the
-//! caller then exits so systemd (Restart=always) re-execs into the new binary.
+//! version (resolved by the panel from the latest `node-v*` GitHub release) and
+//! this node's architecture, verifies its published sha256, backs up + atomically
+//! swaps its own binary, and returns Ok — the caller then exits so systemd
+//! (Restart=always) re-execs into the new binary.
+//!
+//! v1.2: panel and node release on independent tracks. Node binaries live under
+//! `node-v{version}` tags from 1.1.1 onward; releases 1.1.0 and earlier were
+//! published under the joint `v{version}` tag. `build_download_urls` picks the
+//! right prefix per version (and never blindly falls back — only the known
+//! legacy range uses `v{version}`).
 //!
 //! Guarantees:
 //! - **systemd only.** docker / manual installs are refused: only systemd has a
@@ -108,13 +114,43 @@ pub async fn self_upgrade(version: &str) -> Result<(), String> {
     result
 }
 
+/// v1.2: the first node release published under its own `node-v*` tag. Versions
+/// strictly older than this were published under the joint `v{version}` tag, so
+/// the download URL for them uses `v{version}` (legacy fallback). This is a
+/// bounded, explicit boundary — NOT an arbitrary fallback — so a future unknown
+/// version can never silently pick up a wrong-tag URL.
+const FIRST_NODE_V_TAG: semver::Version = semver::Version::new(1, 1, 1);
+
+/// v1.2: build the (binary, sha256) download URLs for a node self-upgrade to
+/// `version` on architecture `arch` ("amd64" | "arm64"). New versions (>=
+/// FIRST_NODE_V_TAG) use the `node-v{version}` tag; the known legacy range
+/// (< FIRST_NODE_V_TAG, i.e. 1.0.x and 1.1.0) falls back to the joint
+/// `v{version}` tag where those binaries were originally published.
+///
+/// `version` must already be a validated semver WITHOUT a leading "v" (the
+/// caller's `check_upgrade_target` guarantees this). Returns `(bin_url, sha_url)`
+/// — the sha256 URL is always the binary URL + ".sha256".
+fn build_download_urls(version: &str, arch: &str) -> Result<(String, String), String> {
+    let asset = format!("relay-node-linux-{arch}");
+    let parsed = semver::Version::parse(version)
+        .map_err(|_| format!("unparseable version {version:?} in build_download_urls"))?;
+    let tag_prefix = if parsed < FIRST_NODE_V_TAG {
+        // Legacy: 1.0.x / 1.1.0 shipped under the joint v* tag.
+        "v"
+    } else {
+        // New: 1.1.1+ ship under the node-only node-v* tag.
+        "node-v"
+    };
+    let bin_url =
+        format!("https://github.com/{REPO}/releases/download/{tag_prefix}{version}/{asset}");
+    let sha_url = format!("{bin_url}.sha256");
+    Ok((bin_url, sha_url))
+}
+
 async fn do_upgrade(version: &str) -> Result<(), String> {
     let arch =
         asset_arch().ok_or_else(|| format!("unsupported arch: {}", std::env::consts::ARCH))?;
-    let asset = format!("relay-node-linux-{arch}");
-    // Pinned to the exact requested release tag (v{version}) — NOT "latest".
-    let bin_url = format!("https://github.com/{REPO}/releases/download/v{version}/{asset}");
-    let sha_url = format!("{bin_url}.sha256");
+    let (bin_url, sha_url) = build_download_urls(version, arch)?;
 
     let bin_path = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
 
@@ -171,9 +207,8 @@ async fn do_upgrade(version: &str) -> Result<(), String> {
         ));
     }
     tracing::warn!(
-        "self-upgrade: sha256 verified ({} bytes) for {} v{version}",
+        "self-upgrade: sha256 verified ({} bytes) for relay-node-linux-{arch} v{version}",
         bin_bytes.len(),
-        asset
     );
 
     // 4. Write a UNIQUE temp file (pid + nanos, so a stray concurrent run can't
@@ -246,5 +281,53 @@ mod tests {
         assert!(check_upgrade_target("1.0.11/../../etc", "1.0.10").is_err());
         assert!(check_upgrade_target("1.0", "1.0.10").is_err());
         assert!(check_upgrade_target("", "1.0.10").is_err());
+    }
+
+    // ---- v1.2: download URL prefix (node-v* for new, v* legacy fallback) ----
+
+    #[test]
+    fn build_download_urls_uses_node_v_for_new_versions() {
+        // 1.1.1 and above ship under the node-only node-v* tag.
+        let (bin, sha) = build_download_urls("1.1.1", "amd64").unwrap();
+        assert_eq!(
+            bin,
+            "https://github.com/MoeShinX/relay-panel/releases/download/node-v1.1.1/relay-node-linux-amd64"
+        );
+        // sha256 URL always tracks the binary URL + ".sha256".
+        assert_eq!(sha, format!("{bin}.sha256"));
+
+        // arm64 + a higher version.
+        let (bin2, sha2) = build_download_urls("2.0.0", "arm64").unwrap();
+        assert_eq!(
+            bin2,
+            "https://github.com/MoeShinX/relay-panel/releases/download/node-v2.0.0/relay-node-linux-arm64"
+        );
+        assert_eq!(sha2, format!("{bin2}.sha256"));
+    }
+
+    #[test]
+    fn build_download_urls_falls_back_to_v_for_legacy_1_1_0() {
+        // 1.1.0 and the 1.0.x line were published under the joint v* tag.
+        let (bin, sha) = build_download_urls("1.1.0", "amd64").unwrap();
+        assert_eq!(
+            bin,
+            "https://github.com/MoeShinX/relay-panel/releases/download/v1.1.0/relay-node-linux-amd64"
+        );
+        assert_eq!(sha, format!("{bin}.sha256"));
+
+        // A 1.0.x patch version also falls back.
+        let (bin2, _) = build_download_urls("1.0.10", "arm64").unwrap();
+        assert!(bin2.contains("/download/v1.0.10/"));
+        assert!(!bin2.contains("/node-v1.0.10/"));
+    }
+
+    #[test]
+    fn build_download_urls_rejects_unparseable_version() {
+        // A non-semver version must error rather than build a bogus URL.
+        assert!(build_download_urls("latest", "amd64").is_err());
+        assert!(build_download_urls("1.0", "amd64").is_err());
+        assert!(build_download_urls("", "amd64").is_err());
+        // Path-injection attempts are rejected (no '/' can sneak through).
+        assert!(build_download_urls("1.1.1/../../etc", "amd64").is_err());
     }
 }

@@ -17,7 +17,11 @@
 
 services:
   panel:
-    image: ghcr.io/moeshinx/relay-panel-panel:1.1.0
+    # v1.2: panel and node release on INDEPENDENT version tracks. The panel tag
+    # (RELAYPANEL_PANEL_TAG) and node tag (RELAYPANEL_NODE_TAG) may differ — a
+    # panel upgrade does NOT require pulling a new node image. Override either
+    # in .env to pin a specific version.
+    image: ghcr.io/moeshinx/relay-panel-panel:${RELAYPANEL_PANEL_TAG:-1.1.0}
     ports:
       # RELAYPANEL_WEB_MODE controls how the panel port is published:
       #   direct         → 0.0.0.0:18888:18888  (public, default)
@@ -50,7 +54,10 @@ services:
   # separate forwarding server. To enable it on this host, use --profile node
   # and set NODE_TOKEN to a real inbound-group token from the panel UI.
   node:
-    image: ghcr.io/moeshinx/relay-panel-node:1.1.0
+    # v1.2: the node image tag is INDEPENDENT of the panel tag. Override
+    # RELAYPANEL_NODE_TAG in .env to pin a node version that differs from the
+    # panel version.
+    image: ghcr.io/moeshinx/relay-panel-node:${RELAYPANEL_NODE_TAG:-1.1.0}
     profiles:
       - node
     network_mode: host

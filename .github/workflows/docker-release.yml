@@ -1,7 +1,11 @@
 name: Docker Release
 
-# Builds panel + node Docker images and pushes them to GitHub Container
-# Registry (GHCR). Triggered by version tags (v*) or manual dispatch.
+# v1.2: panel and node release on INDEPENDENT tracks. This workflow is PANEL-
+# ONLY and fires on `v*` tags. It builds + pushes the panel image and creates
+# the panel GitHub Release (body from CHANGELOG.md). The node image, node
+# binaries, and node Release are published by node-release.yml on `node-v*` tags
+# — a panel-only update no longer rebuilds or republishes any node artifact, and
+# relay-panel-node:latest is untouched by a panel release.
 
 on:
   push:
@@ -10,12 +14,12 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g. 0.1.0), without v prefix'
+        description: 'Panel version (e.g. 1.1.1), without v prefix'
         required: true
-        default: '0.1.0'
+        default: '1.1.1'
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 concurrency:
@@ -28,14 +32,6 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: panel
-            image: ghcr.io/moeshinx/relay-panel-panel
-          - target: node
-            image: ghcr.io/moeshinx/relay-panel-node
 
     steps:
       - uses: actions/checkout@v4
@@ -46,11 +42,12 @@ jobs:
           if [ -n "${{ inputs.version }}" ]; then
             VERSION="${{ inputs.version }}"
           else
-            # Strip leading 'v' from tag name (v0.1.0 -> 0.1.0)
+            # Strip leading 'v' from tag name (v1.1.1 -> 1.1.1)
             VERSION="${GITHUB_REF_NAME#v}"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Publishing version $VERSION"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Publishing PANEL version $VERSION"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -62,14 +59,42 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push ${{ matrix.target }}
+      # v1.2: PANEL-ONLY. target: panel selects the panel stage of the
+      # Dockerfile (which now compiles only relay-panel). The node image is NOT
+      # built here — see node-release.yml.
+      - name: Build and push panel image
         uses: docker/build-push-action@v6
         with:
           context: .
-          target: ${{ matrix.target }}
+          target: panel
           push: true
           tags: |
-            ${{ matrix.image }}:${{ steps.ver.outputs.version }}
-            ${{ matrix.image }}:latest
+            ghcr.io/moeshinx/relay-panel-panel:${{ steps.ver.outputs.version }}
+            ghcr.io/moeshinx/relay-panel-panel:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Generate release body from CHANGELOG.md
+        id: body
+        run: |
+          # Extract ONLY this version's section from the PANEL changelog. The
+          # script exits non-zero if the section is missing or empty, which
+          # fails the job — we never publish a release with body=null.
+          if ! bash scripts/extract-changelog.sh "${{ steps.ver.outputs.version }}" > RELEASE_BODY.md; then
+            echo "::error::No non-empty CHANGELOG.md section for ${{ steps.ver.outputs.version }} — refusing to publish an empty release body."
+            exit 1
+          fi
+          echo "----- release body preview -----"
+          cat RELEASE_BODY.md
+
+      # v1.2: the panel track now owns the panel GitHub Release (previously the
+      # node/binary track created a single joint Release). The node Release is
+      # created separately by node-release.yml under the node-v* tag.
+      - name: Create panel GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
+          body_path: RELEASE_BODY.md
+          prerelease: false
+          make_latest: true

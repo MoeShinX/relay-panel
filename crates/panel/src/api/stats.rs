@@ -354,6 +354,13 @@ pub struct DeleteStatusQuery {
 /// (`send_node` reaches only that node's live connection); the node then pulls
 /// the latest official release for its arch, verifies its sha256, swaps its
 /// binary, and restarts. Returns 409 when the node has no live WS connection.
+///
+/// v1.2: the upgrade target is the latest NODE release (`node-v*`), resolved
+/// from GitHub — NOT the panel's own version. A panel-only release (e.g. v1.2.0
+/// with no node binary) must NEVER be sent as an upgrade target, or nodes would
+/// try to download a non-existent asset. If the node-version check fails or
+/// there is no node release, we refuse with 503 instead of falling back to the
+/// panel version.
 pub async fn upgrade_node(
     _admin: AdminOnly,
     State(state): State<AppState>,
@@ -367,12 +374,30 @@ pub async fn upgrade_node(
             data: None,
         });
     }
-    // Pin the target to the PANEL's own version so a node never jumps ahead of
-    // the panel (e.g. to a newer GitHub release with an incompatible protocol).
+    // v1.2: resolve the upgrade target from the latest node release. This MUST
+    // NOT fall back to the panel version under any circumstance.
+    let target_version = match state.release_cache.resolve_latest_node_version().await {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            return Json(ApiResponse {
+                code: 503,
+                message: "暂无可用的节点版本（尚未发布 node-v* 版本），无法下发升级".into(),
+                data: None,
+            });
+        }
+        Err(e) => {
+            tracing::warn!("upgrade_node: node version check failed: {}", e);
+            return Json(ApiResponse {
+                code: 503,
+                message: "节点版本检查失败，无法确定升级目标，请稍后重试".into(),
+                data: None,
+            });
+        }
+    };
     let msg = match serde_json::to_string(&relay_shared::protocol::UpgradeNodeMessage {
         msg_type: "upgrade_node".into(),
         node_id: node_id.clone(),
-        version: crate::config::app_version().to_string(),
+        version: target_version.clone(),
     }) {
         Ok(s) => s,
         Err(e) => {
@@ -399,6 +424,7 @@ pub async fn upgrade_node(
         action = "upgrade_node",
         group_id,
         node_id = %node_id,
+        target = %target_version,
         "sent self-upgrade command to node"
     );
     Json(ApiResponse::success(()))

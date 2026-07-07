@@ -6,24 +6,34 @@ RUN npm install --no-audit --no-fund || npm install --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
 
-# ---- Build stage for the Rust workspace ----
-# Single-step build: copy everything, build once. Simpler and correct — no
-# stub binaries, no cache ambiguity. The dependency compile takes ~3min in CI
-# but is cached by Docker layer hashing on Cargo.lock.
-FROM rust:1-bookworm AS rust-build
+# ---- Build stage for the Rust workspace (panel only) ----
+# v1.2: panel and node release on independent tracks. Each image compiles ONLY
+# its own crate (panel-build / node-build), so a panel-only release does not
+# compile relay-node and a node-only release does not compile relay-panel. The
+# runtime stages copy only their own binary.
+FROM rust:1-bookworm AS panel-build
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY Cargo.toml Cargo.lock* ./
 COPY crates/ ./crates/
-RUN cargo build --release -p relay-panel -p relay-node
+RUN cargo build --release -p relay-panel
+
+# ---- Build stage for the Rust workspace (node only) ----
+FROM rust:1-bookworm AS node-build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY Cargo.toml Cargo.lock* ./
+COPY crates/ ./crates/
+RUN cargo build --release -p relay-node
 
 # ---- Panel runtime ----
 FROM debian:bookworm-slim AS panel
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=rust-build /app/target/release/relay-panel /app/relay-panel
+COPY --from=panel-build /app/target/release/relay-panel /app/relay-panel
 COPY --from=frontend-build /frontend/dist /app/public
 VOLUME ["/app/data"]
 EXPOSE 18888
@@ -41,7 +51,7 @@ FROM debian:bookworm-slim AS node
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates iproute2 && \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=rust-build /app/target/release/relay-node /app/relay-node
+COPY --from=node-build /app/target/release/relay-node /app/relay-node
 # ENTRYPOINT (not CMD) so `docker run image --version` appends the flag to the
 # binary instead of replacing it. With CMD, `docker run image --version` tries
 # to execute "--version" as a program (the release verify job hit this).

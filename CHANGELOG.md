@@ -3,6 +3,60 @@
 All notable changes to RelayPanel are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+Node-only changes are in **CHANGELOG-NODE.md** (panel and node release on
+independent `v*` / `node-v*` tracks since this release).
+
+---
+
+## [Unreleased]
+
+### Changed — panel & node now release on independent tracks
+
+- **A panel update no longer rebuilds or republishes the node.** Panel releases
+  are tagged `vX.Y.Z` and node releases `node-vX.Y.Z`; the two version numbers
+  no longer have to match. The `v*` tag builds ONLY the panel image + panel
+  GitHub Release; the `node-v*` tag builds ONLY the node binaries + node image
+  + node GitHub Release. `relay-panel-node:latest` is untouched by a panel
+  release, and vice versa. (`docker-release.yml` is now panel-only; a new
+  `node-release.yml` handles the node track; `binary-release.yml` was removed.)
+- **The Dockerfile compiles only what each image needs** (`panel-build` /
+  `node-build` stages with per-crate `cargo build -p …`), so a panel image
+  build no longer compiles `relay-node`.
+- **`release-check.sh` takes a `panel` / `node` subcommand:**
+  `bash scripts/release-check.sh panel 1.1.1` checks only the panel version
+  locations; `… node 1.1.0` checks only the node locations. A panel release no
+  longer requires `crates/node` to match, and a node release no longer requires
+  the panel to match. A bare version still defaults to panel (backwards
+  compatible). `docs/VERSIONS.md` documents the two independent version sets.
+- **`docker-compose.release.yaml`** uses independent `RELAYPANEL_PANEL_TAG` /
+  `RELAYPANEL_NODE_TAG` overrides so a panel upgrade leaves the node image pin
+  unchanged.
+
+### Fixed — node version is no longer measured against the panel version
+
+- **`/system/version`** now returns `latest_node_version` (highest `node-v*`
+  tag) and `node_version_check_failed` alongside the panel `latest_version`.
+  The node-status UI compares each node's `node_version` against
+  `latest_node_version` — NOT the panel version — so a panel-only upgrade (e.g.
+  panel 1.2.0 with node still on 1.1.0) no longer makes a current node look
+  outdated or offers a non-existent 1.2.0 node upgrade.
+- **The directed node-upgrade command** targets `latest_node_version`, not the
+  panel's own version. If the node-version lookup fails, the upgrade endpoint
+  returns 503 instead of falling back to the panel version (a panel-only
+  release can never command a node to download a non-existent asset).
+- **Protocol-incompatible nodes** now show "protocol incompatible" in the
+  upgrade column too (previously only the status column did), taking priority
+  over the version status. **A failed node-version check** shows a neutral
+  state instead of a wrong green check or upgrade button. **A node newer than
+  the latest node release** is shown as a "leading build" and never downgraded.
+- **Node self-upgrade download URLs** use the `node-v{version}` path from 1.1.1
+  onward, with a bounded fallback to the legacy `v{version}` path for 1.1.0 and
+  earlier (where those binaries were originally published). The
+  `relay-node-install.sh` installer queries the latest `node-v*` tag from
+  GitHub (never guessing the panel version), supports `--version X.Y.Z`, and
+  skips re-download/restart when the installed binary already reports that
+  version.
+
 ---
 
 ## [1.1.0] - 2026-07-02

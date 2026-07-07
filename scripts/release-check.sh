@@ -6,9 +6,12 @@
 # lives in the repo agrees with the version you pass on the command line.
 # Does NOT modify any file. Exits 1 on FAIL (so it can plug into CI later).
 #
-# Usage:
-#   bash scripts/release-check.sh 0.2.1
-#   bash scripts/release-check.sh v0.2.1
+# v1.2: panel and node release on INDEPENDENT tracks. Pass a `panel` or `node`
+# subcommand to check ONLY that track's version locations:
+#   bash scripts/release-check.sh panel 1.1.1   # panel release (tag v1.1.1)
+#   bash scripts/release-check.sh node 1.1.0    # node release (tag node-v1.1.0)
+# For backwards compatibility, a bare version (no subcommand) defaults to panel:
+#   bash scripts/release-check.sh 1.1.1         # == panel 1.1.1
 #
 # Exit codes:
 #   0  - all checks pass (warnings allowed)
@@ -45,15 +48,26 @@ fail() { echo "  ${C_FAIL}[FAIL]${C_RESET} $1"; FAIL=$((FAIL+1)); }
 section() { echo ""; echo "== $1 =="; }
 
 # ---------- Argument parsing ----------
+# v1.2: optional first arg is the track: `panel` or `node`. A bare version (no
+# recognized track keyword) defaults to panel for backwards compatibility.
+TRACK="panel"
+if [ $# -ge 2 ]; then
+    case "$1" in
+        panel|node) TRACK="$1"; shift ;;
+        *) ;;  # fall through: $1 is a version, not a track keyword
+    esac
+fi
 if [ $# -lt 1 ]; then
-    echo "Usage: bash scripts/release-check.sh <version>"
-    echo "  e.g. bash scripts/release-check.sh 0.2.1"
-    echo "       bash scripts/release-check.sh v0.2.1"
+    echo "Usage: bash scripts/release-check.sh [panel|node] <version>"
+    echo "  e.g. bash scripts/release-check.sh panel 1.1.1   # panel release (tag v1.1.1)"
+    echo "       bash scripts/release-check.sh node 1.1.0    # node release (tag node-v1.1.0)"
+    echo "       bash scripts/release-check.sh 1.1.1         # defaults to panel"
     exit 1
 fi
 
 RAW="$1"
-# Normalize: strip leading 'v' or 'V' if present.
+# Normalize: strip leading 'v' or 'V' if present. (A node tag prefix 'node-v'
+# is NOT passed here — the caller passes the bare version.)
 VERSION="${RAW#[vV]}"
 # A version must be 3 dot-separated numbers, optionally followed by a SemVer
 # pre-release suffix (-alpha, -beta.1, -rc.2, …). We accept both stable
@@ -63,14 +77,19 @@ if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?
     echo "ERROR: '$RAW' is not a valid semver-like version (expected x.y.z, vx.y.z, x.y.z-suffix, or vx.y.z-suffix)"
     exit 1
 fi
-TAG="v${VERSION}"
+# v1.2: the tag prefix is track-specific. panel -> vX.Y.Z, node -> node-vX.Y.Z.
+if [ "$TRACK" = "node" ]; then
+    TAG="node-v${VERSION}"
+else
+    TAG="v${VERSION}"
+fi
 
 # Find the repo root (this script lives in <root>/scripts/).
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
 
-echo "Release pre-flight check for version: $VERSION (tag: $TAG)"
+echo "Release pre-flight check for ${TRACK} version: $VERSION (tag: $TAG)"
 echo "Repo root: $ROOT"
 
 # ---------- Helper: read a single value from a TOML file ----------
@@ -116,6 +135,7 @@ REQUIRED_FILES=(
     "README.md"
     "README.en.md"
     "CHANGELOG.md"
+    "CHANGELOG-NODE.md"
     "docs/DEPLOYMENT.md"
     "docs/REVERSE-PROXY.md"
     "docs/NODE.md"
@@ -141,105 +161,131 @@ for f in "${REQUIRED_FILES[@]}"; do
 done
 
 # ============================================================================
-# 2. Version string consistency (the 6 places from docs/VERSIONS.md)
+# 2. Version string consistency
+# v1.2: split by track. PANEL checks the panel-version locations; NODE checks
+# the node-version locations. The two version sets are INDEPENDENT — a panel
+# release must NOT require the node crate to match, and vice versa.
 # ============================================================================
-section "Version consistency"
+section "Version consistency (${TRACK})"
 
-# 2.1 relay-node: crates/node/Cargo.toml
-NODE_VER=$(toml_value "crates/node/Cargo.toml" "version")
-if [ -z "$NODE_VER" ]; then
-    fail "crates/node/Cargo.toml: no version found"
-elif [ "$NODE_VER" = "$VERSION" ]; then
-    ok "crates/node/Cargo.toml version = $NODE_VER"
-else
-    fail "crates/node/Cargo.toml version = $NODE_VER (expected $VERSION)"
-fi
-
-# 2.2 panel: crates/panel/src/config.rs (COMPILED_APP_VERSION)
-PANEL_VER=$(rust_const_value "crates/panel/src/config.rs" "COMPILED_APP_VERSION")
-if [ -z "$PANEL_VER" ]; then
-    fail "crates/panel/src/config.rs: COMPILED_APP_VERSION not found"
-elif [ "$PANEL_VER" = "$VERSION" ]; then
-    ok "crates/panel/src/config.rs COMPILED_APP_VERSION = $PANEL_VER"
-else
-    fail "crates/panel/src/config.rs COMPILED_APP_VERSION = $PANEL_VER (expected $VERSION)"
-fi
-
-# 2.3 relay-node install script: scripts/relay-node-install.sh (SCRIPT_VERSION="X")
-SCRIPT_VER=$(grep -E '^SCRIPT_VERSION=' scripts/relay-node-install.sh 2>/dev/null \
-    | head -n1 \
-    | sed -E 's/^SCRIPT_VERSION="([^"]+)"$/\1/' || true)
-if [ -z "$SCRIPT_VER" ]; then
-    fail "scripts/relay-node-install.sh: SCRIPT_VERSION not found"
-elif [ "$SCRIPT_VER" = "$VERSION" ]; then
-    ok "scripts/relay-node-install.sh SCRIPT_VERSION = $SCRIPT_VER"
-else
-    fail "scripts/relay-node-install.sh SCRIPT_VERSION = $SCRIPT_VER (expected $VERSION)"
-fi
-
-# 2.4 docker-compose.release.yaml: both image tags
-if grep -q "ghcr.io/moeshinx/relay-panel-panel:${VERSION}\b" docker-compose.release.yaml 2>/dev/null; then
-    ok "docker-compose.release.yaml panel image tag = ${VERSION}"
-else
-    fail "docker-compose.release.yaml: panel image tag ${VERSION} not found"
-fi
-if grep -q "ghcr.io/moeshinx/relay-panel-node:${VERSION}\b" docker-compose.release.yaml 2>/dev/null; then
-    ok "docker-compose.release.yaml node image tag = ${VERSION}"
-else
-    fail "docker-compose.release.yaml: node image tag ${VERSION} not found"
-fi
-
-# 2.5 README release badge. Both READMEs use a dynamic shields.io
-# `github/v/release` badge that always reflects the latest GitHub release,
-# so there is no static version string to bump. Just confirm the badge is present.
-for rf in README.md README.en.md; do
-    if grep -q "github/v/release" "$rf" 2>/dev/null; then
-        ok "$rf has dynamic release badge"
+if [ "$TRACK" = "panel" ]; then
+    # ── Panel track ──
+    # crates/panel/src/config.rs COMPILED_APP_VERSION
+    PANEL_VER=$(rust_const_value "crates/panel/src/config.rs" "COMPILED_APP_VERSION")
+    if [ -z "$PANEL_VER" ]; then
+        fail "crates/panel/src/config.rs: COMPILED_APP_VERSION not found"
+    elif [ "$PANEL_VER" = "$VERSION" ]; then
+        ok "crates/panel/src/config.rs COMPILED_APP_VERSION = $PANEL_VER"
     else
-        fail "$rf: dynamic release badge (github/v/release) not found"
+        fail "crates/panel/src/config.rs COMPILED_APP_VERSION = $PANEL_VER (expected $VERSION)"
     fi
-done
 
-# 2.6 CHANGELOG
-if grep -qE "^\#\#\s*\[${VERSION}\](\s*-|$)" CHANGELOG.md 2>/dev/null; then
-    ok "CHANGELOG.md has section [${VERSION}]"
+    # docker-compose.release.yaml: PANEL image tag (node tag is independent).
+    # v1.2: the tag may be a literal (:1.1.0) OR an env-var override with a
+    # default (${RELAYPANEL_PANEL_TAG:-1.1.0}); match the version anywhere on
+    # the panel image line.
+    if grep -E "image:.*ghcr\.io/moeshinx/relay-panel-panel.*${VERSION}([^0-9.]|$)" docker-compose.release.yaml >/dev/null 2>&1; then
+        ok "docker-compose.release.yaml panel image tag includes ${VERSION}"
+    else
+        fail "docker-compose.release.yaml: panel image tag ${VERSION} not found"
+    fi
+
+    # README dynamic release badge (reflects the latest GitHub panel release)
+    for rf in README.md README.en.md; do
+        if grep -q "github/v/release" "$rf" 2>/dev/null; then
+            ok "$rf has dynamic release badge"
+        else
+            fail "$rf: dynamic release badge (github/v/release) not found"
+        fi
+    done
+
+    # CHANGELOG.md panel section
+    if grep -qE "^\#\#\s*\[${VERSION}\](\s*-|$)" CHANGELOG.md 2>/dev/null; then
+        ok "CHANGELOG.md has section [${VERSION}]"
+    else
+        fail "CHANGELOG.md: no '## [${VERSION}]' section"
+    fi
 else
-    fail "CHANGELOG.md: no '## [${VERSION}]' section"
+    # ── Node track ──
+    # crates/node/Cargo.toml version (drives relay-node --version)
+    NODE_VER=$(toml_value "crates/node/Cargo.toml" "version")
+    if [ -z "$NODE_VER" ]; then
+        fail "crates/node/Cargo.toml: no version found"
+    elif [ "$NODE_VER" = "$VERSION" ]; then
+        ok "crates/node/Cargo.toml version = $NODE_VER"
+    else
+        fail "crates/node/Cargo.toml version = $NODE_VER (expected $VERSION)"
+    fi
+
+    # scripts/relay-node-install.sh SCRIPT_VERSION (the version it installs)
+    SCRIPT_VER=$(grep -E '^SCRIPT_VERSION=' scripts/relay-node-install.sh 2>/dev/null \
+        | head -n1 \
+        | sed -E 's/^SCRIPT_VERSION="([^"]+)"$/\1/' || true)
+    if [ -z "$SCRIPT_VER" ]; then
+        fail "scripts/relay-node-install.sh: SCRIPT_VERSION not found"
+    elif [ "$SCRIPT_VER" = "$VERSION" ]; then
+        ok "scripts/relay-node-install.sh SCRIPT_VERSION = $SCRIPT_VER"
+    else
+        fail "scripts/relay-node-install.sh SCRIPT_VERSION = $SCRIPT_VER (expected $VERSION)"
+    fi
+
+    # docker-compose.release.yaml: NODE image tag (panel tag is independent).
+    # v1.2: the tag may be a literal (:1.1.0) OR an env-var override with a
+    # default (${RELAYPANEL_NODE_TAG:-1.1.0}); match the version anywhere on
+    # the node image line.
+    if grep -E "image:.*ghcr\.io/moeshinx/relay-panel-node.*${VERSION}([^0-9.]|$)" docker-compose.release.yaml >/dev/null 2>&1; then
+        ok "docker-compose.release.yaml node image tag includes ${VERSION}"
+    else
+        fail "docker-compose.release.yaml: node image tag ${VERSION} not found"
+    fi
+
+    # CHANGELOG-NODE.md node section (the node release body source)
+    if grep -qE "^\#\#\s*\[${VERSION}\](\s*-|$)" CHANGELOG-NODE.md 2>/dev/null; then
+        ok "CHANGELOG-NODE.md has section [${VERSION}]"
+    else
+        fail "CHANGELOG-NODE.md: no '## [${VERSION}]' section"
+    fi
 fi
 
 # ============================================================================
-# 3. Cargo supplementary checks
+# 3. Cargo supplementary checks (per-track)
+# v1.2: only check THIS track's crate + Cargo.lock entry. The other track's
+# crate version is intentionally independent and must NOT be forced to match.
 # ============================================================================
-section "Cargo supplementary"
+section "Cargo supplementary (${TRACK})"
 
-# 3.1 root Cargo.toml workspace.package.version (optional)
+# 3.1 root Cargo.toml workspace.package.version (optional, shared)
 ROOT_WS_VER=$(toml_value "Cargo.toml" "version")
 if [ -n "$ROOT_WS_VER" ]; then
     if [ "$ROOT_WS_VER" = "$VERSION" ]; then
         ok "workspace.package.version = $ROOT_WS_VER"
     else
-        fail "workspace.package.version = $ROOT_WS_VER (expected $VERSION)"
+        warn "workspace.package.version = $ROOT_WS_VER (root workspace version is shared; not enforced per-track)"
     fi
 else
     ok "no workspace.package.version in root Cargo.toml (skipped)"
 fi
 
-# 3.2 crates/panel/Cargo.toml - HARD FAIL on mismatch.
-# v0.3.5: the panel crate version IS part of the release-sync set now. It was
-# missed in v0.3.4 (stayed 0.3.3 while everything else moved to 0.3.4), so it
-# is promoted from WARN to FAIL to make that class of slip impossible.
-PANEL_TOML_VER=$(toml_value "crates/panel/Cargo.toml" "version")
-if [ -n "$PANEL_TOML_VER" ]; then
-    if [ "$PANEL_TOML_VER" = "$VERSION" ]; then
-        ok "crates/panel/Cargo.toml version = $PANEL_TOML_VER"
+# 3.2 THIS track's crate Cargo.toml version — HARD FAIL on mismatch.
+if [ "$TRACK" = "panel" ]; then
+    CRATE_TOML="crates/panel/Cargo.toml"
+    CRATE_NAME="relay-panel"
+else
+    CRATE_TOML="crates/node/Cargo.toml"
+    CRATE_NAME="relay-node"
+fi
+CRATE_VER=$(toml_value "$CRATE_TOML" "version")
+if [ -n "$CRATE_VER" ]; then
+    if [ "$CRATE_VER" = "$VERSION" ]; then
+        ok "${CRATE_TOML} version = $CRATE_VER"
     else
-        fail "crates/panel/Cargo.toml version = $PANEL_TOML_VER (expected $VERSION)"
+        fail "${CRATE_TOML} version = $CRATE_VER (expected $VERSION)"
     fi
 else
-    fail "crates/panel/Cargo.toml: no version field (expected $VERSION)"
+    fail "${CRATE_TOML}: no version field (expected $VERSION)"
 fi
 
-# 3.3 crates/shared/Cargo.toml - WARN if not in sync
+# 3.3 crates/shared/Cargo.toml - WARN only (shared crate, not release-sync'd)
 SHARED_TOML_VER=$(toml_value "crates/shared/Cargo.toml" "version")
 if [ -n "$SHARED_TOML_VER" ]; then
     if [ "$SHARED_TOML_VER" = "$VERSION" ]; then
@@ -251,21 +297,17 @@ else
     ok "crates/shared/Cargo.toml: no version field (skipped)"
 fi
 
-# 3.4 Cargo.lock: project package versions (avoid 3rd-party collisions)
-# For each known package name, walk to its version line in the same [[package]] block.
-# relay-node AND relay-panel are release-sync'd -> hard FAIL on mismatch (panel
-# was promoted in v0.3.5). relay-shared is NOT bumped per release, so a mismatch
-# there is only a WARN.
-PROJECT_PKGS=("relay-node" "relay-panel" "relay-shared")
-for pkg in "${PROJECT_PKGS[@]}"; do
-    # Use awk for the small state machine (we keep this awk because it has no
-    # quoted regex body — just a single line, no `/.../` style patterns).
-    LOCK_VER=$(awk -v pkg="$pkg" '
+# 3.4 Cargo.lock: check ONLY this track's package + the shared crate. The OTHER
+# track's package is intentionally at a different version and must NOT FAIL.
+# shared is WARN only.
+# Use awk for the small state machine (we keep this awk because it has no
+# quoted regex body — just a single line, no `/.../` style patterns).
+cargo_lock_version() {
+    awk -v pkg="$1" '
         /^name = / {
             if ($0 == "name = \"" pkg "\"") { found=1; next }
         }
         found && /^version = / {
-            # Extract the quoted version value
             s = $0
             i = index(s, "\"")
             if (i > 0) {
@@ -274,25 +316,41 @@ for pkg in "${PROJECT_PKGS[@]}"; do
             }
             found = 0
         }
-    ' Cargo.lock 2>/dev/null || true)
-    if [ -z "$LOCK_VER" ]; then
-        warn "Cargo.lock: $pkg not found (workspace may not include this crate?)"
-    elif [ "$LOCK_VER" = "$VERSION" ]; then
-        ok "Cargo.lock $pkg = $LOCK_VER"
-    elif [ "$pkg" = "relay-node" ] || [ "$pkg" = "relay-panel" ]; then
-        fail "Cargo.lock $pkg = $LOCK_VER (expected $VERSION)"
-    else
-        warn "Cargo.lock $pkg = $LOCK_VER ($pkg crate version is not used as release source yet.)"
-    fi
-done
+    ' Cargo.lock 2>/dev/null || true
+}
 
-# 3.5 CHANGELOG section must be non-empty (not just present). A blank section
-# would publish an empty GitHub Release body (the v0.3.4 body=null bug). The
-# shared extractor exits non-zero on a missing / whitespace-only section.
-if bash scripts/extract-changelog.sh "$VERSION" >/dev/null 2>&1; then
-    ok "CHANGELOG.md [${VERSION}] section is non-empty (release body will not be blank)"
+# This track's package: HARD FAIL on mismatch.
+LOCK_VER=$(cargo_lock_version "$CRATE_NAME")
+if [ -z "$LOCK_VER" ]; then
+    warn "Cargo.lock: $CRATE_NAME not found (workspace may not include this crate?)"
+elif [ "$LOCK_VER" = "$VERSION" ]; then
+    ok "Cargo.lock $CRATE_NAME = $LOCK_VER"
 else
-    fail "CHANGELOG.md [${VERSION}] section is missing or empty (would publish an empty release body)"
+    fail "Cargo.lock $CRATE_NAME = $LOCK_VER (expected $VERSION)"
+fi
+
+# shared crate: WARN only.
+SHARED_LOCK_VER=$(cargo_lock_version "relay-shared")
+if [ -n "$SHARED_LOCK_VER" ]; then
+    if [ "$SHARED_LOCK_VER" = "$VERSION" ]; then
+        ok "Cargo.lock relay-shared = $SHARED_LOCK_VER"
+    else
+        warn "Cargo.lock relay-shared = $SHARED_LOCK_VER (shared crate, not release-sync'd)"
+    fi
+fi
+
+# 3.5 CHANGELOG section must be non-empty (per-track changelog file). A blank
+# section would publish an empty GitHub Release body (the v0.3.4 body=null bug).
+# The shared extractor exits non-zero on a missing / whitespace-only section.
+if [ "$TRACK" = "panel" ]; then
+    CHANGELOG_FILE="CHANGELOG.md"
+else
+    CHANGELOG_FILE="CHANGELOG-NODE.md"
+fi
+if bash scripts/extract-changelog.sh "$VERSION" "$CHANGELOG_FILE" >/dev/null 2>&1; then
+    ok "${CHANGELOG_FILE} [${VERSION}] section is non-empty (release body will not be blank)"
+else
+    fail "${CHANGELOG_FILE} [${VERSION}] section is missing or empty (would publish an empty release body)"
 fi
 
 # ============================================================================
@@ -487,4 +545,5 @@ fi
 
 echo ""
 echo "OK to tag: git tag ${TAG} && git push origin ${TAG}"
+echo "(track: ${TRACK})"
 exit 0

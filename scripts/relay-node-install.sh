@@ -51,6 +51,10 @@ NODE_TOKEN=""
 PANEL_URL=""
 SERVICE_NAME="relay-node"
 PROXY="${RELAY_PROXY:-}"
+# v1.2: explicit node version override (--version X.Y.Z). When empty, the
+# script queries GitHub for the latest node-v* tag and falls back to
+# SCRIPT_VERSION if the query fails (it NEVER guesses the panel version).
+TARGET_VERSION=""
 
 # ---------- Parse args ----------
 while [[ $# -gt 0 ]]; do
@@ -59,14 +63,16 @@ while [[ $# -gt 0 ]]; do
         -u|--url)           PANEL_URL="$2"; shift 2 ;;
         -s|--service-name)  SERVICE_NAME="$2"; shift 2 ;;
         -p|--proxy)         PROXY="$2"; shift 2 ;;
+        --version)          TARGET_VERSION="$2"; shift 2 ;;
         -h|--help)
-            echo "Usage: $0 -t <token> -u <panel-url> [-s <service-name>] [-p <proxy>]"
+            echo "Usage: $0 -t <token> -u <panel-url> [-s <service-name>] [-p <proxy>] [--version X.Y.Z]"
             echo ""
             echo "Options:"
             echo "  -t, --token         Node token from the panel UI (required)"
             echo "  -u, --url           Panel URL, e.g. http://panel-ip:18888 (required)"
             echo "  -s, --service-name  systemd service name (default: relay-node)"
             echo "  -p, --proxy         Download proxy, e.g. socks5://127.0.0.1:10808"
+            echo "  --version X.Y.Z     Install a specific node version (default: latest node-v* from GitHub)"
             echo ""
             echo "Environment:"
             echo "  RELAY_PROXY           Same as -p"
@@ -115,14 +121,88 @@ BINARY="${INSTALL_DIR}/relay-node"
 # the atomic mv happens only after the service is stopped.
 TMP_BINARY="${BINARY}.tmp"
 
+# ---------- Resolve the install version ----------
+# v1.2: nodes release on their own node-v* track. By default install the LATEST
+# node-v* tag from GitHub; --version pins a specific one. The script NEVER
+# falls back to the panel version — if the node-version query fails it uses
+# SCRIPT_VERSION (the version this script shipped with) and warns.
+resolve_node_version() {
+    # $1 = proxy arg ("" or "--proxy X"). Returns the bare version on stdout.
+    local proxy_args="$1"
+    local api_url="https://api.github.com/repos/${REPO}/releases?per_page=30"
+    local raw
+    # Query the releases list, find the highest node-v* tag, strip "node-v".
+    # jq is not assumed; use grep+sed+sort. Tolerate a missing jq / API hiccup.
+    raw=$(curl -fsSL --connect-timeout 10 --max-time 20 $proxy_args \
+          -H 'User-Agent: relay-node-install' "$api_url" 2>/dev/null \
+        | grep -oE '"tag_name": "node-v[0-9]+\.[0-9]+\.[0-9]+[^"]*"' \
+        | sed -E 's/"tag_name": "node-v//; s/"$//' \
+        | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' \
+        | sort -rV \
+        | head -n1 || true)
+    echo "$raw"
+}
+
+if [ -z "$TARGET_VERSION" ]; then
+    info "Querying GitHub for the latest node-v* release…"
+    PROXY_ARG=""
+    [ -n "$PROXY" ] && PROXY_ARG="--proxy $PROXY"
+    LATEST_NODE=$(resolve_node_version "$PROXY_ARG")
+    if [ -n "$LATEST_NODE" ]; then
+        TARGET_VERSION="$LATEST_NODE"
+        info "Latest node release: $TARGET_VERSION"
+    else
+        # Query failed — do NOT guess the panel version. Fall back to the
+        # version this script shipped with and warn.
+        TARGET_VERSION="$SCRIPT_VERSION"
+        warn "Could not reach GitHub to find the latest node-v* release; falling back to bundled version $SCRIPT_VERSION. Use --version X.Y.Z to pin a specific version."
+    fi
+else
+    info "Installing node version: $TARGET_VERSION (pinned via --version)"
+fi
+
+# ---------- Already-latest check ----------
+# v1.2: if the installed binary already reports this version, don't re-download,
+# re-swap, or restart the service — just report "already up to date".
+if [ -x "$BINARY" ]; then
+    INSTALLED_VERSION="$("$BINARY" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+    if [ -n "$INSTALLED_VERSION" ] && [ "$INSTALLED_VERSION" = "$TARGET_VERSION" ]; then
+        info "Already at node version $TARGET_VERSION — nothing to do."
+        # Re-apply/ensure the service file + token still point at the panel, but
+        # do NOT replace the binary or restart for an unchanged version. Exit 0.
+        exit 0
+    fi
+    [ -n "$INSTALLED_VERSION" ] && info "Installed version: $INSTALLED_VERSION → upgrading to $TARGET_VERSION"
+fi
+
 # ---------- Build download URL ----------
+# v1.2: node binaries live under node-v{version} from 1.1.1 onward. Versions
+# 1.1.0 and earlier were published under the joint v{version} tag, so fall back
+# to that path for the known legacy range (mirrors the node's self-updater).
 # Default: GitHub Releases. Override with RELAY_NODE_BASE_URL for mirrors.
 ASSET_NAME="relay-node-linux-${ARCH}"
+url_tag_prefix() {
+    # $1 = bare version. Echo "node-v" or "v" (legacy fallback for <= 1.1.0).
+    local v="$1"
+    # Compare major.minor.patch numerically against 1.1.1.
+    local major minor patch
+    IFS=. read -r major minor patch <<< "${v%%-*}"
+    major="${major:-0}"; minor="${minor:-0}"; patch="${patch:-0}"
+    if [ "$major" -lt 1 ] \
+        || { [ "$major" -eq 1 ] && [ "$minor" -lt 1 ]; } \
+        || { [ "$major" -eq 1 ] && [ "$minor" -eq 1 ] && [ "$patch" -lt 1 ]; }; then
+        echo "v"
+    else
+        echo "node-v"
+    fi
+}
 if [ -n "${RELAY_NODE_BASE_URL:-}" ]; then
     DOWNLOAD_URL="${RELAY_NODE_BASE_URL}/${ASSET_NAME}"
     info "Using custom mirror: ${RELAY_NODE_BASE_URL}"
 else
-    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${SCRIPT_VERSION}/${ASSET_NAME}"
+    TAG_PREFIX=$(url_tag_prefix "$TARGET_VERSION")
+    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG_PREFIX}${TARGET_VERSION}/${ASSET_NAME}"
+    info "Download URL: $DOWNLOAD_URL"
 fi
 
 # ---------- Download binary to temp file ----------

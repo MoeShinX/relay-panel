@@ -11,13 +11,26 @@ const { Text } = Typography;
 interface Props {
   rows: NodeDisplayRow[];
   panelProtocol: number;
+  /** v1.2: the latest NODE release (bare, e.g. "1.1.0"). Nodes compare their
+   *  own version against this — NOT the panel version. Empty when unknown. */
+  latestNodeVersion?: string;
+  /** v1.2: the node-version lookup failed. */
+  nodeVersionCheckFailed?: boolean;
   t: Tfn;
   openDetail: (row: NodeDisplayRow) => void;
+  /** v1.0.10/v1.2: admin-only per-node upgrade trigger. Accepted here for the
+   *  mobile upgrade affordance (PR4); PR5 just threads it so the prop is
+   *  available. Unused on mobile for now. */
+  onUpgrade?: (row: NodeDisplayRow) => void;
 }
 
 /** Mobile-friendly compact list — one card per node. No wide table, no
  *  horizontal scroll. Shows: status + network + speed + resource bars +
  *  uptime + a details button. */
+// v1.2: latestNodeVersion / nodeVersionCheckFailed / onUpgrade are accepted via
+// Props (threaded by NodeGroupSection) for the mobile upgrade affordance, but
+// the mobile upgrade UI itself is added in a later PR — they're intentionally
+// not destructured here yet.
 export function NodeMobileList({ rows, panelProtocol, t, openDetail }: Props) {
   const labels = { d: t('uptimeDay'), h: t('uptimeHour'), m: t('uptimeMinute'), s: t('uptimeSecond') };
 

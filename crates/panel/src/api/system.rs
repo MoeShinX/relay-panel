@@ -21,7 +21,18 @@ pub struct ReleaseCache {
 
 struct CachedRelease {
     fetched_at: Instant,
-    data: Option<GitHubRelease>,
+    data: CachedReleases,
+}
+
+/// v1.2: panel and node now release on independent tracks (`v*` vs `node-v*`),
+/// so the version check fetches BOTH the latest panel release and the latest
+/// node release from the same GitHub `/releases` list, splitting by tag
+/// prefix. Each side is independent: a panel-only update must NOT change the
+/// node's "latest", and a node release must NOT be offered as a panel update.
+#[derive(Clone)]
+struct CachedReleases {
+    panel: Option<GitHubRelease>,
+    node: Option<GitHubRelease>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,11 +63,11 @@ impl ReleaseCache {
         }
     }
 
-    async fn get(&self) -> Option<GitHubRelease> {
+    async fn get(&self) -> Option<CachedReleases> {
         let guard = self.inner.read().await;
         if let Some(ref cached) = *guard {
             if cached.fetched_at.elapsed() < CACHE_TTL {
-                return cached.data.clone();
+                return Some(cached.data.clone());
             }
         }
         None
@@ -69,12 +80,40 @@ impl ReleaseCache {
         *guard = None;
     }
 
-    async fn set(&self, data: Option<GitHubRelease>) {
+    async fn set(&self, data: CachedReleases) {
         let mut guard = self.inner.write().await;
         *guard = Some(CachedRelease {
             fetched_at: Instant::now(),
             data,
         });
+    }
+
+    /// v1.2: resolve the latest NODE release version (bare, e.g. "1.1.0") for
+    /// the directed node-upgrade command. Returns:
+    /// - `Ok(Some(version))` — a node release was found.
+    /// - `Ok(None)`           — the check succeeded but there is no node
+    ///   release yet (caller should treat as "no upgrade target available").
+    /// - `Err(message)`        — the version check failed (network/HTTP/parse).
+    ///
+    /// The directed-upgrade handler MUST use this and MUST NEVER fall back to
+    /// the panel version: a panel-only release (e.g. v1.2.0 with no node
+    /// binary) would otherwise command nodes to download a non-existent asset.
+    pub async fn resolve_latest_node_version(&self) -> Result<Option<String>, String> {
+        // Reuse the cache if fresh; otherwise fetch + repopulate. On fetch
+        // failure, do NOT cache (so the next request retries).
+        let releases = match self.get().await {
+            Some(r) => r,
+            None => {
+                let fetched = fetch_github_releases().await?;
+                self.set(fetched.clone()).await;
+                fetched
+            }
+        };
+        Ok(releases
+            .node
+            .as_ref()
+            .and_then(|r| r.tag_name.strip_prefix("node-v"))
+            .map(|s| s.to_string()))
     }
 }
 
@@ -101,12 +140,49 @@ pub struct VersionInfo {
     /// this to decide compatibility — previously the frontend hardcoded "1",
     /// which mislabeled healthy nodes after the constant was bumped to 2.
     pub config_protocol_version: u32,
+    /// v1.2: the latest NODE release tag (e.g. "1.1.0"), resolved from the
+    /// highest `node-v*` GitHub release. Nodes compare their own version
+    /// against THIS (not the panel version) to decide upgrade eligibility.
+    /// Empty when no node release exists or the check failed.
+    pub latest_node_version: String,
+    /// v1.2: true if the node-version lookup failed. The frontend must show an
+    /// "unknown / check failed" state (NOT a green "up to date" or an upgrade
+    /// button) so a broken check can never silently drive a wrong upgrade.
+    pub node_version_check_failed: bool,
 }
 
 /// Parse a version string like "v0.1.4" or "0.1.4" into a semver Version.
 fn parse_version(s: &str) -> Option<semver::Version> {
     let cleaned = s.strip_prefix('v').unwrap_or(s);
     semver::Version::parse(cleaned).ok()
+}
+
+/// v1.2: classify a GitHub release tag and parse its version. Returns the
+/// track ("panel" for `v*`, "node" for `node-v*`) + the parsed semver, or None
+/// for tags that belong to neither track or fail to parse. This is the single
+/// point that keeps `node-v*` from being misread as a panel upgrade (and vice
+/// versa). A bare `v*` is a PANEL tag; `node-v*` is a NODE tag. Anything else
+/// (branches-as-tags, `sdk-v*`, etc.) is ignored.
+enum ReleaseTrack {
+    Panel,
+    Node,
+}
+
+fn classify_tag(tag: &str) -> Option<(ReleaseTrack, semver::Version)> {
+    if let Some(rest) = tag.strip_prefix("node-v") {
+        return semver::Version::parse(rest)
+            .ok()
+            .map(|v| (ReleaseTrack::Node, v));
+    }
+    // `node-v` already handled above, so a plain `v*` here is unambiguously a
+    // panel tag (a hypothetical `node-1.0.0` without the `v` is not a real
+    // release tag in this project).
+    if let Some(rest) = tag.strip_prefix('v') {
+        return semver::Version::parse(rest)
+            .ok()
+            .map(|v| (ReleaseTrack::Panel, v));
+    }
+    None
 }
 
 /// Whether pre-releases count as "latest" when looking for updates.
@@ -118,23 +194,32 @@ fn parse_version(s: &str) -> Option<semver::Version> {
 /// ship a stable 1.0 and only want to notify users about stable releases.
 const ALLOW_PRERELEASE_UPDATES: bool = true;
 
-/// Fetch releases from GitHub and pick the newest eligible one.
+/// Fetch releases from GitHub and pick the newest eligible PANEL release and
+/// the newest eligible NODE release (from the same `/releases` list, split by
+/// tag prefix: `v*` → panel, `node-v*` → node).
 ///
 /// Why not `/releases/latest`: that endpoint only returns the latest
 /// **non-prerelease** release, so during the pre-release phase it returns an
 /// old (or no) release. Instead we list `/releases`, drop drafts (never
-/// installable), and take the release with the greatest semver tag. Pre-
-/// releases are included when `ALLOW_PRERELEASE_UPDATES` is true.
+/// installable), classify each tag, and take the greatest semver PER TRACK.
+/// Pre-releases are included when `ALLOW_PRERELEASE_UPDATES` is true.
+///
+/// v1.2: a `node-v*` tag is NEVER considered a panel update, and a `v*` tag is
+/// NEVER considered a node update. This is the fix for the bug where a node
+/// release could be misread as a panel version.
 ///
 /// Returns:
-/// - `Ok(Some(release))`  - got at least one eligible release
-/// - `Ok(None)`           - call succeeded but no eligible release (e.g. only drafts)
-/// - `Err(msg)`            - network/HTTP/parse error (logged, surfaced to client)
+/// - `Ok(CachedReleases)`  - call succeeded; each track is Some if an eligible
+///   release was found, None if that track had no eligible release.
+/// - `Err(msg)`             - network/HTTP/parse error (logged, surfaced to
+///   client). NOTE: a single shared error covers BOTH tracks because the
+///   fetch is one HTTP call; the caller maps this to `check_failed` AND
+///   `node_version_check_failed` both true.
 ///
 /// Every error path logs a `tracing::warn!` with the URL, status, and body so
 /// ops can diagnose a broken update check (this used to silently return None
 /// and the user saw "no update available" forever).
-async fn fetch_github_release() -> Result<Option<GitHubRelease>, String> {
+async fn fetch_github_releases() -> Result<CachedReleases, String> {
     let url = format!("https://api.github.com/repos/{}/releases?per_page=30", REPO);
     let client = match reqwest::Client::builder()
         .user_agent("RelayPanel-Version-Check")
@@ -188,18 +273,34 @@ async fn fetch_github_release() -> Result<Option<GitHubRelease>, String> {
         }
     };
 
-    // Pick the release with the highest semver tag among eligible ones.
-    // Drafts are always excluded (they're not installable). Pre-releases are
-    // excluded unless ALLOW_PRERELEASE_UPDATES.
-    let picked = releases
+    // Per-track selection: drop drafts, apply prerelease filter, classify each
+    // tag, then take the highest semver WITHIN each track.
+    let eligible = releases
         .into_iter()
         .filter(|r| !r.draft)
-        .filter(|r| ALLOW_PRERELEASE_UPDATES || !r.prerelease)
-        .filter_map(|r| parse_version(&r.tag_name).map(|v| (v, r)))
-        .max_by(|(va, _), (vb, _)| va.cmp(vb))
-        .map(|(_, r)| r);
+        .filter(|r| ALLOW_PRERELEASE_UPDATES || !r.prerelease);
 
-    Ok(picked)
+    let mut panel: Option<(semver::Version, GitHubRelease)> = None;
+    let mut node: Option<(semver::Version, GitHubRelease)> = None;
+    for r in eligible {
+        let Some((track, v)) = classify_tag(&r.tag_name) else {
+            continue;
+        };
+        let slot = match track {
+            ReleaseTrack::Panel => &mut panel,
+            ReleaseTrack::Node => &mut node,
+        };
+        match slot {
+            None => *slot = Some((v, r)),
+            Some((best, _)) if &v > best => *slot = Some((v, r)),
+            _ => {}
+        }
+    }
+
+    Ok(CachedReleases {
+        panel: panel.map(|(_, r)| r),
+        node: node.map(|(_, r)| r),
+    })
 }
 
 /// Query parameters for `get_version`. `refresh=true` (or `1`) bypasses the
@@ -261,35 +362,57 @@ pub async fn get_version(
         state.release_cache.get().await
     };
 
-    let (gh_result, check_failed, error_message): (
-        Result<Option<GitHubRelease>, String>,
-        bool,
-        String,
-    ) = if let Some(r) = cached {
-        // Cached data — assume the cached fetch succeeded. (If the cached
-        // result is None, that means the original fetch found no eligible
-        // release, e.g. all drafts; treat as a successful empty result.)
-        (Ok(Some(r)), false, String::new())
-    } else {
-        let fetched = fetch_github_release().await;
-        match fetched {
-            Ok(opt) => {
-                // Cache both Some and None (None = "succeeded but no eligible
-                // release" — e.g. all drafts). Only Err (network failure)
-                // is NOT cached, so the next request retries.
-                state.release_cache.set(opt.clone()).await;
-                (Ok(opt), false, String::new())
+    // v1.2: a single fetch returns BOTH tracks (panel + node). A network/HTTP
+    // failure is shared (one HTTP call), so it sets BOTH check_failed flags;
+    // an empty track (e.g. no node release yet) sets only its own flag false
+    // with an empty version string (NOT a failure — the check succeeded, there
+    // just was nothing to find).
+    let (releases, check_failed, error_message): (CachedReleases, bool, String) =
+        if let Some(r) = cached {
+            // Cached data — assume the cached fetch succeeded.
+            (r, false, String::new())
+        } else {
+            match fetch_github_releases().await {
+                Ok(got) => {
+                    // Cache the successful result (even if a track is None — that
+                    // means "succeeded but no eligible release on that track").
+                    // Only Err (network failure) is NOT cached, so the next
+                    // request retries.
+                    state.release_cache.set(got.clone()).await;
+                    (got, false, String::new())
+                }
+                Err(msg) => {
+                    tracing::warn!("version-check: surfacing failure to client: {}", msg);
+                    (
+                        CachedReleases {
+                            panel: None,
+                            node: None,
+                        },
+                        true,
+                        msg,
+                    )
+                }
             }
-            Err(msg) => {
-                tracing::warn!("version-check: surfacing failure to client: {}", msg);
-                (Ok(None), true, msg)
-            }
-        }
-    };
+        };
 
-    let gh_release = gh_result.unwrap_or(None);
+    // ── Panel track ──
+    let panel_release = releases.panel;
+    // v1.2: the node check shares the same fetch, so a network failure marks
+    // BOTH tracks failed. A successful fetch with no node release is NOT a
+    // failure (node_version_check_failed stays false, latest_node_version is
+    // just empty).
+    let node_version_check_failed = check_failed;
 
-    match gh_release {
+    // The bare node version (e.g. "1.1.0") the frontend compares node_version
+    // against. Empty when there's no node release or the fetch failed.
+    let latest_node_version = releases
+        .node
+        .as_ref()
+        .and_then(|r| r.tag_name.strip_prefix("node-v"))
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+
+    match panel_release {
         Some(release) => {
             let latest_ver = parse_version(&release.tag_name);
 
@@ -321,12 +444,13 @@ pub async fn get_version(
                 check_failed,
                 error_message,
                 config_protocol_version: relay_shared::protocol::CONFIG_PROTOCOL_VERSION,
+                latest_node_version,
+                node_version_check_failed,
             })
         }
-        // No eligible release (either fetch succeeded and found nothing, or
-        // fetch failed and we cached the failure). In the failure case we
-        // also want the client to know — so check_failed / error_message
-        // are set above and surfaced here.
+        // No eligible PANEL release (either fetch succeeded and found nothing,
+        // or fetch failed and we synthesized empty tracks). check_failed /
+        // error_message are set above and surfaced here.
         None => Json(VersionInfo {
             current_version: current_ver_str.to_string(),
             latest_version: current_ver_str.to_string(),
@@ -339,6 +463,8 @@ pub async fn get_version(
             check_failed,
             error_message,
             config_protocol_version: relay_shared::protocol::CONFIG_PROTOCOL_VERSION,
+            latest_node_version,
+            node_version_check_failed,
         }),
     }
 }
@@ -536,7 +662,7 @@ mod tests {
         assert!(q.want_refresh());
     }
 
-    // ---- Release cache behaviour (unchanged by this fix, kept as regression) ----
+    // ---- Release cache behaviour (updated for v1.2 panel/node split) ----
 
     #[tokio::test]
     async fn release_cache_round_trip_and_invalidate() {
@@ -545,19 +671,34 @@ mod tests {
         assert!(cache.get().await.is_none());
 
         // After set(), get() returns Some and a second get() still returns Some
-        // (within CACHE_TTL).
-        let release = GitHubRelease {
-            tag_name: "v0.2.2".to_string(),
-            html_url: Some("https://example.com".to_string()),
-            body: Some("notes".to_string()),
-            published_at: Some("2026-06-17T00:00:00Z".to_string()),
+        // (within CACHE_TTL). The cache now holds BOTH tracks.
+        let panel = GitHubRelease {
+            tag_name: "v1.1.0".to_string(),
+            html_url: Some("https://example.com/panel".to_string()),
+            body: Some("panel notes".to_string()),
+            published_at: Some("2026-07-02T00:00:00Z".to_string()),
             draft: false,
-            prerelease: true,
+            prerelease: false,
         };
-        cache.set(Some(release.clone())).await;
+        let node = GitHubRelease {
+            tag_name: "node-v1.1.0".to_string(),
+            html_url: Some("https://example.com/node".to_string()),
+            body: Some("node notes".to_string()),
+            published_at: Some("2026-07-02T00:00:00Z".to_string()),
+            draft: false,
+            prerelease: false,
+        };
+        cache
+            .set(CachedReleases {
+                panel: Some(panel),
+                node: Some(node),
+            })
+            .await;
         let got = cache.get().await;
-        assert!(got.is_some());
-        assert_eq!(got.unwrap().tag_name, "v0.2.2");
+        assert!(got.is_some(), "cache hit within TTL");
+        let cached = got.unwrap();
+        assert_eq!(cached.panel.as_ref().unwrap().tag_name, "v1.1.0");
+        assert_eq!(cached.node.as_ref().unwrap().tag_name, "node-v1.1.0");
 
         // `?refresh=true` semantics: invalidate() empties the cache, the next
         // get() returns None (forcing a fresh GitHub fetch).
@@ -565,16 +706,119 @@ mod tests {
         assert!(cache.get().await.is_none());
     }
 
-    /// Empty + None cached value (e.g. previous successful fetch with no
-    /// eligible release) should NOT trigger the "check_failed" path. We
-    /// verify the cache doesn't conflate "no release found" with "network
-    /// error".
+    /// A cached "successful fetch but no eligible release on a track" result
+    /// is NOT a network failure. get() still returns the CachedReleases (so
+    /// the caller serves the empty track with check_failed=false), distinct
+    /// from a cache miss (None).
     #[tokio::test]
     async fn empty_cache_is_not_treated_as_failure() {
         let cache = ReleaseCache::new();
-        cache.set(None).await;
-        // Even with an empty cached "no release" result, get() returns None
-        // and the caller would set check_failed=false (per get_version logic).
-        assert!(cache.get().await.is_none());
+        // Both tracks empty (e.g. all drafts) — still a successful fetch.
+        cache
+            .set(CachedReleases {
+                panel: None,
+                node: None,
+            })
+            .await;
+        // get() returns Some (cache populated), even though both tracks are
+        // None. The caller maps this to check_failed=false with empty versions.
+        let got = cache.get().await;
+        assert!(got.is_some(), "empty-tracks cache is still a cache hit");
+        let cached = got.unwrap();
+        assert!(cached.panel.is_none());
+        assert!(cached.node.is_none());
+    }
+
+    // ---- v1.2: tag classification (panel `v*` vs node `node-v*`) ----
+
+    #[test]
+    fn classify_panel_v_tag() {
+        let (track, v) = classify_tag("v1.1.0").expect("v* is a panel tag");
+        assert!(matches!(track, ReleaseTrack::Panel));
+        assert_eq!(v, semver::Version::new(1, 1, 0));
+    }
+
+    #[test]
+    fn classify_node_v_tag() {
+        let (track, v) = classify_tag("node-v1.1.0").expect("node-v* is a node tag");
+        assert!(matches!(track, ReleaseTrack::Node));
+        assert_eq!(v, semver::Version::new(1, 1, 0));
+    }
+
+    #[test]
+    fn classify_ignores_non_release_tags() {
+        // Branch names / arbitrary tags belong to neither track.
+        assert!(classify_tag("main").is_none());
+        assert!(classify_tag("sdk-v1.0.0").is_none());
+        assert!(classify_tag("not-a-version").is_none());
+        // A node tag without the `v` is not a real release tag in this project.
+        assert!(classify_tag("node-1.1.0").is_none());
+    }
+
+    /// v1.2 core fix: a `node-v*` release must NEVER be selected as the panel
+    /// latest, and a `v*` release must NEVER be selected as the node latest.
+    /// Mirrors the per-track selection in fetch_github_releases.
+    #[test]
+    fn per_track_selection_keeps_panel_and_node_separate() {
+        let json = r#"[
+            { "tag_name": "v1.1.0", "draft": false },
+            { "tag_name": "v1.0.9", "draft": false },
+            { "tag_name": "node-v1.1.0", "draft": false },
+            { "tag_name": "node-v1.0.8", "draft": false }
+        ]"#;
+        let releases: Vec<GitHubRelease> = serde_json::from_str(json).unwrap();
+
+        let eligible = releases.into_iter().filter(|r| !r.draft);
+        let mut panel: Option<(semver::Version, GitHubRelease)> = None;
+        let mut node: Option<(semver::Version, GitHubRelease)> = None;
+        for r in eligible {
+            let Some((track, v)) = classify_tag(&r.tag_name) else {
+                continue;
+            };
+            let slot = match track {
+                ReleaseTrack::Panel => &mut panel,
+                ReleaseTrack::Node => &mut node,
+            };
+            match slot {
+                None => *slot = Some((v, r)),
+                Some((best, _)) if &v > best => *slot = Some((v, r)),
+                _ => {}
+            }
+        }
+
+        // Panel latest = v1.1.0 (the node-v* tags are excluded from panel).
+        assert_eq!(panel.unwrap().1.tag_name, "v1.1.0");
+        // Node latest = node-v1.1.0 (the v* tags are excluded from node).
+        assert_eq!(node.unwrap().1.tag_name, "node-v1.1.0");
+    }
+
+    /// v1.2: when panel ships 1.2.0 but the node is still on 1.1.0, the
+    /// panel track must reflect 1.2.0 and the node track 1.1.0 — independent.
+    /// This is the exact scenario the task calls out (panel 1.2.0, node 1.1.0).
+    #[test]
+    fn panel_can_be_ahead_of_node_independently() {
+        let json = r#"[
+            { "tag_name": "v1.2.0", "draft": false },
+            { "tag_name": "node-v1.1.0", "draft": false }
+        ]"#;
+        let releases: Vec<GitHubRelease> = serde_json::from_str(json).unwrap();
+        let mut panel: Option<(semver::Version, GitHubRelease)> = None;
+        let mut node: Option<(semver::Version, GitHubRelease)> = None;
+        for r in releases.into_iter().filter(|r| !r.draft) {
+            let Some((track, v)) = classify_tag(&r.tag_name) else {
+                continue;
+            };
+            let slot = match track {
+                ReleaseTrack::Panel => &mut panel,
+                ReleaseTrack::Node => &mut node,
+            };
+            match slot {
+                None => *slot = Some((v, r)),
+                Some((best, _)) if &v > best => *slot = Some((v, r)),
+                _ => {}
+            }
+        }
+        assert_eq!(panel.unwrap().1.tag_name, "v1.2.0");
+        assert_eq!(node.unwrap().1.tag_name, "node-v1.1.0");
     }
 }

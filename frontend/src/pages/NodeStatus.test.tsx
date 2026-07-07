@@ -29,7 +29,16 @@ const adminNode = {
 const sharedNode = {
   group_id: 2, group_name: 'shared-grp', node_id: 's1', online: true, connections: 0,
 };
-const version = { current_version: '0.4.15', config_protocol_version: 2 };
+// v1.2: /system/version now also returns latest_node_version +
+// node_version_check_failed. Existing tests ignore them (they assert on data
+// source / polling, not the upgrade column), but the shape must match the
+// real response so the fetch + state setters don't degrade.
+const version = {
+  current_version: '1.1.0',
+  config_protocol_version: 2,
+  latest_node_version: '1.1.0',
+  node_version_check_failed: false,
+};
 
 beforeEach(() => {
   mockGet.mockReset();

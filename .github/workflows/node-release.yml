@@ -1,26 +1,34 @@
-name: Binary Release
+name: Node Release
 
-# Builds relay-node static (musl + rustls) binaries for amd64 + arm64
-# and uploads them as GitHub Release assets. Triggered by version tags (v*)
-# alongside docker-release.yml.
+# v1.2: panel and node release on INDEPENDENT tracks. This workflow is NODE-
+# ONLY and fires on `node-v*` tags. It builds the static (musl + rustls) node
+# binaries (amd64 + arm64), builds + pushes the node Docker image, creates the
+# node GitHub Release (body from CHANGELOG-NODE.md), and verifies the assets.
+# The panel image and panel Release are published by docker-release.yml on `v*`
+# tags. A node release never touches relay-panel-panel:* and a panel release
+# never touches relay-panel-node:*.
 
 on:
   push:
     tags:
-      - 'v*'
+      - 'node-v*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g. 0.1.4), without v prefix'
+        description: 'Node version (e.g. 1.1.0), without node-v prefix'
         required: true
-        default: '0.1.4'
+        default: '1.1.0'
 
 permissions:
   contents: write
+  packages: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
 
 jobs:
   build-and-upload:
@@ -87,43 +95,88 @@ jobs:
           if [ -n "${{ inputs.version }}" ]; then
             VERSION="${{ inputs.version }}"
           else
-            VERSION="${GITHUB_REF_NAME#v}"
+            # Strip leading 'node-v' from tag name (node-v1.1.0 -> 1.1.0)
+            VERSION="${GITHUB_REF_NAME#node-v}"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=node-v${VERSION}" >> "$GITHUB_OUTPUT"
 
-      - name: Generate release body from CHANGELOG
+      - name: Generate release body from CHANGELOG-NODE.md
         id: body
         run: |
-          # Extract ONLY this version's section. The script exits non-zero if
-          # the section is missing or empty, which fails the job — we must never
-          # publish a release with body=null (the dashboard "view changelog"
-          # would render blank). See scripts/extract-changelog.sh.
-          if ! bash scripts/extract-changelog.sh "${{ steps.ver.outputs.version }}" > RELEASE_BODY.md; then
-            echo "::error::No non-empty CHANGELOG section for ${{ steps.ver.outputs.version }} — refusing to publish an empty release body."
+          # Extract ONLY this node version's section from the NODE changelog.
+          # The script exits non-zero if the section is missing or empty, which
+          # fails the job — we never publish a release with body=null.
+          if ! bash scripts/extract-changelog.sh "${{ steps.ver.outputs.version }}" CHANGELOG-NODE.md > RELEASE_BODY.md; then
+            echo "::error::No non-empty CHANGELOG-NODE.md section for ${{ steps.ver.outputs.version }} — refusing to publish an empty release body."
             exit 1
           fi
           echo "----- release body preview -----"
           cat RELEASE_BODY.md
 
-      - name: Upload to GitHub Release
+      - name: Upload to GitHub Release (node-v* tag)
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name || format('v{0}', steps.ver.outputs.version) }}
+          tag_name: ${{ steps.ver.outputs.tag }}
           files: |
             ${{ matrix.asset_name }}
             ${{ matrix.asset_name }}.sha256
           prerelease: false
           make_latest: true
-          name: ${{ github.ref_name || format('v{0}', steps.ver.outputs.version) }}
+          name: ${{ steps.ver.outputs.tag }}
           body_path: RELEASE_BODY.md
 
-  # Post-release verification: download each asset, verify its checksum, and
-  # confirm the binary actually runs and reports the expected version. Catches
-  # truncated uploads, wrong-arch binaries, and version/tag mismatches that a
-  # green build job alone can't detect.
+  # Build + push the node Docker image. Separate job so a binary-build failure
+  # doesn't block it (and vice versa); both must succeed for a complete node
+  # release, but the image push is independent of the asset upload.
+  docker-node:
+    name: Build + push node image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: ver
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#node-v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing NODE image version $VERSION"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # v1.2: NODE-ONLY. target: node selects the node stage of the Dockerfile
+      # (which now compiles only relay-node). The panel image is NOT built here.
+      - name: Build and push node image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: node
+          push: true
+          tags: |
+            ghcr.io/moeshinx/relay-panel-node:${{ steps.ver.outputs.version }}
+            ghcr.io/moeshinx/relay-panel-node:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Post-release verification: download the amd64 asset, verify its checksum,
+  # confirm the binary reports the expected version, and confirm the pushed node
+  # image reports the expected version. Catches truncated uploads, wrong-arch
+  # binaries, and version/tag mismatches.
   verify:
     name: Verify release assets
-    needs: build-and-upload
+    needs: [build-and-upload, docker-node]
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -136,10 +189,10 @@ jobs:
           if [ -n "${{ inputs.version }}" ]; then
             VERSION="${{ inputs.version }}"
           else
-            VERSION="${GITHUB_REF_NAME#v}"
+            VERSION="${GITHUB_REF_NAME#node-v}"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=node-v${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Download + checksum-verify amd64 asset
         run: |
@@ -150,12 +203,17 @@ jobs:
           sha256sum -c relay-node-linux-amd64.sha256
           # Confirm it's a valid ELF, not a truncated/HTML error page.
           file relay-node-linux-amd64 | grep -q "ELF"
+          # Confirm the binary reports the expected node version.
+          chmod +x relay-node-linux-amd64
+          OUT=$(./relay-node-linux-amd64 --version 2>/dev/null || true)
+          echo "binary reports: $OUT"
+          echo "$OUT" | grep -q "${{ steps.ver.outputs.version }}" || { echo "::error::binary version does not match ${{ steps.ver.outputs.version }}"; exit 1; }
 
-      - name: Verify Docker image version matches tag
+      - name: Verify node Docker image version matches tag
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
-          # docker-release.yml builds and pushes on the same tag in parallel.
-          # Retry the pull a few times in case the image job is still pushing.
+          # docker-node job finished before this one (needs:), but retry the
+          # pull a few times in case the registry is still propagating.
           for i in 1 2 3 4 5; do
             docker pull ghcr.io/moeshinx/relay-panel-node:"$VERSION" && break
             echo "image not ready yet, retrying in 30s ($i/5)…"

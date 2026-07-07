@@ -22,19 +22,24 @@ export function parseVersion(v?: string | null): string | null {
 
 export type VersionRelation = 'unknown' | 'behind' | 'same' | 'ahead';
 
-/** Compare a node's reported version against the panel's.
+/** Compare a node's reported version against a comparison target.
+ *
+ *  v1.2: the second argument is the **latest node release** (from
+ *  `/system/version` `latest_node_version`), NOT the panel version. The
+ *  function is version-comparison-generic, so the signature is unchanged —
+ *  only the caller's argument source changed.
  *
  *  - 'unknown' : either side unparseable -> render "-" / plain (no judgement)
- *  - 'behind'  : node < panel  -> "upgradable"
- *  - 'same'    : node == panel
- *  - 'ahead'   : node > panel  -> "newer" (never "stale")
+ *  - 'behind'  : node < target  -> "upgradable"
+ *  - 'same'    : node == target
+ *  - 'ahead'   : node > target  -> "newer" (never "stale")
  */
 export function versionRelation(
   nodeVersion?: string | null,
-  panelVersion?: string | null,
+  targetVersion?: string | null,
 ): VersionRelation {
   const a = parseVersion(nodeVersion);
-  const b = parseVersion(panelVersion);
+  const b = parseVersion(targetVersion);
   if (!a || !b) return 'unknown';
   const cmp = semver.compare(a, b);
   if (cmp < 0) return 'behind';

@@ -12,7 +12,11 @@ const { Text } = Typography;
 interface Props {
   rows: NodeDisplayRow[];
   panelProtocol: number;
-  currentVersion: string;
+  /** v1.2: the latest NODE release (bare, e.g. "1.1.0"). Nodes compare their
+   *  own version against this — NOT the panel version. */
+  latestNodeVersion: string;
+  /** v1.2: the node-version lookup failed; tables show an unknown state. */
+  nodeVersionCheckFailed: boolean;
   isMobile: boolean;
   t: Tfn;
   openDetail: (row: NodeDisplayRow) => void;
@@ -36,7 +40,7 @@ function groupSummary(rows: NodeDisplayRow[]) {
 /** One group block: header bar (name · ID · online/total · aggregate ↑↓) +
  *  either a desktop table or mobile list. Collapsible. A group with only a
  *  placeholder row shows "no node reporting". */
-export function NodeGroupSection({ rows, panelProtocol, currentVersion, isMobile, t, openDetail, onUpgrade }: Props) {
+export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeVersionCheckFailed, isMobile, t, openDetail, onUpgrade }: Props) {
   const head = rows[0];
   const { total, online, up, down } = groupSummary(rows);
   const region = head.region;
@@ -64,10 +68,10 @@ export function NodeGroupSection({ rows, panelProtocol, currentVersion, isMobile
     </div>
   ) : isMobile ? (
     <div style={{ padding: 8 }}>
-      <NodeMobileList rows={rows} panelProtocol={panelProtocol} t={t} openDetail={openDetail} />
+      <NodeMobileList rows={rows} panelProtocol={panelProtocol} latestNodeVersion={latestNodeVersion} nodeVersionCheckFailed={nodeVersionCheckFailed} t={t} openDetail={openDetail} onUpgrade={onUpgrade} />
     </div>
   ) : (
-    <NodeDesktopTable rows={rows} panelProtocol={panelProtocol} currentVersion={currentVersion} t={t} openDetail={openDetail} onUpgrade={onUpgrade} />
+    <NodeDesktopTable rows={rows} panelProtocol={panelProtocol} latestNodeVersion={latestNodeVersion} nodeVersionCheckFailed={nodeVersionCheckFailed} t={t} openDetail={openDetail} onUpgrade={onUpgrade} />
   );
 
   return (
