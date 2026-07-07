@@ -61,6 +61,13 @@ services:
     profiles:
       - node
     network_mode: host
+    # v1.2: match the systemd unit's LimitNOFILE=65536. Docker's default (often
+    # 1024) is exhausted by a busy forwarder (EMFILE, "Too many open files").
+    # The limit is per-process, so host networking doesn't affect it.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     environment:
       - PANEL_URL=http://127.0.0.1:18888
       # NODE_TOKEN has no default: the node refuses to start with an unset or

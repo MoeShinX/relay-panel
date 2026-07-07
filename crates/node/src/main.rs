@@ -60,6 +60,14 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // v1.2: raise our own RLIMIT_NOFILE soft limit before opening any sockets.
+    // systemd sets LimitNOFILE=65536, but a docker or manual (bash/nohup) launch
+    // often inherits the 1024 default soft limit — which a busy forwarder
+    // exhausts (EMFILE, "Too many open files"). Best-effort: we can't exceed the
+    // hard limit without privilege, but raising soft→hard reclaims the headroom
+    // the launcher didn't give us.
+    raise_nofile_limit();
+
     // No early-exit flag present — start the real runtime.
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -89,6 +97,42 @@ fn main() -> ExitCode {
 fn install_crypto_provider() -> Result<(), Arc<rustls::crypto::CryptoProvider>> {
     rustls::crypto::ring::default_provider().install_default()
 }
+
+/// Raise the process RLIMIT_NOFILE soft limit toward the hard limit. Best-
+/// effort (a failure is ignored) and idempotent; prints to stderr (tracing
+/// isn't initialised yet) only when it actually raises the limit. Capped at
+/// 1,048,576 so a `RLIM_INFINITY` hard limit doesn't try to set an absurd value
+/// the kernel rejects.
+#[cfg(unix)]
+fn raise_nofile_limit() {
+    // SAFETY: getrlimit/setrlimit take a valid resource id and a pointer to a
+    // local rlimit we fully own; no aliasing or lifetime concerns.
+    unsafe {
+        let mut lim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) != 0 {
+            return;
+        }
+        let target = std::cmp::min(lim.rlim_max, 1_048_576);
+        if target > lim.rlim_cur {
+            let new = libc::rlimit {
+                rlim_cur: target,
+                rlim_max: lim.rlim_max,
+            };
+            if libc::setrlimit(libc::RLIMIT_NOFILE, &new) == 0 {
+                eprintln!(
+                    "relay-node: raised RLIMIT_NOFILE soft limit {} -> {}",
+                    lim.rlim_cur, target
+                );
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn raise_nofile_limit() {}
 
 fn print_help() {
     println!("relay-node {}", VERSION);

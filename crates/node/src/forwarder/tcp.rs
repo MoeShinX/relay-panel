@@ -46,6 +46,11 @@ pub async fn serve_tcp_listener(
                         e
                     );
                 }
+                // v1.2: enable TCP keepalive so a client that vanishes without a
+                // FIN/RST (NAT rebind, mobile handoff, cable pull) is reaped by
+                // the kernel instead of leaving the copy task blocked on read()
+                // forever, holding two fds until the node exhausts them (EMFILE).
+                super::outbound::apply_keepalive(&inbound, "TCP accept");
                 let targets = targets.clone();
                 let selector = selector.clone();
                 let rate_limit = rate_limit.clone();

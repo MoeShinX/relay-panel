@@ -68,6 +68,13 @@ services:
     # host network so the node can open its forwarding listen ports directly.
     # On a dedicated forwarding box, this is the simplest correct setup.
     network_mode: host
+    # v1.2: match the systemd unit's LimitNOFILE=65536. Docker's default (often
+    # 1024) is exhausted by a busy forwarder (EMFILE, "Too many open files").
+    # The limit is per-process, so host networking doesn't affect it.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     environment:
       - PANEL_URL=http://127.0.0.1:18888
       # Set to a real inbound group token created in the panel UI. The node

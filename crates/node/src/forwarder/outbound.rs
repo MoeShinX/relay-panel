@@ -195,7 +195,42 @@ pub async fn tcp_connect(
     if let Err(e) = stream.set_nodelay(true) {
         tracing::debug!("outbound: set_nodelay(true) failed for {}: {}", target, e);
     }
+    apply_keepalive(&stream, "outbound");
     Ok(stream)
+}
+
+/// Enable TCP keepalive on a forwarded socket — applied to BOTH the accepted
+/// client socket (see `tcp::serve_tcp_listener`) and the dialed target socket
+/// above, so a dead peer on either side is detected.
+///
+/// Why this matters: the bidirectional copy blocks on `read()` until the peer
+/// sends FIN/RST. A peer that vanishes SILENTLY (NAT rebind, mobile handoff,
+/// cable pull, a firewall that drops instead of resets) never sends one, so the
+/// copy task hangs forever holding two fds. Under connection churn these dead
+/// half-open connections pile up until the process hits `EMFILE` ("Too many
+/// open files", os error 24) — exhausting even a systemd node's
+/// `LimitNOFILE=65536`. Keepalive makes the kernel probe an idle peer and RST
+/// it when dead, so `read()` returns and the task releases its fds.
+///
+/// idle 60s, then a probe every 15s up to 4 times → a dead peer is reaped
+/// within ~120s. A live connection resets the idle timer on every byte, so busy
+/// links never emit a probe.
+pub(super) fn apply_keepalive(stream: &TcpStream, ctx: &str) {
+    #[cfg(unix)]
+    {
+        let ka = socket2::TcpKeepalive::new()
+            .with_time(Duration::from_secs(60))
+            .with_interval(Duration::from_secs(15))
+            .with_retries(4);
+        if let Err(e) = socket2::SockRef::from(stream).set_tcp_keepalive(&ka) {
+            tracing::debug!("{}: set_tcp_keepalive failed: {}", ctx, e);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // Keepalive tuning is a unix concern; the node only runs on Linux.
+        let _ = (stream, ctx);
+    }
 }
 
 /// Try each resolved address in order until one connects — mirrors
@@ -417,6 +452,34 @@ mod tests {
         assert_eq!(a, vec![want]);
         let b = resolve_cached("127.0.0.1:9").await.expect("cached ok");
         assert_eq!(a, b);
+    }
+
+    /// v1.2: apply_keepalive must not error on a live connected socket, and on
+    /// unix must actually turn SO_KEEPALIVE on. Exercises the real setsockopt
+    /// path on Linux (CI + the node's real target); a no-op elsewhere.
+    /// Regression guard for the fd-exhaustion fix.
+    #[tokio::test]
+    async fn apply_keepalive_enables_so_keepalive() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let accept = tokio::spawn(async move { listener.accept().await.unwrap().0 });
+        let client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let server = accept.await.unwrap();
+        // The two call sites in production: the dialed (outbound) and accepted
+        // (inbound) sockets.
+        apply_keepalive(&client, "test-client");
+        apply_keepalive(&server, "test-server");
+        #[cfg(unix)]
+        {
+            assert!(
+                socket2::SockRef::from(&client).keepalive().unwrap(),
+                "SO_KEEPALIVE must be on after apply_keepalive (client)"
+            );
+            assert!(
+                socket2::SockRef::from(&server).keepalive().unwrap(),
+                "SO_KEEPALIVE must be on after apply_keepalive (server)"
+            );
+        }
     }
 
     #[test]

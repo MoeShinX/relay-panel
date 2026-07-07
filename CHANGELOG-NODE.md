@@ -11,6 +11,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **File-descriptor exhaustion under connection churn.** Forwarded TCP sockets
+  (both the accepted client side and the dialed target side) now enable TCP
+  keepalive (idle 60s, 15s probes, 4 retries). Previously a peer that vanished
+  without a FIN/RST — NAT rebind, mobile handoff, cable pull, a firewall that
+  drops instead of resets — left the bidirectional copy blocked on `read()`
+  forever, holding two fds; under churn these dead half-open connections
+  accumulated until the node hit `EMFILE` ("Too many open files", os error 24),
+  even at `LimitNOFILE=65536`. Keepalive lets the kernel reap dead peers so the
+  copy task ends and releases its fds.
+- **Low fd limit on non-systemd launches.** The node now raises its own
+  `RLIMIT_NOFILE` soft limit toward the hard limit at startup, so a docker or
+  manual (bash/nohup) launch — which inherits the 1024 default instead of the
+  systemd unit's `LimitNOFILE=65536` — no longer exhausts descriptors under
+  moderate load. The node Docker Compose service also sets `ulimits.nofile` to
+  65536 to match.
+
+---
+
 ## [1.1.0] - 2026-07-02
 
 The node half of the **one-click remote upgrade** release. (Panel-side changes
