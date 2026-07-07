@@ -115,23 +115,26 @@ jobs:
           cat RELEASE_BODY.md
 
       # v1.2 (release gate): upload the binaries to the node-v* GitHub Release
-      # as a PRERELEASE with make_latest: false. The Release is created here so
-      # `verify` (next job) can download the assets via `gh release download`,
-      # BUT it is NOT yet marked stable, and crucially make_latest:false means a
-      # node release NEVER hijacks the repo's "Latest" pointer (which would make
-      # the README's "latest panel version" badge link to a node version). Only
-      # after `verify` passes does `publish-release` flip this to a stable
-      # (non-prerelease) release — a release that fails verification stays a
-      # prerelease and is never advertised to the installer/latest channels.
-      - name: Upload to GitHub Release (PRE-release, not latest)
+      # as a DRAFT. A draft is the only state that is truly INVISIBLE to
+      # unauthenticated callers: GitHub's public /releases list omits drafts, so
+      # a verification-failed draft node version can NEVER leak into the panel's
+      # latest_node_version (system.rs queries that same list) nor into the
+      # installer's resolve_node_version (relay-node-install.sh). A prerelease
+      # would NOT do that — the panel's ALLOW_PRERELEASE_UPDATES=true includes
+      # prereleases, and the installer doesn't filter them, so a failed prerelease
+      # would surface as an upgrade target / installable version before verify.
+      # The verify job (next) is authenticated (GH_TOKEN) so its gh release
+      # download CAN see the draft and pull the assets for sha256/version checks.
+      # Only after verify passes does publish-release publish it (draft:false,
+      # prerelease:false, make_latest:false).
+      - name: Upload to GitHub Release (DRAFT — hidden until verified)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           files: |
             ${{ matrix.asset_name }}
             ${{ matrix.asset_name }}.sha256
-          prerelease: true
-          make_latest: false
+          draft: true
           name: ${{ steps.ver.outputs.tag }}
           body_path: RELEASE_BODY.md
 
@@ -278,11 +281,12 @@ jobs:
           docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE:$VERSION"
           echo "::notice::Promoted $IMAGE:$VERSION to :latest after verify passed"
 
-  # v1.2 (release gate): flip the GitHub Release from prerelease to stable ONLY
-  # after verify + promote-latest pass. build-and-upload created it as a
-  # prerelease (so a failed-verify release is never advertised as stable), and
-  # make_latest stays false so a node release never becomes the repo's "Latest"
-  # (that pointer belongs to panel v* releases — the README badge links there).
+  # v1.2 (release gate): publish the GitHub Release ONLY after verify +
+  # promote-latest pass. build-and-upload created it as a DRAFT (invisible to
+  # unauthenticated /releases callers, so it could never leak as an upgrade
+  # target or installer pick); this job flips it to a published stable release.
+  # make_latest is explicitly false: a node release must NOT take the repo's
+  # "Latest" pointer away from the panel (the README badge links there).
   publish-release:
     name: Publish GitHub Release (after verify)
     needs: [verify, promote-latest]
@@ -303,15 +307,16 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=node-v${VERSION}" >> "$GITHUB_OUTPUT"
 
-      # Mark the existing (prerelease) Release as a stable release. make_latest
-      # is explicitly false: a node release must NOT take the repo's "Latest"
-      # pointer away from the panel. softprops/action-gh-release with the same
-      # tag_name edits the existing release in place (idempotent).
-      - name: Mark node Release as stable (make_latest: false)
+      # Publish the draft: draft:false + prerelease:false + make_latest:false.
+      # softprops/action-gh-release with the same tag_name edits the existing
+      # release in place (idempotent). Once published it becomes visible to the
+      # panel version check + the installer — but ONLY after verify passed.
+      - name: Publish node Release (draft:false, stable, not latest)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: ${{ steps.ver.outputs.tag }}
+          draft: false
           prerelease: false
           make_latest: 'false'
           # body_path is omitted here; build-and-upload already set the body

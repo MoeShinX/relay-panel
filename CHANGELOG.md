@@ -64,7 +64,7 @@ independent `v*` / `node-v*` tracks since this release).
 
 ### Fixed — node release gating & installer re-bind
 
-- **`:latest` and the stable GitHub Release are now promoted only AFTER
+- **`:latest` and the published GitHub Release are now promoted only AFTER
   verification passes.** The node release workflow previously pushed
   `:X.Y.Z` and `:latest` in one build step AND created the GitHub Release as
   stable + `make_latest: true` before `verify` ran — so a release whose image
@@ -72,13 +72,17 @@ independent `v*` / `node-v*` tracks since this release).
   repointed `:latest`, marked a broken node version as the repo's "Latest"
   (hijacking the README's "latest panel version" badge), and left an advertised
   stable Release behind. Now: `docker-node` pushes the version tag only;
-  `build-and-upload` creates the Release as a **prerelease** with
-  **`make_latest: false`** (a node release never becomes the repo's Latest);
-  `verify` runs (sha256 + binary `--version` + image `--version`); only then
-  does `promote-latest` re-tag the verified `:X.Y.Z` image as `:latest`
-  (`docker buildx imagetools create`) and `publish-release` flip the Release to
-  stable. A failed release stays a prerelease and never moves `:latest` or the
-  repo Latest pointer.
+  `build-and-upload` creates the Release as a **draft** (`draft: true`) — GitHub's
+  public `/releases` list omits drafts, so a verify-failed node version can
+  never leak into the panel's `latest_node_version` (`ALLOW_PRERELEASE_UPDATES`
+  includes prereleases, and the installer doesn't filter them, so a prerelease
+  would have leaked); `verify` runs (sha256 + binary `--version` + image
+  `--version`) and is authenticated so it can still download the draft's assets;
+  only then does `promote-latest` re-tag the verified `:X.Y.Z` image as
+  `:latest` (`docker buildx imagetools create`) and `publish-release` publish
+  the Release (`draft: false`, `prerelease: false`, `make_latest: false`). A
+  failed release stays an invisible draft and never moves `:latest` or the repo
+  Latest pointer.
 - **Re-running the installer at the same version now refreshes the panel binding
   and systemd unit instead of exiting.** Previously an "already at version X"
   detection exited immediately, so re-running with a new `-t`/`-u` (to repoint
