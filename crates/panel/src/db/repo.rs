@@ -300,6 +300,58 @@ pub trait RuleRepository: Send + Sync {
         target_addr: &str,
         target_port: i32,
     ) -> Result<u64, DbError>;
+
+    /// v1.2: create a rule AND write its targets / load-balance strategy /
+    /// rate limits / tunnel profile in ONE transaction, returning the new
+    /// rule's id directly.
+    ///
+    /// This supersedes the old `insert_quota_guarded`-then-`list_rules`-by-
+    /// `listen_port`-lookup dance for `create_rule`. The old lookup keyed only
+    /// on `(owner_uid, listen_port)` and ignored `device_group_in`, so when two
+    /// inbound groups (both legal owners of the same listen_port under the
+    /// per-group partial unique index) reused a port, the lookup returned the
+    /// WRONG rule and the targets/LB/limits were written to it. Returning the
+    /// id from the INSERT itself closes that bug, and putting every write in
+    /// one transaction means a mid-creation failure leaves no half-rule.
+    ///
+    /// Returns:
+    /// - `Ok(Some(id))` — rule created; the id is the freshly inserted row.
+    /// - `Ok(None)` — the owner's max_rules quota is exhausted (the
+    ///   quota-guarded INSERT matched 0 rows); no row was written.
+    /// - `Err(DbError::PortConflict)` — listen_port already occupied on the
+    ///   inbound group by a conflicting socket type.
+    /// - `Err(DbError::UniqueViolation)` — DB-layer backstop (partial unique
+    ///   index) when a concurrent creator won the race.
+    ///
+    /// `load_balance_strategy` is the stable DB string ("first"/"round_robin"/
+    /// "failover"); it is only written when it differs from "first" (mirrors
+    /// the service's existing behaviour, since "first" is the column default).
+    /// `upload_limit_mbps` / `download_limit_mbps` are only written when either
+    /// is non-zero (0 = unlimited = the column default). `tunnel_profile_id` is
+    /// only written when `Some`.
+    #[allow(clippy::too_many_arguments)]
+    async fn create_rule_full(
+        &self,
+        name: &str,
+        uid: i64,
+        listen_port: i32,
+        protocol: &str,
+        public_transport: &str,
+        node_transport: &str,
+        route_mode: &str,
+        entry_transport: &str,
+        ws_path: Option<&str>,
+        device_group_in: i64,
+        device_group_out: Option<i64>,
+        forward_mode: &str,
+        target_addr: &str,
+        target_port: i32,
+        targets: &[RuleTargetRequest],
+        load_balance_strategy: &str,
+        upload_limit_mbps: i32,
+        download_limit_mbps: i32,
+        tunnel_profile_id: Option<i64>,
+    ) -> Result<Option<i64>, DbError>;
     /// Find (protocol, public_transport) for effective-combo validation, scoped.
     async fn find_transport_by_id(
         &self,

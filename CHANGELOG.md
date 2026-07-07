@@ -5,6 +5,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Creating a forward rule no longer cross-writes into a different rule when
+  two inbound groups reuse the same listen port.** Previously, after the rule
+  row was inserted, the new rule's id was recovered by re-querying
+  `(owner_uid, listen_port)` — which ignored `device_group_in`. Because the
+  port-uniqueness constraint is *per inbound group*, two rules on two groups
+  can legally share a port, and the lookup returned the wrong (first) rule,
+  so its targets, load-balance strategy and rate limits were overwritten. Rule
+  creation now does the row INSERT + targets + load-balance strategy + rate
+  limits + tunnel profile in a **single transaction** and takes the new id
+  directly from the INSERT (SQLite `last_insert_rowid()` / PostgreSQL
+  `RETURNING id`), so any mid-creation failure rolls back completely (no
+  half-rule) and the side-tables always land on the right row. Existing
+  port-conflict, `max_rules` quota and ownership checks are unchanged.
+  (`create_rule_full` on the Repository trait, used by `create_rule`.)
+
+### Security
+
+- Pinned by regression test: a freshly-registered user has **no usable device
+  groups** by design (`all_device_groups = false`, `user_device_groups` empty),
+  so they cannot forward until a plan or admin grants authorization. Covered
+  on both SQLite and PostgreSQL to guard against a future auto-grant-on-register
+  change flipping this silently.
+
+---
+
 ## [1.1.0] - 2026-07-02
 
 Minor release headlined by **one-click remote node upgrades** from the panel,
