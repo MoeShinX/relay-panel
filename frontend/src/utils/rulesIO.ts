@@ -81,15 +81,61 @@ export interface ImportEntry {
   dest?: string[];
 }
 
-/** Validate a single import entry. Returns a human-readable error string, or
- *  null when the entry is well-formed. Mirrors the original Rules.tsx logic. */
-export function validateImportEntry(e: ImportEntry): string | null {
-  if (!e.name || e.name.trim() === '') return 'name is required';
-  if (e.listen_port == null || e.listen_port < 1 || e.listen_port > 65535)
+/**
+ * Is `x` a plain, non-null object? Guards against the JSON being a bare
+ * primitive / null / array at the entry position (e.g. the user pasted `42` or
+ * `"[1,2,3]"`). Arrays are objects in JS, so exclude them explicitly — an entry
+ * must be a `{...}` record.
+ */
+export function isImportEntry(x: unknown): x is Record<string, unknown> {
+  return typeof x === 'object' && x !== null && !Array.isArray(x);
+}
+
+/**
+ * Validate a single import entry. Returns a human-readable error string, or
+ * null when the entry is well-formed.
+ *
+ * The input is `unknown` (straight from `JSON.parse`), so EVERY field is
+ * runtime-type-checked before its value is inspected — a malformed paste like
+ * `{"name": 123, "listen_port": "80", "dest": "1.2.3.4:80"}` must produce a
+ * clean "invalid" verdict, NOT a `.trim() is not a function` crash. (The earlier
+ * version assumed the fields were already the right type and crashed on
+ * wrong-typed JSON.)
+ */
+export function validateImportEntry(e: unknown): string | null {
+  if (!isImportEntry(e)) return 'entry must be an object';
+  // name: required, must be a non-empty string after trim.
+  const name = e['name'];
+  if (typeof name !== 'string' || name.trim() === '') return 'name is required';
+  // listen_port: required, must be an integer in the valid range. A numeric
+  // string like "80" is rejected (the export emits a real number; accepting
+  // strings would silently let "80abc" through Number() later).
+  const port = e['listen_port'];
+  if (typeof port !== 'number' || !Number.isFinite(port) || port < 1 || port > 65535)
     return 'listen_port must be 1-65535';
-  if (!e.dest || e.dest.length === 0) return 'dest must not be empty';
-  for (const d of e.dest) {
+  // dest: required, must be a non-empty array of strings.
+  const dest = e['dest'];
+  if (!Array.isArray(dest) || dest.length === 0) return 'dest must not be empty';
+  for (const d of dest) {
+    if (typeof d !== 'string') return `invalid dest format: ${String(d)}`;
     if (!parseDest(d)) return `invalid dest format: ${d}`;
   }
   return null;
+}
+
+/**
+ * Coerce a validated entry to its typed form. ONLY safe to call after
+ * `validateImportEntry(e) === null`; the caller MUST have validated first.
+ * Centralises the `as` cast so the consuming code (handleImport) doesn't lie
+ * about types in multiple places.
+ */
+export function asValidatedEntry(e: unknown): { name: string; listen_port: number; dest: string[] } {
+  // validateImportEntry already checked the runtime types; re-assert here only
+  // to satisfy TS. This never throws for an entry that passed validation.
+  const o = e as Record<string, unknown>;
+  return {
+    name: o['name'] as string,
+    listen_port: o['listen_port'] as number,
+    dest: o['dest'] as string[],
+  };
 }

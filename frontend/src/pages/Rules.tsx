@@ -8,7 +8,7 @@ import type { ApiEnvelope, ForwardRule, DeviceGroup, User, UserSelf, RuleTargetI
 import { useI18n } from '../i18n/context';
 import { formatBytes } from '../utils/format';
 import { useAuth } from '../auth/useAuth';
-import { buildExportJSON, parseDest, ruleTargets, validateImportEntry } from '../utils/rulesIO';
+import { asValidatedEntry, buildExportJSON, parseDest, ruleTargets, validateImportEntry } from '../utils/rulesIO';
 
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -301,14 +301,17 @@ const IMPORT_DEFAULTS = {
       message.error(t('importInvalidJson')); return;
     }
     const entries = Array.isArray(parsed) ? parsed : [parsed];
-    if (entries.length === 0 || typeof entries[0] !== 'object') {
+    if (entries.length === 0) {
       message.error(t('importInvalidFormat')); return;
     }
     const results: string[] = [];
     for (const e of entries) {
-      const err = validateImportEntry(e as { name?: string; listen_port?: number; dest?: string[] });
-      if (err) { results.push(`❌ ${(e as { name?: string }).name || '?'}: ${err}`); continue; }
-      const entry = e as { name: string; listen_port: number; dest: string[] };
+      const label = (typeof e === 'object' && e !== null && !Array.isArray(e))
+        ? String((e as { name?: unknown })['name'] ?? '?')
+        : '?';
+      const err = validateImportEntry(e);
+      if (err) { results.push(`❌ ${label}: ${err}`); continue; }
+      const entry = asValidatedEntry(e);
       const targets = entry.dest.map(d => {
         // validateImportEntry already rejected any unparseable dest above, so
         // parseDest is non-null here; fall back to a safe default defensively.

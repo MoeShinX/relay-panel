@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  asValidatedEntry,
   buildExportJSON,
   parseDest,
   ruleTargets,
@@ -137,6 +138,63 @@ describe('validateImportEntry', () => {
   it('rejects a malformed dest', () => {
     expect(validateImportEntry({ name: 'r1', listen_port: 10000, dest: ['no-port'] })).toMatch(/dest format/);
     expect(validateImportEntry({ name: 'r1', listen_port: 10000, dest: ['host:0'] })).toMatch(/dest format/);
+  });
+});
+
+// ── Robustness against malformed/anomalous input. validateImportEntry takes
+// `unknown` (straight from JSON.parse) and must NEVER crash on wrong-typed
+// fields — it returns a clean error string instead. These are the cases that
+// used to throw (.trim is not a function, .length of undefined, etc.).
+describe('validateImportEntry — anomalous input does not crash', () => {
+  it('rejects a non-object entry (primitive / null / array)', () => {
+    expect(validateImportEntry(null)).toMatch(/object/);
+    expect(validateImportEntry(42)).toMatch(/object/);
+    expect(validateImportEntry('not-an-object')).toMatch(/object/);
+    expect(validateImportEntry([1, 2, 3])).toMatch(/object/);
+    expect(validateImportEntry(undefined)).toMatch(/object/);
+  });
+
+  it('rejects a numeric name without crashing on .trim()', () => {
+    expect(validateImportEntry({ name: 123, listen_port: 10000, dest: ['1.1.1.1:80'] })).toMatch(/name/);
+  });
+
+  it('rejects a non-string name (bool / object / null)', () => {
+    expect(validateImportEntry({ name: true, listen_port: 10000, dest: ['1.1.1.1:80'] })).toMatch(/name/);
+    expect(validateImportEntry({ name: { x: 1 }, listen_port: 10000, dest: ['1.1.1.1:80'] })).toMatch(/name/);
+    expect(validateImportEntry({ name: null, listen_port: 10000, dest: ['1.1.1.1:80'] })).toMatch(/name/);
+  });
+
+  it('rejects a string listen_port (does not silently coerce "80")', () => {
+    expect(validateImportEntry({ name: 'r1', listen_port: '80', dest: ['1.1.1.1:80'] })).toMatch(/listen_port/);
+    expect(validateImportEntry({ name: 'r1', listen_port: true, dest: ['1.1.1.1:80'] })).toMatch(/listen_port/);
+    expect(validateImportEntry({ name: 'r1', listen_port: NaN, dest: ['1.1.1.1:80'] })).toMatch(/listen_port/);
+  });
+
+  it('rejects a string dest (was crashing on .length of a string)', () => {
+    expect(validateImportEntry({ name: 'r1', listen_port: 10000, dest: '1.1.1.1:80' })).toMatch(/dest/);
+    expect(validateImportEntry({ name: 'r1', listen_port: 10000, dest: { host: 'x' } })).toMatch(/dest/);
+    expect(validateImportEntry({ name: 'r1', listen_port: 10000, dest: null })).toMatch(/dest/);
+  });
+
+  it('rejects a non-string element inside dest', () => {
+    expect(validateImportEntry({ name: 'r1', listen_port: 10000, dest: [123] })).toMatch(/dest format/);
+    expect(validateImportEntry({ name: 'r1', listen_port: 10000, dest: [null] })).toMatch(/dest format/);
+    expect(validateImportEntry({ name: 'r1', listen_port: 10000, dest: [{ host: 'x', port: 1 }] })).toMatch(/dest format/);
+  });
+
+  it('still accepts a well-formed entry (sanity)', () => {
+    expect(validateImportEntry({ name: 'r1', listen_port: 10000, dest: ['1.1.1.1:80', '[2001:db8::1]:443'] })).toBeNull();
+  });
+});
+
+describe('asValidatedEntry', () => {
+  it('coerces a validated entry to its typed form', () => {
+    const e = { name: 'r1', listen_port: 10000, dest: ['1.1.1.1:80'] };
+    expect(validateImportEntry(e)).toBeNull();
+    const typed = asValidatedEntry(e);
+    expect(typed.name).toBe('r1');
+    expect(typed.listen_port).toBe(10000);
+    expect(typed.dest).toEqual(['1.1.1.1:80']);
   });
 });
 

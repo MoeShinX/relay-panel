@@ -23,6 +23,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   whitespace-trim cases. `Rules.tsx` now imports the shared helpers (removing
   the duplicated dest regex).
 
+### Fixed — rule import no longer crashes on malformed input
+
+- **`validateImportEntry` now runtime-type-checks every field** of the pasted
+  JSON (it receives `unknown`, straight from `JSON.parse`). A malformed paste —
+  e.g. `{"name": 123, "listen_port": "80", "dest": "1.2.3.4:80"}`, a bare
+  primitive, `null`, or an array where an entry object was expected — now
+  produces a clean per-entry "❌" error in the import results instead of
+  throwing (`.trim is not a function`, etc.). `handleImport` likewise labels
+  non-object entries safely and only casts via the new `asValidatedEntry`
+  helper after validation. Covered by 9 new "anomalous input does not crash"
+  tests.
+
 ---
 
 ## [1.1.0] - 2026-07-02
