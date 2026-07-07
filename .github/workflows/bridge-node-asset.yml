@@ -1,0 +1,117 @@
+name: Bridge node asset to panel tag
+
+# ONE-TIME TRANSITION (v1.2 panel/node track split).
+#
+# Nodes running <= 1.1.0 use the PRE-SPLIT updater, which downloads its upgrade
+# binary from the JOINT `v{version}` tag. After the split, `v{version}` is a
+# PANEL-ONLY release (a docker image, no node binary), so an old node told to
+# upgrade to e.g. 1.1.1 would fetch `v1.1.1/relay-node-linux-*` and 404.
+#
+# This workflow copies the ALREADY-VERIFIED node binaries from a PUBLISHED
+# `node-v{version}` release onto the matching `v{version}` panel release, so
+# those old nodes can complete their one and only cross-track upgrade. From
+# 1.1.1 onward nodes use the `node-v*` scheme and never need this again — which
+# is exactly why this is a manual, one-shot workflow and NOT wired into the
+# node release pipeline.
+#
+# HARD SAFETY — this MUST preserve the node track's "invisible until verified"
+# guarantee. Old nodes have NO notion of draft/verify: they trust any URL that
+# returns a file plus its sha256. So this workflow:
+#   * NEVER compiles a fresh binary — it only re-publishes assets that already
+#     passed node-v{version}'s own draft -> verify -> promote -> publish flow;
+#   * refuses to run unless node-v{version} is PUBLISHED (not a draft);
+#   * RE-VERIFIES the sha256 (and ELF-ness) locally before uploading, so a
+#     truncated/corrupt copy can never be attached;
+#   * aborts without touching the panel release if any check fails.
+# Run it only AFTER node-v{version} is fully green AND the panel v{version}
+# release exists.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to bridge (bare semver, e.g. 1.1.1). Copies node-v<version> assets onto v<version>.'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  bridge:
+    name: Copy verified node binaries onto the panel tag
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Resolve + validate tags
+        id: t
+        run: |
+          VER="${{ inputs.version }}"
+          # Bare X.Y.Z only — no leading 'v', no 'node-' prefix, no slashes /
+          # path traversal. This value ends up in tag names and file operations.
+          if ! printf '%s' "$VER" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version must be a bare semver like 1.1.1 (got '$VER')"
+            exit 1
+          fi
+          echo "node_tag=node-v${VER}" >> "$GITHUB_OUTPUT"
+          echo "panel_tag=v${VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Require a PUBLISHED node-v release (never a draft)
+        run: |
+          NODE_TAG="${{ steps.t.outputs.node_tag }}"
+          # isDraft==false is the whole point: a draft means node-v*'s verify
+          # hasn't published yet, and bridging it would defeat the
+          # "invisible until verified" gate that protects unaware old nodes.
+          IS_DRAFT=$(gh release view "$NODE_TAG" --json isDraft -q .isDraft 2>/dev/null || echo "missing")
+          if [ "$IS_DRAFT" = "missing" ]; then
+            echo "::error::node release $NODE_TAG not found — run this only AFTER node-v${{ inputs.version }} is fully published."
+            exit 1
+          fi
+          if [ "$IS_DRAFT" != "false" ]; then
+            echo "::error::node release $NODE_TAG is still a DRAFT — it must finish verify+publish before bridging."
+            exit 1
+          fi
+          echo "node release $NODE_TAG is published."
+
+      - name: Require the panel v release to exist
+        run: |
+          PANEL_TAG="${{ steps.t.outputs.panel_tag }}"
+          if ! gh release view "$PANEL_TAG" >/dev/null 2>&1; then
+            echo "::error::panel release $PANEL_TAG not found — publish panel v${{ inputs.version }} first."
+            exit 1
+          fi
+          echo "panel release $PANEL_TAG exists."
+
+      - name: Download the verified node assets
+        run: |
+          NODE_TAG="${{ steps.t.outputs.node_tag }}"
+          mkdir -p bridge
+          gh release download "$NODE_TAG" --pattern 'relay-node-linux-*' --dir bridge
+          echo "----- downloaded -----"
+          ls -l bridge
+          # Both arches + their sha256 must be present (4 files).
+          for f in relay-node-linux-amd64 relay-node-linux-amd64.sha256 \
+                   relay-node-linux-arm64 relay-node-linux-arm64.sha256; do
+            test -f "bridge/$f" || { echo "::error::missing asset $f in $NODE_TAG"; exit 1; }
+          done
+
+      - name: Re-verify sha256 + ELF (second safety net)
+        run: |
+          cd bridge
+          # Re-run the published checksums against the downloaded binaries.
+          sha256sum -c relay-node-linux-amd64.sha256
+          sha256sum -c relay-node-linux-arm64.sha256
+          # Confirm they're real ELF binaries, not a truncated file / HTML error.
+          file relay-node-linux-amd64 | grep -q ELF
+          file relay-node-linux-arm64 | grep -q ELF
+
+      - name: Attach verified assets to the panel release
+        run: |
+          PANEL_TAG="${{ steps.t.outputs.panel_tag }}"
+          cd bridge
+          # --clobber makes the bridge idempotent (safe to re-run).
+          gh release upload "$PANEL_TAG" \
+            relay-node-linux-amd64 relay-node-linux-amd64.sha256 \
+            relay-node-linux-arm64 relay-node-linux-arm64.sha256 \
+            --clobber
+          echo "::notice::Bridged node-v${{ inputs.version }} binaries onto $PANEL_TAG — old (<=1.1.0) nodes can now complete their one cross-track upgrade."
