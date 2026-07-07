@@ -49,6 +49,11 @@ independent `v*` / `node-v*` tracks since this release).
   over the version status. **A failed node-version check** shows a neutral
   state instead of a wrong green check or upgrade button. **A node newer than
   the latest node release** is shown as a "leading build" and never downgraded.
+  The mobile node list now has the SAME upgrade affordance (version tag +
+  upgrade button / docker-hint / manual-disabled / offline-disabled / protocol-
+  incompatible ladder) as the desktop table, via a shared `resolveNodeUpgrade`
+  helper so the two views can't drift — and it compares against
+  `latest_node_version` like the desktop, never the panel version.
 - **Node self-upgrade download URLs** use the `node-v{version}` path from 1.1.1
   onward, with a bounded fallback to the legacy `v{version}` path for 1.1.0 and
   earlier (where those binaries were originally published). The
