@@ -64,14 +64,21 @@ independent `v*` / `node-v*` tracks since this release).
 
 ### Fixed — node release gating & installer re-bind
 
-- **`:latest` is now promoted only AFTER verification passes.** The node
-  release workflow previously pushed `:X.Y.Z` and `:latest` in one build step,
-  so a release whose image reported the wrong version (or whose binary failed
-  sha256) had already repointed `:latest` at a broken image. Now `docker-node`
-  pushes the version tag only; `verify` runs (sha256 + binary `--version` +
-  image `--version`); only then does a separate `promote-latest` job re-tag the
-  verified `:X.Y.Z` image as `:latest` (`docker buildx imagetools create`). A
-  failed release can never move `:latest`.
+- **`:latest` and the stable GitHub Release are now promoted only AFTER
+  verification passes.** The node release workflow previously pushed
+  `:X.Y.Z` and `:latest` in one build step AND created the GitHub Release as
+  stable + `make_latest: true` before `verify` ran — so a release whose image
+  reported the wrong version (or whose binary failed sha256) had already
+  repointed `:latest`, marked a broken node version as the repo's "Latest"
+  (hijacking the README's "latest panel version" badge), and left an advertised
+  stable Release behind. Now: `docker-node` pushes the version tag only;
+  `build-and-upload` creates the Release as a **prerelease** with
+  **`make_latest: false`** (a node release never becomes the repo's Latest);
+  `verify` runs (sha256 + binary `--version` + image `--version`); only then
+  does `promote-latest` re-tag the verified `:X.Y.Z` image as `:latest`
+  (`docker buildx imagetools create`) and `publish-release` flip the Release to
+  stable. A failed release stays a prerelease and never moves `:latest` or the
+  repo Latest pointer.
 - **Re-running the installer at the same version now refreshes the panel binding
   and systemd unit instead of exiting.** Previously an "already at version X"
   detection exited immediately, so re-running with a new `-t`/`-u` (to repoint
@@ -80,6 +87,9 @@ independent `v*` / `node-v*` tracks since this release).
   NODE_TOKEN), the env file, and the systemd unit are rewritten and the service
   is restarted, so the new panel address/token take effect without touching the
   binary.
+- **The installer now reports the version it actually installs** (the resolved
+  `TARGET_VERSION`, which may come from `--version`), not the script's bundled
+  `SCRIPT_VERSION`, in its download/summary/checksum-failure messages.
 
 ---
 

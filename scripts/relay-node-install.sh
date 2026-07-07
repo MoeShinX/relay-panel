@@ -223,7 +223,7 @@ if [ -n "$PROXY" ]; then
     CURL_OPTS+=(--proxy "$PROXY")
 fi
 
-info "Downloading relay-node v${SCRIPT_VERSION} (${ARCH}) ..."
+info "Downloading relay-node v${TARGET_VERSION} (${ARCH}) ..."
 info "  URL: $DOWNLOAD_URL"
 mkdir -p "$INSTALL_DIR"
 
@@ -236,7 +236,7 @@ if ! curl "${CURL_OPTS[@]}" "$DOWNLOAD_URL" -o "$TMP_BINARY"; then
     echo ""
     fail "Download failed. Possible causes:
   - GitHub Releases is blocked or slow in your network
-  - Release v${SCRIPT_VERSION} does not have asset ${ASSET_NAME}
+  - Release v${TARGET_VERSION} does not have asset ${ASSET_NAME}
   - Proxy is misconfigured (if you passed -p)
 
 Try one of:
@@ -322,7 +322,7 @@ To bypass (NOT recommended), re-run with SKIP_CHECKSUM=1."
         # GitHub Releases is REQUIRED to ship a checksum. Missing = hard fail.
         rm -f "$TMP_BINARY" "$TMP_CHECKSUM"
         fail "Checksum file not found at ${CHECKSUM_URL}.
-Release v${SCRIPT_VERSION} is expected to publish a .sha256. The download was
+Release v${TARGET_VERSION} is expected to publish a .sha256. The download was
 discarded. To bypass (NOT recommended): SKIP_CHECKSUM=1"
     else
         warn "No checksum available at mirror (${CHECKSUM_URL}); skipping verification.
@@ -511,7 +511,7 @@ info "=========================================="
 echo ""
 echo "  Service:   ${SERVICE_NAME}"
 echo "  Binary:    ${BINARY}"
-echo "  Version:   v${SCRIPT_VERSION}"
+echo "  Version:   v${TARGET_VERSION}"
 echo "  Panel:     ${PANEL_URL}"
 echo ""
 echo "  Logs:      journalctl -u ${SERVICE_NAME} -f"

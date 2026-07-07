@@ -114,15 +114,24 @@ jobs:
           echo "----- release body preview -----"
           cat RELEASE_BODY.md
 
-      - name: Upload to GitHub Release (node-v* tag)
+      # v1.2 (release gate): upload the binaries to the node-v* GitHub Release
+      # as a PRERELEASE with make_latest: false. The Release is created here so
+      # `verify` (next job) can download the assets via `gh release download`,
+      # BUT it is NOT yet marked stable, and crucially make_latest:false means a
+      # node release NEVER hijacks the repo's "Latest" pointer (which would make
+      # the README's "latest panel version" badge link to a node version). Only
+      # after `verify` passes does `publish-release` flip this to a stable
+      # (non-prerelease) release — a release that fails verification stays a
+      # prerelease and is never advertised to the installer/latest channels.
+      - name: Upload to GitHub Release (PRE-release, not latest)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           files: |
             ${{ matrix.asset_name }}
             ${{ matrix.asset_name }}.sha256
-          prerelease: false
-          make_latest: true
+          prerelease: true
+          make_latest: false
           name: ${{ steps.ver.outputs.tag }}
           body_path: RELEASE_BODY.md
 
@@ -268,3 +277,43 @@ jobs:
           echo "Promoting $IMAGE:$VERSION -> $IMAGE:latest (verified image)"
           docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE:$VERSION"
           echo "::notice::Promoted $IMAGE:$VERSION to :latest after verify passed"
+
+  # v1.2 (release gate): flip the GitHub Release from prerelease to stable ONLY
+  # after verify + promote-latest pass. build-and-upload created it as a
+  # prerelease (so a failed-verify release is never advertised as stable), and
+  # make_latest stays false so a node release never becomes the repo's "Latest"
+  # (that pointer belongs to panel v* releases — the README badge links there).
+  publish-release:
+    name: Publish GitHub Release (after verify)
+    needs: [verify, promote-latest]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: ver
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#node-v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=node-v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # Mark the existing (prerelease) Release as a stable release. make_latest
+      # is explicitly false: a node release must NOT take the repo's "Latest"
+      # pointer away from the panel. softprops/action-gh-release with the same
+      # tag_name edits the existing release in place (idempotent).
+      - name: Mark node Release as stable (make_latest: false)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
+          prerelease: false
+          make_latest: 'false'
+          # body_path is omitted here; build-and-upload already set the body
+          # from CHANGELOG-NODE.md when it created the prerelease.
+
