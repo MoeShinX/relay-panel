@@ -15,6 +15,7 @@ import { useI18n } from '../i18n/context';
 import api from '../api/client';
 import type { ApiEnvelope } from '../api/types';
 import { useAuth } from '../auth/useAuth';
+import { makePasswordValidator } from '../utils/password';
 
 const { Sider, Content, Header } = Layout;
 const { Text } = Typography;
@@ -150,7 +151,10 @@ export default function MainLayout() {
           <Form.Item
             name="new_password"
             label={t('newPassword')}
-            rules={[{ required: true, min: 6, message: t('newPasswordTooShort') }]}
+            rules={[
+              { required: true, message: t('passwordRequired') },
+              { validator: makePasswordValidator(t('newPasswordTooShort'), t('passwordTooLong')) },
+            ]}
           >
             <Input.Password autoComplete="new-password" />
           </Form.Item>
