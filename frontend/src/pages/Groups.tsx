@@ -153,7 +153,7 @@ export default function Groups() {
       body: (
         <>
           {(isLocalhost() || panelUrl.includes("127.0.0.1") || panelUrl.includes("localhost") || panelUrl.includes("0.0.0.0")) && (
-            <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={t('localhostWarning')} />
+            <Alert type="warning" showIcon style={{ marginBottom: 12 }} title={t('localhostWarning')} />
           )}
           <Input.TextArea value={cmd} readOnly autoSize={{ minRows: 3, maxRows: 5 }} style={{ fontFamily: 'var(--rp-font-mono)', fontSize: 12 }} />
           <div style={{ textAlign: 'right', marginTop: 8 }}>
@@ -205,7 +205,7 @@ export default function Groups() {
         <Space>
           <Text code style={{ maxWidth: 180 }} ellipsis>{tk}</Text>
           <Tooltip title={t('copyInstallCommand')}>
-            <Button size="small" type="text" icon={<CodeOutlined />} onClick={() => showInstallCommand(g)} />
+            <Button size="small" type="text" icon={<CodeOutlined />} aria-label={t('copyInstallCommand')} onClick={() => showInstallCommand(g)} />
           </Tooltip>
         </Space>
       ),

@@ -1,6 +1,6 @@
-import { Layout, Menu, Button, Space, Typography, Segmented, Modal, Form, Input, message } from 'antd';
+import { Layout, Menu, Button, Space, Typography, Segmented, Modal, Form, Input, message, Spin } from 'antd';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { useState } from 'react';
+import { useState, Suspense } from 'react';
 import {
   DashboardOutlined,
   ApiOutlined,
@@ -126,7 +126,12 @@ export default function MainLayout() {
           </Space>
         </Header>
         <Content style={{ margin: 'var(--rp-content-padding)', background: 'var(--rp-bg)' }}>
-          <Outlet />
+          {/* v1.2 (PR4): lazy-loaded pages (router.tsx) suspend here on first
+              navigation to their chunk, showing a centered spinner instead of a
+              blank pane. */}
+          <Suspense fallback={<div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>}>
+            <Outlet />
+          </Suspense>
         </Content>
       </Layout>
 

@@ -111,7 +111,7 @@ export default function Register() {
               name="username"
               rules={[{ required: true, message: t('usernameRequired') }]}
             >
-              <Input prefix={<UserOutlined style={{ color: 'var(--rp-text-tertiary)' }} />} placeholder={t('username')} />
+              <Input prefix={<UserOutlined style={{ color: 'var(--rp-text-tertiary)' }} />} placeholder={t('username')} aria-label={t('username')} />
             </Form.Item>
             <Form.Item
               name="password"
@@ -128,7 +128,7 @@ export default function Register() {
                 },
               ]}
             >
-              <Input.Password prefix={<LockOutlined style={{ color: 'var(--rp-text-tertiary)' }} />} placeholder={t('password')} />
+              <Input.Password prefix={<LockOutlined style={{ color: 'var(--rp-text-tertiary)' }} />} placeholder={t('password')} aria-label={t('password')} />
             </Form.Item>
             <Form.Item
               name="confirm_password"
@@ -149,6 +149,7 @@ export default function Register() {
                 prefix={<LockOutlined style={{ color: 'var(--rp-text-tertiary)' }} />}
                 placeholder={t('confirmPassword')}
                 autoComplete="new-password"
+                aria-label={t('confirmPassword')}
               />
             </Form.Item>
 

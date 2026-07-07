@@ -37,8 +37,8 @@ describe('resolveNodeUpgrade — eligibility ladder (shared by desktop + mobile)
     expect(resolveNodeUpgrade(row({ node_version: '1.1.0' }), '1.1.0', 0, false).state).toBe('latest');
   });
 
-  it('returns "latest" when node > compareVersion (ahead, never stale)', () => {
-    expect(resolveNodeUpgrade(row({ node_version: '1.2.0' }), '1.1.0', 0, false).state).toBe('latest');
+  it('returns "ahead" when node > compareVersion (leading build, never stale, never downgraded)', () => {
+    expect(resolveNodeUpgrade(row({ node_version: '1.2.0' }), '1.1.0', 0, false).state).toBe('ahead');
   });
 
   it('returns "docker" when behind + docker install', () => {

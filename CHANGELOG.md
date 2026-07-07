@@ -97,6 +97,36 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Changed — UI, mobile, performance, accessibility (PR4)
+
+- **Mobile node list now shows the version + a one-click upgrade affordance.**
+  The mobile card mirrors the desktop upgrade ladder exactly (already-latest →
+  green check; systemd+behind+online → upgrade button; docker → "update image";
+  manual/unknown → disabled; offline → disabled; protocol-incompatible → red
+  tag), via a shared `resolveNodeUpgrade` helper so the two views can't drift.
+  Non-admins see no upgrade UI.
+- **Pages are now code-split.** Every page (`Dashboard`/`Rules`/`Users`/`Plans`/
+  `Groups`/`NodeStatus`/…) loads via `React.lazy` on first navigation, so the
+  login page no longer pulls in the admin pages. Vendor libs are split into
+  their own chunks (`react-vendor`, `antd`, `icons`, `semver`). The login entry
+  chunk is ~115 KB (was the whole app); the heavy antd chunk is isolated and
+  caches independently.
+- **Cleaned up real Ant Design v6 deprecation warnings** (verified by running
+  the test suite first): `Drawer width` → `size`, `Alert message` → `title`,
+  `Space direction` → `orientation`. Also silenced the known jsdom
+  `getComputedStyle(pseudoElt)` "Not implemented" noise in the test setup by
+  dropping the pseudo-element arg (a targeted fix — real console warnings are
+  still surfaced).
+- **Accessibility.** Icon-only buttons (rule target move-up / move-down / delete,
+  node upgrade, install-command copy) now have `aria-label`s. Login and Register
+  inputs carry an `aria-label` instead of relying on `placeholder`. Async result
+  regions (import results, diagnose loading) use `aria-live="polite"` /
+  `aria-busy`. Mobile upgrade tap targets are ≥32×32 px.
+
+---
+
 ## [1.1.0] - 2026-07-02
 
 Minor release headlined by **one-click remote node upgrades** from the panel,

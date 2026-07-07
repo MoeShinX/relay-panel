@@ -81,16 +81,16 @@ export default function Login() {
             type="warning"
             showIcon
             style={{ marginBottom: 16, fontSize: 12 }}
-            message={t('changeDefaultPasswordWarning')}
+            title={t('changeDefaultPasswordWarning')}
           />
         )}
 
         <Form onFinish={onFinish} size="large">
           <Form.Item name="username" rules={[{ required: true, message: t('usernameRequired') }]}>
-            <Input prefix={<UserOutlined style={{ color: 'var(--rp-text-tertiary)' }} />} placeholder={t('username')} />
+            <Input prefix={<UserOutlined style={{ color: 'var(--rp-text-tertiary)' }} />} placeholder={t('username')} aria-label={t('username')} />
           </Form.Item>
           <Form.Item name="password" rules={[{ required: true, message: t('passwordRequired') }]}>
-            <Input.Password prefix={<LockOutlined style={{ color: 'var(--rp-text-tertiary)' }} />} placeholder={t('password')} />
+            <Input.Password prefix={<LockOutlined style={{ color: 'var(--rp-text-tertiary)' }} />} placeholder={t('password')} aria-label={t('password')} />
           </Form.Item>
           <Form.Item style={{ marginBottom: 12 }}>
             <Button type="primary" htmlType="submit" block>{t('login')}</Button>

@@ -63,7 +63,7 @@ export default function ForcePasswordChange() {
           type="warning"
           showIcon
           style={{ marginBottom: 16, fontSize: 13 }}
-          message={t('forcePasswordChangeDesc')}
+          title={t('forcePasswordChangeDesc')}
         />
         <Form onFinish={onFinish} layout="vertical">
           <Form.Item

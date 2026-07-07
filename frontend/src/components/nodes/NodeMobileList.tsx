@@ -141,6 +141,16 @@ function MobileUpgradeAffordance({
           </span>
         </Tooltip>
       );
+    case 'ahead':
+      // leading build (node newer than the latest node release): green check
+      // with a "leading build" tooltip, never an upgrade/downgrade offer.
+      return (
+        <Tooltip title={t('nodeVersionAhead')}>
+          <span style={tapStyle} aria-label={t('nodeVersionAhead')} role="img">
+            <CheckCircleOutlined style={{ color: '#52c41a' }} />
+          </span>
+        </Tooltip>
+      );
     case 'docker':
       return (
         <Tooltip title={t('nodeUpgradeDocker')}>

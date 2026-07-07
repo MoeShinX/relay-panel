@@ -647,7 +647,7 @@ const IMPORT_DEFAULTS = {
     return (
       <Alert
         type="info" showIcon style={{ marginBottom: 12, padding: '4px 12px' }}
-        message={t('currentInboundHost').replace('{host}', host || t('notConfigured'))}
+        title={t('currentInboundHost').replace('{host}', host || t('notConfigured'))}
       />
     );
   };
@@ -655,7 +655,7 @@ const IMPORT_DEFAULTS = {
   const renderTargetsEditor = () => (
     <Form.List name="targets" initialValue={[{ host: '', port: undefined as unknown as number, enabled: true }]}>
       {(fields, { add, remove, move }) => (
-        <Space direction="vertical" style={{ width: '100%' }}>
+        <Space orientation="vertical" style={{ width: '100%' }}>
           <Text strong>{t('targets')}</Text>
           {fields.map((field, index) => (
             <Space key={field.key} align="baseline" wrap>
@@ -696,9 +696,9 @@ const IMPORT_DEFAULTS = {
               >
                 <Switch size="small" />
               </Form.Item>
-              <Button size="small" icon={<ArrowUpOutlined />} disabled={index === 0} onClick={() => move(index, index - 1)} />
-              <Button size="small" icon={<ArrowDownOutlined />} disabled={index === fields.length - 1} onClick={() => move(index, index + 1)} />
-              <Button size="small" danger icon={<DeleteOutlined />} disabled={fields.length <= 1} onClick={() => remove(field.name)} />
+              <Button size="small" icon={<ArrowUpOutlined />} aria-label={t('moveTargetUp')} disabled={index === 0} onClick={() => move(index, index - 1)} />
+              <Button size="small" icon={<ArrowDownOutlined />} aria-label={t('moveTargetDown')} disabled={index === fields.length - 1} onClick={() => move(index, index + 1)} />
+              <Button size="small" danger icon={<DeleteOutlined />} aria-label={t('deleteTarget')} disabled={fields.length <= 1} onClick={() => remove(field.name)} />
             </Space>
           ))}
           <Button size="small" icon={<PlusOutlined />} onClick={() => add({ host: '', port: undefined as unknown as number, enabled: true })}>{t('addTarget')}</Button>
@@ -767,7 +767,7 @@ const IMPORT_DEFAULTS = {
       {/* v0.4.20: admin viewing another user's rules — show who. */}
       {filterOwnerUid && (
         <Alert type="info" showIcon style={{ marginBottom: 12 }}
-          message={t('viewingUserRules').replace('{user}', userMap.get(filterOwnerUid) ?? `#${filterOwnerUid}`)}
+          title={t('viewingUserRules').replace('{user}', userMap.get(filterOwnerUid) ?? `#${filterOwnerUid}`)}
         />
       )}
       {/* v0.4.12 PR1: a regular user whose shared-lines fetch failed sees a
@@ -778,7 +778,7 @@ const IMPORT_DEFAULTS = {
           type="error"
           showIcon
           style={{ marginBottom: 12 }}
-          message={t('loadFailed')}
+          title={t('loadFailed')}
           description={t('loadFailedRetry')}
         />
       )}
@@ -801,7 +801,7 @@ const IMPORT_DEFAULTS = {
                     users always own their own rules. */}
                 {filterOwnerUid && (
                   <Alert type="info" showIcon style={{ marginBottom: 12 }}
-                    message={t('creatingRuleFor').replace('{user}', userMap.get(filterOwnerUid) ?? `#${filterOwnerUid}`)}
+                    title={t('creatingRuleFor').replace('{user}', userMap.get(filterOwnerUid) ?? `#${filterOwnerUid}`)}
                   />
                 )}
                 {renderHostHint(createGroupId)}
@@ -833,7 +833,7 @@ const IMPORT_DEFAULTS = {
                   type="info"
                   showIcon
                   style={{ fontSize: 12, marginBottom: 16 }}
-                  message={t('lbStrategyBlockTitle')}
+                  title={t('lbStrategyBlockTitle')}
                   description={
                     <div>
                       <div>• {t('lbFirstDesc')}</div>
@@ -847,7 +847,7 @@ const IMPORT_DEFAULTS = {
                   label={<span>{t('rateLimits')} <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{t('rateLimitsTooltip')}</span>} overlayStyle={{ maxWidth: 340 }}><QuestionCircleOutlined style={{ color: '#999' }} /></Tooltip></span>}
                   extra={t('rateLimitsHint')}
                 >
-                  <Space direction="vertical" style={{ width: '100%' }}>
+                  <Space orientation="vertical" style={{ width: '100%' }}>
                     <Form.Item name="upload_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('uploadLimit')} addonAfter="Mbps" style={{ width: '100%' }} placeholder="0" /></Form.Item>
                     <Form.Item name="download_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('downloadLimit')} addonAfter="Mbps" style={{ width: '100%' }} placeholder="0" /></Form.Item>
                   </Space>
@@ -899,7 +899,7 @@ const IMPORT_DEFAULTS = {
                   type="info"
                   showIcon
                   style={{ fontSize: 12, marginBottom: 16 }}
-                  message={t('lbStrategyBlockTitle')}
+                  title={t('lbStrategyBlockTitle')}
                   description={
                     <div>
                       <div>• {t('lbFirstDesc')}</div>
@@ -913,7 +913,7 @@ const IMPORT_DEFAULTS = {
                   label={<span>{t('rateLimits')} <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{t('rateLimitsTooltip')}</span>} overlayStyle={{ maxWidth: 340 }}><QuestionCircleOutlined style={{ color: '#999' }} /></Tooltip></span>}
                   extra={t('rateLimitsHint')}
                 >
-                  <Space direction="vertical" style={{ width: '100%' }}>
+                  <Space orientation="vertical" style={{ width: '100%' }}>
                     <Form.Item name="upload_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('uploadLimit')} addonAfter="Mbps" style={{ width: '100%' }} placeholder="0" /></Form.Item>
                     <Form.Item name="download_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('downloadLimit')} addonAfter="Mbps" style={{ width: '100%' }} placeholder="0" /></Form.Item>
                   </Space>
@@ -939,12 +939,12 @@ const IMPORT_DEFAULTS = {
                 placeholder={t('selectDeviceGroups')} style={{ width: '100%' }} />
             </Form.Item>
             <Alert type="info" showIcon style={{ marginBottom: 12 }}
-              message={t('importHint')} />
+              title={t('importHint')} />
             <TextArea value={importText} onChange={e => setImportText(e.target.value)}
               rows={10} placeholder='[{"dest":["1.2.3.4:8080"],"listen_port":38446,"name":"SK5"}]' />
           </>
         ) : (
-          <div style={{ maxHeight: 300, overflowY: 'auto' }}>
+          <div style={{ maxHeight: 300, overflowY: 'auto' }} aria-live="polite" aria-label={t('import')}>
             {importResults.map((r, i) => <div key={i} style={{ fontFamily: 'var(--rp-font-mono)', fontSize: 13, lineHeight: 1.8 }}>{r}</div>)}
           </div>
         )}
@@ -960,11 +960,11 @@ const IMPORT_DEFAULTS = {
         width={720}
       >
         {diagnoseLoading ? (
-          <div style={{ textAlign: 'center', padding: 32 }}><Spin tip={t('diagnoseRunning')} /></div>
+          <div style={{ textAlign: 'center', padding: 32 }} aria-live="polite" aria-busy="true"><Spin tip={t('diagnoseRunning')} /></div>
         ) : diagnoseResult ? (
           <>
             <Alert type="info" showIcon style={{ marginBottom: 16 }}
-              message={t('diagnoseScopeHint')} />
+              title={t('diagnoseScopeHint')} />
             {/* v0.4.14: only the relay-node's OWN TCP diagnosis is shown — the
                 node's listener status + its node→target TCP connectivity/latency.
                 The latency is the node→target TCP handshake time, NOT a client
@@ -973,7 +973,7 @@ const IMPORT_DEFAULTS = {
             {diagnoseResult.nodes.length === 0 ? (
               <Text type="secondary">{t('diagnoseNoNodes')}</Text>
             ) : (
-              <Space direction="vertical" style={{ width: '100%' }}>
+              <Space orientation="vertical" style={{ width: '100%' }}>
                 {diagnoseResult.nodes.map((n, i) => (
                   <DiagnoseNodeRow key={i} node={n} t={t} isAdmin={isAdmin} />
                 ))}

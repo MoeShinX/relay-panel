@@ -96,7 +96,7 @@ export default function Shop() {
           type="warning"
           showIcon
           style={{ marginBottom: 16 }}
-          message={t('accountSuspended')}
+          title={t('accountSuspended')}
           description={t('shopSuspendedHint')}
         />
       )}
@@ -186,9 +186,9 @@ export default function Shop() {
                 remaining traffic and expiry are wiped. Warn explicitly. Buying
                 the SAME plan (or having none) just renews/stacks. */}
             {me?.plan_id != null && buying.id !== me.plan_id ? (
-              <Alert type="warning" showIcon style={{ marginTop: 8 }} message={t('shopSwitchPlanWarning')} />
+              <Alert type="warning" showIcon style={{ marginTop: 8 }} title={t('shopSwitchPlanWarning')} />
             ) : (
-              <Alert type="info" showIcon style={{ marginTop: 8 }} message={t('shopTrafficStacksHint')} />
+              <Alert type="info" showIcon style={{ marginTop: 8 }} title={t('shopTrafficStacksHint')} />
             )}
           </div>
         )}

@@ -7,6 +7,7 @@ import { NodeResourceBar, NodeDiskBar } from './NodeResourceBar';
 import { formatBps, formatBytes, formatUptime, formatPercent } from '../../utils/format';
 import { versionRelation, versionTagColor } from '../../utils/version';
 import { NetworkCell } from './shared';
+import { resolveNodeUpgrade } from './upgrade';
 
 interface Props {
   rows: NodeDisplayRow[];
@@ -56,44 +57,46 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
         return <Tag color={versionTagColor(rel)}>{label}</Tag>;
       },
     },
-    // v1.0.10: admin-only per-node upgrade icon. v1.2: compared against the
-    // latest node release (NOT the panel version), protocol-incompatible takes
-    // priority, and a failed node-version check shows an unknown state.
+    // v1.0.10: admin-only per-node upgrade icon. v1.2 (PR4+PR5 reconciled): the
+    // eligibility ladder is shared with the mobile list via resolveNodeUpgrade
+    // (PR4) AND compared against the latest NODE release with a failed-check
+    // neutral state (PR5). Protocol-incompatible and a failed lookup both take
+    // priority over version status.
     ...(onUpgrade ? [{
       title: t('nodeUpgrade'), key: 'upgrade', width: 72,
       render: (_: unknown, r: NodeDisplayRow) => {
-        if (!r.node_id) return <Typography.Text type="secondary">-</Typography.Text>;
-        // v1.2: protocol-incompatible takes priority over any version status.
-        const pv = r.config_protocol_version;
-        if (pv != null && panelProtocol > 0 && pv !== panelProtocol) {
-          return <Tag color="red">{t('protocolIncompatible')}</Tag>;
+        const { state } = resolveNodeUpgrade(r, latestNodeVersion, panelProtocol, nodeVersionCheckFailed);
+        switch (state) {
+          case 'none':
+          case 'checkFailed':
+          case 'unknown':
+            return <Typography.Text type="secondary">-</Typography.Text>;
+          case 'latest':
+            return <Tooltip title={t('nodeUpgradeLatest')}><CheckCircleOutlined style={{ color: '#52c41a' }} /></Tooltip>;
+          case 'ahead':
+            return <Tooltip title={t('nodeVersionAhead')}><CheckCircleOutlined style={{ color: '#52c41a' }} /></Tooltip>;
+          case 'docker':
+            return <Tooltip title={t('nodeUpgradeDocker')}><CloudServerOutlined style={{ color: '#faad14' }} /></Tooltip>;
+          case 'manual':
+            return <Tooltip title={t('nodeUpgradeManual')}><CloudDownloadOutlined style={{ color: '#bfbfbf' }} /></Tooltip>;
+          case 'protocolIncompatible':
+            return <Tag color="red">{t('protocolIncompatible')}</Tag>;
+          case 'upgradeable':
+            return (
+              <Tooltip title={t('nodeUpgradeTip').replace('{v}', latestNodeVersion)}>
+                <Button
+                  size="small"
+                  type="link"
+                  icon={<CloudDownloadOutlined />}
+                  aria-label={t('nodeUpgrade')}
+                  onClick={() => onUpgrade(r)}
+                />
+              </Tooltip>
+            );
+          case 'offline':
+          default:
+            return <Tooltip title={t('offline')}><CloudDownloadOutlined style={{ color: '#bfbfbf' }} /></Tooltip>;
         }
-        // v1.2: node-version lookup failed → unknown state, no green check, no button.
-        if (nodeVersionCheckFailed) {
-          return <Typography.Text type="secondary">-</Typography.Text>;
-        }
-        const rel = versionRelation(r.node_version, latestNodeVersion);
-        // Version unknown/unparseable → neutral placeholder, never a green
-        // "up to date" we can't actually vouch for.
-        if (rel === 'unknown') return <Typography.Text type="secondary">-</Typography.Text>;
-        // same / ahead → up to date. (ahead = development/leading build; do NOT
-        // downgrade or flag it — just treat as current.)
-        if (rel !== 'behind') {
-          return <Tooltip title={rel === 'ahead' ? t('nodeVersionAhead') : t('nodeUpgradeLatest')}><CheckCircleOutlined style={{ color: '#52c41a' }} /></Tooltip>;
-        }
-        // Behind → the offer depends on how the node is installed.
-        if (r.install_method === 'docker') {
-          return <Tooltip title={t('nodeUpgradeDocker')}><CloudServerOutlined style={{ color: '#faad14' }} /></Tooltip>;
-        }
-        if (r.install_method !== 'systemd') {
-          // manual run or unknown install method — no supervisor to restart it.
-          return <Tooltip title={t('nodeUpgradeManual')}><CloudDownloadOutlined style={{ color: '#bfbfbf' }} /></Tooltip>;
-        }
-        return (
-          <Tooltip title={r.online ? t('nodeUpgradeTip').replace('{v}', latestNodeVersion) : t('offline')}>
-            <Button size="small" type="link" icon={<CloudDownloadOutlined />} disabled={!r.online} onClick={() => onUpgrade(r)} />
-          </Tooltip>
-        );
       },
     }] : []),
     {

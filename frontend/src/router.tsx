@@ -1,29 +1,59 @@
+// router.tsx is the route configuration (not a React component file). The
+// react-refresh/only-export-components rule flags the `lazy(() => ...)`` page
+// imports because it can't tell they're components — but fast-refresh doesn't
+// apply to a router config, so suppress the rule for this file only (targeted,
+// not a blanket suppression of real warnings).
+/* eslint-disable react-refresh/only-export-components */
+import { lazy, Suspense } from 'react';
 import { createBrowserRouter } from 'react-router-dom';
+import { Spin } from 'antd';
+// EAGER: the authenticated shell + its route guards load up front so the
+// sidebar/menu renders immediately after login (and the guards run before any
+// lazy chunk is fetched, so a 403 redirect doesn't wait on a page download).
 import MainLayout from './layouts/MainLayout';
-import Login from './pages/Login';
-import Register from './pages/Register';
-import Rules from './pages/Rules';
-import Groups from './pages/Groups';
-import Users from './pages/Users';
-import NodeStatus from './pages/NodeStatus';
-import Account from './pages/Account';
-import SystemSettings from './pages/SystemSettings';
-import Plans from './pages/Plans';
-import Shop from './pages/Shop';
-import ForcePasswordChange from './pages/ForcePasswordChange';
-import Forbidden from './pages/Forbidden';
-import RoleHome from './RoleHome';
 import { RequireAuth } from './RequireAuth';
 import { RequireAdmin } from './RequireAdmin';
+// LAZY: every full page is code-split so the login page (and the initial JS
+// payload) doesn't pull in Dashboard / Rules / Users / Plans / etc. Each page
+// loads on first navigation. The authenticated pages share a <Suspense> in
+// MainLayout (wrapping <Outlet/>); the top-level public pages wrap their own.
+const Login = lazy(() => import('./pages/Login'));
+const Register = lazy(() => import('./pages/Register'));
+const ForcePasswordChange = lazy(() => import('./pages/ForcePasswordChange'));
+const Rules = lazy(() => import('./pages/Rules'));
+const Groups = lazy(() => import('./pages/Groups'));
+const Users = lazy(() => import('./pages/Users'));
+const NodeStatus = lazy(() => import('./pages/NodeStatus'));
+const Account = lazy(() => import('./pages/Account'));
+const SystemSettings = lazy(() => import('./pages/SystemSettings'));
+const Plans = lazy(() => import('./pages/Plans'));
+const Shop = lazy(() => import('./pages/Shop'));
+const Forbidden = lazy(() => import('./pages/Forbidden'));
+const RoleHome = lazy(() => import('./RoleHome'));
+
+/** A centered spinner used as the Suspense fallback for lazy pages. */
+function PageSpin() {
+  return (
+    <div style={{ textAlign: 'center', padding: 48 }}>
+      <Spin />
+    </div>
+  );
+}
+
+/** Wrap a lazy element in its own Suspense (for top-level public routes that
+ *  don't go through MainLayout's <Outlet/> Suspense). */
+function withSuspense(el: React.ReactElement) {
+  return <Suspense fallback={<PageSpin />}>{el}</Suspense>;
+}
 
 export const router = createBrowserRouter([
-  { path: '/login', element: <Login /> },
+  { path: '/login', element: withSuspense(<Login />) },
   // v0.4.10 PR3: public self-service registration (guarded by registration-status on mount).
-  { path: '/register', element: <Register /> },
+  { path: '/register', element: withSuspense(<Register />) },
   // v0.4.10 PR4: forced password change. TOP-LEVEL (not under RequireAuth) so
   // RequireAuth's must-change redirect can't loop back to itself. The page
   // itself relies on the logged-in token to call PUT /user/password.
-  { path: '/force-password-change', element: <ForcePasswordChange /> },
+  { path: '/force-password-change', element: withSuspense(<ForcePasswordChange />) },
   {
     path: '/',
     element: <RequireAuth><MainLayout /></RequireAuth>,
@@ -34,7 +64,7 @@ export const router = createBrowserRouter([
       { index: true, element: <RoleHome /> },
       // Owner-scoped resources — any authenticated user manages their own.
       { path: 'rules', element: <Rules /> },
-	      { path: 'groups', element: <Groups /> },
+      { path: 'groups', element: <Groups /> },
       { path: 'nodes', element: <NodeStatus /> },
       { path: 'node-status', element: <NodeStatus /> },
       // v1.0.8: self-service shop (plan purchase + order history).

@@ -10,7 +10,8 @@
  * - node-version check failed → 'checkFailed' (neutral "-", no green check)
  * - protocol incompatible → 'protocolIncompatible' (priority over version)
  * - version unknown       → 'unknown' (render "-", never a green check)
- * - same / ahead          → 'latest' (green check)
+ * - same                  → 'latest' (green check, "up to date")
+ * - ahead                 → 'ahead' (green check, "leading build" — never stale)
  * - behind + docker       → 'docker' (amber "update image" hint)
  * - behind + non-systemd  → 'manual' (grey "no supervisor")
  * - behind + systemd      → 'upgradeable' if online, else 'offline'
@@ -24,6 +25,7 @@ export type NodeUpgradeState =
   | 'protocolIncompatible'
   | 'unknown'
   | 'latest'
+  | 'ahead'
   | 'docker'
   | 'manual'
   | 'upgradeable'
@@ -39,6 +41,11 @@ export interface NodeUpgrade {
  * `compareVersion` is the latest NODE release (NOT the panel version). When
  * `nodeVersionCheckFailed` is true the lookup failed and we MUST show a neutral
  * state (never a green check or an upgrade button based on a stale/empty value).
+ *
+ * 'latest' (node == compareVersion) and 'ahead' (node > compareVersion, e.g. a
+ * development build) are distinct states so the caller can show different
+ * tooltips ("up to date" vs "leading build"), but both render as a green check
+ * and neither ever offers a downgrade.
  */
 export function resolveNodeUpgrade(
   row: NodeDisplayRow,
@@ -57,9 +64,11 @@ export function resolveNodeUpgrade(
   }
   const rel = versionRelation(row.node_version, compareVersion);
   if (rel === 'unknown') return { state: 'unknown' };
-  if (rel !== 'behind') return { state: 'latest' };
-  // Behind → the offer depends on how the node is installed.
+  if (rel === 'ahead') return { state: 'ahead' };
+  if (rel === 'same') return { state: 'latest' };
+  // rel === 'behind' → the offer depends on how the node is installed.
   if (row.install_method === 'docker') return { state: 'docker' };
   if (row.install_method !== 'systemd') return { state: 'manual' };
   return { state: row.online ? 'upgradeable' : 'offline' };
 }
+

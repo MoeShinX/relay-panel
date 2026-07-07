@@ -203,7 +203,7 @@ export default function Dashboard() {
           type="warning"
           showIcon
           style={{ marginBottom: 16 }}
-          message={t('updateCheckFailed')}
+          title={t('updateCheckFailed')}
           description={versionInfo.error_message || t('versionCheckFailed')}
         />
       )}
@@ -212,7 +212,7 @@ export default function Dashboard() {
           type={versionInfo?.is_outdated ? 'error' : 'info'}
           showIcon
           style={{ marginBottom: 16 }}
-          message={bannerMsg}
+          title={bannerMsg}
           action={
             <Space>
               <Button size="small" onClick={handleIgnore}>{t('ignoreVersion')}</Button>
@@ -227,7 +227,7 @@ export default function Dashboard() {
           type="success"
           showIcon
           style={{ marginBottom: 16 }}
-          message={`${t('currentVersion')}: v${versionInfo.current_version} · ${t('upToDate')}`}
+          title={`${t('currentVersion')}: v${versionInfo.current_version} · ${t('upToDate')}`}
         />
       )}
 

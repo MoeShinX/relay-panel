@@ -45,7 +45,7 @@ export function NodeDetailDrawer({ row, open, onClose, isAdmin, panelProtocol, o
   const v6 = row?.public_ipv6;
 
   return (
-    <Drawer title={row?.group_name || t('resourceDetails')} open={open} onClose={onClose} width={440}>
+    <Drawer title={row?.group_name || t('resourceDetails')} open={open} onClose={onClose} size={440}>
       {row && (
         <Descriptions column={1} size="small" bordered>
           <Descriptions.Item label={t('status')}>

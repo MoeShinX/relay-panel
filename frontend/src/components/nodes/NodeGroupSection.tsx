@@ -68,7 +68,15 @@ export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeV
     </div>
   ) : isMobile ? (
     <div style={{ padding: 8 }}>
-      <NodeMobileList rows={rows} panelProtocol={panelProtocol} latestNodeVersion={latestNodeVersion} nodeVersionCheckFailed={nodeVersionCheckFailed} t={t} openDetail={openDetail} onUpgrade={onUpgrade} />
+      <NodeMobileList
+        rows={rows}
+        panelProtocol={panelProtocol}
+        latestNodeVersion={latestNodeVersion}
+        nodeVersionCheckFailed={nodeVersionCheckFailed}
+        t={t}
+        openDetail={openDetail}
+        onUpgrade={onUpgrade}
+      />
     </div>
   ) : (
     <NodeDesktopTable rows={rows} panelProtocol={panelProtocol} latestNodeVersion={latestNodeVersion} nodeVersionCheckFailed={nodeVersionCheckFailed} t={t} openDetail={openDetail} onUpgrade={onUpgrade} />
