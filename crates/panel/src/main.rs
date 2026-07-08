@@ -94,6 +94,12 @@ async fn main() {
             "CORS disabled (same-origin deployment). Set CORS_ORIGINS for cross-origin dev/split deploy."
         );
     }
+    // Security response headers (CSP, X-Frame-Options, X-Content-Type-Options,
+    // Referrer-Policy, Permissions-Policy) on every response — API + static SPA
+    // assets. HSTS is intentionally NOT set here (it belongs to the HTTPS/proxy
+    // layer; the panel may listen on plain HTTP behind Caddy). See
+    // api::security_headers for the exact policy.
+    let app = api::security_headers::apply_security_headers(app);
     let app = app.with_state(api::AppState {
         db,
         config: config.clone(),

@@ -11,6 +11,7 @@ pub mod geoip;
 pub mod groups;
 pub mod middleware;
 pub mod node;
+pub mod security_headers;
 pub mod stats;
 pub mod system;
 pub mod ws;

@@ -121,6 +121,78 @@ independent `v*` / `node-v*` tracks since this release).
   regions (import results, diagnose loading) use `aria-live="polite"` /
   `aria-busy`. Mobile upgrade tap targets are ≥32×32 px.
 
+### Changed
+
+- **The minimal share-export now has a regression test pinning its round-trip.**
+  The export format (`[{"dest":["host:port"],"listen_port":10000,"name":"…"}]`,
+  enabled targets only, IPv6 bracketed) and the import validation previously
+  lived as private functions inside `Rules.tsx`, so a future change could have
+  silently broken the "export pastes straight back into import" property. They
+  are extracted into a pure `frontend/src/utils/rulesIO.ts` module
+  (`buildExportJSON`, `validateImportEntry`, `parseDest`, `ruleTargets`) and
+  covered by `rulesIO.test.ts`, which asserts that a rule exported by
+  `buildExportJSON` always re-imports cleanly (every entry passes
+  `validateImportEntry`, and the parsed targets match the original enabled
+  targets) for single/multi target, IPv4/IPv6, disabled-target filtering, and
+  whitespace-trim cases. `Rules.tsx` now imports the shared helpers (removing
+  the duplicated dest regex).
+
+### Fixed
+
+- **Creating a forward rule no longer cross-writes into a different rule when
+  two inbound groups reuse the same listen port.** Previously, after the rule
+  row was inserted, the new rule's id was recovered by re-querying
+  `(owner_uid, listen_port)` — which ignored `device_group_in`. Because the
+  port-uniqueness constraint is *per inbound group*, two rules on two groups
+  can legally share a port, and the lookup returned the wrong (first) rule,
+  so its targets, load-balance strategy and rate limits were overwritten. Rule
+  creation now does the row INSERT + targets + load-balance strategy + rate
+  limits + tunnel profile in a **single transaction** and takes the new id
+  directly from the INSERT (SQLite `last_insert_rowid()` / PostgreSQL
+  `RETURNING id`), so any mid-creation failure rolls back completely (no
+  half-rule) and the side-tables always land on the right row. Existing
+  port-conflict, `max_rules` quota and ownership checks are unchanged.
+  (`create_rule_full` on the Repository trait, used by `create_rule`.)
+- **Every password input now enforces the backend's 8–72 UTF-8-byte rule.**
+  Previously MainLayout / Account change-password and the admin create-user form
+  used an antd `min: 6` *character* rule (UTF-16 code units, no upper bound),
+  while Register / ForcePasswordChange / admin-reset used a copy-pasted
+  TextEncoder byte check — so a 6-char password could be set via change-password
+  but never re-set via self-service, and a >72-byte password passed the client
+  only to be rejected by bcrypt. All six inputs now share one
+  `validatePassword` util (`frontend/src/utils/password.ts`) that counts UTF-8
+  bytes via `TextEncoder` (exactly matching `password.len()` in Rust), and the
+  zh/en hint text is unified to "8–72 bytes (UTF-8)".
+- **`validateImportEntry` now runtime-type-checks every field** of the pasted
+  JSON (it receives `unknown`, straight from `JSON.parse`). A malformed paste —
+  e.g. `{"name": 123, "listen_port": "80", "dest": "1.2.3.4:80"}`, a bare
+  primitive, `null`, or an array where an entry object was expected — now
+  produces a clean per-entry "❌" error in the import results instead of
+  throwing (`.trim is not a function`, etc.). `handleImport` likewise labels
+  non-object entries safely and only casts via the new `asValidatedEntry`
+  helper after validation. Covered by 9 new "anomalous input does not crash"
+  tests.
+
+### Security
+
+- **Security response headers are now set on every panel response** (API + the
+  static SPA): `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`,
+  a strict `Content-Security-Policy` (`default-src 'self'`, `script-src 'self'`,
+  `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'none'`,
+  `form-action 'self'`), and a conservative `Permissions-Policy` (camera,
+  microphone, geolocation, USB, etc. disabled). `style-src` is widened to
+  `'self' 'unsafe-inline'` because Ant Design v6 injects runtime CSS-in-JS;
+  `script-src` stays strict (Vite's production build has no inline scripts).
+  HSTS is intentionally NOT set by the panel — it belongs to the HTTPS / reverse
+  proxy layer (Caddy). Each header is `if_not_present`, so a stricter header set
+  by an edge proxy is preserved.
+- Pinned by regression test: a freshly-registered user has **no usable device
+  groups** by design (`all_device_groups = false`, `user_device_groups` empty),
+  so they cannot forward until a plan or admin grants authorization. Covered
+  on both SQLite and PostgreSQL to guard against a future auto-grant-on-register
+  change flipping this silently.
+
 ---
 
 ## [1.1.0] - 2026-07-02

@@ -7,6 +7,7 @@ import api from '../api/client';
 import type { ApiEnvelope, User, Plan } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { formatBytes } from '../utils/format';
+import { makePasswordValidator } from '../utils/password';
 import { useAuth } from '../auth/useAuth';
 
 // traffic_limit is stored in BYTES in the database. The edit form works in GB
@@ -562,7 +563,7 @@ export default function Users() {
             tooltip={t('createPasswordHint')}
             rules={[
               { required: true, message: t('createPasswordRequired') },
-              { min: 6, message: t('createPasswordTooShort') },
+              { validator: makePasswordValidator(t('createPasswordTooShort'), t('passwordTooLong')) },
             ]}
           >
             <Input.Password autoComplete="new-password" placeholder="••••••" />
@@ -591,16 +592,7 @@ export default function Users() {
             label={t('temporaryPassword')}
             rules={[
               { required: true, message: t('passwordRequired') },
-              {
-                validator: (_, value: string) => {
-                  if (!value) return Promise.resolve();
-                  // UTF-8 byte length, matching the backend's 8..=72 bcrypt bound.
-                  const bytes = new TextEncoder().encode(value).length;
-                  if (bytes < 8) return Promise.reject(new Error(t('passwordTooShort')));
-                  if (bytes > 72) return Promise.reject(new Error(t('passwordTooLong')));
-                  return Promise.resolve();
-                },
-              },
+              { validator: makePasswordValidator(t('passwordTooShort'), t('passwordTooLong')) },
             ]}
           >
             <Input.Password autoComplete="new-password" placeholder="••••••••" />
