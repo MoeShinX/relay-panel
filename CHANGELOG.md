@@ -8,7 +8,7 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
-## [Unreleased]
+## [1.1.1] - 2026-07-08
 
 ### Changed — panel & node now release on independent tracks
 
