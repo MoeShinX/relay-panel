@@ -140,3 +140,29 @@ Through 1.1.0, panel and node shared a single `vX.Y.Z` tag and were forced to
 the same version. v1.2 split them. Node self-upgrade download URLs fall back to
 the legacy `v*` path for versions ≤ 1.1.0 (where those binaries were originally
 published); 1.1.1+ use `node-v*` exclusively.
+
+---
+
+## One-time cross-track upgrade bridge (only for the first `node-v*`)
+
+A node running ≤ 1.1.0 uses the PRE-SPLIT updater, which downloads its upgrade
+binary from the joint `v{version}` tag. Once the panel points those nodes at the
+first node release (1.1.1), they fetch `v1.1.1/relay-node-linux-*` — but `v1.1.1`
+is a PANEL-only release with no node binary, so the one-click upgrade 404s. Those
+old nodes must either be re-installed via `relay-node-install.sh`, OR the
+`node-v1.1.1` binaries can be copied onto the `v1.1.1` tag so the old URL resolves.
+
+**Order is mandatory and must not be reversed.** Do this only AFTER `node-v1.1.1`
+has finished its own `draft → verify → promote-latest → publish-release` flow AND
+the panel `v1.1.1` release exists:
+
+```
+# after node-v1.1.1 is PUBLISHED (green) and v1.1.1 exists:
+gh workflow run bridge-node-asset.yml -f version=1.1.1
+```
+
+`bridge-node-asset.yml` copies the ALREADY-VERIFIED `node-v1.1.1` assets onto
+`v1.1.1` — it never compiles a fresh binary, refuses to run while `node-v1.1.1`
+is still a draft, and re-verifies the sha256 before attaching. This preserves the
+"invisible until verified" gate that unaware old nodes rely on. From 1.1.1 onward
+nodes use `node-v*` and never need the bridge again — this is a one-shot step.
