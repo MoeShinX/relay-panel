@@ -8,16 +8,10 @@ import type { ApiEnvelope, ForwardRule, DeviceGroup, User, UserSelf, RuleTargetI
 import { useI18n } from '../i18n/context';
 import { formatBytes } from '../utils/format';
 import { useAuth } from '../auth/useAuth';
+import { asValidatedEntry, buildExportJSON, parseDest, ruleTargets, validateImportEntry } from '../utils/rulesIO';
 
 const { Text } = Typography;
 const { TextArea } = Input;
-
-function ruleTargets(rule: ForwardRule): RuleTargetInput[] {
-  const targets = rule.targets?.length
-    ? rule.targets.map(t => ({ host: t.host, port: t.port, enabled: t.enabled }))
-    : [{ host: rule.target_addr, port: rule.target_port, enabled: true }];
-  return targets;
-}
 
 function targetSummary(rule: ForwardRule): string {
   const targets = ruleTargets(rule).filter(t => t.enabled);
@@ -44,26 +38,6 @@ function payloadWithTargets<T extends Record<string, unknown>>(values: T & { tar
     target_port: first.port,
     targets,
   };
-}
-
-/** v1.0.4: simplified export format — only dest, listen_port, name.
- *  Enabled targets only. IPv6 wrapped as [addr]:port.
- *  v1.0.6: always emit a JSON array (even for a single rule) so the export
- *  round-trips into the import box, which documents the `[{...}]` array form.
- *  v1.0.7: emit COMPACT single-line JSON (no pretty-printing) so the export is
- *  exactly the one-line `[{"dest":[...],"listen_port":...,"name":"..."}]` shape
- *  shown in the import hint — ready to copy-paste straight back in. */
-function buildExportJSON(rules: ForwardRule[]): string {
-  const simplified = rules.map(r => {
-    const targets = ruleTargets(r).filter(t => t.enabled);
-    const dest = targets.map(t => {
-      const h = t.host.trim();
-      const isV6 = h.includes(':') && !h.startsWith('[');
-      return isV6 ? `[${h}]:${t.port}` : `${h}:${t.port}`;
-    });
-    return { dest, listen_port: r.listen_port, name: r.name };
-  });
-  return JSON.stringify(simplified);
 }
 
 /** Trigger a browser download of a text file. */
@@ -308,21 +282,6 @@ export default function Rules() {
     message.success(t('exported'));
   };
 
-  /** v1.0.4: validate a single import entry. Returns error string or null. */
-function validateImportEntry(e: { name?: string; listen_port?: number; dest?: string[] }): string | null {
-  if (!e.name || e.name.trim() === '') return 'name is required';
-  if (e.listen_port == null || e.listen_port < 1 || e.listen_port > 65535) return 'listen_port must be 1-65535';
-  if (!e.dest || e.dest.length === 0) return 'dest must not be empty';
-  for (const d of e.dest) {
-    const m = d.match(/^(\[.+?\]|[^:]+):(\d+)$/);
-    if (!m) return `invalid dest format: ${d}`;
-    const host = m[1].replace(/^\[|\]$/g, '');
-    const port = parseInt(m[2], 10);
-    if (!host || port < 1 || port > 65535) return `invalid host/port in ${d}`;
-  }
-  return null;
-}
-
 const IMPORT_DEFAULTS = {
   protocol: 'tcp_udp' as const,
   public_transport: 'raw' as const,
@@ -342,17 +301,22 @@ const IMPORT_DEFAULTS = {
       message.error(t('importInvalidJson')); return;
     }
     const entries = Array.isArray(parsed) ? parsed : [parsed];
-    if (entries.length === 0 || typeof entries[0] !== 'object') {
+    if (entries.length === 0) {
       message.error(t('importInvalidFormat')); return;
     }
     const results: string[] = [];
     for (const e of entries) {
-      const err = validateImportEntry(e as { name?: string; listen_port?: number; dest?: string[] });
-      if (err) { results.push(`❌ ${(e as { name?: string }).name || '?'}: ${err}`); continue; }
-      const entry = e as { name: string; listen_port: number; dest: string[] };
+      const label = (typeof e === 'object' && e !== null && !Array.isArray(e))
+        ? String((e as { name?: unknown })['name'] ?? '?')
+        : '?';
+      const err = validateImportEntry(e);
+      if (err) { results.push(`❌ ${label}: ${err}`); continue; }
+      const entry = asValidatedEntry(e);
       const targets = entry.dest.map(d => {
-        const m = d.match(/^(\[.+?\]|[^:]+):(\d+)$/)!;
-        return { host: m[1].replace(/^\[|\]$/g, ''), port: parseInt(m[2], 10), enabled: true };
+        // validateImportEntry already rejected any unparseable dest above, so
+        // parseDest is non-null here; fall back to a safe default defensively.
+        const p = parseDest(d) ?? { host: '', port: 0 };
+        return { host: p.host, port: p.port, enabled: true };
       });
       const first = targets[0];
       try {

@@ -677,6 +677,273 @@ async fn rule_insert_quota_guarded_surfaces_port_unique_violation() {
     }
 }
 
+/// v1.2 regression: the same listen_port may be reused across TWO different
+/// inbound groups (the per-group partial unique index allows it). Before v1.2,
+/// create_rule re-looked-up the new rule by (owner_uid, listen_port) — which
+/// ignores device_group_in — so the second create_rule_full's targets / LB /
+/// rate limits were written to the FIRST (wrong) rule. create_rule_full returns
+/// the id straight from the INSERT, so the side-tables land on the right rule.
+#[tokio::test]
+async fn rule_create_full_cross_group_no_crosstalk() {
+    let db = repo().await; // uid=1 admin seeded
+    seed_group(&db, 1).await; // inbound group 1
+    seed_group(&db, 2).await; // inbound group 2
+
+    // Rule A on group 1, port 10000, ONE target, default LB ("first"), no caps.
+    let id_a = db
+        .create_rule_full(
+            "ruleA",
+            1,
+            10000,
+            "tcp_udp",
+            "raw",
+            "raw",
+            "direct",
+            "raw",
+            None,
+            1,
+            None,
+            "direct",
+            "1.1.1.1",
+            80,
+            &[relay_shared::protocol::RuleTargetRequest {
+                host: "a.example.com".into(),
+                port: 1001,
+                enabled: true,
+            }],
+            "first",
+            0,
+            0,
+            None,
+        )
+        .await
+        .unwrap()
+        .expect("rule A created");
+
+    // Rule B on group 2, SAME port 10000, THREE distinct targets + round_robin
+    // LB + up/down rate caps. Under the old bug this clobbered rule A.
+    let id_b = db
+        .create_rule_full(
+            "ruleB",
+            1,
+            10000,
+            "tcp_udp",
+            "raw",
+            "raw",
+            "direct",
+            "raw",
+            None,
+            2,
+            None,
+            "direct",
+            "2.2.2.2",
+            80,
+            &[
+                relay_shared::protocol::RuleTargetRequest {
+                    host: "b1.example.com".into(),
+                    port: 2001,
+                    enabled: true,
+                },
+                relay_shared::protocol::RuleTargetRequest {
+                    host: "b2.example.com".into(),
+                    port: 2002,
+                    enabled: true,
+                },
+                relay_shared::protocol::RuleTargetRequest {
+                    host: "b3.example.com".into(),
+                    port: 2003,
+                    enabled: true,
+                },
+            ],
+            "round_robin",
+            50,
+            100,
+            None,
+        )
+        .await
+        .unwrap()
+        .expect("rule B created");
+
+    assert_ne!(id_a, id_b, "two distinct rules must have distinct ids");
+
+    // Rule A is UNTOUCHED: still one target, LB "first", zero caps.
+    let a = db
+        .find_rule_by_id(id_a, &ResourceScope::All)
+        .await
+        .unwrap()
+        .expect("rule A exists");
+    assert_eq!(a.device_group_in, 1);
+    assert_eq!(a.load_balance_strategy, "first");
+    assert_eq!(a.upload_limit_mbps, 0);
+    assert_eq!(a.download_limit_mbps, 0);
+    let a_targets = db
+        .list_rule_targets(id_a, &ResourceScope::All)
+        .await
+        .unwrap();
+    assert_eq!(a_targets.len(), 1, "rule A keeps exactly its one target");
+    assert_eq!(a_targets[0].host, "a.example.com");
+
+    // Rule B got everything: three targets, round_robin, the rate caps.
+    let b = db
+        .find_rule_by_id(id_b, &ResourceScope::All)
+        .await
+        .unwrap()
+        .expect("rule B exists");
+    assert_eq!(b.device_group_in, 2);
+    assert_eq!(b.load_balance_strategy, "round_robin");
+    assert_eq!(b.upload_limit_mbps, 50);
+    assert_eq!(b.download_limit_mbps, 100);
+    let b_targets = db
+        .list_rule_targets(id_b, &ResourceScope::All)
+        .await
+        .unwrap();
+    assert_eq!(b_targets.len(), 3, "rule B got its three targets");
+    assert_eq!(b_targets[0].host, "b1.example.com");
+    assert_eq!(b_targets[2].host, "b3.example.com");
+}
+
+/// v1.2 regression: create_rule_full is one transaction, so a failure in the
+/// targets write (here a port=0 target violates the table's CHECK constraint)
+/// must roll back the rule-row INSERT — no half-rule left behind.
+#[tokio::test]
+async fn rule_create_full_rollback_on_target_failure() {
+    let db = repo().await;
+    seed_group(&db, 1).await;
+
+    // port 0 is a valid u16 but violates forward_rule_targets CHECK (port >= 1),
+    // so the target INSERT inside the transaction fails.
+    let err = db
+        .create_rule_full(
+            "doomed",
+            1,
+            30000,
+            "tcp",
+            "raw",
+            "raw",
+            "direct",
+            "raw",
+            None,
+            1,
+            None,
+            "direct",
+            "1.1.1.1",
+            80,
+            &[relay_shared::protocol::RuleTargetRequest {
+                host: "bad.example.com".into(),
+                port: 0,
+                enabled: true,
+            }],
+            "first",
+            0,
+            0,
+            None,
+        )
+        .await;
+    assert!(err.is_err(), "the bad target must fail the whole call");
+
+    // No half-rule residue: zero rows on port 30000 for this owner.
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM forward_rules WHERE uid = 1 AND listen_port = 30000",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 0, "transaction must roll back, leaving no rule row");
+    // And no orphan targets either.
+    let target_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM forward_rule_targets WHERE rule_id IN \
+             (SELECT id FROM forward_rules WHERE uid = 1)",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(target_count, 0, "no orphan target rows");
+}
+
+/// v1.2: create_rule_full reports Ok(None) (not an error, not a row) when the
+/// owner's max_rules quota is exhausted, so the service can map that to a 400.
+#[tokio::test]
+async fn rule_create_full_quota_exhausted_returns_none() {
+    let db = repo().await;
+    seed_group(&db, 1).await;
+    sqlx::query("UPDATE users SET max_rules = 1 WHERE id = 1")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    // First create succeeds with Some(id).
+    assert!(
+        db.create_rule_full(
+            "r1",
+            1,
+            40000,
+            "tcp",
+            "raw",
+            "raw",
+            "direct",
+            "raw",
+            None,
+            1,
+            None,
+            "direct",
+            "1.1.1.1",
+            80,
+            &[relay_shared::protocol::RuleTargetRequest {
+                host: "a.example.com".into(),
+                port: 80,
+                enabled: true,
+            }],
+            "first",
+            0,
+            0,
+            None,
+        )
+        .await
+        .unwrap()
+        .is_some(),
+        "first rule within quota returns Some(id)"
+    );
+
+    // Second create hits the quota guard → Ok(None), and crucially no new row.
+    assert_eq!(
+        db.create_rule_full(
+            "r2",
+            1,
+            40001,
+            "tcp",
+            "raw",
+            "raw",
+            "direct",
+            "raw",
+            None,
+            1,
+            None,
+            "direct",
+            "1.1.1.1",
+            80,
+            &[relay_shared::protocol::RuleTargetRequest {
+                host: "a.example.com".into(),
+                port: 80,
+                enabled: true,
+            }],
+            "first",
+            0,
+            0,
+            None,
+        )
+        .await
+        .unwrap(),
+        None,
+        "quota exhaustion returns Ok(None)"
+    );
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM forward_rules WHERE uid = 1")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "the over-quota create wrote no row");
+}
+
 /// v0.4.11 PR4: a pure-TCP and a pure-UDP rule may share the same port on
 /// the same group; two TCP-bearing (or two UDP-bearing) rules may not.
 #[tokio::test]
@@ -1879,6 +2146,47 @@ async fn insert_user_from_plan_inherits_quota_and_handles_missing_plan() {
     assert!(
         db.find_by_username("bob").await.unwrap().is_none(),
         "no user should be created for a missing plan"
+    );
+}
+
+/// v1.2 regression: a freshly-registered user has NO usable device groups by
+/// product design — `all_device_groups` stays false and `user_device_groups`
+/// stays empty, so a brand-new user cannot forward until a plan/admin grants
+/// authorization. This pins the behaviour so a future change (e.g. auto-grant
+/// on registration) can't silently flip it.
+#[tokio::test]
+async fn new_user_has_no_device_groups_by_default() {
+    let db = repo().await; // plan_id=1 (free) is seeded
+    db.insert_user_from_plan("carol", "hash", 1).await.unwrap();
+    let carol = db
+        .find_by_username("carol")
+        .await
+        .unwrap()
+        .expect("carol registered");
+    assert!(!carol.admin);
+    assert!(
+        !carol.all_device_groups,
+        "all_device_groups must default to false — a new user may not use any group"
+    );
+
+    // No explicit authorization rows either.
+    assert!(
+        db.list_user_device_groups(carol.id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "user_device_groups must be empty for a new user"
+    );
+    assert!(
+        db.authorized_device_group_ids(carol.id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "authorized_device_group_ids must be empty for a new user"
+    );
+    assert!(
+        db.is_user_restricted(carol.id).await.unwrap(),
+        "a non-admin without all_device_groups is restricted (cannot forward)"
     );
 }
 

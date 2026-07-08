@@ -6,6 +6,7 @@ import api from '../api/client';
 import type { ApiEnvelope } from '../api/client';
 import { useI18n } from '../i18n/context';
 import { useAuth } from '../auth/useAuth';
+import { makePasswordValidator } from '../utils/password';
 
 const { Title, Text } = Typography;
 
@@ -81,15 +82,7 @@ export default function ForcePasswordChange() {
             label={t('newPassword')}
             rules={[
               { required: true },
-              {
-                validator: (_, value: string) => {
-                  if (!value) return Promise.resolve();
-                  const bytes = new TextEncoder().encode(value).length;
-                  if (bytes < 8) return Promise.reject(new Error(t('passwordTooShort')));
-                  if (bytes > 72) return Promise.reject(new Error(t('passwordTooLong')));
-                  return Promise.resolve();
-                },
-              },
+              { validator: makePasswordValidator(t('passwordTooShort'), t('passwordTooLong')) },
             ]}
           >
             <Input.Password autoComplete="new-password" />

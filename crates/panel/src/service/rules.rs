@@ -9,8 +9,7 @@
 use crate::db::error::DbError;
 use crate::db::repo::{GroupRepository, ProfileScope, Repository, ResourceScope};
 use relay_shared::protocol::{
-    CreateRuleRequest, GroupType, LoadBalanceStrategy, Protocol, PublicTransport,
-    RuleTargetRequest, UpdateRuleRequest,
+    CreateRuleRequest, GroupType, Protocol, PublicTransport, RuleTargetRequest, UpdateRuleRequest,
 };
 
 /// v0.4.20: forward_mode is locked to "direct" at the API boundary
@@ -406,10 +405,22 @@ pub async fn create_rule(
         None
     };
 
+    let lb_db = req.load_balance_strategy.to_db_str();
+    let up_mbps = req.upload_limit_mbps.unwrap_or(0).max(0);
+    let down_mbps = req.download_limit_mbps.unwrap_or(0).max(0);
+
     let mut attempt = 0u32;
     let max_attempts = if req.listen_port.is_some() { 1 } else { 8 };
     let mut last_port: Option<u16> = req.listen_port;
-    let result: Result<u64, DbError> = loop {
+    // v1.2: create_rule_full does the rule INSERT + targets + LB + rate limits
+    // + tunnel profile in ONE transaction and returns the new rule's id
+    // directly (SQLite last_insert_rowid / PG RETURNING id). This replaces the
+    // old insert_quota_guarded-then-list_rules-by-(owner,listen_port)-lookup,
+    // which wrote the side-tables to the WRONG rule when two inbound groups
+    // reused the same listen_port (the per-group unique index makes that legal
+    // but the lookup ignored device_group_in). Atomicity also guarantees a
+    // mid-create failure leaves no half-rule.
+    let result: Result<Option<i64>, DbError> = loop {
         let port = match last_port {
             Some(p) => p,
             None => match auto_assign_port(db, req.device_group_in, protocol_str).await {
@@ -420,7 +431,7 @@ pub async fn create_rule(
         last_port = Some(port);
 
         match db
-            .insert_quota_guarded(
+            .create_rule_full(
                 &req.name,
                 owner_uid,
                 port as i32,
@@ -435,10 +446,15 @@ pub async fn create_rule(
                 &req.forward_mode,
                 &primary_target.host,
                 primary_target.port as i32,
+                &targets,
+                lb_db,
+                up_mbps,
+                down_mbps,
+                req.tunnel_profile_id,
             )
             .await
         {
-            Ok(n) => break Ok(n),
+            Ok(opt) => break Ok(opt),
             Err(DbError::PortConflict | DbError::UniqueViolation)
                 if req.listen_port.is_none() && attempt + 1 < max_attempts =>
             {
@@ -456,76 +472,22 @@ pub async fn create_rule(
         }
     };
 
-    if let Ok(0) = result {
-        let current_count: i64 = db.count_by_uid(owner_uid).await.unwrap_or(0);
-        let max_rules: i32 = db.max_rules_for_uid(owner_uid).await.unwrap_or(0);
-        return Err(CreateRuleError::BadRequest(format!(
-            "Rule limit reached: you have {} rules, max is {}",
-            current_count, max_rules
-        )));
-    }
-
-    if let Err(DbError::PortConflict | DbError::UniqueViolation) = &result {
-        return Err(CreateRuleError::PortConflict(last_port.unwrap_or(0)));
-    }
-
     match result {
-        Ok(_) => {
-            if let Some(rule) = db
-                .list_rules(&owner_scope)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .find(|r| r.listen_port == last_port.unwrap_or(0) as i32)
-            {
-                if let Err(e) = db
-                    .replace_rule_targets(rule.id, &owner_scope, &targets)
-                    .await
-                {
-                    tracing::error!("create_rule: replace_rule_targets failed: {}", e);
-                    return Err(CreateRuleError::Database(e));
-                }
-                if req.load_balance_strategy != LoadBalanceStrategy::First {
-                    if let Err(e) = db
-                        .set_rule_load_balance_strategy(
-                            rule.id,
-                            &owner_scope,
-                            req.load_balance_strategy.to_db_str(),
-                        )
-                        .await
-                    {
-                        tracing::error!(
-                            "create_rule: set_rule_load_balance_strategy failed: {}",
-                            e
-                        );
-                        return Err(CreateRuleError::Database(e));
-                    }
-                }
-                let up_mbps = req.upload_limit_mbps.unwrap_or(0).max(0);
-                let down_mbps = req.download_limit_mbps.unwrap_or(0).max(0);
-                if up_mbps != 0 || down_mbps != 0 {
-                    if let Err(e) = db
-                        .set_rule_rate_limits(rule.id, &owner_scope, up_mbps, down_mbps)
-                        .await
-                    {
-                        tracing::error!("create_rule: set_rule_rate_limits failed: {}", e);
-                        return Err(CreateRuleError::Database(e));
-                    }
-                }
-                if let Some(pid) = req.tunnel_profile_id {
-                    if let Err(e) = db
-                        .set_rule_tunnel_profile(rule.id, &owner_scope, Some(pid))
-                        .await
-                    {
-                        tracing::error!("create_rule: set_rule_tunnel_profile failed: {}", e);
-                        return Err(CreateRuleError::Database(e));
-                    }
-                }
-            }
-            Ok(())
+        Ok(None) => {
+            // Quota exhausted: the guarded INSERT matched 0 rows.
+            let current_count: i64 = db.count_by_uid(owner_uid).await.unwrap_or(0);
+            let max_rules: i32 = db.max_rules_for_uid(owner_uid).await.unwrap_or(0);
+            Err(CreateRuleError::BadRequest(format!(
+                "Rule limit reached: you have {} rules, max is {}",
+                current_count, max_rules
+            )))
+        }
+        Ok(Some(_)) => Ok(()),
+        Err(DbError::PortConflict | DbError::UniqueViolation) => {
+            Err(CreateRuleError::PortConflict(last_port.unwrap_or(0)))
         }
         Err(e) => {
-            tracing::error!("create_rule: insert_quota_guarded failed: {}", e);
+            tracing::error!("create_rule: create_rule_full failed: {}", e);
             Err(CreateRuleError::Database(e))
         }
     }

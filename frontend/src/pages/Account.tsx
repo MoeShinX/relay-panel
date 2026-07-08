@@ -6,6 +6,7 @@ import api from '../api/client';
 import type { ApiEnvelope, UserSelf } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { formatBytes } from '../utils/format';
+import { makePasswordValidator } from '../utils/password';
 import { useAuth } from '../auth/useAuth';
 
 const { Text } = Typography;
@@ -191,7 +192,10 @@ export default function Account() {
           <Form.Item
             name="new_password"
             label={t('newPassword')}
-            rules={[{ required: true, min: 6, message: t('newPasswordTooShort') }]}
+            rules={[
+              { required: true, message: t('passwordRequired') },
+              { validator: makePasswordValidator(t('newPasswordTooShort'), t('passwordTooLong')) },
+            ]}
           >
             <Input.Password autoComplete="new-password" />
           </Form.Item>
