@@ -707,6 +707,265 @@ async fn pg_rule_insert_quota_guarded_port_scoped_by_group() {
     cleanup(&db).await;
 }
 
+/// v1.2 regression (PG mirror of the SQLite test): the same listen_port may be
+/// reused across two different inbound groups. create_rule_full returns the id
+/// straight from RETURNING, so the second rule's targets / LB / rate limits land
+/// on the SECOND rule — never the first.
+#[tokio::test]
+async fn pg_rule_create_full_cross_group_no_crosstalk() {
+    let Some(db) = repo("rule_full_cross_group").await else {
+        return;
+    };
+    sqlx::query("INSERT INTO device_groups (id, name, group_type, token, uid) VALUES (1, 'gin', 'in', 'tok-1', 1)")
+        .execute(&db.pool).await.unwrap();
+    sqlx::query("INSERT INTO device_groups (id, name, group_type, token, uid) VALUES (2, 'gin2', 'in', 'tok-2', 1)")
+        .execute(&db.pool).await.unwrap();
+
+    // Rule A: group 1, port 10000, ONE target, default LB, no caps.
+    let id_a = db
+        .create_rule_full(
+            "ruleA",
+            1,
+            10000,
+            "tcp_udp",
+            "raw",
+            "raw",
+            "direct",
+            "raw",
+            None,
+            1,
+            None,
+            "direct",
+            "1.1.1.1",
+            80,
+            &[relay_shared::protocol::RuleTargetRequest {
+                host: "a.example.com".into(),
+                port: 1001,
+                enabled: true,
+            }],
+            "first",
+            0,
+            0,
+            None,
+        )
+        .await
+        .unwrap()
+        .expect("rule A created");
+
+    // Rule B: group 2, SAME port 10000, THREE targets + round_robin + caps.
+    let id_b = db
+        .create_rule_full(
+            "ruleB",
+            1,
+            10000,
+            "tcp_udp",
+            "raw",
+            "raw",
+            "direct",
+            "raw",
+            None,
+            2,
+            None,
+            "direct",
+            "2.2.2.2",
+            80,
+            &[
+                relay_shared::protocol::RuleTargetRequest {
+                    host: "b1.example.com".into(),
+                    port: 2001,
+                    enabled: true,
+                },
+                relay_shared::protocol::RuleTargetRequest {
+                    host: "b2.example.com".into(),
+                    port: 2002,
+                    enabled: true,
+                },
+                relay_shared::protocol::RuleTargetRequest {
+                    host: "b3.example.com".into(),
+                    port: 2003,
+                    enabled: true,
+                },
+            ],
+            "round_robin",
+            50,
+            100,
+            None,
+        )
+        .await
+        .unwrap()
+        .expect("rule B created");
+
+    assert_ne!(id_a, id_b, "two distinct rules must have distinct ids");
+
+    let a = db
+        .find_rule_by_id(id_a, &ResourceScope::All)
+        .await
+        .unwrap()
+        .expect("rule A exists");
+    assert_eq!(a.device_group_in, 1);
+    assert_eq!(a.load_balance_strategy, "first");
+    assert_eq!(a.upload_limit_mbps, 0);
+    assert_eq!(a.download_limit_mbps, 0);
+    let a_targets = db
+        .list_rule_targets(id_a, &ResourceScope::All)
+        .await
+        .unwrap();
+    assert_eq!(a_targets.len(), 1, "rule A keeps exactly its one target");
+    assert_eq!(a_targets[0].host, "a.example.com");
+
+    let b = db
+        .find_rule_by_id(id_b, &ResourceScope::All)
+        .await
+        .unwrap()
+        .expect("rule B exists");
+    assert_eq!(b.device_group_in, 2);
+    assert_eq!(b.load_balance_strategy, "round_robin");
+    assert_eq!(b.upload_limit_mbps, 50);
+    assert_eq!(b.download_limit_mbps, 100);
+    let b_targets = db
+        .list_rule_targets(id_b, &ResourceScope::All)
+        .await
+        .unwrap();
+    assert_eq!(b_targets.len(), 3, "rule B got its three targets");
+    assert_eq!(b_targets[0].host, "b1.example.com");
+    assert_eq!(b_targets[2].host, "b3.example.com");
+    cleanup(&db).await;
+}
+
+/// v1.2 regression (PG): create_rule_full is one transaction, so a bad target
+/// (port=0 violates the CHECK constraint) rolls back the rule-row INSERT.
+#[tokio::test]
+async fn pg_rule_create_full_rollback_on_target_failure() {
+    let Some(db) = repo("rule_full_rollback").await else {
+        return;
+    };
+    sqlx::query("INSERT INTO device_groups (id, name, group_type, token, uid) VALUES (1, 'gin', 'in', 'tok-1', 1)")
+        .execute(&db.pool).await.unwrap();
+
+    let err = db
+        .create_rule_full(
+            "doomed",
+            1,
+            30000,
+            "tcp",
+            "raw",
+            "raw",
+            "direct",
+            "raw",
+            None,
+            1,
+            None,
+            "direct",
+            "1.1.1.1",
+            80,
+            &[relay_shared::protocol::RuleTargetRequest {
+                host: "bad.example.com".into(),
+                port: 0,
+                enabled: true,
+            }],
+            "first",
+            0,
+            0,
+            None,
+        )
+        .await;
+    assert!(err.is_err(), "the bad target must fail the whole call");
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM forward_rules WHERE uid = 1 AND listen_port = 30000",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 0, "transaction must roll back, leaving no rule row");
+    cleanup(&db).await;
+}
+
+/// v1.2 (PG): create_rule_full reports Ok(None) when the max_rules quota is
+/// exhausted, and crucially writes no row.
+#[tokio::test]
+async fn pg_rule_create_full_quota_exhausted_returns_none() {
+    let Some(db) = repo("rule_full_quota").await else {
+        return;
+    };
+    sqlx::query("INSERT INTO device_groups (id, name, group_type, token, uid) VALUES (1, 'gin', 'in', 'tok-1', 1)")
+        .execute(&db.pool).await.unwrap();
+    sqlx::query("UPDATE users SET max_rules = 1 WHERE id = 1")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    assert!(
+        db.create_rule_full(
+            "r1",
+            1,
+            40000,
+            "tcp",
+            "raw",
+            "raw",
+            "direct",
+            "raw",
+            None,
+            1,
+            None,
+            "direct",
+            "1.1.1.1",
+            80,
+            &[relay_shared::protocol::RuleTargetRequest {
+                host: "a.example.com".into(),
+                port: 80,
+                enabled: true,
+            }],
+            "first",
+            0,
+            0,
+            None,
+        )
+        .await
+        .unwrap()
+        .is_some(),
+        "first rule within quota returns Some(id)"
+    );
+    assert_eq!(
+        db.create_rule_full(
+            "r2",
+            1,
+            40001,
+            "tcp",
+            "raw",
+            "raw",
+            "direct",
+            "raw",
+            None,
+            1,
+            None,
+            "direct",
+            "1.1.1.1",
+            80,
+            &[relay_shared::protocol::RuleTargetRequest {
+                host: "a.example.com".into(),
+                port: 80,
+                enabled: true,
+            }],
+            "first",
+            0,
+            0,
+            None,
+        )
+        .await
+        .unwrap(),
+        None,
+        "quota exhaustion returns Ok(None)"
+    );
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM forward_rules WHERE uid = 1")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "the over-quota create wrote no row");
+    cleanup(&db).await;
+}
+
 #[tokio::test]
 async fn pg_rule_update_switch_to_direct_clears_device_group_out() {
     // Regression for v0.4.4: switching a rule to "direct" without an
@@ -1762,6 +2021,46 @@ async fn pg_insert_user_from_plan_inherits_quota_and_handles_missing_plan() {
     assert!(
         db.find_by_username("bob").await.unwrap().is_none(),
         "no user for missing plan (PG)"
+    );
+    cleanup(&db).await;
+}
+
+/// v1.2 regression (PG parity): a freshly-registered user has NO usable device
+/// groups by design — all_device_groups stays false, user_device_groups empty,
+/// so a new user cannot forward until a plan/admin grants authorization.
+#[tokio::test]
+async fn pg_new_user_has_no_device_groups_by_default() {
+    let Some(db) = repo("newuser_nogroups").await else {
+        return;
+    };
+    db.insert_user_from_plan("carol", "hash", 1).await.unwrap();
+    let carol = db
+        .find_by_username("carol")
+        .await
+        .unwrap()
+        .expect("carol registered");
+    assert!(!carol.admin);
+    assert!(
+        !carol.all_device_groups,
+        "all_device_groups must default to false (PG)"
+    );
+    assert!(
+        db.list_user_device_groups(carol.id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "user_device_groups must be empty for a new user (PG)"
+    );
+    assert!(
+        db.authorized_device_group_ids(carol.id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "authorized_device_group_ids must be empty for a new user (PG)"
+    );
+    assert!(
+        db.is_user_restricted(carol.id).await.unwrap(),
+        "a non-admin without all_device_groups is restricted (PG)"
     );
     cleanup(&db).await;
 }

@@ -357,6 +357,202 @@ impl RuleRepository for PgRepository {
         }
     }
 
+    async fn create_rule_full(
+        &self,
+        name: &str,
+        uid: i64,
+        listen_port: i32,
+        protocol: &str,
+        public_transport: &str,
+        node_transport: &str,
+        route_mode: &str,
+        entry_transport: &str,
+        ws_path: Option<&str>,
+        device_group_in: i64,
+        device_group_out: Option<i64>,
+        forward_mode: &str,
+        target_addr: &str,
+        target_port: i32,
+        targets: &[relay_shared::protocol::RuleTargetRequest],
+        load_balance_strategy: &str,
+        upload_limit_mbps: i32,
+        download_limit_mbps: i32,
+        tunnel_profile_id: Option<i64>,
+    ) -> Result<Option<i64>, DbError> {
+        // v1.2: atomic create. Same advisory-xact-lock + user-row FOR UPDATE +
+        // conflict pre-check + quota-guarded INSERT shape as
+        // insert_quota_guarded, but the INSERT is a RETURNING-id, followed by
+        // the targets / LB / rate-limit / tunnel writes INSIDE the same tx.
+        // The new id comes from RETURNING (not a post-commit listen_port
+        // re-lookup), so two inbound groups reusing a port can't cross-write.
+
+        let needs_tcp = matches!(protocol, "tcp" | "tcp_udp");
+        let needs_udp = matches!(protocol, "udp" | "tcp_udp");
+
+        let mut tx = self.pool.begin().await?;
+
+        // Convert any sqlx error into a rollback + DbError early return so the
+        // body stays linear. Evaluates to `!`, so `try_!(expr)` is well-typed
+        // for any sqlx::Error-producing statement.
+        macro_rules! try_ {
+            ($tx:expr, $expr:expr) => {
+                match $expr {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let _ = $tx.rollback().await;
+                        return Err(DbError::from(e));
+                    }
+                }
+            };
+        }
+
+        // Lock order: advisory(group) then row(user) — identical to
+        // insert_quota_guarded so no deadlock cycle can form.
+        try_!(
+            tx,
+            sqlx::query("SELECT pg_advisory_xact_lock($1)")
+                .bind(device_group_in)
+                .execute(&mut *tx)
+                .await
+        );
+
+        try_!(
+            tx,
+            sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+                .bind(uid)
+                .fetch_optional(&mut *tx)
+                .await
+        );
+
+        let conflict: Option<(i32,)> = try_!(
+            tx,
+            sqlx::query_as(
+                "SELECT 1 FROM forward_rules \
+                 WHERE device_group_in = $1 AND listen_port = $2 \
+                   AND ( ($3 AND protocol IN ('tcp', 'tcp_udp')) \
+                      OR ($4 AND protocol IN ('udp', 'tcp_udp')) ) \
+                 LIMIT 1",
+            )
+            .bind(device_group_in)
+            .bind(listen_port)
+            .bind(needs_tcp)
+            .bind(needs_udp)
+            .fetch_optional(&mut *tx)
+            .await
+        );
+        if conflict.is_some() {
+            let _ = tx.rollback().await;
+            return Err(DbError::PortConflict);
+        }
+
+        // RETURNING id so we get the new row's id directly. The WHERE quota
+        // guard is the same as SQLite's; when it matches 0 rows the SELECT
+        // yields no id → Option<i64> None → quota exhausted.
+        let rule_id: Option<i64> = try_!(
+            tx,
+            sqlx::query_scalar(
+                "INSERT INTO forward_rules \
+                   (name, uid, listen_port, protocol, public_transport, node_transport, \
+                    route_mode, entry_transport, ws_path, \
+                    device_group_in, device_group_out, forward_mode, target_addr, target_port) \
+                 SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14 \
+                 WHERE (SELECT max_rules FROM users WHERE id = $15) = 0 \
+                    OR (SELECT COUNT(*) FROM forward_rules WHERE uid = $16) \
+                       < (SELECT max_rules FROM users WHERE id = $17) \
+                 RETURNING id",
+            )
+            .bind(name)
+            .bind(uid)
+            .bind(listen_port)
+            .bind(protocol)
+            .bind(public_transport)
+            .bind(node_transport)
+            .bind(route_mode)
+            .bind(entry_transport)
+            .bind(ws_path)
+            .bind(device_group_in)
+            .bind(device_group_out)
+            .bind(forward_mode)
+            .bind(target_addr)
+            .bind(target_port)
+            .bind(uid)
+            .bind(uid)
+            .bind(uid)
+            .fetch_optional(&mut *tx)
+            .await
+        );
+
+        let Some(rule_id) = rule_id else {
+            // Quota exhausted — nothing inserted. Commit the empty tx.
+            tx.commit().await?;
+            return Ok(None);
+        };
+
+        try_!(
+            tx,
+            sqlx::query("DELETE FROM forward_rule_targets WHERE rule_id = $1")
+                .bind(rule_id)
+                .execute(&mut *tx)
+                .await
+        );
+        for (idx, target) in targets.iter().enumerate() {
+            try_!(
+                tx,
+                sqlx::query(
+                    "INSERT INTO forward_rule_targets (rule_id, host, port, position, enabled) \
+                     VALUES ($1, $2, $3, $4, $5)",
+                )
+                .bind(rule_id)
+                .bind(target.host.trim())
+                .bind(target.port as i32)
+                .bind(idx as i32 + 1)
+                .bind(target.enabled)
+                .execute(&mut *tx)
+                .await
+            );
+        }
+
+        if load_balance_strategy != "first" {
+            try_!(
+                tx,
+                sqlx::query("UPDATE forward_rules SET load_balance_strategy = $1 WHERE id = $2")
+                    .bind(load_balance_strategy)
+                    .bind(rule_id)
+                    .execute(&mut *tx)
+                    .await
+            );
+        }
+
+        if upload_limit_mbps != 0 || download_limit_mbps != 0 {
+            try_!(
+                tx,
+                sqlx::query(
+                    "UPDATE forward_rules SET upload_limit_mbps = $1, download_limit_mbps = $2 \
+                     WHERE id = $3",
+                )
+                .bind(upload_limit_mbps)
+                .bind(download_limit_mbps)
+                .bind(rule_id)
+                .execute(&mut *tx)
+                .await
+            );
+        }
+
+        if let Some(pid) = tunnel_profile_id {
+            try_!(
+                tx,
+                sqlx::query("UPDATE forward_rules SET tunnel_profile_id = $1 WHERE id = $2")
+                    .bind(pid)
+                    .bind(rule_id)
+                    .execute(&mut *tx)
+                    .await
+            );
+        }
+
+        tx.commit().await?;
+        Ok(Some(rule_id))
+    }
+
     async fn find_transport_by_id(
         &self,
         id: i64,
