@@ -42,6 +42,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
+      # No `actions/checkout` in this job, so `gh` has no local git remote to
+      # infer the repo from — point it explicitly, or every `gh release` call
+      # fails to resolve the repository and reports "release not found".
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: Resolve + validate tags
         id: t
