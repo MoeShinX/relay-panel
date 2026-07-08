@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import api from '../api/client';
 import type { ApiEnvelope, RegistrationStatus, Plan } from '../api/types';
 import { useI18n } from '../i18n/context';
+import { makePasswordValidator } from '../utils/password';
 
 const { Title, Text } = Typography;
 
@@ -117,15 +118,7 @@ export default function Register() {
               name="password"
               rules={[
                 { required: true, message: t('passwordRequired') },
-                {
-                  validator: (_, value: string) => {
-                    if (!value) return Promise.resolve();
-                    const bytes = new TextEncoder().encode(value).length;
-                    if (bytes < 8) return Promise.reject(new Error(t('passwordTooShort')));
-                    if (bytes > 72) return Promise.reject(new Error(t('passwordTooLong')));
-                    return Promise.resolve();
-                  },
-                },
+                { validator: makePasswordValidator(t('passwordTooShort'), t('passwordTooLong')) },
               ]}
             >
               <Input.Password prefix={<LockOutlined style={{ color: 'var(--rp-text-tertiary)' }} />} placeholder={t('password')} aria-label={t('password')} />
