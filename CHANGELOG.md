@@ -95,10 +95,6 @@ independent `v*` / `node-v*` tracks since this release).
   `TARGET_VERSION`, which may come from `--version`), not the script's bundled
   `SCRIPT_VERSION`, in its download/summary/checksum-failure messages.
 
----
-
-## [Unreleased]
-
 ### Changed
 
 - **The minimal share-export now has a regression test pinning its round-trip.**
