@@ -707,6 +707,118 @@ async fn pg_rule_insert_quota_guarded_port_scoped_by_group() {
     cleanup(&db).await;
 }
 
+// ── v1.2.x (PG parity): auto_assign_port honors the group's port_range ──
+
+/// Seed an inbound device_group with an explicit `port_range` (the auto-assign
+/// pool). PG mirror of the SQLite `seed_group_with_range` helper.
+async fn seed_group_with_range(db: &PgRepository, gid: i64, range: &str) {
+    sqlx::query(
+        "INSERT INTO device_groups (id, name, group_type, token, uid, port_range) \
+         VALUES ($1, 'gin', 'in', $2, 1, $3)",
+    )
+    .bind(gid)
+    .bind(format!("tok-{gid}"))
+    .bind(range)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+}
+
+/// PG mirror: an explicit narrow range confines every auto-assigned port.
+#[tokio::test]
+async fn pg_auto_assign_port_stays_within_explicit_group_range() {
+    use crate::service::rules::auto_assign_port;
+    let Some(db) = repo("auto_port_explicit_range").await else {
+        return;
+    };
+    seed_group_with_range(&db, 1, "65000-65100").await;
+    for _ in 0..30 {
+        let p = auto_assign_port(&db, 1, "tcp").await.unwrap();
+        assert!(
+            (65000..=65100).contains(&p),
+            "auto port {} escaped the configured 65000-65100 range",
+            p
+        );
+    }
+    cleanup(&db).await;
+}
+
+/// PG mirror: the `1-65535` sentinel maps to the 10000-65535 default pool.
+#[tokio::test]
+async fn pg_auto_assign_port_sentinel_uses_default_pool() {
+    use crate::service::rules::auto_assign_port;
+    let Some(db) = repo("auto_port_sentinel").await else {
+        return;
+    };
+    // No port_range column → PG schema default '1-65535' (the sentinel).
+    sqlx::query("INSERT INTO device_groups (id, name, group_type, token, uid) VALUES (1, 'gin', 'in', 'tok-1', 1)")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    for _ in 0..30 {
+        let p = auto_assign_port(&db, 1, "tcp").await.unwrap();
+        assert!(
+            (10000..=65535).contains(&p),
+            "sentinel must map to 10000-65535, got {}",
+            p
+        );
+    }
+    cleanup(&db).await;
+}
+
+/// PG mirror: a full range errors (naming the range), socket-type scoped.
+#[tokio::test]
+async fn pg_auto_assign_port_errors_when_range_full() {
+    use crate::service::rules::auto_assign_port;
+    let Some(db) = repo("auto_port_full").await else {
+        return;
+    };
+    seed_group_with_range(&db, 1, "50000-50000").await;
+    db.insert_quota_guarded(
+        "r1",
+        1,
+        50000,
+        "tcp",
+        "raw",
+        "raw",
+        "direct",
+        "raw",
+        None,
+        1,
+        None,
+        "direct",
+        "127.0.0.1",
+        80,
+    )
+    .await
+    .unwrap();
+    let err = auto_assign_port(&db, 1, "tcp").await.unwrap_err();
+    assert!(
+        err.contains("50000-50000"),
+        "error must name the exhausted range, got {:?}",
+        err
+    );
+    let p = auto_assign_port(&db, 1, "udp").await.unwrap();
+    assert_eq!(p, 50000, "udp must reuse the port held only by tcp");
+    cleanup(&db).await;
+}
+
+/// PG mirror: a non-existent group id falls back to the default pool.
+#[tokio::test]
+async fn pg_auto_assign_port_missing_group_uses_default_pool() {
+    use crate::service::rules::auto_assign_port;
+    let Some(db) = repo("auto_port_missing_group").await else {
+        return;
+    };
+    let p = auto_assign_port(&db, 999, "tcp").await.unwrap();
+    assert!(
+        (10000..=65535).contains(&p),
+        "missing group must use the default pool, got {}",
+        p
+    );
+    cleanup(&db).await;
+}
+
 /// v1.2 regression (PG mirror of the SQLite test): the same listen_port may be
 /// reused across two different inbound groups. create_rule_full returns the id
 /// straight from RETURNING, so the second rule's targets / LB / rate limits land
