@@ -1098,8 +1098,20 @@ async fn auto_assign_port_errors_when_range_full() {
     seed_group_with_range(&db, 1, "50000-50000").await;
     // Occupy the pool's only port with a TCP rule on this group.
     db.insert_quota_guarded(
-        "r1", 1, 50000, "tcp", "raw", "raw", "direct", "raw", None, 1, None, "direct",
-        "127.0.0.1", 80,
+        "r1",
+        1,
+        50000,
+        "tcp",
+        "raw",
+        "raw",
+        "direct",
+        "raw",
+        None,
+        1,
+        None,
+        "direct",
+        "127.0.0.1",
+        80,
     )
     .await
     .unwrap();
