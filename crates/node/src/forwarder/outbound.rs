@@ -297,7 +297,10 @@ fn dns_cache() -> &'static AsyncMutex<HashMap<String, CachedDns>> {
 /// Resolve `target` ("host:port") to socket addresses, caching for
 /// `DNS_CACHE_TTL`. On a resolver error a stale cached entry (if any) is reused
 /// rather than failing the connection outright — DNS blips shouldn't drop links.
-async fn resolve_cached(target: &str) -> std::io::Result<Vec<SocketAddr>> {
+///
+/// `pub(super)` so the UDP forwarder can re-resolve session targets through the
+/// same cache (following DDNS changes) instead of pinning a boot-time IP.
+pub(super) async fn resolve_cached(target: &str) -> std::io::Result<Vec<SocketAddr>> {
     {
         let cache = dns_cache().lock().await;
         if let Some(c) = cache.get(target) {

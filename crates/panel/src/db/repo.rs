@@ -264,6 +264,11 @@ pub trait RuleRepository: Send + Sync {
         &self,
         device_group_in: i64,
     ) -> Result<Vec<(i32, String)>, DbError>;
+    /// v1.2.x: the auto-assign port pool configured on a device group
+    /// (`device_groups.port_range`, e.g. "10000-65535"). `auto_assign_port`
+    /// parses this to bound its search. Returns `None` when the group id
+    /// doesn't exist (the caller falls back to the default pool).
+    async fn group_port_range(&self, group_id: i64) -> Result<Option<String>, DbError>;
     /// Count rules for a user (quota reporting).
     async fn count_by_uid(&self, uid: i64) -> Result<i64, DbError>;
     /// Get max_rules for a user (quota ceiling; 0 = unlimited).

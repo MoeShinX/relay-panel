@@ -215,6 +215,17 @@ impl RuleRepository for SqliteRepository {
         Ok(rows)
     }
 
+    async fn group_port_range(&self, group_id: i64) -> Result<Option<String>, DbError> {
+        // port_range is TEXT NOT NULL, so the Option here reflects row existence
+        // (missing group -> None), not a null column.
+        let range: Option<String> =
+            sqlx::query_scalar("SELECT port_range FROM device_groups WHERE id = ?")
+                .bind(group_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(range)
+    }
+
     async fn count_by_uid(&self, uid: i64) -> Result<i64, DbError> {
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM forward_rules WHERE uid = ?")
             .bind(uid)

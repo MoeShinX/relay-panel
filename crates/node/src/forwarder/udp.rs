@@ -63,37 +63,13 @@ pub async fn serve_udp_listener(
 
     let port = listen_addr.port();
 
-    // v0.4.6: resolve targets keeping index alignment with the `targets` list so
-    // the load-balance selector (which returns target INDICES) maps to the right
-    // address. Each target string resolves to its FIRST address; unresolvable
-    // targets become None and are skipped during selection. Async DNS is used so
-    // a slow resolver can't block a runtime worker.
-    let mut resolved: Vec<Option<SocketAddr>> = Vec::with_capacity(targets.len());
-    for t in &targets {
-        if let Ok(addr) = t.parse::<SocketAddr>() {
-            resolved.push(Some(addr));
-            continue;
-        }
-        match tokio::net::lookup_host(t).await {
-            Ok(mut addrs) => resolved.push(addrs.next()),
-            Err(e) => {
-                tracing::warn!(
-                    "UDP listener on {}: failed to resolve {}: {}",
-                    listen_addr,
-                    t,
-                    e
-                );
-                resolved.push(None);
-            }
-        }
-    }
-    if resolved.iter().all(Option::is_none) {
-        tracing::error!(
-            "UDP listener on {}: failed to resolve any target",
-            listen_addr
-        );
-        return Err("no resolvable target".into());
-    }
+    // v1.2.x: targets are resolved LAZILY per new session (see
+    // select_udp_target) rather than once here at listener start. The old
+    // boot-time resolution pinned a DDNS target to whatever IP it had when the
+    // rule was pushed; the IP never refreshed until the rule/node restarted,
+    // silently blackholing UDP (WireGuard / game / DNS-forward) traffic after a
+    // DDNS update. Session-time resolution goes through the shared 30s DNS cache
+    // so new sessions follow IP changes automatically.
 
     // v1.0.9: sharded concurrent map — per-packet lookups take a per-shard lock
     // (keyed by client addr) instead of one listener-wide mutex, so datagrams
@@ -177,15 +153,12 @@ pub async fn serve_udp_listener(
                     continue;
                 }
             };
-            // v0.4.6: pick a target per the rule's load-balance strategy. The
-            // selector yields target indices in priority order; we use the first
-            // that resolved. UDP affinity: this pick happens once per NEW
-            // session, so all datagrams from the same client stay pinned.
-            let target = match selector
-                .order()
-                .into_iter()
-                .find_map(|idx| resolved.get(idx).copied().flatten())
-            {
+            // Pick a target per the rule's load-balance strategy AND resolve it
+            // now, through the 30s DNS cache, so a DDNS target follows IP
+            // changes (see select_udp_target). UDP affinity: this happens once
+            // per NEW session, so all datagrams from the same client stay pinned
+            // to the IP chosen here until the session idles out.
+            let target = match select_udp_target(&targets, &selector, port).await {
                 Some(t) => t,
                 None => {
                     tracing::warn!("UDP port {}: no resolvable target for session", port);
@@ -289,6 +262,42 @@ pub async fn serve_udp_listener(
     }
 }
 
+/// Resolve the outbound target for a NEW UDP session, honoring the rule's
+/// load-balance order and following DNS changes.
+///
+/// v1.2.x: unlike the pre-split code — which resolved every target ONCE at
+/// listener startup and reused those addresses forever — this re-resolves
+/// through the shared DNS cache (`resolve_cached`, 30s TTL) at session-open
+/// time. A DDNS target whose IP changes is picked up by the next new session
+/// within the cache TTL, instead of being pinned to the boot-time IP until the
+/// rule or node restarts. (Established sessions keep their socket and age out on
+/// the 60s idle timeout, after which new datagrams open a fresh session against
+/// the current IP.)
+///
+/// Returns the first target, in selector order, that resolves to at least one
+/// address; None when none resolve.
+async fn select_udp_target(
+    targets: &[String],
+    selector: &TargetSelector,
+    port: u16,
+) -> Option<SocketAddr> {
+    for idx in selector.order() {
+        let Some(t) = targets.get(idx) else { continue };
+        match super::outbound::resolve_cached(t).await {
+            Ok(addrs) => {
+                if let Some(addr) = addrs.into_iter().next() {
+                    return Some(addr);
+                }
+                tracing::debug!("UDP port {}: target {} resolved to no address", port, t);
+            }
+            Err(e) => {
+                tracing::debug!("UDP port {}: failed to resolve target {}: {}", port, t, e);
+            }
+        }
+    }
+    None
+}
+
 /// Classify whether a `recv_from` error is worth retrying (mirrors the TCP
 /// accept classifier). Transient OS-level resource exhaustion clears on its
 /// own; retrying keeps the listener alive. A bad-fd / closed-socket error is
@@ -305,4 +314,52 @@ fn is_transient_recv_error(e: &std::io::Error) -> bool {
         // EMFILE (24) / ENFILE (23) / ENOBUFS (105) / ENOMEM (12).
         matches!(c, 24 | 23 | 105 | 12)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use relay_shared::protocol::LoadBalanceStrategy;
+
+    // All targets below are IP literals ("ip:port"), which resolve LOCALLY via
+    // lookup_host with no DNS query — keeping these tests hermetic (no network).
+
+    /// Failover order picks the first (primary) target and resolves it.
+    #[tokio::test]
+    async fn select_udp_target_picks_first_in_order() {
+        let targets = vec!["127.0.0.1:9".to_string(), "127.0.0.2:9".to_string()];
+        let selector = TargetSelector::new(LoadBalanceStrategy::Failover, 2);
+        let got = select_udp_target(&targets, &selector, 5000).await;
+        assert_eq!(got, Some("127.0.0.1:9".parse().unwrap()));
+    }
+
+    /// Round-robin advances the shared cursor across successive new sessions,
+    /// so consecutive sessions pin to different targets.
+    #[tokio::test]
+    async fn select_udp_target_follows_round_robin() {
+        let targets = vec!["127.0.0.1:9".to_string(), "127.0.0.2:9".to_string()];
+        let selector = TargetSelector::new(LoadBalanceStrategy::RoundRobin, 2);
+        let a = select_udp_target(&targets, &selector, 5000).await.unwrap();
+        let b = select_udp_target(&targets, &selector, 5000).await.unwrap();
+        assert_eq!(a, "127.0.0.1:9".parse().unwrap());
+        assert_eq!(b, "127.0.0.2:9".parse().unwrap());
+    }
+
+    /// A target that can't be resolved (no port → immediate parse error, no DNS)
+    /// is skipped, falling through to the next resolvable target in order.
+    #[tokio::test]
+    async fn select_udp_target_skips_unresolvable() {
+        let targets = vec!["nocolon-no-port".to_string(), "127.0.0.1:9".to_string()];
+        let selector = TargetSelector::new(LoadBalanceStrategy::Failover, 2);
+        let got = select_udp_target(&targets, &selector, 5000).await;
+        assert_eq!(got, Some("127.0.0.1:9".parse().unwrap()));
+    }
+
+    /// No targets → None (the caller drops the datagram and warns).
+    #[tokio::test]
+    async fn select_udp_target_none_when_empty() {
+        let targets: Vec<String> = vec![];
+        let selector = TargetSelector::new(LoadBalanceStrategy::RoundRobin, 0);
+        assert!(select_udp_target(&targets, &selector, 5000).await.is_none());
+    }
 }

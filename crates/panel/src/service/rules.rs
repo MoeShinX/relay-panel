@@ -132,8 +132,61 @@ pub fn group_type_to_str(gt: &GroupType) -> &'static str {
     }
 }
 
-/// Auto-assign a free listen port from 10000-65535, scoped to the rule's
-/// inbound group and socket type.
+/// The default auto-assign pool used when a group's `port_range` is unset, is
+/// the "全可转发" sentinel `1-65535`, or is unparseable. Deliberately excludes
+/// system ports (<10000) — matching the historical hardcoded behavior — so a
+/// brand-new / never-customized group never auto-assigns 22/80/443 etc.
+const DEFAULT_AUTO_PORT_LO: u16 = 10000;
+const DEFAULT_AUTO_PORT_HI: u16 = 65535;
+
+/// Resolve a group's stored `port_range` string into the inclusive `[lo, hi]`
+/// pool that auto-assignment draws from.
+///
+/// * empty / `"1-65535"` (the schema default, i.e. "全可转发" — nobody narrowed
+///   it) / unparseable → the default 10000-65535 pool (never system ports);
+/// * an explicit `"start-end"` with `1 <= start <= end <= 65535` → used
+///   verbatim, INCLUDING sub-10000 ports when the admin asked for them
+///   (`"5000-65535"` really does hand out 5000-9999 — an explicit choice wins
+///   over the default-avoidance). Only the exact `1-65535` string is treated as
+///   the sentinel, so `2-65535` or `1-65534` are honored as narrowings.
+pub fn resolve_auto_port_range(raw: &str) -> (u16, u16) {
+    const DEFAULT: (u16, u16) = (DEFAULT_AUTO_PORT_LO, DEFAULT_AUTO_PORT_HI);
+    let s = raw.trim();
+    if s.is_empty() || s == "1-65535" {
+        return DEFAULT;
+    }
+    let Some((a, b)) = s.split_once('-') else {
+        return DEFAULT;
+    };
+    let (Ok(start), Ok(end)) = (a.trim().parse::<u32>(), b.trim().parse::<u32>()) else {
+        return DEFAULT;
+    };
+    if start < 1 || end > 65535 || start > end {
+        return DEFAULT;
+    }
+    (start as u16, end as u16)
+}
+
+/// A cheap, dependency-free pseudo-random offset in `[0, span)`, seeded from the
+/// wall clock so successive auto-assignments on the same group spread across the
+/// pool instead of clustering at its low end. `span` is always `>= 1`.
+fn pseudo_random_offset(span: u32) -> u32 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    nanos % span
+}
+
+/// Auto-assign a free listen port from the rule's inbound group's configured
+/// `port_range`, scoped to that group and socket type.
+///
+/// v1.2.x: the search pool is the group's `port_range` (resolved via
+/// [`resolve_auto_port_range`]) instead of a hardcoded 10000-65535. When the
+/// pool is exhausted this returns an error naming the real range so the panel
+/// can tell the operator the range is full — it never silently spills outside
+/// the configured range.
 ///
 /// v0.4.11 PR4: port occupancy is per (device_group_in, port, socket type).
 /// We only need to avoid ports already used ON THIS GROUP that conflict with
@@ -149,6 +202,16 @@ pub async fn auto_assign_port(
 ) -> Result<u16, String> {
     let needs_tcp = matches!(protocol, "tcp" | "tcp_udp");
     let needs_udp = matches!(protocol, "udp" | "tcp_udp");
+
+    // The pool to draw from = this group's configured port_range, with the
+    // unset / "1-65535" sentinel mapped to the safe 10000-65535 default. A
+    // missing group (None) also falls back to the default pool.
+    let range_raw = db
+        .group_port_range(device_group_in)
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let (lo, hi) = resolve_auto_port_range(&range_raw);
 
     // (port, protocol) pairs already in use on this group.
     let group_ports: Vec<(i32, String)> = db
@@ -172,22 +235,26 @@ pub async fn auto_assign_port(
         })
         .collect();
 
-    // Try pseudo-random ports in the 10000-65535 range
-    let mut rng = 10000u16;
-    for _ in 0..1000 {
-        let candidate = rng.wrapping_add(7919).wrapping_rem(55535) + 10000;
+    // Ring scan over [lo, hi] starting from a pseudo-random offset: visits every
+    // port in the pool exactly once, returning the first that doesn't conflict.
+    // The random start spreads assignments across the range rather than always
+    // taking the lowest free port. If every port is taken, the range is full.
+    let span = (hi as u32) - (lo as u32) + 1;
+    let start_offset = pseudo_random_offset(span);
+    for i in 0..span {
+        // lo + offset <= hi <= 65535, so the u16 cast never truncates.
+        let candidate = (lo as u32 + (start_offset + i) % span) as u16;
         if !used.contains(&candidate) {
             return Ok(candidate);
         }
-        rng = candidate;
     }
-    // Fallback: linear scan
-    for p in 10000u16..=65535 {
-        if !used.contains(&p) {
-            return Ok(p);
-        }
-    }
-    Err("No free port available in 10000-65535".into())
+    // Actionable, user-facing: this surfaces as a 400 (CreateRuleError::BadRequest)
+    // so the operator knows to widen the group's port range or free a rule —
+    // NOT a generic 500 "数据库错误".
+    Err(format!(
+        "设备组端口范围 {}-{} 已全部占用,请扩大该组端口范围或删除已有规则后重试",
+        lo, hi
+    ))
 }
 
 #[derive(Debug)]
@@ -425,7 +492,10 @@ pub async fn create_rule(
             Some(p) => p,
             None => match auto_assign_port(db, req.device_group_in, protocol_str).await {
                 Ok(p) => p,
-                Err(e) => break Err(DbError::Other(sqlx::Error::Configuration(e.into()))),
+                // A full/unassignable range is a client-fixable condition, not a
+                // DB fault — surface the actionable message as a 400, not a
+                // generic 500 "数据库错误".
+                Err(e) => return Err(CreateRuleError::BadRequest(e)),
             },
         };
         last_port = Some(port);
@@ -927,5 +997,49 @@ mod tests {
             enabled: true,
         }];
         assert!(normalize_rule_targets(Some(bad), "x", 1).is_err());
+    }
+
+    /// v1.2.x: the unset / "全可转发" sentinel and any garbage fall back to the
+    /// default 10000-65535 pool, so a never-customized group never auto-assigns
+    /// a system port.
+    #[test]
+    fn resolve_auto_port_range_sentinel_and_default() {
+        let def = (DEFAULT_AUTO_PORT_LO, DEFAULT_AUTO_PORT_HI);
+        assert_eq!(resolve_auto_port_range("1-65535"), def, "全可转发 sentinel");
+        assert_eq!(resolve_auto_port_range(""), def, "empty");
+        assert_eq!(resolve_auto_port_range("   "), def, "whitespace");
+        assert_eq!(resolve_auto_port_range("garbage"), def, "no dash");
+        assert_eq!(resolve_auto_port_range("10000"), def, "single number");
+        assert_eq!(resolve_auto_port_range("abc-def"), def, "non-numeric");
+        assert_eq!(resolve_auto_port_range("65000-100"), def, "start > end");
+        assert_eq!(resolve_auto_port_range("0-100"), def, "start < 1");
+        assert_eq!(resolve_auto_port_range("1-70000"), def, "end > 65535");
+    }
+
+    /// An explicit narrowing is honored verbatim — including sub-10000 ports the
+    /// admin deliberately opted into, and including exact-boundary narrowings
+    /// that are NOT the `1-65535` sentinel.
+    #[test]
+    fn resolve_auto_port_range_explicit_is_honored() {
+        assert_eq!(resolve_auto_port_range("65000-65100"), (65000, 65100));
+        // "5000-65535" is an explicit choice → really hands out 5000-9999.
+        assert_eq!(resolve_auto_port_range("5000-65535"), (5000, 65535));
+        // A one-off narrowing of either bound is NOT the sentinel.
+        assert_eq!(resolve_auto_port_range("2-65535"), (2, 65535));
+        assert_eq!(resolve_auto_port_range("1-65534"), (1, 65534));
+        // Single-port pool.
+        assert_eq!(resolve_auto_port_range("40000-40000"), (40000, 40000));
+        // Surrounding whitespace is trimmed on both the whole string and parts.
+        assert_eq!(resolve_auto_port_range("  5000 - 6000  "), (5000, 6000));
+    }
+
+    /// The ring-scan offset is always inside the pool span, so `lo + offset`
+    /// can never exceed `hi` (guards the u16 cast in auto_assign_port).
+    #[test]
+    fn pseudo_random_offset_within_span() {
+        for span in [1u32, 2, 101, 55536, 65535] {
+            let off = pseudo_random_offset(span);
+            assert!(off < span, "offset {} must be < span {}", off, span);
+        }
     }
 }

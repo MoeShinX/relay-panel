@@ -42,6 +42,21 @@ async fn seed_group(db: &SqliteRepository, gid: i64) {
     .unwrap();
 }
 
+/// Seed an inbound device_group with an explicit `port_range` (the auto-assign
+/// pool). Mirrors `seed_group` but lets a test pin the range under test.
+async fn seed_group_with_range(db: &SqliteRepository, gid: i64, range: &str) {
+    sqlx::query(
+        "INSERT INTO device_groups (id, name, group_type, token, uid, port_range) \
+         VALUES (?, 'gin', 'in', ?, 1, ?)",
+    )
+    .bind(gid)
+    .bind(format!("tok-{gid}"))
+    .bind(range)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+}
+
 /// Insert a user row with the given id + admin flag (FK target for groups).
 async fn seed_user(db: &SqliteRepository, id: i64, admin: bool) {
     sqlx::query("INSERT INTO users (id, username, password, admin) VALUES (?, ?, 'x', ?)")
@@ -1035,6 +1050,82 @@ async fn rule_insert_quota_guarded_port_scoped_by_group() {
             other
         ),
     }
+}
+
+// ── v1.2.x: auto_assign_port honors the group's port_range ──
+
+/// An explicit narrow range confines every auto-assigned port to that range.
+#[tokio::test]
+async fn auto_assign_port_stays_within_explicit_group_range() {
+    use crate::service::rules::auto_assign_port;
+    let db = repo().await;
+    seed_group_with_range(&db, 1, "65000-65100").await;
+    // Nothing is occupied, so every draw is valid — assert it stays in-range
+    // across many random starts (the ring scan starts at a random offset).
+    for _ in 0..30 {
+        let p = auto_assign_port(&db, 1, "tcp").await.unwrap();
+        assert!(
+            (65000..=65100).contains(&p),
+            "auto port {} escaped the configured 65000-65100 range",
+            p
+        );
+    }
+}
+
+/// The `1-65535` schema default (seed_group leaves it unset → default) is the
+/// "全可转发" sentinel and maps to the 10000-65535 pool, never a system port.
+#[tokio::test]
+async fn auto_assign_port_sentinel_uses_default_pool() {
+    use crate::service::rules::auto_assign_port;
+    let db = repo().await;
+    seed_group(&db, 1).await; // port_range defaults to '1-65535'
+    for _ in 0..30 {
+        let p = auto_assign_port(&db, 1, "tcp").await.unwrap();
+        assert!(
+            (10000..=65535).contains(&p),
+            "sentinel must map to 10000-65535, got {}",
+            p
+        );
+    }
+}
+
+/// A full range errors (naming the real range) instead of spilling outside it —
+/// and the fullness is socket-type scoped: a TCP occupant doesn't block UDP.
+#[tokio::test]
+async fn auto_assign_port_errors_when_range_full() {
+    use crate::service::rules::auto_assign_port;
+    let db = repo().await;
+    seed_group_with_range(&db, 1, "50000-50000").await;
+    // Occupy the pool's only port with a TCP rule on this group.
+    db.insert_quota_guarded(
+        "r1", 1, 50000, "tcp", "raw", "raw", "direct", "raw", None, 1, None, "direct",
+        "127.0.0.1", 80,
+    )
+    .await
+    .unwrap();
+    let err = auto_assign_port(&db, 1, "tcp").await.unwrap_err();
+    assert!(
+        err.contains("50000-50000"),
+        "error must name the exhausted range, got {:?}",
+        err
+    );
+    // A UDP-bearing rule doesn't conflict with the TCP occupant → still fits.
+    let p = auto_assign_port(&db, 1, "udp").await.unwrap();
+    assert_eq!(p, 50000, "udp must reuse the port held only by tcp");
+}
+
+/// A non-existent group id (None port_range) falls back to the default pool
+/// rather than erroring.
+#[tokio::test]
+async fn auto_assign_port_missing_group_uses_default_pool() {
+    use crate::service::rules::auto_assign_port;
+    let db = repo().await;
+    let p = auto_assign_port(&db, 999, "tcp").await.unwrap();
+    assert!(
+        (10000..=65535).contains(&p),
+        "missing group must use the default pool, got {}",
+        p
+    );
 }
 
 #[tokio::test]
