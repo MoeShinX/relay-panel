@@ -8,6 +8,24 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [1.1.2] - 2026-07-12
+
+### Fixed
+
+- **Auto-assigned listen ports now respect the device group's `port_range`.**
+  When a rule was created with the port left on `auto`, the panel ignored the
+  inbound group's configured `port_range` entirely and always drew from a
+  hardcoded 10000-65535 — so a group set to e.g. `65000-65100` still handed out
+  2xxxx ports. Auto-assignment now draws from the group's `port_range`: an
+  explicit range is honored verbatim (including sub-10000 ports the admin opted
+  into), while the unset/default `1-65535` sentinel maps to the safe 10000-65535
+  pool so a never-customized group never auto-assigns a system port. Manual port
+  entry, per-group/per-socket-type conflict detection, and the frontend's
+  `10000-65535` default display are unchanged.
+- **A full port range now returns a clear error instead of "数据库错误".** When
+  every port in a group's range is taken, rule creation returns a 400 naming the
+  exhausted range (`设备组端口范围 X-Y 已全部占用…`) rather than a generic 500.
+
 ## [1.1.1] - 2026-07-08
 
 ### Changed — panel & node now release on independent tracks

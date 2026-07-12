@@ -11,6 +11,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [1.1.2] - 2026-07-12
+
+### Fixed
+
+- **UDP forwarding now follows DDNS target IP changes.** A UDP rule's domain
+  target was resolved ONCE when the listener started (rule push / node boot) and
+  the resolved IP was reused forever — so a DDNS target (WireGuard, game relay,
+  DNS forwarding) that changed IP kept getting blackholed to the stale address
+  until the rule or node was manually restarted. New UDP sessions now resolve
+  through the shared 30s DNS cache (same as TCP), so an IP change is picked up
+  within the cache TTL; established sessions age out on the 60s idle timeout and
+  the next datagram opens a fresh session against the current IP. This also
+  removes the old "unresolvable-at-boot kills the listener → restart loop"
+  behavior — a transient DNS failure no longer tears down the UDP listener.
+
 ## [1.1.1] - 2026-07-08
 
 ### Fixed
