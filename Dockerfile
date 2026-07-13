@@ -56,3 +56,24 @@ COPY --from=node-build /app/target/release/relay-node /app/relay-node
 # binary instead of replacing it. With CMD, `docker run image --version` tries
 # to execute "--version" as a program (the release verify job hit this).
 ENTRYPOINT ["./relay-node"]
+
+# ---- Panel release image (used by docker-release.yml for multi-arch publishing) ----
+# v1.3: panel and node release on independent tracks. This stage produces a
+# panel image from a pre-compiled binary + pre-built frontend (both supplied by
+# the CI job, not baked into the image). Unlike the build-time `panel` stage,
+# it accepts the binary from any host architecture, so the same Dockerfile can
+# produce `linux/amd64` and `linux/arm64` images from their respective native
+# runners without QEMU or cross-compilation toolchains.
+FROM debian:bookworm-slim AS panel-release
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY release-dist/panel/relay-panel /app/relay-panel
+RUN chmod +x /app/relay-panel
+COPY release-dist/frontend /app/public
+VOLUME ["/app/data"]
+EXPOSE 18888
+ENV DATABASE_URL="sqlite:/app/data/data.db?mode=rwc" \
+    LISTEN="0.0.0.0:18888" \
+    PUBLIC_DIR="/app/public"
+CMD ["./relay-panel"]

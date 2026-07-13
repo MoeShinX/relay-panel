@@ -1,0 +1,32 @@
+# Version control
+.git
+.gitignore
+.github
+
+# Build artifacts
+target/
+frontend/dist
+frontend/node_modules
+frontend/.vite
+node_modules/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data files (SQLite, etc.)
+*.db
+*.db-*
+*.wal
+*.shm
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Env files (contain secrets)
+.env
+.env.*
+!.env.example

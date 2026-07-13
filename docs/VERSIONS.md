@@ -82,9 +82,10 @@ tagging.
 4. Commit ("release: vX.Y.Z") and push to `main`. Wait for main CI green.
 5. Tag on the current `main` HEAD: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
 6. The `v*` tag triggers **docker-release.yml** (PANEL-ONLY): it builds + pushes
-   `ghcr.io/moeshinx/relay-panel-panel:X.Y.Z` + `:latest`, and creates the panel
-   GitHub Release (body from CHANGELOG.md). **No node artifact is built or
-   pushed.** `relay-panel-node:latest` is untouched.
+   `ghcr.io/moeshinx/relay-panel-panel:X.Y.Z` + `:latest` (multi-arch manifest
+   with `linux/amd64` and `linux/arm64` legs), and creates the panel GitHub
+   Release (body from CHANGELOG.md). **No node artifact is built or pushed.**
+   `relay-panel-node:latest` is untouched.
 
 ## Release flow — NODE (tag `node-vX.Y.Z`)
 
