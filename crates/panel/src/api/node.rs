@@ -270,6 +270,13 @@ pub async fn report_status(
             // etc.) so the operator can see WHY a rule isn't forwarding.
             // Missing on older nodes; the frontend renders "ok".
             "listener_errors": req.listener_errors,
+            // v1.1.x: how the node is installed ("systemd" | "docker" | "manual").
+            // The node reports this so the panel's node-status UI knows whether a
+            // one-click self-upgrade is possible (only systemd can safely restart
+            // after replacing its own binary). Without persisting it here the
+            // frontend saw `undefined` and wrongly showed every node as "manual",
+            // hiding the upgrade button on legitimately systemd-managed nodes.
+            "install_method": req.install_method,
         });
         // Status persistence is best-effort: the original used .ok() to swallow
         // any DB error so a transient failure never broke the report cycle.
@@ -720,5 +727,57 @@ mod tests {
         let mut h2 = HeaderMap::new();
         h2.insert("Authorization", "notabearer".parse().unwrap());
         assert!(extract_node_token(&h2).is_none());
+    }
+
+    /// Regression: report_status MUST persist `install_method` into the stored
+    /// node-status JSON. It was dropped from the status builder, so the panel
+    /// served `install_method: undefined` and the frontend wrongly resolved
+    /// every node to the "manual" upgrade state ("手动运行：不支持一键升级"),
+    /// hiding the one-click upgrade button on legitimately systemd-managed nodes.
+    #[tokio::test]
+    async fn report_status_persists_install_method() {
+        use relay_shared::protocol::StatusReport;
+        let (state, _pool) = seeded_state().await;
+        let req = StatusReport {
+            cpu_usage: 0.0,
+            mem_usage: 0.0,
+            active_connections: 0,
+            uptime_secs: 0,
+            public_ip: None,
+            public_ipv4: None,
+            public_ipv6: None,
+            disk_total: None,
+            disk_used: None,
+            disk_usage_percent: None,
+            disk_mount: None,
+            upload_bps: None,
+            download_bps: None,
+            boot_upload_bytes: None,
+            boot_download_bytes: None,
+            network_interface: None,
+            node_id: Some("n1".into()),
+            process_uptime_secs: None,
+            node_version: Some("1.1.1".into()),
+            config_protocol_version: None,
+            listener_errors: None,
+            install_method: Some("systemd".into()),
+        };
+        let Json(resp) =
+            report_status(State(state.clone()), auth_headers("tok-A"), Json(req)).await;
+        assert_eq!(resp.code, 0, "valid report → success");
+
+        // The per-node status key is node_status:{group_id}:{node_id}.
+        let raw = state
+            .db
+            .get("node_status:10:n1")
+            .await
+            .expect("kvs get")
+            .expect("status row must exist after a successful report");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("stored status is JSON");
+        assert_eq!(
+            v.get("install_method").and_then(|x| x.as_str()),
+            Some("systemd"),
+            "install_method must be persisted so the upgrade UI can offer a self-upgrade"
+        );
     }
 }
