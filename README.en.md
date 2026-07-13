@@ -30,6 +30,8 @@
 
 - 🔀 **Forwarding rules** — TCP/UDP port forwarding with multi-target, failover and round-robin load balancing; on Linux, unlimited rules use `splice` zero-copy forwarding for low latency and jitter on long chains
 - 🛡️ **Circuit breaker** — a target that keeps failing is skipped for a while; all-down triggers probe mode for auto-recovery
+- 🌐 **Domain targets & DDNS following** — targets can be domain names; DNS changes are picked up automatically (TCP 30s cache, UDP per-session re-resolution), so a DDNS target that changes IP needs no manual rule/node restart
+- ♻️ **High-concurrency stability** — TCP keepalive reclaims dead connections (NAT timeout, dropped links) to prevent file-descriptor exhaustion; the node raises its own fd limit at startup for sustained high-connection load
 - 🛒 **Plan shop & billing** — self-service purchase (balance charge) with order history; admin plan CRUD, plans grant lines and auto-authorize on purchase
 - 💳 **Up + down billing + per-line rate** — charged as `(upload + download) × line rate (0.1–100)` against the plan quota
 - 🔁 **Single current plan** — one plan per user: buying the **same** plan renews it (stack traffic / extend a time plan), buying a **different** plan switches (full replace, with a confirm); rules on lost lines auto-pause and auto-resume once re-authorized
@@ -69,6 +71,8 @@ curl -fsSL https://raw.githubusercontent.com/MoeShinX/relay-panel/main/install.s
 ```
 
 > 🔑 **Default login `admin` / `admin123` — first login forces a password change.**
+
+> 🖥️ **Platform**: the panel image is currently **amd64-only** (arm hosts not yet supported — multi-arch is planned); the **node supports amd64 / arm64**, and its install script auto-detects the arch via `uname -m` — no manual selection needed.
 
 📖 Full guide: **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
 
