@@ -72,7 +72,7 @@ curl -fsSL https://raw.githubusercontent.com/MoeShinX/relay-panel/main/install.s
 
 > 🔑 **Default login `admin` / `admin123` — first login forces a password change.**
 
-> 🖥️ **Platform**: the panel image is currently **amd64-only** (arm hosts not yet supported — multi-arch is planned); the **node supports amd64 / arm64**, and its install script auto-detects the arch via `uname -m` — no manual selection needed.
+> 🖥️ **Platform**: both the panel image and the node support **amd64 / arm64**, so ARM servers can deploy directly. The panel image is a multi-arch manifest (`docker pull` picks the right arch automatically) and the node install script auto-detects the arch via `uname -m` — no manual selection needed.
 
 📖 Full guide: **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
 

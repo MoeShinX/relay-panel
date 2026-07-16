@@ -15,7 +15,7 @@ const INSECURE_JWT_SECRET: &str = "change-me-jwt-secret";
 /// Overridable at runtime via the `APP_VERSION` env var — used by CI to inject
 /// the version into the Docker image without rebuilding. If the env var is
 /// unset, the compiled-in default below is used.
-const COMPILED_APP_VERSION: &str = "1.1.2";
+const COMPILED_APP_VERSION: &str = "1.1.3";
 
 /// Resolve the effective app version: the `APP_VERSION` env var if set,
 /// otherwise the compiled-in default. Cached for the process lifetime.

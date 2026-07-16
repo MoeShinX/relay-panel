@@ -71,7 +71,7 @@ curl -fsSL https://raw.githubusercontent.com/MoeShinX/relay-panel/main/install.s
 
 > 🔑 **默认账号 `admin` / `admin123`，首次登录强制修改密码。**
 
-> 🖥️ **平台支持**：面板镜像目前仅 **amd64**，arm 主机暂不支持（多架构后续跟进）；**节点支持 amd64 / arm64**，安装脚本 `uname -m` 自动适配，无需手动指定。
+> 🖥️ **平台支持**：面板镜像与节点均支持 **amd64 / arm64**，ARM 服务器可直接部署；面板镜像为多架构 manifest，`docker pull` 自动选对架构，节点安装脚本 `uname -m` 自动适配，均无需手动指定。
 
 📖 完整指南：**[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
 

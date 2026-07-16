@@ -8,6 +8,28 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [1.1.3] - 2026-07-16
+
+### Fixed
+
+- **systemd-managed nodes are no longer wrongly shown as "手动运行" (manual) in
+  node status, and their one-click upgrade button now appears.** The node
+  correctly reported its `install_method` ("systemd" | "docker" | "manual"), but
+  the panel's status-report handler dropped the field when persisting the node
+  status, so the frontend always saw it as unset and resolved every node to the
+  "manual" upgrade state — showing "手动运行：不支持一键升级（退出后无人拉起）"
+  and hiding the upgrade action on legitimately systemd-managed nodes. The panel
+  now persists `install_method`; no node re-install is needed — an already
+  running node surfaces the correct state on its next status report.
+
+### Changed
+
+- **The panel Docker image is now multi-arch (`linux/amd64` + `linux/arm64`).**
+  ARM64 servers can pull and run the panel image directly. Each architecture is
+  compiled natively on its own GitHub-hosted runner (no QEMU / cross-toolchain);
+  the two per-arch images are merged into one manifest and the release verifies
+  both architectures are present. Node binaries already supported amd64/arm64.
+
 ## [1.1.2] - 2026-07-12
 
 ### Fixed
