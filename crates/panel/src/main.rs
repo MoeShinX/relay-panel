@@ -100,7 +100,7 @@ async fn main() {
     // layer; the panel may listen on plain HTTP behind Caddy). See
     // api::security_headers for the exact policy.
     let app = api::security_headers::apply_security_headers(app);
-    let app = app.with_state(api::AppState {
+    let state = api::AppState {
         db,
         config: config.clone(),
         release_cache: api::system::ReleaseCache::new(),
@@ -109,7 +109,14 @@ async fn main() {
         geoip_in_flight: std::sync::Arc::new(tokio::sync::Mutex::new(
             std::collections::HashSet::new(),
         )),
-    });
+    };
+
+    // v1.2.0: scheduled rule restarts. Shares the AppState (and therefore the
+    // same node WS registry) with the HTTP handlers, so a scheduled restart goes
+    // out over exactly the same control channel as a manual one.
+    service::auto_restart::spawn(state.clone());
+
+    let app = app.with_state(state);
 
     let addr: SocketAddr = config.listen.parse().expect("Invalid listen address");
     tracing::info!(
