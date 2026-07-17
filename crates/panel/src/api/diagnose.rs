@@ -233,11 +233,15 @@ pub struct DiagnoseResponse {
 /// A node's status row from kvs, parsed for diagnosis scheduling. v0.4.15:
 /// carries group_name + public_ip so each NodeDiagnoseStatus can show
 /// "分组名 · 公网IP" without exposing the raw node_id as the label.
-struct NodeStatusRow {
-    node_id: String,
-    node_version: Option<String>,
-    public_ip: Option<String>,
-    group_name: String,
+/// v1.2.0: `pub(crate)` so `api::restart` can reuse the same node enumeration.
+/// Restart and diagnose both need "the nodes of this rule's inbound group, with
+/// their versions", and duplicating that logic would let the two drift apart on
+/// which nodes are considered live.
+pub(crate) struct NodeStatusRow {
+    pub(crate) node_id: String,
+    pub(crate) node_version: Option<String>,
+    pub(crate) public_ip: Option<String>,
+    pub(crate) group_name: String,
 }
 
 /// POST /api/v1/rules/{id}/diagnose — start a diagnosis run for a rule.
@@ -617,7 +621,7 @@ pub async fn receive_diagnose_result(
 /// `group_name` is passed in by the caller (which has already loaded the group)
 /// and attached to each row; `public_ip` is read from the status JSON for
 /// display. No extra DB lookup here.
-async fn group_node_statuses(
+pub(crate) async fn group_node_statuses(
     state: &AppState,
     group_id: i64,
     group_name: String,
