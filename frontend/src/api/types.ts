@@ -80,10 +80,42 @@ export interface ForwardRule {
   /** v0.4.7: bound tunnel profile (source of transport config).
    *  null/undefined = legacy (use public_transport/ws_path). */
   tunnel_profile_id?: number | null;
+  /** v1.2.0: cap on concurrent TCP connections, counted PER NODE (0 = unlimited).
+   *  A rule served by 3 nodes admits up to 3x this in total. TCP only. */
+  max_connections?: number;
+  /** v1.2.0: restart the rule every N minutes to shed connections (0 = off).
+   *  Non-zero values are floored at MIN_AUTO_RESTART_MINUTES by the API. */
+  auto_restart_minutes?: number;
   config: string;
   traffic_used: number;
   status: string;
   created_at: string;
+}
+
+/** v1.2.0: the API's floor for a non-zero auto_restart_minutes. Mirrors
+ *  relay_shared::models::MIN_AUTO_RESTART_MINUTES — the backend rejects
+ *  anything between 1 and this, so the form must not offer it. */
+export const MIN_AUTO_RESTART_MINUTES = 5;
+
+/** v1.2.0: one node's outcome in a restart response. */
+export interface NodeRestartStatus {
+  /** "restarted" = the command reached the node's live control channel.
+   *  "unsupported" = node too old to understand restart_rule (upgrade it).
+   *  "control_channel_offline" = no live WS connection. */
+  state: 'restarted' | 'unsupported' | 'control_channel_offline';
+  node_id: string;
+  group_name: string;
+  public_ip?: string | null;
+  node_version?: string | null;
+}
+
+/** v1.2.0: POST /rules/{id}/restart. `restarted` counts nodes actually reached
+ *  — it can be 0 on an otherwise successful request (all nodes old/offline), so
+ *  callers must check it rather than only the envelope code. */
+export interface RestartResponse {
+  rule_id: number;
+  restarted: number;
+  nodes: NodeRestartStatus[];
 }
 
 /** v0.4.0: a tunnel profile (matches backend TunnelProfile struct). Builtin

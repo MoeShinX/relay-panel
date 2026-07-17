@@ -1,10 +1,11 @@
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, message, Popconfirm, Tag, Alert, Typography, Dropdown, Switch, Tabs, Spin, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
-import { PlusOutlined, ReloadOutlined, EditOutlined, ApiOutlined, CopyOutlined, DownloadOutlined, UploadOutlined, PauseCircleOutlined, PlayCircleOutlined, DeleteOutlined, ArrowUpOutlined, ArrowDownOutlined, MedicineBoxOutlined, QuestionCircleOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, EditOutlined, ApiOutlined, CopyOutlined, DownloadOutlined, UploadOutlined, PauseCircleOutlined, PlayCircleOutlined, DeleteOutlined, ArrowUpOutlined, ArrowDownOutlined, MedicineBoxOutlined, QuestionCircleOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api/client';
-import type { ApiEnvelope, ForwardRule, DeviceGroup, User, UserSelf, RuleTargetInput, DiagnoseResponse, NodeDiagnoseStatus, DiagnoseTargetResult, SharedGroupSummary } from '../api/types';
+import type { ApiEnvelope, ForwardRule, DeviceGroup, User, UserSelf, RuleTargetInput, DiagnoseResponse, NodeDiagnoseStatus, DiagnoseTargetResult, SharedGroupSummary, RestartResponse } from '../api/types';
+import { MIN_AUTO_RESTART_MINUTES } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { formatBytes } from '../utils/format';
 import { useAuth } from '../auth/useAuth';
@@ -246,6 +247,8 @@ export default function Rules() {
       load_balance_strategy: r.load_balance_strategy ?? 'first',
       upload_limit_mbps: r.upload_limit_mbps ?? 0,
       download_limit_mbps: r.download_limit_mbps ?? 0,
+      max_connections: r.max_connections ?? 0,
+      auto_restart_minutes: r.auto_restart_minutes ?? 0,
     });
     setEditOpen(true);
   };
@@ -264,6 +267,9 @@ export default function Rules() {
       load_balance_strategy: r.load_balance_strategy ?? 'first',
       upload_limit_mbps: r.upload_limit_mbps ?? 0,
       download_limit_mbps: r.download_limit_mbps ?? 0,
+      // v1.2.0: max_connections / auto_restart_minutes are NOT carried over —
+      // they're edit-only (the create path can't store them), so the copy starts
+      // uncapped and the user sets them via Edit if wanted.
     });
     setCreateOpen(true);
   };
@@ -347,6 +353,8 @@ const IMPORT_DEFAULTS = {
     load_balance_strategy?: string;
     upload_limit_mbps?: number;
     download_limit_mbps?: number;
+    max_connections?: number;
+    auto_restart_minutes?: number;
   }) => {
     if (!editing) return;
     const payload: Record<string, unknown> = {};
@@ -374,6 +382,15 @@ const IMPORT_DEFAULTS = {
     if (newUp !== (editing.upload_limit_mbps ?? 0) || newDown !== (editing.download_limit_mbps ?? 0)) {
       payload.upload_limit_mbps = newUp;
       payload.download_limit_mbps = newDown;
+    }
+    // v1.2.0: send both together when either changed. The API defaults an
+    // omitted one to the rule's current value, so sending a single field is
+    // safe — but sending the pair keeps the request self-describing.
+    const newMaxConn = values.max_connections ?? 0;
+    const newAutoRestart = values.auto_restart_minutes ?? 0;
+    if (newMaxConn !== (editing.max_connections ?? 0) || newAutoRestart !== (editing.auto_restart_minutes ?? 0)) {
+      payload.max_connections = newMaxConn;
+      payload.auto_restart_minutes = newAutoRestart;
     }
     if (Object.keys(payload).length === 0) { setEditOpen(false); return; }
     try {
@@ -436,6 +453,71 @@ const IMPORT_DEFAULTS = {
     }
     setSelectedRowKeys([]);
     load();
+  };
+
+  /** v1.2.0: restart one rule — drop its live connections and rebuild its
+   *  listeners on every node of its inbound group. The rule's paused state is
+   *  untouched; this is not a pause/resume round-trip.
+   *
+   *  `restarted` (nodes actually reached) drives the message rather than the
+   *  HTTP code: the request can succeed while restarting nothing, e.g. every
+   *  node is too old to understand the command. Reporting that as success would
+   *  hide exactly the case the user needs to act on. */
+  const handleRestart = async (r: ForwardRule) => {
+    try {
+      const res = await api.post<unknown, ApiEnvelope<RestartResponse>>(`/rules/${r.id}/restart`, {});
+      if (res.code !== 0) {
+        message.error(res.message || t('restartFailed'));
+        return;
+      }
+      const data = res.data;
+      const outdated = (data?.nodes ?? []).filter(n => n.state === 'unsupported').length;
+      const offline = (data?.nodes ?? []).filter(n => n.state === 'control_channel_offline').length;
+      if ((data?.restarted ?? 0) > 0) {
+        let msg = t('restartSuccess').replace('{count}', String(data?.restarted ?? 0));
+        if (outdated > 0) msg += ` ${t('restartOutdatedSuffix').replace('{count}', String(outdated))}`;
+        if (offline > 0) msg += ` ${t('restartOfflineSuffix').replace('{count}', String(offline))}`;
+        if (outdated > 0 || offline > 0) message.warning(msg);
+        else message.success(msg);
+      } else if (outdated > 0) {
+        message.warning(t('restartAllOutdated').replace('{count}', String(outdated)));
+      } else if (offline > 0) {
+        message.warning(t('restartAllOffline').replace('{count}', String(offline)));
+      } else {
+        message.warning(t('restartNoNodes'));
+      }
+    } catch {
+      message.error(t('restartFailed'));
+    }
+  };
+
+  /** v1.2.0: batch restart. Per-rule POST like batch pause/resume — there is no
+   *  bulk endpoint. A rule can fail individually (paused → 400, or not owned →
+   *  404), so tally ok/fail rather than assuming Promise.all means success. */
+  const handleBatchRestart = async () => {
+    const ids = selectedRowKeys as number[];
+    if (ids.length === 0) return;
+    const results = await Promise.all(ids.map(async id => {
+      try {
+        const res = await api.post<unknown, ApiEnvelope<RestartResponse>>(`/rules/${id}/restart`, {});
+        // Reaching zero nodes is not a success worth reporting as one.
+        return res.code === 0 && (res.data?.restarted ?? 0) > 0;
+      } catch { return false; }
+    }));
+    const ok = results.filter(Boolean).length;
+    const fail = results.length - ok;
+    if (fail === 0) {
+      message.success(t('batchRestartSuccess').replace('{count}', String(ok)));
+    } else {
+      // NOT batchPartial: that message blames "unauthorized lines can't be
+      // resumed", which is the batch-resume failure mode and has nothing to do
+      // with a restart. A restart fails when the rule is paused or every node is
+      // old/offline — say that instead of pointing at the wrong cause.
+      message.warning(
+        t('batchRestartPartial').replace('{ok}', String(ok)).replace('{fail}', String(fail))
+      );
+    }
+    setSelectedRowKeys([]);
   };
 
   /** v0.4.8: run a diagnosis for a rule. The panel fans the probe out to the
@@ -563,6 +645,26 @@ const IMPORT_DEFAULTS = {
           <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => handleCopy(r)}>{t('copy')}</Button>
           {/* v0.4.9: diagnosis is TCP-only — disable for pure-UDP rules. */}
           <Button size="small" type="text" icon={<MedicineBoxOutlined />} disabled={r.protocol === 'udp'} onClick={() => handleDiagnose(r)} title={r.protocol === 'udp' ? t('diagnoseUdpUnsupported') : t('diagnose')}>{t('diagnose')}</Button>
+          {/* v1.2.0: restart drops every live connection on this rule, so it is
+              behind a confirm (diagnose is read-only and isn't). Disabled while
+              paused — there are no listeners to restart. */}
+          <Popconfirm
+            title={t('restartConfirmTitle')}
+            description={t('restartConfirmDesc')}
+            onConfirm={() => handleRestart(r)}
+            okButtonProps={{ danger: true }}
+            disabled={r.paused}
+          >
+            <Button
+              size="small"
+              type="text"
+              icon={<ThunderboltOutlined />}
+              disabled={r.paused}
+              title={r.paused ? t('restartPausedHint') : t('restart')}
+            >
+              {t('restart')}
+            </Button>
+          </Popconfirm>
           <Popconfirm title={t('deleteRuleConfirm')} onConfirm={() => handleDelete(r.id)}>
             <Button danger size="small" type="text">{t('delete')}</Button>
           </Popconfirm>
@@ -613,6 +715,54 @@ const IMPORT_DEFAULTS = {
         type="info" showIcon style={{ marginBottom: 12, padding: '4px 12px' }}
         title={t('currentInboundHost').replace('{host}', host || t('notConfigured'))}
       />
+    );
+  };
+
+  /** v1.2.0: connection cap + scheduled restart. Shared by the create and edit
+   *  forms so the two can't drift (the rate-limit block above predates this and
+   *  is still duplicated).
+   *
+   *  Both fields are 0 = off. The cap's `extra` says the count is PER NODE,
+   *  because that isn't guessable: a rule on 3 nodes admits 3x the number typed
+   *  here.
+   *
+   *  The cap is disabled for a UDP-ONLY rule. It is enforced at accept(), which
+   *  UDP doesn't have — the panel would happily store the number and ship it to
+   *  the node, where nothing would ever read it. Showing an editable field that
+   *  silently does nothing is worse than showing a disabled one that says why.
+   *  A tcp_udp rule keeps it: the cap governs its TCP half. */
+  const renderConnectionControls = (proto?: string) => {
+    const udpOnly = proto === 'udp';
+    return (
+    <>
+      <Form.Item
+        name="max_connections"
+        label={t('maxConnections')}
+        extra={udpOnly ? t('maxConnectionsUdpUnsupported') : t('maxConnectionsHint')}
+        initialValue={0}
+      >
+        <InputNumber min={0} style={{ width: '100%' }} placeholder="0" disabled={udpOnly} />
+      </Form.Item>
+      <Form.Item
+        name="auto_restart_minutes"
+        label={t('autoRestart')}
+        extra={t('autoRestartHint').replace('{min}', String(MIN_AUTO_RESTART_MINUTES))}
+        initialValue={0}
+        rules={[{
+          // Mirrors the API's floor. 0 = off is always allowed; anything between
+          // 1 and the floor would drop connections faster than clients reconnect.
+          validator: (_, value) => {
+            const v = Number(value ?? 0);
+            if (v === 0 || v >= MIN_AUTO_RESTART_MINUTES) return Promise.resolve();
+            return Promise.reject(new Error(
+              t('autoRestartTooSmall').replace('{min}', String(MIN_AUTO_RESTART_MINUTES))
+            ));
+          },
+        }]}
+      >
+        <InputNumber min={0} style={{ width: '100%' }} addonAfter={t('minutes')} placeholder="0" />
+      </Form.Item>
+    </>
     );
   };
 
@@ -709,6 +859,18 @@ const IMPORT_DEFAULTS = {
             <Button icon={<PauseCircleOutlined />} onClick={() => handleBatchSetPaused(true)}>
               {t('batchPause')} ({selectedRowKeys.length})
             </Button>
+          )}
+          {selectedRowKeys.length > 0 && (
+            <Popconfirm
+              title={t('batchRestartConfirm').replace('{count}', String(selectedRowKeys.length))}
+              description={t('restartConfirmDesc')}
+              onConfirm={handleBatchRestart}
+              okButtonProps={{ danger: true }}
+            >
+              <Button icon={<ThunderboltOutlined />}>
+                {t('batchRestart')} ({selectedRowKeys.length})
+              </Button>
+            </Popconfirm>
           )}
           {selectedRowKeys.length > 0 && (
             <Popconfirm
@@ -816,6 +978,12 @@ const IMPORT_DEFAULTS = {
                     <Form.Item name="download_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('downloadLimit')} addonAfter="Mbps" style={{ width: '100%' }} placeholder="0" /></Form.Item>
                   </Space>
                 </Form.Item>
+                {/* v1.2.0: the connection cap / auto-restart controls are
+                    deliberately EDIT-ONLY. The atomic create transaction
+                    (create_rule_with_guard) doesn't carry them, so offering them
+                    here would silently discard whatever the user typed. They are
+                    also settings you tune after watching a rule misbehave, not
+                    ones you can guess up front. */}
               </>),
             },
           ]} />
@@ -882,6 +1050,7 @@ const IMPORT_DEFAULTS = {
                     <Form.Item name="download_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('downloadLimit')} addonAfter="Mbps" style={{ width: '100%' }} placeholder="0" /></Form.Item>
                   </Space>
                 </Form.Item>
+                {renderConnectionControls(editProto)}
               </>),
             },
           ]} />

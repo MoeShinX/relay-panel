@@ -10,7 +10,53 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The connection cap is no longer offered on UDP-only rules.** It is enforced
+  at `accept()`, which UDP doesn't have, so the panel would store the number and
+  ship it to the node where nothing reads it. The field is now disabled for a
+  UDP-only rule with a note saying why; a `tcp_udp` rule keeps it (it governs
+  the TCP half).
+- **Batch restart no longer blames the wrong thing on partial failure.** It
+  reused the batch-resume message ("unauthorized lines can't be resumed"), which
+  has nothing to do with a restart — it now names the real causes (paused rule,
+  or nodes offline / too old).
+
 ### Added
+
+- **Rule restart (manual + batch).** `POST /rules/{id}/restart` drops every
+  connection a rule is currently carrying and rebuilds its listeners on each
+  node of its inbound group. Owner-scoped (a user may restart only their own
+  rules); batch restart is the frontend calling it per rule, matching batch
+  pause/resume, so there is deliberately no bulk endpoint. The rule's `paused`
+  flag is never read or written — a restart is not a state transition. A paused
+  rule is rejected rather than reported as a hollow success: it has no listener
+  to restart, and the user's actual intent there is "resume".
+
+  This is deliberately NOT implemented as pause+resume. That pair leaves the
+  rule PAUSED if the resume half fails (node offline, authorization revoked
+  between the two calls, panel restarted mid-way) — an outage caused by the
+  button whose whole job is to end one. It also frees the listen port for
+  auto-assignment during the gap, and writing `paused` resets `auto_paused`
+  (v1.0.8), corrupting the system-paused vs. human-paused distinction.
+
+  The response's `restarted` field counts nodes ACTUALLY reached and can be 0
+  on an otherwise successful request (every node too old or offline), so the UI
+  keys its message off that rather than the envelope code — a restart that
+  silently did nothing would otherwise be undetectable.
+
+- **Scheduled rule restart.** A rule with `auto_restart_minutes > 0` has its
+  connections dropped on that interval. The `max_connections` cap is the actual
+  fix for connection accumulation; this is the valve for when you'd rather shed
+  than refuse.
+
+  The schedule lives in MEMORY, not the database. Persisting `last_restart_at`
+  would mean every rule whose interval elapsed while the panel was down comes
+  due at once on boot — a panel upgrade would begin by dropping every
+  auto-restart rule's connections simultaneously. In-memory re-bases each timer
+  to "now" on restart; the cost is at most one skipped cycle, which is invisible
+  next to an unscheduled mass disconnect. A rule seen for the first time is
+  baselined, never restarted on the spot.
 
 - **Rule connection controls, storage + API** (no enforcement yet — the node
   half lands separately). Two new per-rule settings, both `0` = off/unlimited so
@@ -31,9 +77,13 @@ independent `v*` / `node-v*` tracks since this release).
   than to 0 — otherwise setting only `max_connections` would silently switch off
   that rule's scheduled restart.
 
-- **`restart_rule` wire message + `node_supports_restart_rule` version gate**
-  (1.2.0+) in `relay-shared`. Nothing sends it yet; the panel endpoint and the
-  node handler land in follow-up PRs.
+### Compatibility
+
+- Nodes below **1.2.0** silently ignore the unknown `restart_rule` message. The
+  panel gates on `node_supports_restart_rule` and surfaces those nodes as
+  "upgrade required" rather than counting them as restarted — a restart that
+  quietly did nothing would be undetectable to the operator. Node Status already
+  offers one-click upgrade.
 
 ### Schema
 

@@ -11,6 +11,72 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`restart_rule` control message.** The panel can ask the node to drop one
+  rule's connections and rebuild its listeners. The node re-creates listeners
+  from its OWN cached config (`ForwarderManager::last_config`), never from
+  anything in the message, so a restart cannot be used to inject listener
+  config. `node_id` is re-checked on arrival as defence in depth even though
+  `send_node` already routed it.
+
+  The WS dispatch arm for this MUST stay above the diagnose arm and MUST check
+  `type`: `DiagnoseRuleMessage` defaults its `challenge` field and ignores
+  unknown fields, so a `restart_rule` payload deserializes into it cleanly
+  (`rule_id` + `request_id` are both present). Ordered after diagnose, every
+  restart would silently become a target probe instead. A test in
+  `relay-shared` pins the ambiguity.
+
+- **Per-rule concurrent TCP connection cap** (`ListenerConfig.max_connections`,
+  None = unlimited). Admission happens in the accept loop, not in the spawned
+  connection task: the accept loop is sequential, so check-then-increment there
+  is exact, whereas incrementing inside the task would let an unbounded number
+  of accepts through before the first increment landed — precisely the
+  connection-flood case the cap exists for. Over the cap, the socket is dropped
+  immediately (the "at cap" warning is rate-limited to once per 60s per
+  listener; a rule sitting at its cap rejects on every accept, and an
+  unthrottled warn would itself become the outage).
+
+  The counter lives per RULE, not per listener: a dual-stack rule runs two
+  accept loops (IPv4 + IPv6), and a per-listener counter would silently grant
+  double the configured cap.
+
+### Fixed
+
+- **Aborting a listener no longer leaves its connections forwarding.**
+  Connections run on detached `tokio::spawn` tasks, so an aborted accept loop
+  stopped new accepts while every established connection kept relaying —
+  verified: a post-abort read/write round-trips fine. Connections now select on
+  a per-rule cancellation channel (`forwarder::gate`). Consequences:
+  - an explicit `restart_rule` genuinely sheds connections rather than just
+    re-binding the port;
+  - a rule removed from the node's config now stops forwarding, instead of
+    relaying bytes for a rule whose traffic counters `apply_config` already
+    pruned.
+
+  `apply_config`'s fingerprint-driven restart (changed targets / rate caps) does
+  NOT cancel: editing a rule must not kick everyone off, which has been the
+  behaviour since v0.3.6.
+
+- **A UDP-only rule's restart is no longer a silent no-op.** `restart_rule`
+  returned early when the rule had no `RuleRuntime` — but only the TCP arm of
+  `apply_config` creates one (UDP has no `accept()` and no cancellable
+  per-connection tasks), so a UDP-only rule has no runtime while very much
+  having a listener. It was never torn down or rebuilt, and its sessions never
+  dropped. The panel reports success as soon as the command reaches the node, so
+  the operator was told the rule had restarted while nothing happened at all.
+  "No runtime" now means only "no connections to cancel"; whether there are
+  listeners to rebuild is decided separately.
+
+### Compatibility
+
+- Requires panel **1.2.0+** to be sent `restart_rule` or a connection cap. Both
+  additions are backward compatible on the wire (`#[serde(default)]`), so a
+  1.2.0 node runs against an older panel unchanged — it simply never receives
+  either.
+
 ## [1.1.2] - 2026-07-12
 
 ### Fixed
