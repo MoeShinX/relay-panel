@@ -266,6 +266,51 @@ async fn connect_and_run(
                                 }
                             }
                             return WsExit::ConfigChanged;
+                        } else if let Some(rm) =
+                            serde_json::from_str::<relay_shared::protocol::RestartRuleMessage>(&text)
+                                .ok()
+                                .filter(|rm| rm.msg_type == "restart_rule")
+                        {
+                            // v1.2.0: restart ONE rule's listeners and drop its
+                            // connections.
+                            //
+                            // This arm MUST stay ABOVE the diagnose arm, and MUST
+                            // check msg_type. DiagnoseRuleMessage defaults its
+                            // `challenge` field and ignores unknown fields, so a
+                            // restart_rule payload deserializes into it cleanly
+                            // (rule_id + request_id are both present) — order it
+                            // after diagnose and every restart silently becomes a
+                            // target probe instead.
+                            //
+                            // send_node already routed this to us; re-check as
+                            // defence in depth (same as upgrade_node below).
+                            if rm.node_id != node_id {
+                                tracing::warn!(
+                                    "websocket: ignoring restart of rule {} for node {} (I am {})",
+                                    rm.rule_id,
+                                    rm.node_id,
+                                    node_id
+                                );
+                            } else {
+                                tracing::info!(
+                                    "websocket: restart_rule request_id={} rule_id={}",
+                                    rm.request_id,
+                                    rm.rule_id
+                                );
+                                // Held across the restart: apply_config takes the
+                                // same lock, so a concurrent config push cannot
+                                // interleave with the teardown/rebuild.
+                                let mut mgr = manager.lock().await;
+                                let (dropped, restarted) = mgr.restart_rule(rm.rule_id).await;
+                                tracing::info!(
+                                    "websocket: restart_rule request_id={} rule_id={} done \
+                                     ({} connection(s) dropped, {} listener(s) rebuilt)",
+                                    rm.request_id,
+                                    rm.rule_id,
+                                    dropped,
+                                    restarted
+                                );
+                            }
                         } else if let Ok(dm) =
                             serde_json::from_str::<relay_shared::protocol::DiagnoseRuleMessage>(&text)
                         {

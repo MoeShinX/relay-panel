@@ -1,3 +1,4 @@
+use super::gate::RuleRuntime;
 use super::limiter::RateLimit;
 use super::selector::TargetSelector;
 use super::tcp;
@@ -63,6 +64,15 @@ struct ListenerFingerprint {
     /// takes effect without a node restart.
     upload_limit_bps: Option<u64>,
     download_limit_bps: Option<u64>,
+    /// v1.2.0: concurrent-connection cap (None = unlimited). The accept loop
+    /// captures this when it spawns, so a change must restart the listener for
+    /// the new cap to apply — same reasoning as the rate caps above.
+    ///
+    /// Note this restart does NOT drop live connections (only an explicit
+    /// `restart_rule` does that), so editing the cap on a busy rule is safe:
+    /// existing connections keep running and the new cap governs admissions
+    /// from that point on. A lowered cap takes effect by attrition.
+    max_connections: Option<u32>,
 }
 
 impl ListenerFingerprint {
@@ -75,6 +85,7 @@ impl ListenerFingerprint {
             node_transport: l.node_transport,
             upload_limit_bps: l.upload_limit_bps,
             download_limit_bps: l.download_limit_bps,
+            max_connections: l.max_connections,
         }
     }
 }
@@ -98,6 +109,20 @@ pub struct ListenerInfo {
 
 pub struct ForwarderManager {
     listeners: HashMap<ListenerKey, ManagedListener>,
+    /// v1.2.0: per-rule runtime state (live-connection counter + restart
+    /// cancellation), keyed by rule_id. Lives HERE rather than in the listener
+    /// because a rule's IPv4 and IPv6 listeners must share one connection
+    /// budget, and because it has to survive the listener being torn down and
+    /// rebuilt by `apply_config` (a config edit must not reset the count while
+    /// the connections it counted are still alive). Entries are dropped when the
+    /// rule leaves the config, which cancels its connections — see `gate.rs`.
+    rule_runtime: HashMap<i64, RuleRuntime>,
+    /// v1.2.0: the most recent config, kept so `restart_rule` can rebuild a
+    /// rule's listeners without asking the panel for the config again. A restart
+    /// must be able to run while the control channel is busy, and re-fetching
+    /// would also let a config change ride in on what the operator asked to be a
+    /// pure restart.
+    last_config: Option<NodeConfigResponse>,
     counter: Arc<TrafficCounter>,
     connections: Arc<ConnectionTracker>,
     /// Bind/runtime errors captured from spawned listener tasks since the last
@@ -118,6 +143,8 @@ impl ForwarderManager {
     pub fn new(counter: Arc<TrafficCounter>, connections: Arc<ConnectionTracker>) -> Self {
         Self {
             listeners: HashMap::new(),
+            rule_runtime: HashMap::new(),
+            last_config: None,
             counter,
             connections,
             listener_errors: Arc::new(Mutex::new(Vec::new())),
@@ -474,6 +501,15 @@ impl ForwarderManager {
                     let cn = connections.clone();
                     let rid = rule_id;
                     let ipv4_src = src_ipv4;
+                    // v1.2.0: both families get a gate cloned from the SAME
+                    // RuleRuntime, so `max_connections` is a per-rule total
+                    // rather than a per-family allowance.
+                    let gate4 = self
+                        .rule_runtime
+                        .entry(rule_id)
+                        .or_default()
+                        .gate(listener.max_connections);
+                    let gate6 = gate4.clone();
                     tokio::spawn(async move {
                         type SrvResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
                         let (tgt4, sel4, rl4, ctr4, cn4) = (
@@ -486,7 +522,7 @@ impl ForwarderManager {
                         let v4_fut = async move {
                             if let Some(l) = v4_listener {
                                 tcp::serve_tcp_listener(
-                                    l, tgt4, sel4, rl4, ctr4, cn4, rid, ipv4_src,
+                                    l, tgt4, sel4, rl4, ctr4, cn4, rid, ipv4_src, gate4,
                                 )
                                 .await
                             } else {
@@ -495,8 +531,10 @@ impl ForwarderManager {
                         };
                         let v6_fut = async move {
                             if let Some(l) = v6_listener {
-                                tcp::serve_tcp_listener(l, tgt, sel, rl, ctr, cn, rid, ipv4_src)
-                                    .await
+                                tcp::serve_tcp_listener(
+                                    l, tgt, sel, rl, ctr, cn, rid, ipv4_src, gate6,
+                                )
+                                .await
                             } else {
                                 std::future::pending::<SrvResult>().await
                             }
@@ -695,6 +733,93 @@ impl ForwarderManager {
                 },
             );
         }
+
+        // ── Step 5: forget rules that are gone ──
+        // v1.2.0: dropping a rule's RuleRuntime drops its watch::Sender, which
+        // cancels any connection still forwarding for it. That is deliberate: a
+        // rule removed from the config can no longer have its traffic attributed
+        // or billed (step 2/3 already pruned its counters), so letting its
+        // connections outlive it would forward bytes nobody accounts for.
+        self.rule_runtime
+            .retain(|rule_id, _| desired_rule_ids.contains(rule_id));
+
+        // v1.2.0: remember the applied config so restart_rule can rebuild a
+        // rule's listeners from it without a round-trip to the panel.
+        self.last_config = Some(config.clone());
+    }
+
+    /// v1.2.0: restart ONE rule — drop every connection it is currently
+    /// forwarding, then rebuild its listeners from the last applied config.
+    ///
+    /// Returns `(connections_dropped, listeners_restarted)`. A rule with no
+    /// listeners on this node returns `(0, 0)`; the caller reports that as
+    /// "nothing to do here" rather than an error, because a rule legitimately
+    /// spans only some of a group's nodes.
+    ///
+    /// Order matters. Connections are cancelled BEFORE the listeners are torn
+    /// down and rebuilt: the connection tasks are detached, so tearing the
+    /// listener down first would rebind the port while the old connections kept
+    /// forwarding — the exact no-op this command exists to avoid.
+    ///
+    /// The rule's `paused` state is never consulted or written here. A restart
+    /// is not a state transition: it re-creates whatever the current config
+    /// says should be running. If the panel has paused the rule, the config
+    /// carries no listener for it and this is a no-op.
+    pub async fn restart_rule(&mut self, rule_id: i64) -> (u64, usize) {
+        // Cancel first — see the ordering note above.
+        let dropped = match self.rule_runtime.get(&rule_id) {
+            Some(rt) => rt.cancel_all(),
+            // No runtime → the rule has never had a listener here. Nothing to
+            // restart; don't fabricate an empty runtime for it.
+            None => return (0, 0),
+        };
+
+        let keys: Vec<ListenerKey> = self
+            .listeners
+            .iter()
+            .filter(|(_, m)| m.fingerprint.rule_id == rule_id)
+            .map(|(k, _)| *k)
+            .collect();
+
+        for key in &keys {
+            if let Some(m) = self.listeners.remove(key) {
+                let handle = m.handle;
+                handle.abort();
+                // Await the aborted task so the OS releases the listen socket
+                // before the rebuild re-binds the same port — without this the
+                // bind races teardown and fails with "address already in use".
+                // (Same reason as the equivalent await in apply_config.)
+                let _ = (&mut { handle }).await;
+            }
+        }
+
+        let restarted = keys.len();
+        if restarted > 0 {
+            // Rebuild from the cached config. apply_config re-creates exactly
+            // the listeners we just removed (every other listener still matches
+            // its fingerprint and is skipped), and it reuses this rule's
+            // existing RuleRuntime, so the live counter stays consistent with
+            // the connections that survive — there are none, we just cancelled
+            // them all.
+            if let Some(cfg) = self.last_config.clone() {
+                self.apply_config(&cfg).await;
+            } else {
+                tracing::warn!(
+                    "rule {}: restart tore down {} listener(s) but no cached config exists \
+                     to rebuild from; the next config push will restore them",
+                    rule_id,
+                    restarted
+                );
+            }
+        }
+
+        tracing::info!(
+            "rule {}: restarted — dropped {} connection(s), rebuilt {} listener(s)",
+            rule_id,
+            dropped,
+            restarted
+        );
+        (dropped, restarted)
     }
 }
 
@@ -704,6 +829,7 @@ mod tests {
     use crate::reporter::{ConnectionTracker, TrafficCounter};
     use relay_shared::protocol::{ListenerConfig, NodeConfigResponse, NodeTransport, Protocol};
     use std::sync::Arc;
+    use std::time::Duration;
 
     impl ForwarderManager {
         /// Test-only accessor: the set of listener keys currently registered.
@@ -791,6 +917,169 @@ mod tests {
         let down_limited = ListenerFingerprint::from_listener(&l);
         assert_ne!(up_limited, down_limited);
         assert_ne!(unlimited, down_limited);
+    }
+
+    /// v1.2.0: a connection-cap change must restart the listener, for the same
+    /// reason a rate-limit change must — the accept loop captures the cap when
+    /// it spawns.
+    #[test]
+    fn max_connections_change_alters_fingerprint() {
+        let mut l = one_rule(40051, Protocol::Tcp, NodeTransport::Raw)
+            .listeners
+            .pop()
+            .unwrap();
+        let uncapped = ListenerFingerprint::from_listener(&l);
+
+        l.max_connections = Some(100);
+        let capped = ListenerFingerprint::from_listener(&l);
+        assert_ne!(
+            uncapped, capped,
+            "setting a connection cap must change the fingerprint"
+        );
+
+        l.max_connections = Some(200);
+        assert_ne!(
+            capped,
+            ListenerFingerprint::from_listener(&l),
+            "raising the cap must also change the fingerprint"
+        );
+    }
+
+    /// Spawn an echo server and return its address. Used by the restart tests to
+    /// prove a forwarded connection is really carrying data.
+    async fn echo_target() -> SocketAddr {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut s, _)) = l.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut b = [0u8; 256];
+                    loop {
+                        match s.read(&mut b).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => {
+                                if s.write_all(&b[..n]).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    /// THE test for the restart feature: a live connection must actually be
+    /// dropped, and the listener must come back up.
+    ///
+    /// This is not a formality. Connection tasks are detached `tokio::spawn`s,
+    /// so the intuitive implementation (abort the listener, re-bind) leaves
+    /// every established connection forwarding — the port gets rebound and not
+    /// one connection is shed, which is the whole point of the feature. If this
+    /// test regresses to "connection still alive", the restart is a placebo.
+    #[tokio::test]
+    async fn restart_rule_drops_live_connections_and_rebuilds_listener() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let target = echo_target().await;
+        let mut mgr = fresh_mgr();
+        mgr.listen_ipv6 = String::new(); // IPv4-only keeps the assertions simple.
+        let port = 40561;
+        let c = cfg(
+            port,
+            Protocol::Tcp,
+            NodeTransport::Raw,
+            vec![&target.to_string()],
+            None,
+        );
+        mgr.apply_config(&c).await;
+
+        // Establish a connection and prove it forwards.
+        let mut client = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("listener must be up");
+        client.write_all(b"before").await.unwrap();
+        let mut buf = [0u8; 64];
+        let n = client.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"before", "the rule must forward before restart");
+
+        let (dropped, restarted) = mgr.restart_rule(1).await;
+        assert_eq!(dropped, 1, "the one live connection must be counted");
+        assert_eq!(restarted, 1, "the rule's single TCP listener must rebuild");
+
+        // The OLD connection must now be dead. Read returns EOF (or errors) —
+        // anything that echoes here means the restart shed nothing.
+        let r = tokio::time::timeout(Duration::from_secs(2), client.read(&mut buf)).await;
+        match r {
+            Ok(Ok(0)) | Ok(Err(_)) => {}
+            Ok(Ok(n)) => panic!(
+                "restart did NOT drop the connection — it echoed {:?}",
+                String::from_utf8_lossy(&buf[..n])
+            ),
+            Err(_) => panic!("restart did NOT drop the connection — the read is still hanging"),
+        }
+
+        // ...and the listener must be serving again, on the same port.
+        let mut fresh = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("listener must be re-bound after restart");
+        fresh.write_all(b"after").await.unwrap();
+        let n = fresh.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"after", "the rebuilt listener must forward");
+    }
+
+    /// Restarting a rule this node doesn't serve is a no-op, not a panic or a
+    /// fabricated runtime entry — a rule legitimately spans only some nodes.
+    #[tokio::test]
+    async fn restart_unknown_rule_is_a_noop() {
+        let mut mgr = fresh_mgr();
+        assert_eq!(mgr.restart_rule(999).await, (0, 0));
+        assert!(
+            mgr.rule_runtime.is_empty(),
+            "must not create runtime state for a rule that isn't here"
+        );
+    }
+
+    /// The cap must survive an unrelated config push. apply_config rebuilds its
+    /// local limiter map each run; if the connection counter were rebuilt the
+    /// same way, every config edit would reset the count to 0 while the counted
+    /// connections were still alive, and the cap would over-admit.
+    #[tokio::test]
+    async fn rule_runtime_survives_apply_and_is_dropped_with_the_rule() {
+        let mut mgr = fresh_mgr();
+        mgr.listen_ipv6 = String::new();
+        let c = cfg(
+            40562,
+            Protocol::Tcp,
+            NodeTransport::Raw,
+            vec!["127.0.0.1:1"],
+            None,
+        );
+        mgr.apply_config(&c).await;
+        assert!(
+            mgr.rule_runtime.contains_key(&1),
+            "runtime created on apply"
+        );
+
+        // Re-applying the identical config must not disturb the runtime.
+        mgr.apply_config(&c).await;
+        assert!(
+            mgr.rule_runtime.contains_key(&1),
+            "an unchanged apply must keep the rule's runtime"
+        );
+
+        // Removing the rule drops its runtime (which cancels its connections).
+        mgr.apply_config(&NodeConfigResponse { listeners: vec![] })
+            .await;
+        assert!(
+            !mgr.rule_runtime.contains_key(&1),
+            "a removed rule must not leak its runtime"
+        );
     }
 
     #[tokio::test]
@@ -1217,6 +1506,7 @@ mod tests {
                     node_transport: NodeTransport::Raw,
                     upload_limit_bps: None,
                     download_limit_bps: None,
+                    max_connections: None,
                 },
             },
         );
@@ -1276,6 +1566,7 @@ mod tests {
                     node_transport: NodeTransport::Raw,
                     upload_limit_bps: None,
                     download_limit_bps: None,
+                    max_connections: None,
                 },
             },
         );
@@ -1291,6 +1582,7 @@ mod tests {
                     node_transport: NodeTransport::Raw,
                     upload_limit_bps: None,
                     download_limit_bps: None,
+                    max_connections: None,
                 },
             },
         );
@@ -1329,6 +1621,7 @@ mod tests {
                     node_transport: NodeTransport::Raw,
                     upload_limit_bps: None,
                     download_limit_bps: None,
+                    max_connections: None,
                 },
             },
         );
