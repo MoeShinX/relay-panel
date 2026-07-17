@@ -99,11 +99,29 @@ pub struct ForwardRule {
     /// v0.4.6: per-rule download cap in decimal Mbps. 0 = unlimited.
     #[serde(default)]
     pub download_limit_mbps: i32,
+    /// v1.2.0: cap on concurrent TCP connections, enforced PER NODE (see
+    /// `ListenerConfig::max_connections` for why the scope is per-node, and why
+    /// it is TCP-only). 0 = unlimited, which is the pre-v1.2 behaviour and
+    /// stays the default so an upgrade changes nothing on its own.
+    #[serde(default)]
+    pub max_connections: i32,
+    /// v1.2.0: restart this rule every N minutes to shed accumulated
+    /// connections. 0 = off (the default). The panel rejects a non-zero value
+    /// below `MIN_AUTO_RESTART_MINUTES` — a shorter interval would drop live
+    /// connections faster than clients can reasonably reconnect, which turns
+    /// the safety valve into an outage.
+    #[serde(default)]
+    pub auto_restart_minutes: i32,
     pub config: String,
     pub traffic_used: i64,
     pub status: String,
     pub created_at: String,
 }
+
+/// v1.2.0: floor for `auto_restart_minutes` when it is enabled (non-zero).
+/// Lives in shared so the panel's validation and the frontend's form hint
+/// cannot drift apart.
+pub const MIN_AUTO_RESTART_MINUTES: i32 = 5;
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct DeviceGroup {

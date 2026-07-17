@@ -4309,3 +4309,69 @@ async fn pg_admin_set_user_plan_skips_admin_users() {
     );
     cleanup(&db).await;
 }
+
+/// v1.2.0: PG twin of rule_list_auto_restart_rules_excludes_off_and_paused.
+/// The scheduler's query must return ONLY opted-in (`auto_restart_minutes > 0`)
+/// and unpaused rules. PG stores `paused` as a real BOOLEAN (SQLite uses
+/// INTEGER 0/1), so the two implementations genuinely differ and both need
+/// covering.
+#[tokio::test]
+async fn pg_rule_list_auto_restart_rules_excludes_off_and_paused() {
+    let Some(db) = repo("list_auto_restart").await else {
+        return;
+    };
+    sqlx::query("INSERT INTO device_groups (id, name, group_type, token, uid) VALUES (1, 'gin', 'in', 'tok1', 1)")
+        .execute(&db.pool).await.unwrap();
+    for (name, port) in [("off", 20001), ("on", 20002), ("paused", 20003)] {
+        db.insert_quota_guarded(
+            name,
+            1,
+            port,
+            "tcp",
+            "raw",
+            "raw",
+            "direct",
+            "raw",
+            None,
+            1,
+            None,
+            "direct",
+            "127.0.0.1",
+            80,
+        )
+        .await
+        .unwrap();
+    }
+    let on_id: i64 = sqlx::query_scalar("SELECT id FROM forward_rules WHERE name = 'on'")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let paused_id: i64 = sqlx::query_scalar("SELECT id FROM forward_rules WHERE name = 'paused'")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+
+    // "off" keeps the default 0 → never scheduled.
+    db.set_rule_connection_controls(on_id, &ResourceScope::All, 0, 10)
+        .await
+        .unwrap();
+    db.set_rule_connection_controls(paused_id, &ResourceScope::All, 0, 10)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE forward_rules SET paused = TRUE WHERE id = $1")
+        .bind(paused_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    let got = db.list_auto_restart_rules().await.unwrap();
+    assert_eq!(
+        got.len(),
+        1,
+        "only the enabled, unpaused rule is scheduled; got {got:?}"
+    );
+    assert_eq!(got[0].0, on_id);
+    assert_eq!(got[0].1, 1, "device_group_in is carried for the fan-out");
+    assert_eq!(got[0].2, 10, "the interval is carried");
+    cleanup(&db).await;
+}

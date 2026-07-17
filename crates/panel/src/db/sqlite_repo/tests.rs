@@ -4252,3 +4252,66 @@ async fn admin_set_user_plan_skips_admin_users() {
         .unwrap();
     assert_eq!(affected, 0, "admin users must be skipped (WHERE admin = 0)");
 }
+
+/// v1.2.0: the auto-restart scheduler's query. It must return ONLY rules that
+/// opted in (`auto_restart_minutes > 0`) AND are not paused.
+///
+/// The paused filter belongs in SQL, not the scheduler: a paused rule has no
+/// listener on any node, so restarting it is a guaranteed no-op that still
+/// costs a WS round-trip per node, every tick, forever.
+#[tokio::test]
+async fn rule_list_auto_restart_rules_excludes_off_and_paused() {
+    let db = repo().await;
+    seed_group(&db, 1).await;
+    for (name, port) in [("off", 20001), ("on", 20002), ("paused", 20003)] {
+        db.insert_quota_guarded(
+            name,
+            1,
+            port,
+            "tcp",
+            "raw",
+            "raw",
+            "direct",
+            "raw",
+            None,
+            1,
+            None,
+            "direct",
+            "127.0.0.1",
+            80,
+        )
+        .await
+        .unwrap();
+    }
+    let on_id: i64 = sqlx::query_scalar("SELECT id FROM forward_rules WHERE name = 'on'")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let paused_id: i64 = sqlx::query_scalar("SELECT id FROM forward_rules WHERE name = 'paused'")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+
+    // "off" keeps the default 0 → never scheduled.
+    db.set_rule_connection_controls(on_id, &ResourceScope::All, 0, 10)
+        .await
+        .unwrap();
+    db.set_rule_connection_controls(paused_id, &ResourceScope::All, 0, 10)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE forward_rules SET paused = 1 WHERE id = ?")
+        .bind(paused_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    let got = db.list_auto_restart_rules().await.unwrap();
+    assert_eq!(
+        got.len(),
+        1,
+        "only the enabled, unpaused rule is scheduled; got {got:?}"
+    );
+    assert_eq!(got[0].0, on_id);
+    assert_eq!(got[0].1, 1, "device_group_in is carried for the fan-out");
+    assert_eq!(got[0].2, 10, "the interval is carried");
+}

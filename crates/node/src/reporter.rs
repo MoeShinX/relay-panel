@@ -1239,6 +1239,7 @@ mod tests {
                 load_balance_strategy: relay_shared::protocol::LoadBalanceStrategy::First,
                 upload_limit_bps: None,
                 download_limit_bps: None,
+                max_connections: None,
             })
             .collect();
         let cfg = NodeConfigResponse { listeners };

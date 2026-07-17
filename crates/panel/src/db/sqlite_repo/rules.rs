@@ -180,6 +180,46 @@ impl RuleRepository for SqliteRepository {
         Ok(result.rows_affected())
     }
 
+    async fn set_rule_connection_controls(
+        &self,
+        rule_id: i64,
+        scope: &ResourceScope,
+        max_connections: i32,
+        auto_restart_minutes: i32,
+    ) -> Result<u64, DbError> {
+        let result = match scope.owner_id() {
+            None => sqlx::query(
+                "UPDATE forward_rules SET max_connections = ?, auto_restart_minutes = ? WHERE id = ?",
+            )
+            .bind(max_connections)
+            .bind(auto_restart_minutes)
+            .bind(rule_id),
+            Some(uid) => sqlx::query(
+                "UPDATE forward_rules SET max_connections = ?, auto_restart_minutes = ? \
+                 WHERE id = ? AND uid = ?",
+            )
+            .bind(max_connections)
+            .bind(auto_restart_minutes)
+            .bind(rule_id)
+            .bind(uid),
+        }
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    async fn list_auto_restart_rules(&self) -> Result<Vec<(i64, i64, i32)>, DbError> {
+        // Paused rules are excluded here rather than at the scheduler: a paused
+        // rule has no listener on any node, so restarting it would be a
+        // guaranteed no-op that still costs a WS round-trip per node per tick.
+        Ok(sqlx::query_as(
+            "SELECT id, device_group_in, auto_restart_minutes FROM forward_rules \
+             WHERE auto_restart_minutes > 0 AND paused = 0",
+        )
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
     async fn set_rule_tunnel_profile(
         &self,
         rule_id: i64,

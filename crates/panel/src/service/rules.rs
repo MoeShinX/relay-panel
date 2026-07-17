@@ -670,6 +670,11 @@ pub async fn update_rule(
         || req.load_balance_strategy.is_some()
         || req.upload_limit_mbps.is_some()
         || req.download_limit_mbps.is_some()
+        // v1.2.0: these are written by set_rule_connection_controls, not by the
+        // main UPDATE, so they belong in has_field but NOT in has_scalar_field
+        // (same category as the rate limits and targets above).
+        || req.max_connections.is_some()
+        || req.auto_restart_minutes.is_some()
         || req.tunnel_profile_id.is_some()
         || req.paused.is_some();
     let has_scalar_field = req.name.is_some()
@@ -877,6 +882,60 @@ pub async fn update_rule(
                 let down_mbps = req.download_limit_mbps.unwrap_or(0).max(0);
                 if let Err(e) = db.set_rule_rate_limits(id, scope, up_mbps, down_mbps).await {
                     tracing::error!("update_rule {}: set_rule_rate_limits failed: {}", id, e);
+                    return Err(UpdateRuleError::Database(e));
+                }
+            }
+            // v1.2.0: connection cap + scheduled restart.
+            //
+            // Unlike the rate-limit branch above, an omitted field here falls
+            // back to the rule's CURRENT value rather than to 0. These two live
+            // in one form and are normally sent together, but defaulting to 0
+            // would mean an API client that sets only `max_connections` silently
+            // switches off that rule's scheduled restart — a destructive
+            // side-effect of an unrelated edit.
+            if req.max_connections.is_some() || req.auto_restart_minutes.is_some() {
+                let current = match db.find_rule_by_id(id, scope).await {
+                    Ok(Some(r)) => r,
+                    Ok(None) => return Err(UpdateRuleError::NotFound),
+                    Err(e) => {
+                        tracing::error!(
+                            "update_rule {}: reload for conn controls failed: {}",
+                            id,
+                            e
+                        );
+                        return Err(UpdateRuleError::Database(e));
+                    }
+                };
+                let max_connections = req
+                    .max_connections
+                    .unwrap_or(current.max_connections)
+                    .max(0);
+                let auto_restart_minutes = req
+                    .auto_restart_minutes
+                    .unwrap_or(current.auto_restart_minutes)
+                    .max(0);
+
+                // 0 = off. Any other value must clear the floor: a 1-minute
+                // restart loop would drop connections faster than clients
+                // reconnect, turning the safety valve into the outage.
+                if auto_restart_minutes != 0
+                    && auto_restart_minutes < relay_shared::models::MIN_AUTO_RESTART_MINUTES
+                {
+                    return Err(UpdateRuleError::BadRequest(format!(
+                        "自动重启间隔最小 {} 分钟（0 = 关闭）",
+                        relay_shared::models::MIN_AUTO_RESTART_MINUTES
+                    )));
+                }
+
+                if let Err(e) = db
+                    .set_rule_connection_controls(id, scope, max_connections, auto_restart_minutes)
+                    .await
+                {
+                    tracing::error!(
+                        "update_rule {}: set_rule_connection_controls failed: {}",
+                        id,
+                        e
+                    );
                     return Err(UpdateRuleError::Database(e));
                 }
             }

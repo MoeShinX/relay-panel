@@ -180,6 +180,45 @@ impl RuleRepository for PgRepository {
         Ok(result.rows_affected())
     }
 
+    async fn set_rule_connection_controls(
+        &self,
+        rule_id: i64,
+        scope: &ResourceScope,
+        max_connections: i32,
+        auto_restart_minutes: i32,
+    ) -> Result<u64, DbError> {
+        let result = match scope.owner_id() {
+            None => sqlx::query(
+                "UPDATE forward_rules SET max_connections = $1, auto_restart_minutes = $2 WHERE id = $3",
+            )
+            .bind(max_connections)
+            .bind(auto_restart_minutes)
+            .bind(rule_id),
+            Some(uid) => sqlx::query(
+                "UPDATE forward_rules SET max_connections = $1, auto_restart_minutes = $2 \
+                 WHERE id = $3 AND uid = $4",
+            )
+            .bind(max_connections)
+            .bind(auto_restart_minutes)
+            .bind(rule_id)
+            .bind(uid),
+        }
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    async fn list_auto_restart_rules(&self) -> Result<Vec<(i64, i64, i32)>, DbError> {
+        // `paused = FALSE` — PG stores paused as a real BOOLEAN, unlike SQLite's
+        // INTEGER 0/1. See the exclusion rationale in the SQLite implementation.
+        Ok(sqlx::query_as(
+            "SELECT id, device_group_in, auto_restart_minutes FROM forward_rules \
+             WHERE auto_restart_minutes > 0 AND paused = FALSE",
+        )
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
     async fn set_rule_tunnel_profile(
         &self,
         rule_id: i64,

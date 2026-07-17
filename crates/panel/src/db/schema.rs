@@ -170,6 +170,13 @@ CREATE TABLE IF NOT EXISTS forward_rules (
     -- Shared across all connections of the rule.
     upload_limit_mbps INTEGER NOT NULL DEFAULT 0,
     download_limit_mbps INTEGER NOT NULL DEFAULT 0,
+    -- v1.2.0: cap on concurrent TCP connections, enforced PER NODE (nodes share
+    -- no state, so a group-wide total would need a central allocator on the
+    -- forwarding hot path). 0 = unlimited.
+    max_connections INTEGER NOT NULL DEFAULT 0,
+    -- v1.2.0: restart the rule every N minutes to shed accumulated connections.
+    -- 0 = off. The API rejects non-zero values below MIN_AUTO_RESTART_MINUTES.
+    auto_restart_minutes INTEGER NOT NULL DEFAULT 0,
     config TEXT NOT NULL DEFAULT '{}',
     traffic_used INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'active',
@@ -1376,6 +1383,27 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
     .await?;
     tracing::info!("Migration 37: forward_rules.auto_paused column present");
 
+    // ── Migration 38: v1.2.0 connection cap + scheduled restart ──
+    // Both default to 0 = "off", which is exactly the pre-v1.2 behaviour: an
+    // upgraded panel must not start capping or restarting anything until the
+    // operator opts a rule in. (0 means unlimited, NOT "admit zero" — the node
+    // maps 0 → None; see build_listeners_for_rule.)
+    add_column_if_missing(
+        pool,
+        "forward_rules",
+        "max_connections",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    .await?;
+    add_column_if_missing(
+        pool,
+        "forward_rules",
+        "auto_restart_minutes",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    .await?;
+    tracing::info!("Migration 38: forward_rules.max_connections + auto_restart_minutes present");
+
     Ok(())
 }
 
@@ -1466,6 +1494,67 @@ mod tests {
             n, 1,
             "expected column {}.{} to exist after migration",
             table, column
+        );
+    }
+
+    /// Migration 38 must reach BOTH a fresh database (via SCHEMA_SQL) and an
+    /// upgraded one (via ADD COLUMN), and existing rules must come out
+    /// UNCAPPED.
+    ///
+    /// The value here is not "does ADD COLUMN work" — it's the default. 0 means
+    /// unlimited, and the node maps 0 → None. If this ever defaulted to
+    /// something the node read as a real cap, upgrading the panel would
+    /// throttle every pre-existing rule to that number without anyone asking.
+    #[tokio::test]
+    async fn migration_38_defaults_existing_rules_to_uncapped_and_no_autorestart() {
+        let pool = fresh_pool().await;
+        assert_column(&pool, "forward_rules", "max_connections").await;
+        assert_column(&pool, "forward_rules", "auto_restart_minutes").await;
+
+        // Simulate a rule that predates v1.2: insert without mentioning either
+        // new column, exactly as an older INSERT would have.
+        sqlx::query(
+            "INSERT INTO users (id, username, password) VALUES (1, 'u', 'h')
+             ON CONFLICT DO NOTHING",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed user");
+        sqlx::query(
+            "INSERT INTO device_groups (id, name, group_type, token, uid) \
+             VALUES (1, 'g', 'in', 'tok', 1) ON CONFLICT DO NOTHING",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed device group");
+        sqlx::query(
+            "INSERT INTO forward_rules (name, uid, listen_port, device_group_in, \
+             target_addr, target_port) VALUES ('legacy', 1, 10001, 1, '1.2.3.4', 80)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert legacy rule");
+
+        let (cap, restart): (i64, i64) = sqlx::query_as(
+            "SELECT max_connections, auto_restart_minutes FROM forward_rules WHERE name = 'legacy'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read back");
+        assert_eq!(cap, 0, "a pre-v1.2 rule must be UNCAPPED (0), never capped");
+        assert_eq!(restart, 0, "a pre-v1.2 rule must not start auto-restarting");
+
+        // Re-running migrations must not disturb the row (idempotency).
+        run_migrations(&pool).await.expect("re-run migrations");
+        let (cap, _): (i64, i64) = sqlx::query_as(
+            "SELECT max_connections, auto_restart_minutes FROM forward_rules WHERE name = 'legacy'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read back after re-run");
+        assert_eq!(
+            cap, 0,
+            "re-running migrations must not change existing data"
         );
     }
 

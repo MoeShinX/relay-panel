@@ -126,12 +126,15 @@ pub struct NodeConfigRequest {
     pub token: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+/// v1.2.0: `Clone` so the node's ForwarderManager can cache the last applied
+/// config and rebuild a single rule's listeners from it on `restart_rule`,
+/// without re-fetching from the panel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeConfigResponse {
     pub listeners: Vec<ListenerConfig>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListenerConfig {
     /// The forward_rules.id this listener corresponds to. Traffic is
     /// attributed to this rule, NOT to the listen port (which may collide
@@ -170,6 +173,19 @@ pub struct ListenerConfig {
     /// v0.4.6: per-rule download cap in BYTES/sec (0 / None = unlimited).
     #[serde(default)]
     pub download_limit_bps: Option<u64>,
+    /// v1.2.0: cap on CONCURRENT TCP connections for this rule (0 / None =
+    /// unlimited). Scope is deliberately PER NODE, not per rule across the
+    /// group: nodes share no state, so a group-wide cap would need a central
+    /// allocator on the forwarding hot path. A rule served by 3 nodes therefore
+    /// admits up to 3 × this value in total, and the UI says so.
+    ///
+    /// TCP only. UDP "connections" are sessions that already self-expire on a
+    /// 60s idle timeout, so they cannot grow without bound the way an idle TCP
+    /// connection can, and UDP has no accept() to reject at.
+    ///
+    /// `#[serde(default)]` so a v1.1.x node still deserializes a v1.2 config.
+    #[serde(default)]
+    pub max_connections: Option<u32>,
     // v0.4.7: the placeholder `speed_limit` / `ip_limit` wire fields were
     // removed. They were always None and no node ever read them. The DB columns
     // on users/plans are kept (deprecated) to avoid a pointless migration, but
@@ -241,6 +257,14 @@ pub fn build_listeners_for_rule(
             // NOT doubled.
             upload_limit_bps: mbps_to_bps(rule.upload_limit_mbps),
             download_limit_bps: mbps_to_bps(rule.download_limit_mbps),
+            // v1.2.0: 0 / negative → no cap (None). Both expanded listeners of
+            // a tcp_udp rule carry the value, but only the Tcp one enforces it
+            // (UDP has no accept() to reject at); see ListenerConfig.
+            max_connections: if rule.max_connections > 0 {
+                Some(rule.max_connections as u32)
+            } else {
+                None
+            },
         })
         .collect()
 }
@@ -624,6 +648,63 @@ impl DiagnoseRuleMessage {
     }
 }
 
+/// v1.2.0: panel → node over WS, routed with `send_node` so only the targeted
+/// node acts on it. Asks the node to tear down and re-create the listeners
+/// belonging to ONE rule, which drops every connection currently held by that
+/// rule and frees their fds/tasks.
+///
+/// Why this is a dedicated command rather than a pause+resume round-trip: a
+/// pause/resume pair writes the DB twice and leaves the rule stuck in `paused`
+/// if the resume half fails (node offline, authorization revoked between the
+/// two calls), which is exactly the failure a "get me unstuck" button must not
+/// have. A restart carries no state: it either happens or it doesn't, and the
+/// rule's stored `paused` flag is never touched.
+///
+/// The node re-creates listeners from its OWN cached config, not from anything
+/// in this message — the panel cannot use a restart to inject listener config.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestartRuleMessage {
+    #[serde(rename = "type")]
+    pub msg_type: String, // "restart_rule"
+    /// The intended target's node_id. `send_node` already routed this to the
+    /// matching connection; the node re-checks as defence in depth (same
+    /// pattern as `UpgradeNodeMessage`).
+    pub node_id: String,
+    /// The rule whose listeners to restart.
+    pub rule_id: i64,
+    /// Correlates panel logs with node logs for one restart. The node echoes it
+    /// into its own log line; there is no result message back over the wire.
+    pub request_id: String,
+}
+
+impl RestartRuleMessage {
+    pub fn new(node_id: String, rule_id: i64, request_id: String) -> Self {
+        Self {
+            msg_type: "restart_rule".into(),
+            node_id,
+            rule_id,
+            request_id,
+        }
+    }
+}
+
+/// v1.2.0: whether a node understands `restart_rule`. An older node silently
+/// ignores the unknown message, so the panel MUST gate on this and tell the
+/// operator to upgrade rather than report a restart that never happened.
+/// Missing/malformed version → unsupported (same conservative stance as the
+/// diagnose gates above).
+pub fn node_supports_restart_rule(version: Option<&str>) -> bool {
+    let Some(v) = version else {
+        return false;
+    };
+    let base = v.split('-').next().unwrap_or("");
+    let mut parts = base.split('.');
+    let major: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let minor: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let patch: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    (major, minor, patch) >= (1, 2, 0)
+}
+
 /// Outcome of probing ONE target from the node (TCP-only since v0.4.9).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -846,6 +927,14 @@ pub struct UpdateRuleRequest {
     /// toggle paused after creation, even though the node already honored it.
     #[serde(default)]
     pub paused: Option<bool>,
+    /// v1.2.0: cap on concurrent TCP connections PER NODE (0 = unlimited).
+    /// Omitted keeps current.
+    #[serde(default)]
+    pub max_connections: Option<i32>,
+    /// v1.2.0: restart the rule every N minutes (0 = off). Omitted keeps
+    /// current. A non-zero value below `MIN_AUTO_RESTART_MINUTES` is rejected.
+    #[serde(default)]
+    pub auto_restart_minutes: Option<i32>,
 }
 
 // === Admin API — Groups ===
@@ -1161,6 +1250,8 @@ mod tests {
             load_balance_strategy: "first".into(),
             upload_limit_mbps: 0,
             download_limit_mbps: 0,
+            max_connections: 0,
+            auto_restart_minutes: 0,
             config: "{}".into(),
             traffic_used: 0,
             status: "active".into(),
@@ -1266,6 +1357,90 @@ mod tests {
         assert!(node_supports_secure_diagnose(Some("0.4.9-rc1")));
         assert!(node_supports_secure_diagnose(Some("0.5.0")));
         assert!(node_supports_secure_diagnose(Some("1.0.0")));
+    }
+
+    /// GUARD RAIL for the node's WS dispatch, which discriminates messages by
+    /// trying struct parses in order.
+    ///
+    /// A `restart_rule` payload ALSO deserializes cleanly into
+    /// `DiagnoseRuleMessage`: rule_id and request_id are both present, the
+    /// `challenge` field is `#[serde(default)]`, and serde ignores the extra
+    /// `node_id`. So the restart arm only routes correctly because it sits above
+    /// the diagnose arm AND checks `msg_type`. If this test starts failing
+    /// because the overlap is gone, the ordering constraint in ws_client.rs can
+    /// be relaxed; while it passes, do NOT reorder those arms.
+    #[test]
+    fn restart_payload_is_ambiguous_with_diagnose_so_msg_type_must_gate() {
+        let json = serde_json::to_string(&RestartRuleMessage::new(
+            "node-a".into(),
+            42,
+            "req-1".into(),
+        ))
+        .unwrap();
+
+        // The ambiguity is real — this is what makes the ordering load-bearing.
+        let as_diagnose = serde_json::from_str::<DiagnoseRuleMessage>(&json)
+            .expect("restart payload parses as diagnose — the hazard this guards");
+        assert_eq!(as_diagnose.rule_id, 42);
+        assert_eq!(
+            as_diagnose.msg_type, "restart_rule",
+            "msg_type is what distinguishes them; the dispatch MUST check it"
+        );
+
+        // The reverse is NOT ambiguous: diagnose carries no node_id, so it can
+        // never be mistaken for a restart.
+        let diag =
+            serde_json::to_string(&DiagnoseRuleMessage::new("req-2".into(), 7, "chal".into()))
+                .unwrap();
+        assert!(
+            serde_json::from_str::<RestartRuleMessage>(&diag).is_err(),
+            "diagnose must not parse as restart (node_id is required)"
+        );
+    }
+
+    #[test]
+    fn node_supports_restart_rule_version_gate() {
+        // Unsupported: an older node ignores the unknown restart_rule message
+        // silently, so anything below 1.2.0 (and anything unparseable) must gate
+        // out — otherwise the panel reports a restart that never happened.
+        assert!(!node_supports_restart_rule(None));
+        assert!(!node_supports_restart_rule(Some("")));
+        assert!(!node_supports_restart_rule(Some("garbage")));
+        assert!(!node_supports_restart_rule(Some("1.1.2")));
+        assert!(!node_supports_restart_rule(Some("1.1.9")));
+        assert!(!node_supports_restart_rule(Some("0.4.14")));
+        // Supported: exactly 1.2.0 and above; an rc of that release counts.
+        assert!(node_supports_restart_rule(Some("1.2.0")));
+        assert!(node_supports_restart_rule(Some("1.2.0-rc1")));
+        assert!(node_supports_restart_rule(Some("1.3.0")));
+        assert!(node_supports_restart_rule(Some("2.0.0")));
+    }
+
+    /// A rule's `max_connections` reaches the wire, and 0 means "no cap" rather
+    /// than "admit zero connections" — an off-by-one here would take every
+    /// existing rule offline on upgrade, since 0 is the migration default.
+    #[test]
+    fn max_connections_zero_means_unlimited_on_the_wire() {
+        // 0 is the migration default for every pre-v1.2 rule, so if 0 reached
+        // the node as Some(0) the upgrade would cap every existing rule at zero
+        // connections — i.e. take the whole fleet offline. Assert it is None.
+        let mut r = rule(1, "tcp_udp", "raw");
+        r.max_connections = 0;
+        let ls = build_listeners_for_rule(&r, vec!["1.2.3.4:80".into()]);
+        assert!(
+            ls.iter().all(|l| l.max_connections.is_none()),
+            "0 must serialize as None (unlimited), not Some(0)"
+        );
+
+        // A positive cap reaches BOTH expanded listeners of a tcp_udp rule.
+        // (Only the Tcp one enforces it; the Udp one carrying it is harmless.)
+        r.max_connections = 500;
+        let ls = build_listeners_for_rule(&r, vec!["1.2.3.4:80".into()]);
+        assert_eq!(ls.len(), 2, "tcp_udp expands to two listeners");
+        assert!(
+            ls.iter().all(|l| l.max_connections == Some(500)),
+            "a positive cap must reach every expanded listener of the rule"
+        );
     }
 
     #[test]

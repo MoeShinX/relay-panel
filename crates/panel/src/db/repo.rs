@@ -248,6 +248,25 @@ pub trait RuleRepository: Send + Sync {
         upload_limit_mbps: i32,
         download_limit_mbps: i32,
     ) -> Result<u64, DbError>;
+    /// v1.2.0: update a rule's connection cap (0 = unlimited) and scheduled
+    /// restart interval in minutes (0 = off), within scope.
+    ///
+    /// Written together because they are one form section and one semantic
+    /// concern — "how this rule sheds load". The caller validates
+    /// `auto_restart_minutes` against `MIN_AUTO_RESTART_MINUTES` first; this
+    /// layer stores what it is given.
+    async fn set_rule_connection_controls(
+        &self,
+        rule_id: i64,
+        scope: &ResourceScope,
+        max_connections: i32,
+        auto_restart_minutes: i32,
+    ) -> Result<u64, DbError>;
+    /// v1.2.0: rules with a scheduled restart enabled (`auto_restart_minutes >
+    /// 0`) that are not paused. Returns (rule_id, device_group_in,
+    /// auto_restart_minutes) — everything the scheduler needs to fan a restart
+    /// out to the rule's nodes, without loading whole rules every tick.
+    async fn list_auto_restart_rules(&self) -> Result<Vec<(i64, i64, i32)>, DbError>;
     /// Bind (or unbind, when profile_id is None) a rule to a tunnel profile,
     /// within scope.
     async fn set_rule_tunnel_profile(

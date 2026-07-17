@@ -137,6 +137,10 @@ CREATE TABLE IF NOT EXISTS forward_rules (
     load_balance_strategy TEXT NOT NULL DEFAULT 'first',
     upload_limit_mbps INTEGER NOT NULL DEFAULT 0,
     download_limit_mbps INTEGER NOT NULL DEFAULT 0,
+    -- v1.2.0: cap on concurrent TCP connections, enforced PER NODE. 0 = unlimited.
+    max_connections INTEGER NOT NULL DEFAULT 0,
+    -- v1.2.0: restart the rule every N minutes to shed connections. 0 = off.
+    auto_restart_minutes INTEGER NOT NULL DEFAULT 0,
     config TEXT NOT NULL DEFAULT '{}',
     traffic_used BIGINT NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'active',
@@ -281,7 +285,7 @@ INSERT INTO schema_version (version) VALUES (1) ON CONFLICT (version) DO NOTHING
 /// The schema revision this build's baseline `PG_SCHEMA_SQL` represents. When a
 /// future release adds a column/table, bump this and add a matching arm in
 /// `run_pg_migrations`. `apply_pg_schema` seeds `schema_version` with revision 1.
-pub const PG_SCHEMA_VERSION: i32 = 20;
+pub const PG_SCHEMA_VERSION: i32 = 21;
 
 /// Apply PG_SCHEMA_SQL to a pool. PostgreSQL's prepared-statement protocol
 /// rejects multi-statement strings ("cannot insert multiple commands into a
@@ -1084,6 +1088,31 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
         tracing::info!("PG migration 20: forward_rules.auto_paused column present");
+    }
+
+    if current < 21 {
+        // v1.2.0: connection cap + scheduled restart. Both default to 0 = off,
+        // so an upgraded panel changes nothing about existing rules until the
+        // operator opts one in. (0 = unlimited, not "admit zero" — the node maps
+        // 0 → None.)
+        sqlx::query(
+            "ALTER TABLE forward_rules ADD COLUMN IF NOT EXISTS max_connections INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "ALTER TABLE forward_rules ADD COLUMN IF NOT EXISTS auto_restart_minutes INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO schema_version (version) VALUES (21) ON CONFLICT (version) DO NOTHING",
+        )
+        .execute(pool)
+        .await?;
+        tracing::info!(
+            "PG migration 21: forward_rules.max_connections + auto_restart_minutes present"
+        );
     }
 
     Ok(())

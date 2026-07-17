@@ -731,6 +731,7 @@ mod tests {
                 load_balance_strategy: relay_shared::protocol::LoadBalanceStrategy::First,
                 upload_limit_bps: None,
                 download_limit_bps: None,
+                max_connections: None,
             }],
         }
     }
@@ -753,6 +754,7 @@ mod tests {
                 load_balance_strategy: relay_shared::protocol::LoadBalanceStrategy::First,
                 upload_limit_bps: None,
                 download_limit_bps: None,
+                max_connections: None,
             }],
         }
     }
@@ -806,6 +808,7 @@ mod tests {
                     load_balance_strategy: relay_shared::protocol::LoadBalanceStrategy::First,
                     upload_limit_bps: None,
                     download_limit_bps: None,
+                    max_connections: None,
                 },
                 ListenerConfig {
                     rule_id: 2,
@@ -817,6 +820,7 @@ mod tests {
                     load_balance_strategy: relay_shared::protocol::LoadBalanceStrategy::First,
                     upload_limit_bps: None,
                     download_limit_bps: None,
+                    max_connections: None,
                 },
             ],
         };
@@ -884,6 +888,7 @@ mod tests {
                     load_balance_strategy: relay_shared::protocol::LoadBalanceStrategy::First,
                     upload_limit_bps: None,
                     download_limit_bps: None,
+                    max_connections: None,
                 },
                 ListenerConfig {
                     rule_id: 2,
@@ -895,6 +900,7 @@ mod tests {
                     load_balance_strategy: relay_shared::protocol::LoadBalanceStrategy::First,
                     upload_limit_bps: None,
                     download_limit_bps: None,
+                    max_connections: None,
                 },
             ],
         };
@@ -1015,6 +1021,7 @@ mod tests {
                 load_balance_strategy: strategy,
                 upload_limit_bps: None,
                 download_limit_bps: None,
+                max_connections: None,
             }],
         };
         mgr.apply_config(&mk(LoadBalanceStrategy::First)).await;
@@ -1047,6 +1054,7 @@ mod tests {
                 load_balance_strategy: LoadBalanceStrategy::First,
                 upload_limit_bps: None,
                 download_limit_bps: None,
+                max_connections: None,
             }],
         };
         mgr.apply_config(&mk(NodeTransport::Raw)).await;
@@ -1109,6 +1117,7 @@ mod tests {
                     load_balance_strategy: relay_shared::protocol::LoadBalanceStrategy::First,
                     upload_limit_bps: None,
                     download_limit_bps: None,
+                    max_connections: None,
                 },
                 ListenerConfig {
                     rule_id: 2,
@@ -1120,6 +1129,7 @@ mod tests {
                     load_balance_strategy: relay_shared::protocol::LoadBalanceStrategy::First,
                     upload_limit_bps: None,
                     download_limit_bps: None,
+                    max_connections: None,
                 },
             ],
         };
@@ -1140,6 +1150,7 @@ mod tests {
                     load_balance_strategy: relay_shared::protocol::LoadBalanceStrategy::First,
                     upload_limit_bps: None,
                     download_limit_bps: None,
+                    max_connections: None,
                 },
                 ListenerConfig {
                     rule_id: 2,
@@ -1151,6 +1162,7 @@ mod tests {
                     load_balance_strategy: relay_shared::protocol::LoadBalanceStrategy::First,
                     upload_limit_bps: None,
                     download_limit_bps: None,
+                    max_connections: None,
                 },
             ],
         };
@@ -1412,6 +1424,7 @@ mod tests {
                     load_balance_strategy: LoadBalanceStrategy::First,
                     upload_limit_bps: None,
                     download_limit_bps: None,
+                    max_connections: None,
                 },
                 ListenerConfig {
                     rule_id: 1,
@@ -1423,6 +1436,7 @@ mod tests {
                     load_balance_strategy: LoadBalanceStrategy::First,
                     upload_limit_bps: None,
                     download_limit_bps: None,
+                    max_connections: None,
                 },
             ],
         };
@@ -1442,6 +1456,7 @@ mod tests {
                 load_balance_strategy: LoadBalanceStrategy::First,
                 upload_limit_bps: None,
                 download_limit_bps: None,
+                max_connections: None,
             }],
         };
         mgr.apply_config(&tcp_cfg).await;

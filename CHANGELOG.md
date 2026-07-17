@@ -8,6 +8,44 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Rule connection controls, storage + API** (no enforcement yet — the node
+  half lands separately). Two new per-rule settings, both `0` = off/unlimited so
+  an upgrade changes nothing until a rule is explicitly opted in:
+  - `max_connections` — cap on concurrent TCP connections, scoped PER NODE.
+    Nodes share no state and a group-wide total would need a central allocator
+    on the forwarding hot path, so a rule served by 3 nodes admits up to 3x this
+    number. The panel ships it to nodes in `ListenerConfig`; a node that doesn't
+    understand it ignores it (`#[serde(default)]`).
+  - `auto_restart_minutes` — interval for scheduled restarts. A non-zero value
+    below `MIN_AUTO_RESTART_MINUTES` (5) is rejected: a shorter loop would drop
+    connections faster than clients can reconnect, turning the safety valve into
+    the outage.
+
+  Both are edit-only. The atomic create path (`create_rule_with_guard`) doesn't
+  carry them, so offering them at create would silently discard the value.
+  `PUT /rules/{id}` defaults an omitted one to the rule's CURRENT value rather
+  than to 0 — otherwise setting only `max_connections` would silently switch off
+  that rule's scheduled restart.
+
+- **`restart_rule` wire message + `node_supports_restart_rule` version gate**
+  (1.2.0+) in `relay-shared`. Nothing sends it yet; the panel endpoint and the
+  node handler land in follow-up PRs.
+
+### Schema
+
+- SQLite Migration **38**, PG revision **21** (`PG_SCHEMA_VERSION` 20 → 21):
+  `forward_rules.max_connections` and `forward_rules.auto_restart_minutes`, both
+  `NOT NULL DEFAULT 0`. 0 = unlimited/off. A pre-v1.2 rule must come out
+  UNCAPPED — if 0 reached a node as a real cap, upgrading would throttle every
+  existing rule to zero connections; `max_connections_zero_means_unlimited_on_the_wire`
+  pins that.
+
+---
+
 ## [1.1.3] - 2026-07-16
 
 ### Fixed

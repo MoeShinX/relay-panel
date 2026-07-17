@@ -665,6 +665,106 @@ mod tests {
         .await;
     }
 
+    /// v1.2.0: a non-zero auto-restart interval below the floor is rejected.
+    /// A 1-minute restart loop drops connections faster than clients can
+    /// reconnect, which turns the safety valve into a permanent outage.
+    #[tokio::test]
+    async fn update_rule_rejects_auto_restart_below_floor() {
+        let (state, pool) = test_state().await;
+        seed_rule_and_group(&pool).await;
+
+        let Json(resp) = update_rule(
+            AuthUser {
+                user_id: 1,
+                admin: true,
+            },
+            State(state.clone()),
+            Path(200),
+            Json(UpdateRuleRequest {
+                auto_restart_minutes: Some(1),
+                ..Default::default()
+            }),
+        )
+        .await;
+        assert_eq!(
+            resp.code, 400,
+            "1 minute must be rejected: {}",
+            resp.message
+        );
+
+        // 0 = off is always allowed, and so is anything at/above the floor.
+        for v in [0, relay_shared::models::MIN_AUTO_RESTART_MINUTES] {
+            let Json(resp) = update_rule(
+                AuthUser {
+                    user_id: 1,
+                    admin: true,
+                },
+                State(state.clone()),
+                Path(200),
+                Json(UpdateRuleRequest {
+                    auto_restart_minutes: Some(v),
+                    ..Default::default()
+                }),
+            )
+            .await;
+            assert_eq!(resp.code, 0, "{} must be accepted: {}", v, resp.message);
+        }
+    }
+
+    /// v1.2.0: setting ONLY max_connections must not switch off a rule's
+    /// scheduled restart. The two share a form but are independent settings, and
+    /// defaulting the omitted one to 0 would make an unrelated edit silently
+    /// disable auto-restart.
+    #[tokio::test]
+    async fn update_rule_partial_conn_controls_does_not_clobber_the_other() {
+        let (state, pool) = test_state().await;
+        seed_rule_and_group(&pool).await;
+
+        // Turn auto-restart on (10 min), leaving the cap unset.
+        let Json(resp) = update_rule(
+            AuthUser {
+                user_id: 1,
+                admin: true,
+            },
+            State(state.clone()),
+            Path(200),
+            Json(UpdateRuleRequest {
+                auto_restart_minutes: Some(10),
+                ..Default::default()
+            }),
+        )
+        .await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+
+        // Now set ONLY the cap. auto_restart_minutes must survive.
+        let Json(resp) = update_rule(
+            AuthUser {
+                user_id: 1,
+                admin: true,
+            },
+            State(state.clone()),
+            Path(200),
+            Json(UpdateRuleRequest {
+                max_connections: Some(500),
+                ..Default::default()
+            }),
+        )
+        .await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+
+        let (cap, restart): (i64, i64) = sqlx::query_as(
+            "SELECT max_connections, auto_restart_minutes FROM forward_rules WHERE id = 200",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(cap, 500, "the cap we set must be stored");
+        assert_eq!(
+            restart, 10,
+            "setting only max_connections must NOT reset auto_restart_minutes to 0"
+        );
+    }
+
     /// v0.4.8 PR2: changing a rule's protocol to UDP while it's bound to a WS
     /// profile must be rejected, even when tunnel_profile_id is NOT in the
     /// request (the binding is loaded from the stored rule). Without this the
