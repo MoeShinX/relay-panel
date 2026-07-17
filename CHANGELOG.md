@@ -12,6 +12,27 @@ independent `v*` / `node-v*` tracks since this release).
 
 ### Added
 
+- **Rule restart (manual + batch).** `POST /rules/{id}/restart` drops every
+  connection a rule is currently carrying and rebuilds its listeners on each
+  node of its inbound group. Owner-scoped (a user may restart only their own
+  rules); batch restart is the frontend calling it per rule, matching batch
+  pause/resume, so there is deliberately no bulk endpoint. The rule's `paused`
+  flag is never read or written — a restart is not a state transition. A paused
+  rule is rejected rather than reported as a hollow success: it has no listener
+  to restart, and the user's actual intent there is "resume".
+
+  This is deliberately NOT implemented as pause+resume. That pair leaves the
+  rule PAUSED if the resume half fails (node offline, authorization revoked
+  between the two calls, panel restarted mid-way) — an outage caused by the
+  button whose whole job is to end one. It also frees the listen port for
+  auto-assignment during the gap, and writing `paused` resets `auto_paused`
+  (v1.0.8), corrupting the system-paused vs. human-paused distinction.
+
+  The response's `restarted` field counts nodes ACTUALLY reached and can be 0
+  on an otherwise successful request (every node too old or offline), so the UI
+  keys its message off that rather than the envelope code — a restart that
+  silently did nothing would otherwise be undetectable.
+
 - **Rule connection controls, storage + API** (no enforcement yet — the node
   half lands separately). Two new per-rule settings, both `0` = off/unlimited so
   an upgrade changes nothing until a rule is explicitly opted in:
@@ -31,9 +52,13 @@ independent `v*` / `node-v*` tracks since this release).
   than to 0 — otherwise setting only `max_connections` would silently switch off
   that rule's scheduled restart.
 
-- **`restart_rule` wire message + `node_supports_restart_rule` version gate**
-  (1.2.0+) in `relay-shared`. Nothing sends it yet; the panel endpoint and the
-  node handler land in follow-up PRs.
+### Compatibility
+
+- Nodes below **1.2.0** silently ignore the unknown `restart_rule` message. The
+  panel gates on `node_supports_restart_rule` and surfaces those nodes as
+  "upgrade required" rather than counting them as restarted — a restart that
+  quietly did nothing would be undetectable to the operator. Node Status already
+  offers one-click upgrade.
 
 ### Schema
 

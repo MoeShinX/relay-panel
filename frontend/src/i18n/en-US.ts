@@ -514,6 +514,29 @@ export const enUS: Dict = {
   batchPartial: '{ok} succeeded, {fail} failed (unauthorized lines can\'t be resumed)',
   selectedCount: '{count} selected',
 
+  // ── v1.2.0: rule restart + connection cap + scheduled restart ──
+  restart: 'Restart',
+  batchRestart: 'Batch Restart',
+  restartConfirmTitle: 'Restart this rule?',
+  restartConfirmDesc: 'Every connection this rule is currently carrying is dropped immediately and clients must reconnect. The rule stays enabled/paused as it is.',
+  batchRestartConfirm: 'Restart {count} selected rules?',
+  restartPausedHint: 'Rule is paused — there are no connections to restart',
+  restartSuccess: 'Restarted on {count} node(s)',
+  batchRestartSuccess: 'Restarted {count} rules',
+  restartFailed: 'Restart failed',
+  // Partial success: appended to restartSuccess to say which nodes missed out.
+  restartOutdatedSuffix: '({count} node(s) too old — upgrade them first)',
+  restartOfflineSuffix: '({count} node(s) offline)',
+  restartAllOutdated: 'Nothing restarted: {count} node(s) are too old. Upgrade them from Node Status first.',
+  restartAllOffline: 'Nothing restarted: {count} node(s) are offline',
+  restartNoNodes: 'Nothing restarted: this rule\'s inbound group has no nodes',
+  maxConnections: 'Max connections',
+  maxConnectionsHint: '0 = unlimited. TCP only, and counted PER NODE — a rule running on 3 nodes allows 3x this number in total. Connections past the cap are refused immediately. Changing the cap does not drop existing connections; it applies to new ones from now on.',
+  autoRestart: 'Auto-restart interval',
+  autoRestartHint: '0 = off. Drops all of this rule\'s connections on this interval to clear accumulation. Minimum {min} minutes. The timer restarts when the panel restarts.',
+  autoRestartTooSmall: 'Minimum {min} minutes (0 = off)',
+  minutes: 'minutes',
+
   // ── v1.0.8: plans + shop + suspension ──
   shop: 'Shop',
   planManagement: 'Plans',

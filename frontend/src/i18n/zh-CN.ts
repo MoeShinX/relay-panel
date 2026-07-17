@@ -513,6 +513,29 @@ export const zhCN = {
   batchPartial: '成功 {ok} 条，失败 {fail} 条（无权限的线路无法启动）',
   selectedCount: '已选 {count} 条',
 
+  // ── v1.2.0: 规则重启 + 连接数上限 + 定时自动重启 ──
+  restart: '重启',
+  batchRestart: '批量重启',
+  restartConfirmTitle: '确定重启这条规则？',
+  restartConfirmDesc: '会立即断开该规则当前的所有连接，客户端需要重连。规则的启用/暂停状态不变。',
+  batchRestartConfirm: '确定重启选中的 {count} 条规则？',
+  restartPausedHint: '规则已暂停，没有连接可重启',
+  restartSuccess: '已在 {count} 个节点上重启',
+  batchRestartSuccess: '已重启 {count} 条规则',
+  restartFailed: '重启失败',
+  // 部分成功：拼在 restartSuccess 后面，说明哪些节点没轮到
+  restartOutdatedSuffix: '（{count} 个节点版本过低，需先升级节点）',
+  restartOfflineSuffix: '（{count} 个节点离线）',
+  restartAllOutdated: '重启未生效：{count} 个节点版本过低，请先在「节点状态」升级节点',
+  restartAllOffline: '重启未生效：{count} 个节点当前离线',
+  restartNoNodes: '重启未生效：该规则的入口分组下没有节点',
+  maxConnections: '最大连接数',
+  maxConnectionsHint: '0 = 不限。仅对 TCP 生效，且按「每个节点」独立计数——规则跑在 3 个节点上时总量是这里的 3 倍。超出后新连接会被直接拒绝。修改上限不会断开已有连接，新上限从此刻起对新连接生效。',
+  autoRestart: '自动重启间隔',
+  autoRestartHint: '0 = 关闭。开启后每隔这么久自动断开该规则的全部连接一次，用于清理堆积的连接。最小 {min} 分钟。面板重启后重新计时。',
+  autoRestartTooSmall: '最小 {min} 分钟（0 = 关闭）',
+  minutes: '分钟',
+
   // ── v1.0.8: plans + shop + suspension ──
   shop: '套餐商店',
   planManagement: '套餐管理',

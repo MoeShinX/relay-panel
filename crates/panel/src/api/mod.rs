@@ -11,6 +11,7 @@ pub mod geoip;
 pub mod groups;
 pub mod middleware;
 pub mod node;
+pub mod restart;
 pub mod security_headers;
 pub mod stats;
 pub mod system;
@@ -90,6 +91,14 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/rules/{id}/diagnose",
             axum::routing::post(diagnose::diagnose_rule),
+        )
+        // v1.2.0: drop a rule's live connections and rebuild its listeners.
+        // Owner-scoped like diagnose — a user may restart only their own rules.
+        // Batch restart is the frontend calling this per rule (same shape as
+        // batch pause/resume), so there is deliberately no /rules/restart.
+        .route(
+            "/rules/{id}/restart",
+            axum::routing::post(restart::restart_rule),
         )
         // v0.4.12: device groups are admin-only shared infrastructure again.
         // Writes use the AdminOnly guard; the service layer operates with
