@@ -4,13 +4,24 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+use super::gate::RuleGate;
 use super::limiter::RateLimit;
 use super::selector::TargetSelector;
 use crate::reporter::{ConnectionTracker, TrafficCounter};
 
+/// v1.2.0: how often the "rule is at its connection cap" warning may be logged
+/// per listener. A rule sitting at its cap rejects on EVERY accept, so an
+/// unthrottled warn! here would itself become the outage (disk + CPU) that the
+/// cap exists to prevent.
+const CAP_WARN_INTERVAL: Duration = Duration::from_secs(60);
+
 /// v1.0.4: serve an ALREADY-BOUND TcpListener. Binding happens in the manager
 /// (synchronously, so errors surface immediately and per-family success is
 /// known). This function only runs the accept loop.
+///
+/// v1.2.0: `gate` carries the rule's connection cap and its restart
+/// cancellation. It is cloned from the rule's `RuleRuntime`, so the rule's IPv4
+/// and IPv6 listeners share one connection budget and one cancel signal.
 #[allow(clippy::too_many_arguments)]
 pub async fn serve_tcp_listener(
     listener: TcpListener,
@@ -21,6 +32,7 @@ pub async fn serve_tcp_listener(
     connections: Arc<ConnectionTracker>,
     rule_id: i64,
     source_ipv4: Option<Ipv4Addr>,
+    gate: RuleGate,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listen_addr = listener
         .local_addr()
@@ -32,9 +44,37 @@ pub async fn serve_tcp_listener(
     // whole listener task, leaving the port dead until node restart. Now we
     // classify the error: transient -> back off and retry; the listener stays
     // up. A non-transient error (e.g. the listener was closed) ends the task.
+    let mut last_cap_warn: Option<std::time::Instant> = None;
     loop {
         match listener.accept().await {
             Ok((inbound, client_addr)) => {
+                // v1.2.0: admit against the rule's connection cap BEFORE doing
+                // any further work. `admit` is called here, in the sequential
+                // accept loop, rather than inside the spawned task below — if the
+                // count were incremented in the task, an inbound flood would let
+                // an unbounded number of accepts through before the first
+                // increment landed, which is exactly the case the cap is for.
+                let Some(conn_guard) = gate.admit() else {
+                    // At cap: close immediately. We accept-then-drop rather than
+                    // stop accepting, because leaving connections in the kernel's
+                    // backlog would stall the queue and make the client hang
+                    // instead of failing fast and retrying elsewhere.
+                    drop(inbound);
+                    let now = std::time::Instant::now();
+                    if last_cap_warn.is_none_or(|t| now.duration_since(t) >= CAP_WARN_INTERVAL) {
+                        last_cap_warn = Some(now);
+                        tracing::warn!(
+                            "TCP rule {}: at connection cap ({} live / {} max), rejecting new \
+                             connections (latest from {}); rate-limited to once per {}s",
+                            rule_id,
+                            gate.live(),
+                            gate.max_connections.unwrap_or(0),
+                            client_addr,
+                            CAP_WARN_INTERVAL.as_secs()
+                        );
+                    }
+                    continue;
+                };
                 // v1.0.8: disable Nagle on the accepted (client-facing) socket.
                 // See the note in outbound::tcp_connect — a relay MUST set
                 // TCP_NODELAY on both ends or small packets get buffered ~40ms
@@ -56,25 +96,45 @@ pub async fn serve_tcp_listener(
                 let rate_limit = rate_limit.clone();
                 let counter = counter.clone();
                 let connections = connections.clone();
+                let mut gate = gate.clone();
 
                 tokio::spawn(async move {
                     // RAII guard: increments the active-TCP count on create,
                     // decrements on drop (end of task — normal close, error, or
                     // panic). Guarantees the count is correct even on abrupt close.
                     let _guard = connections.tcp_handle();
-                    if let Err(e) = handle_tcp_connection(
-                        inbound,
-                        client_addr,
-                        targets,
-                        selector,
-                        rate_limit,
-                        counter,
-                        rule_id,
-                        source_ipv4,
-                    )
-                    .await
-                    {
-                        tracing::debug!("TCP connection error: {}", e);
+                    // v1.2.0: holds this connection's slot in the rule's cap;
+                    // drops with the task however it ends, including when the
+                    // select! below takes the cancellation branch.
+                    let _conn_guard = conn_guard;
+                    // v1.2.0: this task is DETACHED — aborting the accept loop
+                    // does not stop it (verified: an established connection keeps
+                    // forwarding after the listener task is aborted). So a rule
+                    // restart cannot work by killing the listener; it fires this
+                    // cancellation instead, and dropping the handle_tcp_connection
+                    // future here closes both sockets.
+                    tokio::select! {
+                        _ = gate.cancelled() => {
+                            tracing::debug!(
+                                "TCP rule {}: dropping connection from {} (rule restarted)",
+                                rule_id,
+                                client_addr
+                            );
+                        }
+                        r = handle_tcp_connection(
+                            inbound,
+                            client_addr,
+                            targets,
+                            selector,
+                            rate_limit,
+                            counter,
+                            rule_id,
+                            source_ipv4,
+                        ) => {
+                            if let Err(e) = r {
+                                tracing::debug!("TCP connection error: {}", e);
+                            }
+                        }
                     }
                 });
             }
@@ -303,6 +363,7 @@ mod tests {
         let selector = Arc::new(TargetSelector::new(LoadBalanceStrategy::First, 1));
         let counter = Arc::new(TrafficCounter::new());
         let connections = Arc::new(ConnectionTracker::new());
+        let runtime = crate::forwarder::gate::RuleRuntime::new();
         tokio::spawn(serve_tcp_listener(
             listener,
             vec![target_addr.to_string()],
@@ -312,7 +373,11 @@ mod tests {
             connections,
             1,
             None,
+            runtime.gate(None),
         ));
+        // Keep the runtime alive for the duration of the test: dropping it would
+        // cancel the connection we are about to make.
+        let _runtime = runtime;
 
         // Client connects to the relay and round-trips through to the echo.
         let mut client = TcpStream::connect(listen_addr).await.unwrap();
@@ -327,5 +392,91 @@ mod tests {
             b"ping-through-relay",
             "relay must echo the target"
         );
+    }
+
+    /// v1.2.0: the cap is enforced at accept. Connections up to the cap forward
+    /// normally; the one over it is closed immediately rather than queued, so a
+    /// client fails fast instead of hanging.
+    #[tokio::test]
+    async fn accept_loop_rejects_over_the_connection_cap() {
+        // Echo target that serves many connections concurrently.
+        let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_addr = target.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut s, _)) = target.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    let mut b = [0u8; 64];
+                    loop {
+                        match s.read(&mut b).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => {
+                                if s.write_all(&b[..n]).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        });
+
+        let listener = bind_tcp_listener(IpAddr::V4(Ipv4Addr::LOCALHOST), 0).unwrap();
+        let listen_addr = listener.local_addr().unwrap();
+        let runtime = crate::forwarder::gate::RuleRuntime::new();
+        tokio::spawn(serve_tcp_listener(
+            listener,
+            vec![target_addr.to_string()],
+            Arc::new(TargetSelector::new(LoadBalanceStrategy::First, 1)),
+            RateLimit::Unlimited,
+            Arc::new(TrafficCounter::new()),
+            Arc::new(ConnectionTracker::new()),
+            1,
+            None,
+            runtime.gate(Some(2)),
+        ));
+        let _runtime = runtime;
+
+        // Two connections fit under the cap and must both forward.
+        let mut a = TcpStream::connect(listen_addr).await.unwrap();
+        a.write_all(b"a").await.unwrap();
+        let mut buf = [0u8; 16];
+        assert_eq!(a.read(&mut buf).await.unwrap(), 1, "conn 1 must forward");
+
+        let mut b = TcpStream::connect(listen_addr).await.unwrap();
+        b.write_all(b"b").await.unwrap();
+        assert_eq!(b.read(&mut buf).await.unwrap(), 1, "conn 2 must forward");
+
+        // The third is over the cap. The TCP handshake still completes (the
+        // kernel accepts it, then we close), so the rejection shows up as EOF on
+        // read rather than a connect error.
+        let mut c = TcpStream::connect(listen_addr).await.unwrap();
+        let _ = c.write_all(b"c").await;
+        match tokio::time::timeout(Duration::from_secs(2), c.read(&mut buf)).await {
+            Ok(Ok(0)) | Ok(Err(_)) => {}
+            Ok(Ok(n)) => panic!(
+                "over-cap connection was served — echoed {:?}",
+                String::from_utf8_lossy(&buf[..n])
+            ),
+            Err(_) => panic!("over-cap connection hung instead of being closed"),
+        }
+
+        // Closing one frees its slot, and a new connection is admitted again.
+        drop(a);
+        // Give the closed connection's task a moment to drop its guard.
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let mut d = TcpStream::connect(listen_addr).await.unwrap();
+            if d.write_all(b"d").await.is_ok() {
+                if let Ok(Ok(1)) =
+                    tokio::time::timeout(Duration::from_millis(200), d.read(&mut buf)).await
+                {
+                    return; // slot was freed and reused — done.
+                }
+            }
+        }
+        panic!("a freed slot was never reused — the guard did not release the cap");
     }
 }
