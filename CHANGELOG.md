@@ -10,6 +10,18 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The connection cap is no longer offered on UDP-only rules.** It is enforced
+  at `accept()`, which UDP doesn't have, so the panel would store the number and
+  ship it to the node where nothing reads it. The field is now disabled for a
+  UDP-only rule with a note saying why; a `tcp_udp` rule keeps it (it governs
+  the TCP half).
+- **Batch restart no longer blames the wrong thing on partial failure.** It
+  reused the batch-resume message ("unauthorized lines can't be resumed"), which
+  has nothing to do with a restart — it now names the real causes (paused rule,
+  or nodes offline / too old).
+
 ### Added
 
 - **Rule restart (manual + batch).** `POST /rules/{id}/restart` drops every

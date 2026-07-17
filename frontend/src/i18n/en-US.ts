@@ -523,6 +523,7 @@ export const enUS: Dict = {
   restartPausedHint: 'Rule is paused — there are no connections to restart',
   restartSuccess: 'Restarted on {count} node(s)',
   batchRestartSuccess: 'Restarted {count} rules',
+  batchRestartPartial: '{ok} restarted, {fail} had no effect (paused rules, or nodes offline / too old)',
   restartFailed: 'Restart failed',
   // Partial success: appended to restartSuccess to say which nodes missed out.
   restartOutdatedSuffix: '({count} node(s) too old — upgrade them first)',
@@ -532,6 +533,7 @@ export const enUS: Dict = {
   restartNoNodes: 'Nothing restarted: this rule\'s inbound group has no nodes',
   maxConnections: 'Max connections',
   maxConnectionsHint: '0 = unlimited. TCP only, and counted PER NODE — a rule running on 3 nodes allows 3x this number in total. Connections past the cap are refused immediately. Changing the cap does not drop existing connections; it applies to new ones from now on.',
+  maxConnectionsUdpUnsupported: 'Not applicable to UDP rules: the cap is checked at accept(), and UDP has no connections to accept (sessions self-expire after 60s idle, so they cannot pile up the same way). A TCP+UDP rule can set it — it governs the TCP half.',
   autoRestart: 'Auto-restart interval',
   autoRestartHint: '0 = off. Drops all of this rule\'s connections on this interval to clear accumulation. Minimum {min} minutes. The timer restarts when the panel restarts.',
   autoRestartTooSmall: 'Minimum {min} minutes (0 = off)',

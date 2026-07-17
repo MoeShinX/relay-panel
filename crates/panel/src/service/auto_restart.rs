@@ -105,7 +105,18 @@ async fn tick(state: &AppState, schedule: &mut Schedule, now: Instant) {
             }
             Some(&last) if now.duration_since(last) >= due_after => {
                 schedule.insert(rule_id, now);
-                let request_id = format!("auto-{}-{}", rule_id, state.config.listen);
+                // Unique per RUN, not per rule. The id exists to tie a panel log
+                // line to the matching node log line; a constant id makes every
+                // restart of this rule indistinguishable in the logs — exactly
+                // when you're reading them to find out which run misbehaved.
+                let request_id = format!(
+                    "auto-{}-{}",
+                    rule_id,
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0)
+                );
                 match dispatch_restart(state, rule_id, group_id, &request_id).await {
                     Ok(nodes) => {
                         let reached = nodes

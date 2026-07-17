@@ -767,12 +767,20 @@ impl ForwarderManager {
     /// carries no listener for it and this is a no-op.
     pub async fn restart_rule(&mut self, rule_id: i64) -> (u64, usize) {
         // Cancel first — see the ordering note above.
-        let dropped = match self.rule_runtime.get(&rule_id) {
-            Some(rt) => rt.cancel_all(),
-            // No runtime → the rule has never had a listener here. Nothing to
-            // restart; don't fabricate an empty runtime for it.
-            None => return (0, 0),
-        };
+        //
+        // No runtime is NOT the same as nothing to do: only the TCP arm of
+        // apply_config creates one (UDP has no accept() and no cancellable
+        // per-connection tasks), so a UDP-only rule legitimately has no runtime
+        // while very much having a listener. Treating that as "return early"
+        // made a UDP rule's restart a silent no-op — and silent is the operative
+        // word, because the panel reports success as soon as the command reaches
+        // the node. Whether there are connections to cancel is decided here;
+        // whether there are listeners to rebuild is decided below.
+        let dropped = self
+            .rule_runtime
+            .get(&rule_id)
+            .map(|rt| rt.cancel_all())
+            .unwrap_or(0);
 
         let keys: Vec<ListenerKey> = self
             .listeners
@@ -780,6 +788,12 @@ impl ForwarderManager {
             .filter(|(_, m)| m.fingerprint.rule_id == rule_id)
             .map(|(k, _)| *k)
             .collect();
+
+        // Genuinely nothing here — this node doesn't serve the rule (it may
+        // legitimately span only some of a group's nodes), or it's paused.
+        if keys.is_empty() {
+            return (dropped, 0);
+        }
 
         for key in &keys {
             if let Some(m) = self.listeners.remove(key) {
@@ -1042,6 +1056,51 @@ mod tests {
         assert!(
             mgr.rule_runtime.is_empty(),
             "must not create runtime state for a rule that isn't here"
+        );
+    }
+
+    /// A UDP-only rule must still restart: its listener is torn down and
+    /// rebuilt, which is what drops its sessions (they live in the listener
+    /// task's session map).
+    ///
+    /// Only the TCP arm of apply_config creates a RuleRuntime — UDP has no
+    /// accept() and no cancellable per-connection tasks. So restart_rule must
+    /// NOT treat "no runtime" as "nothing to do": a UDP-only rule has no
+    /// runtime but very much has a listener. Getting this wrong is invisible
+    /// from the panel, which reports success as soon as the command reaches the
+    /// node — the operator would be told the rule restarted while the node did
+    /// nothing at all.
+    #[tokio::test]
+    async fn restart_udp_only_rule_rebuilds_its_listener() {
+        let mut mgr = fresh_mgr();
+        mgr.listen_ipv6 = String::new();
+        let c = cfg(
+            40571,
+            Protocol::Udp,
+            NodeTransport::Raw,
+            vec!["127.0.0.1:9"],
+            None,
+        );
+        mgr.apply_config(&c).await;
+        assert_eq!(
+            mgr.listener_keys().len(),
+            1,
+            "the UDP listener must be running before we restart it"
+        );
+
+        let (dropped, restarted) = mgr.restart_rule(1).await;
+        assert_eq!(
+            restarted, 1,
+            "a UDP-only rule's listener MUST be rebuilt; 0 here means the \
+             restart silently did nothing while the panel reported success"
+        );
+        // UDP sessions aren't individually cancellable — they die with the
+        // listener — so nothing is reported as a dropped connection.
+        assert_eq!(dropped, 0, "UDP has no per-connection tasks to cancel");
+        assert_eq!(
+            mgr.listener_keys().len(),
+            1,
+            "the listener must be back after the restart"
         );
     }
 

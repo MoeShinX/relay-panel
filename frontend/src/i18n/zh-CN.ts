@@ -522,6 +522,7 @@ export const zhCN = {
   restartPausedHint: '规则已暂停，没有连接可重启',
   restartSuccess: '已在 {count} 个节点上重启',
   batchRestartSuccess: '已重启 {count} 条规则',
+  batchRestartPartial: '成功 {ok} 条，未生效 {fail} 条（已暂停的规则、或节点离线/版本过低）',
   restartFailed: '重启失败',
   // 部分成功：拼在 restartSuccess 后面，说明哪些节点没轮到
   restartOutdatedSuffix: '（{count} 个节点版本过低，需先升级节点）',
@@ -531,6 +532,7 @@ export const zhCN = {
   restartNoNodes: '重启未生效：该规则的入口分组下没有节点',
   maxConnections: '最大连接数',
   maxConnectionsHint: '0 = 不限。仅对 TCP 生效，且按「每个节点」独立计数——规则跑在 3 个节点上时总量是这里的 3 倍。超出后新连接会被直接拒绝。修改上限不会断开已有连接，新上限从此刻起对新连接生效。',
+  maxConnectionsUdpUnsupported: 'UDP 规则不适用：上限在 accept 时判断，而 UDP 没有「连接」这个东西（会话按 60 秒空闲自动回收，不会无限堆积）。TCP+UDP 规则可以设，只管其中的 TCP 部分。',
   autoRestart: '自动重启间隔',
   autoRestartHint: '0 = 关闭。开启后每隔这么久自动断开该规则的全部连接一次，用于清理堆积的连接。最小 {min} 分钟。面板重启后重新计时。',
   autoRestartTooSmall: '最小 {min} 分钟（0 = 关闭）',

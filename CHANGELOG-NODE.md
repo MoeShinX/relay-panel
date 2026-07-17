@@ -60,6 +60,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   NOT cancel: editing a rule must not kick everyone off, which has been the
   behaviour since v0.3.6.
 
+- **A UDP-only rule's restart is no longer a silent no-op.** `restart_rule`
+  returned early when the rule had no `RuleRuntime` — but only the TCP arm of
+  `apply_config` creates one (UDP has no `accept()` and no cancellable
+  per-connection tasks), so a UDP-only rule has no runtime while very much
+  having a listener. It was never torn down or rebuilt, and its sessions never
+  dropped. The panel reports success as soon as the command reaches the node, so
+  the operator was told the rule had restarted while nothing happened at all.
+  "No runtime" now means only "no connections to cancel"; whether there are
+  listeners to rebuild is decided separately.
+
 ### Compatibility
 
 - Requires panel **1.2.0+** to be sent `restart_rule` or a connection cap. Both

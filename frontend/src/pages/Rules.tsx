@@ -509,7 +509,13 @@ const IMPORT_DEFAULTS = {
     if (fail === 0) {
       message.success(t('batchRestartSuccess').replace('{count}', String(ok)));
     } else {
-      message.warning(t('batchPartial').replace('{ok}', String(ok)).replace('{fail}', String(fail)));
+      // NOT batchPartial: that message blames "unauthorized lines can't be
+      // resumed", which is the batch-resume failure mode and has nothing to do
+      // with a restart. A restart fails when the rule is paused or every node is
+      // old/offline — say that instead of pointing at the wrong cause.
+      message.warning(
+        t('batchRestartPartial').replace('{ok}', String(ok)).replace('{fail}', String(fail))
+      );
     }
     setSelectedRowKeys([]);
   };
@@ -716,18 +722,26 @@ const IMPORT_DEFAULTS = {
    *  forms so the two can't drift (the rate-limit block above predates this and
    *  is still duplicated).
    *
-   *  Both fields are 0 = off. The cap's `extra` says the count is PER NODE and
-   *  TCP-only, because neither is guessable: a rule on 3 nodes admits 3x the
-   *  number typed here, and setting it on a UDP-only rule does nothing. */
-  const renderConnectionControls = () => (
+   *  Both fields are 0 = off. The cap's `extra` says the count is PER NODE,
+   *  because that isn't guessable: a rule on 3 nodes admits 3x the number typed
+   *  here.
+   *
+   *  The cap is disabled for a UDP-ONLY rule. It is enforced at accept(), which
+   *  UDP doesn't have — the panel would happily store the number and ship it to
+   *  the node, where nothing would ever read it. Showing an editable field that
+   *  silently does nothing is worse than showing a disabled one that says why.
+   *  A tcp_udp rule keeps it: the cap governs its TCP half. */
+  const renderConnectionControls = (proto?: string) => {
+    const udpOnly = proto === 'udp';
+    return (
     <>
       <Form.Item
         name="max_connections"
         label={t('maxConnections')}
-        extra={t('maxConnectionsHint')}
+        extra={udpOnly ? t('maxConnectionsUdpUnsupported') : t('maxConnectionsHint')}
         initialValue={0}
       >
-        <InputNumber min={0} style={{ width: '100%' }} placeholder="0" />
+        <InputNumber min={0} style={{ width: '100%' }} placeholder="0" disabled={udpOnly} />
       </Form.Item>
       <Form.Item
         name="auto_restart_minutes"
@@ -749,7 +763,8 @@ const IMPORT_DEFAULTS = {
         <InputNumber min={0} style={{ width: '100%' }} addonAfter={t('minutes')} placeholder="0" />
       </Form.Item>
     </>
-  );
+    );
+  };
 
   const renderTargetsEditor = () => (
     <Form.List name="targets" initialValue={[{ host: '', port: undefined as unknown as number, enabled: true }]}>
@@ -1035,7 +1050,7 @@ const IMPORT_DEFAULTS = {
                     <Form.Item name="download_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('downloadLimit')} addonAfter="Mbps" style={{ width: '100%' }} placeholder="0" /></Form.Item>
                   </Space>
                 </Form.Item>
-                {renderConnectionControls()}
+                {renderConnectionControls(editProto)}
               </>),
             },
           ]} />
