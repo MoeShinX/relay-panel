@@ -1,4 +1,5 @@
 pub mod cert_reloader;
+pub mod gate;
 pub mod limiter;
 pub mod manager;
 pub mod outbound;
