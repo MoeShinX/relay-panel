@@ -33,6 +33,19 @@ independent `v*` / `node-v*` tracks since this release).
   keys its message off that rather than the envelope code — a restart that
   silently did nothing would otherwise be undetectable.
 
+- **Scheduled rule restart.** A rule with `auto_restart_minutes > 0` has its
+  connections dropped on that interval. The `max_connections` cap is the actual
+  fix for connection accumulation; this is the valve for when you'd rather shed
+  than refuse.
+
+  The schedule lives in MEMORY, not the database. Persisting `last_restart_at`
+  would mean every rule whose interval elapsed while the panel was down comes
+  due at once on boot — a panel upgrade would begin by dropping every
+  auto-restart rule's connections simultaneously. In-memory re-bases each timer
+  to "now" on restart; the cost is at most one skipped cycle, which is invisible
+  next to an unscheduled mass disconnect. A rule seen for the first time is
+  baselined, never restarted on the spot.
+
 - **Rule connection controls, storage + API** (no enforcement yet — the node
   half lands separately). Two new per-rule settings, both `0` = off/unlimited so
   an upgrade changes nothing until a rule is explicitly opted in:
