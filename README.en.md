@@ -28,19 +28,24 @@
 
 ## ✨ Features
 
-- 🔀 **Forwarding rules** — TCP/UDP port forwarding with multi-target, failover and round-robin load balancing; on Linux, unlimited rules use `splice` zero-copy forwarding for low latency and jitter on long chains
+- 🔀 **Forwarding rules** — TCP/UDP port forwarding with multi-target, failover and round-robin load balancing; low latency and jitter on long chains
 - 🛡️ **Circuit breaker** — a target that keeps failing is skipped for a while; all-down triggers probe mode for auto-recovery
-- 🌐 **Domain targets & DDNS following** — targets can be domain names; DNS changes are picked up automatically (TCP 30s cache, UDP per-session re-resolution), so a DDNS target that changes IP needs no manual rule/node restart
-- ♻️ **High-concurrency stability** — TCP keepalive reclaims dead connections (NAT timeout, dropped links) to prevent file-descriptor exhaustion; the node raises its own fd limit at startup for sustained high-connection load
+- 🌐 **Domain targets & DDNS following** — targets can be domain names; a DDNS target that changes IP is followed automatically, with no manual rule/node restart
+- ♻️ **High-concurrency stability** — dead connections left by dropped links are reclaimed automatically, sustaining long-running high-connection load
+- 🚦 **Per-rule connection cap** — each rule can cap its own concurrent connections; anything beyond it is refused (TCP)
+- 🔄 **Rule restart** — restart one rule, batch-restart a selection, or set an automatic interval; a restart drops the connections established on that rule and rebuilds its listeners
 - 🛒 **Plan shop & billing** — self-service purchase (balance charge) with order history; admin plan CRUD, plans grant lines and auto-authorize on purchase
-- 💳 **Up + down billing + per-line rate** — charged as `(upload + download) × line rate (0.1–100)` against the plan quota
+- 💳 **Redeem codes** — admins generate codes in batches; users top up their own balance from the account page or the shop, with no payment gateway involved
+- 💰 **Up + down billing + per-line rate** — charged as `(upload + download) × line rate (0.1–100)` against the plan quota
 - 🔁 **Single current plan** — one plan per user: buying the **same** plan renews it (stack traffic / extend a time plan), buying a **different** plan switches (full replace, with a confirm); rules on lost lines auto-pause and auto-resume once re-authorized
 - 📈 **Traffic & quotas** — per-rule and per-user tracking with configurable limits (rule count, bandwidth, traffic cap)
+- 📊 **Traffic charts** — usage over the last 1 / 7 / 30 days, stacked by line in distinct colours so you can see which line is consuming the quota
+- 🔔 **Node offline alerts** — Telegram or email notification when a node stays unreachable past a threshold, and again when it recovers
 - 📋 **Multi-plan registration** — admins configure allowed plans; users choose on sign-up
 - 👤 **User management** — manage any user's rules, plan (assign / renew / switch / expiry / remove), reset traffic, reset password, ban/unban
 - 🖥️ **Device group management** — expandable groups with node listings; a "hidden" toggle hides a group from regular users' Node Status page only (rules keep working); node removal does not affect groups or rules
-- ⬆️ **One-click node upgrade** — trigger from the panel; the node self-updates from the official release (sha256-verified, upgrade-only never downgrade, aware of systemd / docker / manual installs); node ships native amd64 / arm64 binaries
-- 🖱️ **Minimal rule import/export** — single-line JSON format, batch import / batch pause-resume with automatic node distribution
+- ⬆️ **One-click node upgrade** — trigger from the panel; the node self-updates from the official release, upgrade-only and never downgrading, without logging into the node
+- 🖱️ **Minimal rule import/export** — batch import / batch pause-resume with automatic node distribution
 - 🖥️ **Live node status** — CPU, memory, connections, node version (highlighted when an upgrade is available)
 - 🌍 **Node region detection** — automatically identifies each node's country/region with flag display
 - 🗄️ **Dual database** — SQLite (default, zero-config) or PostgreSQL
