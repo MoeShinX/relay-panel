@@ -8,7 +8,7 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
-## [Unreleased]
+## [1.2.0] - 2026-07-21
 
 ### Added
 
@@ -135,6 +135,13 @@ independent `v*` / `node-v*` tracks since this release).
 
 ### Fixed
 
+- **The redeem-code entry is now findable.** The control existed only on the
+  account page, as a small text-link button beside the balance number — users
+  reported there was no way to top up at all. It now also sits on the shop's
+  balance card (where you actually discover you can't afford a plan, so you no
+  longer have to leave the purchase flow), and reads as a button in both places.
+  Redeeming re-reads the account rather than patching the number locally, so the
+  displayed balance can't drift from what the backend recorded.
 - **The traffic chart no longer appears twice for admins.** It was on both the
   dashboard (fleet-wide) and the account page (personal); an admin's "personal"
   traffic is a near-meaningless number, so the duplicate card was just noise.
