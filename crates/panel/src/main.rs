@@ -116,6 +116,11 @@ async fn main() {
     // out over exactly the same control channel as a manual one.
     service::auto_restart::spawn(state.clone());
 
+    // v1.2.0: node offline/recovery alerting. Runs unconditionally — it tracks
+    // state even when notifications are disabled, so turning them on later
+    // doesn't immediately fire for outages that started before.
+    service::node_watch::spawn(state.clone());
+
     let app = app.with_state(state);
 
     let addr: SocketAddr = config.listen.parse().expect("Invalid listen address");

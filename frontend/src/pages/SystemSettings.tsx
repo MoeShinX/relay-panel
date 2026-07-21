@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import api from '../api/client';
 import type { ApiEnvelope, Plan, RegistrationSettings } from '../api/types';
 import { useI18n } from '../i18n/context';
+import NotifySettings from './NotifySettings';
 
 const { Text } = Typography;
 
@@ -108,6 +109,7 @@ export default function SystemSettings() {
   const planOptions = plans.map((p) => ({ value: p.id, label: `${p.name} (${p.max_rules} ${t('rules')})` }));
 
   return (
+    <>
     <Card
       title={t('systemSettings')}
       extra={<Button type="primary" loading={saving} onClick={onSave}>{t('save')}</Button>}
@@ -161,5 +163,9 @@ export default function SystemSettings() {
         </Text>
       </Form>
     </Card>
+    {/* v1.2.0: node-offline alerting. Its own card + form so saving one
+        section can never submit the other. */}
+    <NotifySettings />
+    </>
   );
 }

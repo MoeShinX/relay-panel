@@ -1,6 +1,8 @@
 pub mod auto_restart;
 pub mod groups;
 pub mod node_config;
+pub mod node_watch;
+pub mod notify;
 pub mod password;
 pub mod profiles;
 pub mod redeem;

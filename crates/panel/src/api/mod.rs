@@ -11,6 +11,7 @@ pub mod geoip;
 pub mod groups;
 pub mod middleware;
 pub mod node;
+pub mod notify;
 pub mod redeem;
 pub mod restart;
 pub mod security_headers;
@@ -197,6 +198,21 @@ pub fn routes() -> Router<AppState> {
             "/admin/settings/registration",
             axum::routing::get(admin::get_registration_settings)
                 .put(admin::update_registration_settings),
+        )
+        // v1.2.0: node-offline notification settings. GET never returns the bot
+        // token / SMTP password (only whether one is set); PUT treats an empty
+        // credential as "keep the stored one".
+        .route(
+            "/admin/settings/notify",
+            axum::routing::get(notify::get_notify_settings).put(notify::update_notify_settings),
+        )
+        // Sends a REAL message on one channel using the stored config, ignoring
+        // the master switch — you test before turning it on. Notification
+        // config is the classic write-and-forget setting: a typo is otherwise
+        // invisible until the night a node actually dies.
+        .route(
+            "/admin/settings/notify/test",
+            axum::routing::post(notify::test_notify),
         )
         // Stats & monitoring
         .route("/stats", axum::routing::get(stats::get_stats))

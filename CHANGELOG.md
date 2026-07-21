@@ -12,6 +12,42 @@ independent `v*` / `node-v*` tracks since this release).
 
 ### Added
 
+- **Node offline alerts (Telegram + email).** A node could die and nothing told
+  anyone — the operator found out from a user complaint or by happening to
+  refresh the panel. A background watcher now scans node status and notifies
+  when a node has been silent past a threshold, and again when it recovers.
+
+  - **The alert threshold is deliberately NOT the UI's online window.** The
+    status dot flips after 30s, which is right for a status light and wrong for
+    a page: a node that misses two reports on a flaky link is briefly "offline"
+    and perfectly healthy. Alerting has its own threshold (default 180s ≈ six
+    missed reports, floor 60s), and a compile-time assert keeps that floor above
+    the online window so an alert can never fire for a node the status page
+    still paints green.
+  - **Each transition alerts exactly once.** An ongoing outage does not re-alert
+    every tick; re-alerting is how a channel gets muted, and a muted channel is
+    worse than none.
+  - **State is in memory, like the auto-restart scheduler** — persisting "was
+    offline" would replay every outage that happened while the panel was down,
+    so an upgrade would open with a burst of stale pages. One case is handled
+    explicitly rather than dropped: a node first seen ALREADY offline (it died
+    during the restart) still alerts once, because that is exactly when the
+    operator needs to know.
+  - **Credentials are write-only.** The bot token and SMTP password go in
+    through PUT and are never returned — GET reports only whether one is stored,
+    and an empty credential on save means "keep the stored one", so the form
+    round-trips without the browser ever holding the secret. They are stored in
+    plaintext, same as node tokens: anyone who can read this database already
+    controls the fleet, so encrypting one field beside the keys would be
+    theatre.
+  - **A "save & send test" button per channel**, because notification config is
+    the classic write-and-forget setting — a typo'd chat id is invisible until
+    the night a node actually dies. It saves first (the backend tests the STORED
+    config) and surfaces the provider's own error text, so a failure is
+    actionable rather than a generic "failed".
+  - Enabling a channel without its required fields is refused up front, rather
+    than silently never sending.
+
 - **Redeem codes (balance top-up).** The shop could already DEDUCT balance
   (buying a plan) but nothing could ADD any — balance could only be typed in by
   an admin, so the selling flow was open-loop. An admin now generates batches of

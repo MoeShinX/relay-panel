@@ -92,6 +92,40 @@ export interface ForwardRule {
   created_at: string;
 }
 
+/** v1.2.0: notification settings as returned by the API.
+ *
+ *  Credentials are NEVER included — only `*_set` booleans saying whether one is
+ *  stored. Submitting an empty credential means "keep the stored one", so the
+ *  form can round-trip without ever holding the secret. */
+export interface NotifyConfigPublic {
+  enabled: boolean;
+  offline_alert_secs: number;
+  notify_recovery: boolean;
+  telegram_enabled: boolean;
+  telegram_chat_id: string;
+  telegram_bot_token_set: boolean;
+  email_enabled: boolean;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_username: string;
+  smtp_password_set: boolean;
+  smtp_from: string;
+  smtp_to: string;
+  smtp_tls: boolean;
+}
+
+/** v1.2.0: result of a test send. `ok: false` still arrives as HTTP 200 — the
+ *  request worked, the delivery didn't, and `detail` carries the provider's own
+ *  words so the operator can actually fix it. */
+export interface TestNotifyResult {
+  ok: boolean;
+  detail: string;
+}
+
+/** Minimum offline-alert threshold in seconds. Mirrors
+ *  service::notify::MIN_OFFLINE_ALERT_SECS. */
+export const MIN_OFFLINE_ALERT_SECS = 60;
+
 /** v1.2.0: a balance top-up code. `code` arrives in DISPLAY form (dashed);
  *  the backend stores it without dashes and normalizes user input, so a user
  *  may type it with or without them, in any case. */
