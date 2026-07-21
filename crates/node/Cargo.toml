@@ -2,7 +2,7 @@
 name = "relay-node"
 # Keep in sync with scripts/relay-node-install.sh (SCRIPT_VERSION) and the
 # GitHub release tag. `--version` / `-V` read this via env!("CARGO_PKG_VERSION").
-version = "1.1.2"
+version = "1.2.0"
 edition = "2021"
 license.workspace = true
 
