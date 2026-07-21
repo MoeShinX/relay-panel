@@ -1,5 +1,5 @@
-import { Card, Row, Col, Button, Spin, Tag, Modal, Table, Typography, message, Result, Alert, Space } from 'antd';
-import { ShoppingOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Card, Row, Col, Button, Spin, Tag, Modal, Table, Typography, message, Result, Alert, Space, Form, Input } from 'antd';
+import { ShoppingOutlined, ReloadOutlined, WalletOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState } from 'react';
 import api from '../api/client';
 import type { ApiEnvelope, Plan, Order, UserSelf } from '../api/types';
@@ -24,6 +24,11 @@ export default function Shop() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [buying, setBuying] = useState<Plan | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // v1.2.0: redeem-code top-up, mirrored from the account page so a user who
+  // finds their balance short can fix it without leaving the shop.
+  const [redeemOpen, setRedeemOpen] = useState(false);
+  const [redeemForm] = Form.useForm();
+  const [redeeming, setRedeeming] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -59,6 +64,29 @@ export default function Shop() {
       message.error(t('purchaseFailed'));
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleRedeem = async (values: { code: string }) => {
+    setRedeeming(true);
+    try {
+      const res = await api.post<unknown, ApiEnvelope<{ amount: string; balance: string }>>(
+        '/user/redeem',
+        { code: values.code },
+      );
+      if (res.code !== 0) { message.error(res.message); return; }
+      message.success(
+        t('redeemSuccess')
+          .replace('{amount}', res.data?.amount ?? '')
+          .replace('{balance}', res.data?.balance ?? ''),
+      );
+      setRedeemOpen(false);
+      redeemForm.resetFields();
+      load(); // the balance shown above the plan cards must reflect the top-up
+    } catch {
+      message.error(t('redeemFailed'));
+    } finally {
+      setRedeeming(false);
     }
   };
 
@@ -101,12 +129,26 @@ export default function Shop() {
         />
       )}
 
-      {/* Balance + the "流量叠加" note. */}
+      {/* Balance + top-up + the "流量叠加" note.
+
+          v1.2.0: the redeem entry point lives HERE as well as on the account
+          page, because this is where a user actually discovers they can't
+          afford a plan. Making them go hunt for it on another page is the
+          difference between a sale and an abandoned one. */}
       {me && (
         <Card size="small" style={{ marginBottom: 16 }}>
-          <Space>
+          <Space wrap>
             <Text strong>{t('accountBalance')}:</Text>
             <span className="rp-mono">{me.balance}</span>
+            <Button
+              size="small"
+              type="primary"
+              ghost
+              icon={<WalletOutlined />}
+              onClick={() => { redeemForm.resetFields(); setRedeemOpen(true); }}
+            >
+              {t('redeem')}
+            </Button>
             <Text type="secondary" style={{ marginLeft: 16 }}>·</Text>
             <Text type="secondary">{t('shopTrafficStacksHint')}</Text>
           </Space>
@@ -192,6 +234,30 @@ export default function Shop() {
             )}
           </div>
         )}
+      </Modal>
+
+      {/* Same permissive field as the account page: the backend normalizes
+          case, dashes, whitespace and O/0 · I/L/1 confusions, so no
+          client-side format policing that would reject a valid code. */}
+      <Modal
+        title={t('redeem')}
+        open={redeemOpen}
+        onCancel={() => setRedeemOpen(false)}
+        onOk={() => redeemForm.submit()}
+        okText={t('redeemConfirm')}
+        cancelText={t('cancel')}
+        confirmLoading={redeeming}
+      >
+        <Form form={redeemForm} onFinish={handleRedeem} layout="vertical">
+          <Form.Item
+            name="code"
+            label={t('redeemCode')}
+            extra={t('redeemCodeHint')}
+            rules={[{ required: true, message: t('redeemCodeRequired') }]}
+          >
+            <Input placeholder="XXXX-XXXX-XXXX-XXXX" autoComplete="off" />
+          </Form.Item>
+        </Form>
       </Modal>
     </>
   );

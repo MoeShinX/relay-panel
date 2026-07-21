@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Card, Descriptions, Spin, Button, Space, Modal, Form, Input, message, Typography, Result, Progress, Alert, Tag } from 'antd';
-import { LockOutlined, LogoutOutlined } from '@ant-design/icons';
+import { LockOutlined, LogoutOutlined, WalletOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
 import type { ApiEnvelope, UserSelf } from '../api/types';
@@ -179,10 +179,16 @@ export default function Account() {
               <span className="rp-mono">{me.balance}</span>
               {/* v1.2.0: self-service top-up. It lives on the balance row
                   because that is exactly where a user looks when they find
-                  they can't afford a plan. */}
+                  they can't afford a plan.
+
+                  Ghost-primary with an icon, not a bare text link: as a `link`
+                  button beside a number it read as a label rather than a
+                  control, and users reported finding no way to top up at all. */}
               <Button
                 size="small"
-                type="link"
+                type="primary"
+                ghost
+                icon={<WalletOutlined />}
                 onClick={() => { redeemForm.resetFields(); setRedeemOpen(true); }}
               >
                 {t('redeem')}
