@@ -237,6 +237,37 @@ tag within ~30 seconds.
 
 ## Update
 
+### Option A: one-click from the panel (recommended, no SSH)
+
+**Panel → Node Status → find the node → click "Upgrade".**
+
+The panel pushes an upgrade instruction to the node over WebSocket, and the node
+fetches the new version from the official Release itself: sha256 verified, never
+downgrades, backed up and atomically replaced, then it restarts itself. You never
+log into the node.
+
+When a node is behind, the node status page highlights that an upgrade is
+available.
+
+> **Upgrading drops the forwarding connections currently running on that node**
+> — replacing the binary requires restarting the process. Pick a quiet window if
+> the node is busy.
+
+**It depends on how the node was installed** — self-upgrade relies on "the old
+process exits, and something starts the new one":
+
+| Install method | Node status page |
+| --- | --- |
+| **systemd** | Blue upgrade button; one-click when behind and online |
+| **Docker** | Amber "update the image" hint — pull the latest `relay-panel-node` image and recreate the container |
+| **Manual** (nohup / screen / running the binary directly) | Greyed out, "nothing restarts it after exit" |
+
+For a node showing "manual run: one-click upgrade not supported", just re-run the
+Option B install command on it — the script installs it as a systemd service, and
+one-click works from then on.
+
+### Option B: re-run the installer
+
 Updating is the same one-line installer. **The simplest approach is to copy the
 install command from the panel UI again and re-run it** — that command already
 carries the correct `-t <NODE_TOKEN> -u <PANEL_URL>`, so you don't have to

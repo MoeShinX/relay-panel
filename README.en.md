@@ -86,7 +86,19 @@ cd /opt/relay-panel && git pull --quiet && ./deploy.sh
 
 > ⚠️ Back up `.env` and your database before updating.
 
-Forwarding nodes: **Device Groups → Copy Install Command** → paste on the node.
+**Forwarding nodes: Panel → Node Status → click "Upgrade" on each node.** No SSH
+required. The panel pushes the upgrade to the node, which pulls the new version
+from the official Release itself (sha256 verified, never downgrades). Upgrading a
+node drops the forwarding connections currently running on it.
+
+> **One-click upgrade is available for systemd nodes only** — self-upgrade relies
+> on "old process exits, supervisor starts the new one". Docker nodes show an
+> "update the image" hint instead (pull the latest image and recreate the
+> container); a node run manually in the foreground has nothing to restart it, so
+> the button is greyed out.
+
+Manual upgrade (when one-click isn't available): **Device Groups → Copy Install
+Command** → paste on the node. See the [node documentation](docs/NODE.md#update).
 
 ---
 
