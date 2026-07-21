@@ -708,11 +708,18 @@ pub trait TrafficRepository: Send + Sync {
     async fn prune_traffic_history(&self, cutoff: &str) -> Result<u64, DbError>;
 }
 
-/// One point of the traffic-history series.
+/// One point of the traffic-history series, per (bucket, line).
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow, serde::Serialize)]
 pub struct TrafficHistoryBucket {
     /// 'YYYY-MM-DD HH:00:00' (hourly) or 'YYYY-MM-DD' (daily), UTC.
     pub bucket: String,
+    /// v1.2.0: the inbound device group (line) this slice belongs to. 0 =
+    /// unknown — pre-column history whose rule has since been deleted, so the
+    /// attribution is unrecoverable.
+    pub group_id: i64,
+    /// The group's name at query time, or "#id" once the group is deleted.
+    /// Resolved in SQL so the chart legend needs no second round trip.
+    pub group_name: String,
     pub real_upload: i64,
     pub real_download: i64,
     /// What was actually charged against quota in this bucket — the chart's

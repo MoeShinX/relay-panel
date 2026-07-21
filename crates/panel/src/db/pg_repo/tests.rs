@@ -4828,3 +4828,151 @@ async fn pg_traffic_history_prune_respects_cutoff() {
     assert_eq!(deleted, 1, "only the pre-cutoff row dies");
     cleanup(&db).await;
 }
+
+/// PG twin: traffic split per line. The GROUP BY / LEFT JOIN shape differs
+/// between backends (PG needs dg.name in the grouping, SQLite takes the alias),
+/// so the behaviour is verified on each.
+#[tokio::test]
+async fn pg_traffic_history_splits_by_line() {
+    let Some(db) = repo("th_lines").await else {
+        return;
+    };
+    let alice = pg_seed_history_fixture(&db, "grp_a", 70, 300, 1.0).await;
+    sqlx::query(
+        "INSERT INTO device_groups (id, name, group_type, token, uid, rate) \
+         VALUES (71, 'hk-line', 'in', 'tok-71', $1, 1.0)",
+    )
+    .bind(alice)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, target_addr, target_port) \
+         VALUES (301, 'r301', $1, 20001, 71, '127.0.0.1', 80)",
+    )
+    .bind(alice)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    db.apply_traffic_batch(
+        70,
+        &[relay_shared::protocol::TrafficEntry {
+            rule_id: 300,
+            upload: 100,
+            download: 0,
+        }],
+    )
+    .await
+    .unwrap();
+    db.apply_traffic_batch(
+        71,
+        &[relay_shared::protocol::TrafficEntry {
+            rule_id: 301,
+            upload: 700,
+            download: 0,
+        }],
+    )
+    .await
+    .unwrap();
+
+    let rows = db
+        .query_traffic_history(Some(alice), None, "2000-01-01 00:00:00", false)
+        .await
+        .unwrap();
+    let by_group: std::collections::HashMap<i64, &crate::db::repo::TrafficHistoryBucket> =
+        rows.iter().map(|r| (r.group_id, r)).collect();
+    assert_eq!(by_group.len(), 2, "one slice per line, got {rows:?}");
+    assert_eq!(by_group[&70].real_upload, 100);
+    assert_eq!(by_group[&71].real_upload, 700);
+    assert_eq!(by_group[&71].group_name, "hk-line");
+    cleanup(&db).await;
+}
+
+/// PG twin: a deleted line keeps its history (LEFT JOIN must not gate the row).
+#[tokio::test]
+async fn pg_traffic_history_survives_group_and_rule_deletion() {
+    let Some(db) = repo("th_del").await else {
+        return;
+    };
+    let alice = pg_seed_history_fixture(&db, "grp_b", 72, 302, 1.0).await;
+    db.apply_traffic_batch(
+        72,
+        &[relay_shared::protocol::TrafficEntry {
+            rule_id: 302,
+            upload: 500,
+            download: 0,
+        }],
+    )
+    .await
+    .unwrap();
+
+    sqlx::query("DELETE FROM forward_rules WHERE id = 302")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM device_groups WHERE id = 72")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    let rows = db
+        .query_traffic_history(Some(alice), None, "2000-01-01 00:00:00", false)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1, "history must outlive both parents");
+    assert_eq!(rows[0].real_upload, 500);
+    assert_eq!(rows[0].group_id, 72);
+    assert_eq!(rows[0].group_name, "#72");
+    cleanup(&db).await;
+}
+
+/// PG twin of the Migration 41 backfill (PG revision 24).
+#[tokio::test]
+async fn pg_migration_41_backfills_group_id_from_the_rule() {
+    let Some(db) = repo("th_backfill").await else {
+        return;
+    };
+    let alice = pg_seed_history_fixture(&db, "grp_c", 73, 303, 1.0).await;
+    sqlx::query(
+        "INSERT INTO traffic_history (rule_id, uid, group_id, hour_ts, real_upload, real_download, billed_total) \
+         VALUES (303, $1, 0, '2026-07-20 10:00:00', 42, 0, 42)",
+    )
+    .bind(alice)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO traffic_history (rule_id, uid, group_id, hour_ts, real_upload, real_download, billed_total) \
+         VALUES (999999, $1, 0, '2026-07-20 10:00:00', 7, 0, 7)",
+    )
+    .bind(alice)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    // Re-running the migration must backfill idempotently.
+    run_pg_migrations(&db.pool).await.unwrap();
+    sqlx::query(
+        "UPDATE traffic_history th SET group_id = fr.device_group_in \
+         FROM forward_rules fr WHERE fr.id = th.rule_id AND th.group_id = 0",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let filled: i64 =
+        sqlx::query_scalar("SELECT group_id FROM traffic_history WHERE rule_id = 303")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(filled, 73, "backfilled from the rule's inbound group");
+
+    let orphan: i64 =
+        sqlx::query_scalar("SELECT group_id FROM traffic_history WHERE rule_id = 999999")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(orphan, 0, "an orphan keeps 0 — never invent an attribution");
+    cleanup(&db).await;
+}

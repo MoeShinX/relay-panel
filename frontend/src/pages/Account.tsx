@@ -214,8 +214,13 @@ export default function Account() {
       </Card>
 
       {/* v1.2.0: the user's own traffic trend. No rule filter here — the API
-          pins non-admins to their own uid, so the total IS their usage. */}
-      <TrafficChart />
+          pins non-admins to their own uid, so the total IS their usage.
+
+          Hidden for admins: they already get the fleet-wide chart (with a
+          per-rule drill-down) on the dashboard, and an admin's "personal"
+          traffic is a near-meaningless number. The same card on two pages is
+          just noise. */}
+      {!me.admin && <TrafficChart />}
 
       <Modal
         title={t('changePassword')}

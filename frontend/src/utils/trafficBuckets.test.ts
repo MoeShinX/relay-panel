@@ -1,13 +1,32 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { foldBuckets, localDayKey, parseUtcBucket } from './trafficBuckets';
+import {
+  foldBuckets,
+  localDayKey,
+  parseUtcBucket,
+  MAX_SERIES,
+  OTHER_SERIES,
+  SERIES_COLORS_LIGHT,
+  SERIES_COLORS_DARK,
+} from './trafficBuckets';
 import type { TrafficHistoryBucket } from '../api/types';
 
-const b = (bucket: string, billed: number, up = 0, down = 0): TrafficHistoryBucket => ({
+const b = (
+  bucket: string,
+  billed: number,
+  up = 0,
+  down = 0,
+  group = 'line-a',
+): TrafficHistoryBucket => ({
   bucket,
+  group_id: 1,
+  group_name: group,
   billed_total: billed,
   real_upload: up,
   real_download: down,
 });
+
+/** Total billed across every slice — output is per (bucket, line) now. */
+const sum = (points: { billed: number }[]) => points.reduce((n, p) => n + p.billed, 0);
 
 describe('traffic bucket folding', () => {
   it('parses a stored bucket as UTC, not local time', () => {
@@ -113,5 +132,91 @@ describe('daily grouping uses the VIEWER timezone, not UTC', () => {
     const byLabel = Object.fromEntries(points.map((p) => [p.label, p.billed]));
     expect(byLabel['07-20']).toBe(100);
     expect(byLabel['07-21']).toBe(700);
+  });
+});
+
+describe('per-line slicing', () => {
+  it('emits one slice per (bucket, line) so the chart can stack them', () => {
+    const points = foldBuckets(
+      [
+        b('2026-07-20 10:00:00', 100, 0, 0, 'guangzhou'),
+        b('2026-07-20 10:00:00', 700, 0, 0, 'hk'),
+      ],
+      '2026-07-20 10:00:00',
+      true,
+      new Date('2026-07-20T10:00:00Z'),
+    );
+    expect(points).toHaveLength(2);
+    const byLine = Object.fromEntries(points.map((p) => [p.group, p.billed]));
+    expect(byLine).toEqual({ guangzhou: 100, hk: 700 });
+    // Same bucket → same x position, which is what makes them stack.
+    expect(new Set(points.map((p) => p.label)).size).toBe(1);
+  });
+
+  it('folds the tail by VOLUME, not by first appearance', () => {
+    // MAX_SERIES busy lines plus two tiny ones. The tiny ones must fold even
+    // though one of them is alphabetically/positionally first — folding by
+    // arrival order would hand a color to a line that moved one byte and hide
+    // the one actually burning the quota.
+    const buckets: TrafficHistoryBucket[] = [
+      b('2026-07-20 10:00:00', 1, 0, 0, 'tiny-first'),
+      ...Array.from({ length: MAX_SERIES }, (_, i) =>
+        b('2026-07-20 10:00:00', 1000 * (i + 1), 0, 0, `big-${i}`),
+      ),
+      b('2026-07-20 10:00:00', 2, 0, 0, 'tiny-last'),
+    ];
+    const points = foldBuckets(
+      buckets,
+      '2026-07-20 10:00:00',
+      true,
+      new Date('2026-07-20T10:00:00Z'),
+    );
+    const lines = points.map((p) => p.group);
+    expect(lines).toContain(OTHER_SERIES);
+    expect(lines).not.toContain('tiny-first');
+    expect(lines).not.toContain('tiny-last');
+    expect(lines).toContain('big-0');
+    // Folding must not lose bytes.
+    expect(sum(points)).toBe(1 + 2 + 1000 * ((MAX_SERIES * (MAX_SERIES + 1)) / 2));
+    // The two tiny lines merge into ONE "other" slice for this bucket.
+    expect(points.filter((p) => p.group === OTHER_SERIES)).toHaveLength(1);
+    expect(points.find((p) => p.group === OTHER_SERIES)!.billed).toBe(3);
+  });
+
+  it('keeps a quiet bucket on the axis even with no slice', () => {
+    const points = foldBuckets(
+      [b('2026-07-20 12:00:00', 500, 0, 0, 'gz')],
+      '2026-07-20 10:00:00',
+      true,
+      new Date('2026-07-20T13:00:00Z'),
+    );
+    // Four hours on the axis; only one carries traffic.
+    expect(new Set(points.map((p) => p.label)).size).toBe(4);
+    expect(sum(points)).toBe(500);
+  });
+});
+
+describe('categorical palette', () => {
+  it('has a fixed slot order so a line keeps its color', () => {
+    // Colors are assigned by slot, never cycled or regenerated. If this array
+    // is ever reordered, every existing chart silently repaints.
+    expect(SERIES_COLORS_LIGHT[0]).toBe('#6366f1');
+    expect(SERIES_COLORS_LIGHT).toHaveLength(MAX_SERIES);
+    expect(SERIES_COLORS_DARK).toHaveLength(MAX_SERIES);
+  });
+
+  it('excludes the reserved status red and the accent-colliding violet', () => {
+    // Red is reserved for critical status and must never be "series 6"; it also
+    // failed the adjacent-pair check against orange (ΔE 7.1 normal vision).
+    // Violet collides with the indigo accent in slot 1.
+    for (const banned of ['#e34948', '#e66767', '#4a3aa7', '#9085e9']) {
+      expect(SERIES_COLORS_LIGHT).not.toContain(banned);
+      expect(SERIES_COLORS_DARK).not.toContain(banned);
+    }
+  });
+
+  it('has no duplicate hues', () => {
+    expect(new Set(SERIES_COLORS_LIGHT).size).toBe(SERIES_COLORS_LIGHT.length);
+    expect(new Set(SERIES_COLORS_DARK).size).toBe(SERIES_COLORS_DARK.length);
   });
 });

@@ -97,6 +97,12 @@ export interface ForwardRule {
  *  number charged against quota in that hour. */
 export interface TrafficHistoryBucket {
   bucket: string;
+  /** v1.2.0: the inbound line (device group) this slice belongs to. 0 =
+   *  unknown — pre-column history whose rule has since been deleted. */
+  group_id: number;
+  /** The line's name, or "#id" once the group is deleted (the history
+   *  deliberately outlives it). */
+  group_name: string;
   real_upload: number;
   real_download: number;
   billed_total: number;

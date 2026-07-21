@@ -204,6 +204,9 @@ CREATE INDEX IF NOT EXISTS idx_redeem_codes_used_by ON redeem_codes(used_by);
 CREATE TABLE IF NOT EXISTS traffic_history (
     rule_id BIGINT NOT NULL,
     uid BIGINT NOT NULL,
+    -- v1.2.0: inbound device group SNAPSHOT (see the SQLite baseline for why
+    -- this is stored rather than joined at query time). 0 = unknown.
+    group_id BIGINT NOT NULL DEFAULT 0,
     hour_ts TEXT NOT NULL,
     real_upload BIGINT NOT NULL DEFAULT 0,
     real_download BIGINT NOT NULL DEFAULT 0,
@@ -212,6 +215,7 @@ CREATE TABLE IF NOT EXISTS traffic_history (
 );
 CREATE INDEX IF NOT EXISTS idx_traffic_history_uid ON traffic_history(uid, hour_ts);
 CREATE INDEX IF NOT EXISTS idx_traffic_history_hour ON traffic_history(hour_ts);
+CREATE INDEX IF NOT EXISTS idx_traffic_history_group ON traffic_history(group_id, hour_ts);
 
 -- v1.0.9: plan ↔ device_group grant map (mirrors SQLite baseline + Migration 35).
 CREATE TABLE IF NOT EXISTS plan_device_groups (
@@ -319,7 +323,7 @@ INSERT INTO schema_version (version) VALUES (1) ON CONFLICT (version) DO NOTHING
 /// The schema revision this build's baseline `PG_SCHEMA_SQL` represents. When a
 /// future release adds a column/table, bump this and add a matching arm in
 /// `run_pg_migrations`. `apply_pg_schema` seeds `schema_version` with revision 1.
-pub const PG_SCHEMA_VERSION: i32 = 23;
+pub const PG_SCHEMA_VERSION: i32 = 24;
 
 /// Apply PG_SCHEMA_SQL to a pool. PostgreSQL's prepared-statement protocol
 /// rejects multi-statement strings ("cannot insert multiple commands into a
@@ -1210,6 +1214,43 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
         tracing::info!("PG migration 23: traffic_history table present");
+    }
+
+    if current < 24 {
+        // v1.2.0: traffic per line. See the baseline comment for why the group
+        // is a stored snapshot rather than a query-time join.
+        sqlx::query(
+            "ALTER TABLE traffic_history ADD COLUMN IF NOT EXISTS group_id BIGINT NOT NULL DEFAULT 0",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_traffic_history_group \
+             ON traffic_history(group_id, hour_ts)",
+        )
+        .execute(pool)
+        .await?;
+        // Backfill rows written before this column existed — otherwise every
+        // pre-upgrade hour renders as "unknown line". Rows whose rule is
+        // already gone keep 0: that history is unattributable by construction,
+        // and inventing a group for it would be a lie.
+        let backfilled = sqlx::query(
+            "UPDATE traffic_history th SET group_id = fr.device_group_in \
+             FROM forward_rules fr \
+             WHERE fr.id = th.rule_id AND th.group_id = 0",
+        )
+        .execute(pool)
+        .await?
+        .rows_affected();
+        sqlx::query(
+            "INSERT INTO schema_version (version) VALUES (24) ON CONFLICT (version) DO NOTHING",
+        )
+        .execute(pool)
+        .await?;
+        tracing::info!(
+            "PG migration 24: traffic_history.group_id present ({} row(s) backfilled)",
+            backfilled
+        );
     }
 
     Ok(())

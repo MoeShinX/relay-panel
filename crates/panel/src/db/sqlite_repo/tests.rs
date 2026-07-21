@@ -4767,3 +4767,150 @@ async fn traffic_history_prune_respects_cutoff() {
             .unwrap();
     assert_eq!(left, "2026-07-20 00:00:00");
 }
+
+/// v1.2.0: traffic is attributed to the rule's inbound line, and the query
+/// returns one slice per (bucket, line) so the chart can stack them.
+#[tokio::test]
+async fn traffic_history_splits_by_line() {
+    let db = repo().await;
+    // Two lines, one rule each, same user — the "which line is burning my
+    // quota" question the chart exists to answer.
+    let alice = seed_history_fixture(&db, "grp_a", 70, 300, 1.0).await;
+    sqlx::query(
+        "INSERT INTO device_groups (id, name, group_type, token, uid, rate) \
+         VALUES (71, 'hk-line', 'in', 'tok-71', ?, 1.0)",
+    )
+    .bind(alice)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, target_addr, target_port) \
+         VALUES (301, 'r301', ?, 20001, 71, '127.0.0.1', 80)",
+    )
+    .bind(alice)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    db.apply_traffic_batch(
+        70,
+        &[relay_shared::protocol::TrafficEntry {
+            rule_id: 300,
+            upload: 100,
+            download: 0,
+        }],
+    )
+    .await
+    .unwrap();
+    db.apply_traffic_batch(
+        71,
+        &[relay_shared::protocol::TrafficEntry {
+            rule_id: 301,
+            upload: 700,
+            download: 0,
+        }],
+    )
+    .await
+    .unwrap();
+
+    let rows = db
+        .query_traffic_history(Some(alice), None, "2000-01-01 00:00:00", false)
+        .await
+        .unwrap();
+    // Same hour, two lines → two slices, not one merged column.
+    let by_group: std::collections::HashMap<i64, &crate::db::repo::TrafficHistoryBucket> =
+        rows.iter().map(|r| (r.group_id, r)).collect();
+    assert_eq!(by_group.len(), 2, "one slice per line, got {rows:?}");
+    assert_eq!(by_group[&70].real_upload, 100);
+    assert_eq!(by_group[&71].real_upload, 700);
+    assert_eq!(
+        by_group[&71].group_name, "hk-line",
+        "legend name resolved in SQL"
+    );
+}
+
+/// THE reason group_id is a stored snapshot rather than a query-time join:
+/// deleting the group (or the rule) must NOT make that history vanish from the
+/// chart. A join would drop the row entirely and "last 7 days" would silently
+/// shrink.
+#[tokio::test]
+async fn traffic_history_survives_group_and_rule_deletion() {
+    let db = repo().await;
+    let alice = seed_history_fixture(&db, "grp_b", 72, 302, 1.0).await;
+    db.apply_traffic_batch(
+        72,
+        &[relay_shared::protocol::TrafficEntry {
+            rule_id: 302,
+            upload: 500,
+            download: 0,
+        }],
+    )
+    .await
+    .unwrap();
+
+    // Drop the rule, then the group — the order a real cleanup would take.
+    sqlx::query("DELETE FROM forward_rules WHERE id = 302")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM device_groups WHERE id = 72")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    let rows = db
+        .query_traffic_history(Some(alice), None, "2000-01-01 00:00:00", false)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1, "history must outlive both parents");
+    assert_eq!(rows[0].real_upload, 500, "the bytes are still there");
+    assert_eq!(rows[0].group_id, 72, "attribution kept via the snapshot");
+    assert_eq!(
+        rows[0].group_name, "#72",
+        "a deleted line falls back to #id instead of disappearing"
+    );
+}
+
+/// Migration 41 backfills the line for history written before the column
+/// existed — otherwise every pre-upgrade hour renders as "unknown".
+#[tokio::test]
+async fn migration_41_backfills_group_id_from_the_rule() {
+    let db = repo().await;
+    let alice = seed_history_fixture(&db, "grp_c", 73, 303, 1.0).await;
+    // Simulate a pre-v1.2 row: group_id left at the 0 default.
+    sqlx::query(
+        "INSERT INTO traffic_history (rule_id, uid, group_id, hour_ts, real_upload, real_download, billed_total) \
+         VALUES (303, ?, 0, '2026-07-20 10:00:00', 42, 0, 42)",
+    )
+    .bind(alice)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    // An orphan row whose rule no longer exists — unattributable by
+    // construction, so it must stay 0 rather than be given a made-up line.
+    sqlx::query(
+        "INSERT INTO traffic_history (rule_id, uid, group_id, hour_ts, real_upload, real_download, billed_total) \
+         VALUES (999999, ?, 0, '2026-07-20 10:00:00', 7, 0, 7)",
+    )
+    .bind(alice)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    crate::db::schema::run_migrations(&db.pool).await.unwrap();
+
+    let filled: i64 =
+        sqlx::query_scalar("SELECT group_id FROM traffic_history WHERE rule_id = 303")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(filled, 73, "backfilled from the rule's inbound group");
+
+    let orphan: i64 =
+        sqlx::query_scalar("SELECT group_id FROM traffic_history WHERE rule_id = 999999")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(orphan, 0, "an orphan keeps 0 — never invent an attribution");
+}

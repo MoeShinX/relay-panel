@@ -5,15 +5,14 @@ import api from '../api/client';
 import type { ApiEnvelope, TrafficHistoryResponse } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { formatBytes } from '../utils/format';
-import { foldBuckets } from '../utils/trafficBuckets';
+import { foldBuckets, OTHER_SERIES, SERIES_COLORS_LIGHT } from '../utils/trafficBuckets';
 import type { TrafficPoint } from '../utils/trafficBuckets';
 
-/** The panel's indigo accent (--rp-primary). Validated against the light
- *  surface with the palette checker: lightness band, chroma floor and 3:1
- *  contrast all pass. Single series → one hue, no legend (the title names it). */
-const SERIES_COLOR = '#6366f1';
-
 type Range = '1d' | '7d' | '30d';
+
+/** A plotted point with its legend label resolved (the fold layer stays
+ *  i18n-free; translation happens here, at render time). */
+type ChartPoint = TrafficPoint & { groupLabel: string };
 
 interface Props {
   /** Rules for the admin drill-down Select. Omit to hide the filter (the
@@ -62,13 +61,19 @@ export default function TrafficChart({ rules }: Props) {
 
   useEffect(() => { load(); }, [load]);
 
-  /** Zero-fill + viewer-timezone bucketing. Lives in utils/trafficBuckets so
-   *  the timezone handling — the part that actually breaks — is unit-tested
-   *  rather than only observable by squinting at a rendered canvas. */
-  const points: TrafficPoint[] = useMemo(
-    () => (resp ? foldBuckets(resp.buckets, resp.since, range === '1d') : []),
-    [resp, range],
-  );
+  /** Zero-fill + viewer-timezone bucketing + per-line slicing. Lives in
+   *  utils/trafficBuckets so the parts that actually break (timezone folding,
+   *  which lines get their own color) are unit-tested rather than only
+   *  observable by squinting at a rendered canvas. */
+  const points: ChartPoint[] = useMemo(() => {
+    if (!resp) return [];
+    return foldBuckets(resp.buckets, resp.since, range === '1d').map((p) => ({
+      ...p,
+      // The folded tail carries a sentinel rather than a translated string, so
+      // the fold logic stays language-independent and testable.
+      groupLabel: p.group === OTHER_SERIES ? t('otherLines') : p.group,
+    }));
+  }, [resp, range, t]);
 
   const hasData = points.some((p) => p.billed > 0 || p.real_upload > 0 || p.real_download > 0);
 
@@ -115,8 +120,17 @@ export default function TrafficChart({ rules }: Props) {
             data={points}
             xField="label"
             yField="billed"
-            legend={false}
-            style={{ fill: SERIES_COLOR, radiusTopLeft: 4, radiusTopRight: 4 }}
+            /* Stacked by line: one bar per time bucket, one segment per line.
+               Part-to-whole over time — you see the total AND which line is
+               responsible for it, which is the actual question being asked. */
+            colorField="groupLabel"
+            stack
+            scale={{ color: { range: SERIES_COLORS_LIGHT } }}
+            /* A legend is mandatory at >= 2 series: identity must never rest on
+               color alone. Three of the light steps sit below 3:1 against the
+               surface, so the label IS the required relief. */
+            legend={{ color: { position: 'top', layout: { justifyContent: 'flex-end' } } }}
+            style={{ radiusTopLeft: 4, radiusTopRight: 4 }}
             axis={{
               // 30 days of labels don't fit; let the axis thin them out.
               x: { labelAutoHide: true, labelAutoRotate: false, title: false },
@@ -126,15 +140,14 @@ export default function TrafficChart({ rules }: Props) {
               },
             }}
             tooltip={{
-              title: (d: TrafficPoint) => d.label,
+              title: (d: ChartPoint) => d.label,
               items: [
-                (d: TrafficPoint) => ({
-                  name: t('billedTraffic'),
+                (d: ChartPoint) => ({
+                  name: `${d.groupLabel} · ${t('billedTraffic')}`,
                   value: formatBytes(d.billed),
-                  color: SERIES_COLOR,
                 }),
-                (d: TrafficPoint) => ({ name: t('realUpload'), value: formatBytes(d.real_upload) }),
-                (d: TrafficPoint) => ({ name: t('realDownload'), value: formatBytes(d.real_download) }),
+                (d: ChartPoint) => ({ name: t('realUpload'), value: formatBytes(d.real_upload) }),
+                (d: ChartPoint) => ({ name: t('realDownload'), value: formatBytes(d.real_download) }),
               ],
             }}
           />

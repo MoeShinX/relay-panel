@@ -524,6 +524,7 @@ export const enUS: Dict = {
   realUpload: 'Real upload',
   realDownload: 'Real download',
   noTrafficYet: 'No traffic recorded in this window (recording starts after the panel upgrade)',
+  otherLines: 'Other lines',
 
   // ── v1.2.0: node offline notifications ──
   notifySettings: 'Notifications',

@@ -212,15 +212,21 @@ impl TrafficRepository for SqliteRepository {
             // never disagree, not even by a crashed half-batch.
             sqlx::query(
                 "INSERT INTO traffic_history \
-                   (rule_id, uid, hour_ts, real_upload, real_download, billed_total) \
-                 VALUES (?, ?, ?, ?, ?, ?) \
+                   (rule_id, uid, group_id, hour_ts, real_upload, real_download, billed_total) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?) \
                  ON CONFLICT(rule_id, hour_ts) DO UPDATE SET \
                    real_upload = real_upload + excluded.real_upload, \
                    real_download = real_download + excluded.real_download, \
-                   billed_total = billed_total + excluded.billed_total",
+                   billed_total = billed_total + excluded.billed_total, \
+                   group_id = excluded.group_id",
             )
             .bind(r.rule_id)
             .bind(r.uid)
+            // v1.2.0: the batch's group. A rule belongs to exactly one inbound
+            // group, and pass 2 already verified ownership against THIS group,
+            // so it is the rule's group by construction. Refreshed on conflict
+            // so a row the backfill left at 0 self-heals on the next report.
+            .bind(group_id)
             .bind(&hour_ts)
             .bind(up)
             .bind(down)
@@ -244,22 +250,35 @@ impl TrafficRepository for SqliteRepository {
         // GROUP BY column can't be a bind parameter. COALESCE folds the two
         // optional filters into one prepared statement each (the statistics
         // query's trick).
+        //
+        // v1.2.0: grouped by (bucket, line). The LEFT JOIN resolves the name
+        // for the legend but never gates the row — a deleted group must still
+        // show its history, labelled "#id", rather than vanishing from the
+        // chart (which is the whole reason group_id is a stored snapshot).
         let sql = if daily {
-            "SELECT substr(hour_ts, 1, 10) AS bucket, \
-                    SUM(real_upload) AS real_upload, \
-                    SUM(real_download) AS real_download, \
-                    SUM(billed_total) AS billed_total \
-             FROM traffic_history \
-             WHERE hour_ts >= ? AND uid = COALESCE(?, uid) AND rule_id = COALESCE(?, rule_id) \
-             GROUP BY bucket ORDER BY bucket"
+            "SELECT substr(th.hour_ts, 1, 10) AS bucket, \
+                    th.group_id AS group_id, \
+                    COALESCE(dg.name, '#' || th.group_id) AS group_name, \
+                    SUM(th.real_upload) AS real_upload, \
+                    SUM(th.real_download) AS real_download, \
+                    SUM(th.billed_total) AS billed_total \
+             FROM traffic_history th \
+             LEFT JOIN device_groups dg ON dg.id = th.group_id \
+             WHERE th.hour_ts >= ? AND th.uid = COALESCE(?, th.uid) \
+               AND th.rule_id = COALESCE(?, th.rule_id) \
+             GROUP BY bucket, th.group_id, group_name ORDER BY bucket, th.group_id"
         } else {
-            "SELECT hour_ts AS bucket, \
-                    SUM(real_upload) AS real_upload, \
-                    SUM(real_download) AS real_download, \
-                    SUM(billed_total) AS billed_total \
-             FROM traffic_history \
-             WHERE hour_ts >= ? AND uid = COALESCE(?, uid) AND rule_id = COALESCE(?, rule_id) \
-             GROUP BY bucket ORDER BY bucket"
+            "SELECT th.hour_ts AS bucket, \
+                    th.group_id AS group_id, \
+                    COALESCE(dg.name, '#' || th.group_id) AS group_name, \
+                    SUM(th.real_upload) AS real_upload, \
+                    SUM(th.real_download) AS real_download, \
+                    SUM(th.billed_total) AS billed_total \
+             FROM traffic_history th \
+             LEFT JOIN device_groups dg ON dg.id = th.group_id \
+             WHERE th.hour_ts >= ? AND th.uid = COALESCE(?, th.uid) \
+               AND th.rule_id = COALESCE(?, th.rule_id) \
+             GROUP BY bucket, th.group_id, group_name ORDER BY bucket, th.group_id"
         };
         Ok(sqlx::query_as(sql)
             .bind(since)

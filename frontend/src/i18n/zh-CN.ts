@@ -523,6 +523,7 @@ export const zhCN = {
   realUpload: '真实上行',
   realDownload: '真实下行',
   noTrafficYet: '该时间段内暂无流量记录(升级面板后开始记录)',
+  otherLines: '其他线路',
 
   // ── v1.2.0: 节点掉线通知 ──
   notifySettings: '通知设置',

@@ -266,9 +266,20 @@ CREATE INDEX IF NOT EXISTS idx_redeem_codes_used_by ON redeem_codes(used_by);
 --
 -- hour_ts is 'YYYY-MM-DD HH:00:00' UTC — the schema-wide TEXT timestamp format
 -- whose lexicographic order is chronological.
+--
+-- `group_id` (v1.2.0) is the rule's inbound device group, stored as a SNAPSHOT
+-- rather than resolved by joining forward_rules at query time. A join would
+-- lose the line attribution the moment a rule is deleted — and this table
+-- deliberately outlives its rules (see the no-FK note above), so "traffic per
+-- line" would silently drop the history of deleted rules. Same reasoning as
+-- orders.plan_name. 0 = unknown.
+--
+-- The primary key does NOT change: a rule belongs to exactly one inbound
+-- group, so (rule_id, hour_ts) stays unique and the row count is unaffected.
 CREATE TABLE IF NOT EXISTS traffic_history (
     rule_id INTEGER NOT NULL,
     uid INTEGER NOT NULL,
+    group_id INTEGER NOT NULL DEFAULT 0,
     hour_ts TEXT NOT NULL,
     real_upload INTEGER NOT NULL DEFAULT 0,
     real_download INTEGER NOT NULL DEFAULT 0,
@@ -277,6 +288,7 @@ CREATE TABLE IF NOT EXISTS traffic_history (
 );
 CREATE INDEX IF NOT EXISTS idx_traffic_history_uid ON traffic_history(uid, hour_ts);
 CREATE INDEX IF NOT EXISTS idx_traffic_history_hour ON traffic_history(hour_ts);
+CREATE INDEX IF NOT EXISTS idx_traffic_history_group ON traffic_history(group_id, hour_ts);
 
 -- v1.0.9: plan ↔ device_group grant map. Buying a plan (with grant_all_groups=0)
 -- REPLACES the user's user_device_groups with these groups (v1.0.8: purchase is
@@ -1517,6 +1529,42 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
         sqlx::query(idx).execute(pool).await?;
     }
     tracing::info!("Migration 40: traffic_history table present");
+
+    // ── Migration 41: v1.2.0 traffic_history.group_id (traffic per line) ──
+    // See SCHEMA_SQL for why the group is stored as a snapshot rather than
+    // joined at query time.
+    add_column_if_missing(
+        pool,
+        "traffic_history",
+        "group_id",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_traffic_history_group \
+         ON traffic_history(group_id, hour_ts)",
+    )
+    .execute(pool)
+    .await?;
+    // Backfill rows written before this column existed. Their rule usually
+    // still exists, so the attribution is recoverable — without this, every
+    // pre-upgrade hour would show up as "unknown line" on the chart. Rows whose
+    // rule is already gone keep 0; that history is unattributable by
+    // construction and inventing a group for it would be a lie.
+    let backfilled = sqlx::query(
+        "UPDATE traffic_history SET group_id = ( \
+             SELECT fr.device_group_in FROM forward_rules fr \
+             WHERE fr.id = traffic_history.rule_id) \
+         WHERE group_id = 0 \
+           AND EXISTS (SELECT 1 FROM forward_rules fr WHERE fr.id = traffic_history.rule_id)",
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+    tracing::info!(
+        "Migration 41: traffic_history.group_id present ({} row(s) backfilled)",
+        backfilled
+    );
 
     Ok(())
 }

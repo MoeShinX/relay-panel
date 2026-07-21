@@ -12,6 +12,29 @@ independent `v*` / `node-v*` tracks since this release).
 
 ### Added
 
+- **Traffic is charted per LINE, stacked by inbound device group.** The chart
+  answered "how much" but not "through which line" — with several lines at
+  different billing rates, one total column can't tell you which one is burning
+  the quota. Each bar now stacks one segment per line, with a legend.
+
+  - **The line is stored as a SNAPSHOT on each history row, not joined at query
+    time.** This table deliberately outlives its rules, so a join would drop the
+    history of any deleted rule and "last 7 days" would quietly shrink. Same
+    reasoning as `orders.plan_name`. A deleted line keeps its history under
+    `#id` instead of vanishing.
+  - **Row count is unchanged**: a rule belongs to exactly one inbound group, so
+    the `(rule_id, hour_ts)` key still holds.
+  - Existing history is **backfilled** from each rule's current group, so
+    pre-upgrade hours don't all render as "unknown". Rows whose rule is already
+    gone keep 0 — that attribution is unrecoverable, and inventing one would be
+    a lie.
+  - **Colors are a validated categorical palette**, fixed slot order so a line
+    keeps its color when another is filtered out. Red is excluded (reserved for
+    status, and it failed the adjacent-pair check against orange at ΔE 7.1 for
+    normal vision); violet is excluded because it collides with the panel's
+    indigo accent. Past 6 lines the tail folds into "Other" ranked BY VOLUME —
+    a generated 7th hue would be indistinguishable under CVD.
+
 - **Traffic history (24h / 7d / 30d).** `forward_rules.traffic_used` was a running
   total with no time dimension, so nobody could answer "how much did I use this
   week" or "which rule suddenly burned 500 GB last night" — the two questions
@@ -106,11 +129,16 @@ independent `v*` / `node-v*` tracks since this release).
 
 ### Schema
 
-- SQLite Migrations **39-40**, PG revisions **22-23** (`PG_SCHEMA_VERSION` 21 → 23):
-  the `redeem_codes` and `traffic_history` tables.
+- SQLite Migrations **39-41**, PG revisions **22-24** (`PG_SCHEMA_VERSION` 21 → 24):
+  the `redeem_codes` and `traffic_history` tables, plus
+  `traffic_history.group_id` (backfilled).
 
 ### Fixed
 
+- **The traffic chart no longer appears twice for admins.** It was on both the
+  dashboard (fleet-wide) and the account page (personal); an admin's "personal"
+  traffic is a near-meaningless number, so the duplicate card was just noise.
+  Regular users keep it on their account page — that is their only view.
 - **The connection cap is no longer offered on UDP-only rules.** It is enforced
   at `accept()`, which UDP doesn't have, so the panel would store the number and
   ship it to the node where nothing reads it. The field is now disabled for a
