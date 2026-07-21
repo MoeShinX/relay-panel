@@ -682,6 +682,42 @@ pub trait TrafficRepository: Send + Sync {
         group_id: i64,
         entries: &[TrafficEntry],
     ) -> Result<Vec<TrafficEntryResult>, DbError>;
+
+    // ── v1.2.0: hourly traffic history ──
+
+    /// Aggregated history buckets, oldest first.
+    ///
+    /// `since` is an inclusive 'YYYY-MM-DD HH:00:00' UTC lower bound. `daily`
+    /// collapses hour rows into per-day buckets ('YYYY-MM-DD') — a 30-day
+    /// hourly series is 720 points of noise, so 7d/30d views aggregate by day.
+    ///
+    /// `uid = None` means all users (admin); `rule_id = None` means all rules.
+    /// The API layer is responsible for forcing `uid = Some(caller)` on
+    /// non-admins — this layer trusts its arguments.
+    async fn query_traffic_history(
+        &self,
+        uid: Option<i64>,
+        rule_id: Option<i64>,
+        since: &str,
+        daily: bool,
+    ) -> Result<Vec<TrafficHistoryBucket>, DbError>;
+
+    /// Delete rows with `hour_ts < cutoff`. Returns rows deleted. Called by
+    /// the retention sweeper; the table has no FK so this is the ONLY way rows
+    /// die.
+    async fn prune_traffic_history(&self, cutoff: &str) -> Result<u64, DbError>;
+}
+
+/// One point of the traffic-history series.
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow, serde::Serialize)]
+pub struct TrafficHistoryBucket {
+    /// 'YYYY-MM-DD HH:00:00' (hourly) or 'YYYY-MM-DD' (daily), UTC.
+    pub bucket: String,
+    pub real_upload: i64,
+    pub real_download: i64,
+    /// What was actually charged against quota in this bucket — the chart's
+    /// primary series, so it can never disagree with the quota numbers.
+    pub billed_total: i64,
 }
 
 // ── KVS (generic key-value) ──

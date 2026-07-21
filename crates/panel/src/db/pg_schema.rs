@@ -198,6 +198,21 @@ CREATE INDEX IF NOT EXISTS idx_redeem_codes_status ON redeem_codes(status);
 CREATE INDEX IF NOT EXISTS idx_redeem_codes_batch ON redeem_codes(batch_id);
 CREATE INDEX IF NOT EXISTS idx_redeem_codes_used_by ON redeem_codes(used_by);
 
+-- v1.2.0: hourly traffic history (mirrors the SQLite baseline — see the
+-- comment there for why one row per (rule, hour), why billed_total reuses the
+-- exact charged number, and why there is deliberately NO FK).
+CREATE TABLE IF NOT EXISTS traffic_history (
+    rule_id BIGINT NOT NULL,
+    uid BIGINT NOT NULL,
+    hour_ts TEXT NOT NULL,
+    real_upload BIGINT NOT NULL DEFAULT 0,
+    real_download BIGINT NOT NULL DEFAULT 0,
+    billed_total BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (rule_id, hour_ts)
+);
+CREATE INDEX IF NOT EXISTS idx_traffic_history_uid ON traffic_history(uid, hour_ts);
+CREATE INDEX IF NOT EXISTS idx_traffic_history_hour ON traffic_history(hour_ts);
+
 -- v1.0.9: plan ↔ device_group grant map (mirrors SQLite baseline + Migration 35).
 CREATE TABLE IF NOT EXISTS plan_device_groups (
     plan_id BIGINT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
@@ -304,7 +319,7 @@ INSERT INTO schema_version (version) VALUES (1) ON CONFLICT (version) DO NOTHING
 /// The schema revision this build's baseline `PG_SCHEMA_SQL` represents. When a
 /// future release adds a column/table, bump this and add a matching arm in
 /// `run_pg_migrations`. `apply_pg_schema` seeds `schema_version` with revision 1.
-pub const PG_SCHEMA_VERSION: i32 = 22;
+pub const PG_SCHEMA_VERSION: i32 = 23;
 
 /// Apply PG_SCHEMA_SQL to a pool. PostgreSQL's prepared-statement protocol
 /// rejects multi-statement strings ("cannot insert multiple commands into a
@@ -1166,6 +1181,35 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
         tracing::info!("PG migration 22: redeem_codes table present");
+    }
+
+    if current < 23 {
+        // v1.2.0: hourly traffic history. See the baseline comment.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS traffic_history (
+                rule_id BIGINT NOT NULL,
+                uid BIGINT NOT NULL,
+                hour_ts TEXT NOT NULL,
+                real_upload BIGINT NOT NULL DEFAULT 0,
+                real_download BIGINT NOT NULL DEFAULT 0,
+                billed_total BIGINT NOT NULL DEFAULT 0,
+                PRIMARY KEY (rule_id, hour_ts)
+            )",
+        )
+        .execute(pool)
+        .await?;
+        for idx in [
+            "CREATE INDEX IF NOT EXISTS idx_traffic_history_uid ON traffic_history(uid, hour_ts)",
+            "CREATE INDEX IF NOT EXISTS idx_traffic_history_hour ON traffic_history(hour_ts)",
+        ] {
+            sqlx::query(idx).execute(pool).await?;
+        }
+        sqlx::query(
+            "INSERT INTO schema_version (version) VALUES (23) ON CONFLICT (version) DO NOTHING",
+        )
+        .execute(pool)
+        .await?;
+        tracing::info!("PG migration 23: traffic_history table present");
     }
 
     Ok(())

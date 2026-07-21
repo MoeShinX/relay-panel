@@ -151,6 +151,9 @@ impl TrafficRepository for PgRepository {
 
         // ── Pass 3: apply writes (one UPDATE per distinct rule + its user).
         // v1.0.8: forward_rules += REAL bytes; users += BILLED bytes. ──
+        // v1.2.0: one hour bucket for the whole batch (see the SQLite impl for
+        // why history accumulates per (rule, hour) rather than per report).
+        let hour_ts = chrono::Utc::now().format("%Y-%m-%d %H:00:00").to_string();
         for r in &resolved {
             let up = r.delta_up as i64;
             let down = r.delta_down as i64;
@@ -167,9 +170,72 @@ impl TrafficRepository for PgRepository {
                 .bind(r.uid)
                 .execute(&mut *tx)
                 .await?;
+            // v1.2.0: same billed_delta as the user charge above, in the same
+            // tx — the history chart can never disagree with the quota.
+            sqlx::query(
+                "INSERT INTO traffic_history \
+                   (rule_id, uid, hour_ts, real_upload, real_download, billed_total) \
+                 VALUES ($1, $2, $3, $4, $5, $6) \
+                 ON CONFLICT (rule_id, hour_ts) DO UPDATE SET \
+                   real_upload = traffic_history.real_upload + EXCLUDED.real_upload, \
+                   real_download = traffic_history.real_download + EXCLUDED.real_download, \
+                   billed_total = traffic_history.billed_total + EXCLUDED.billed_total",
+            )
+            .bind(r.rule_id)
+            .bind(r.uid)
+            .bind(&hour_ts)
+            .bind(up)
+            .bind(down)
+            .bind(r.billed_delta)
+            .execute(&mut *tx)
+            .await?;
         }
 
         tx.commit().await?;
         Ok(vec![TrafficEntryResult::Ok])
+    }
+
+    async fn query_traffic_history(
+        &self,
+        uid: Option<i64>,
+        rule_id: Option<i64>,
+        since: &str,
+        daily: bool,
+    ) -> Result<Vec<TrafficHistoryBucket>, DbError> {
+        // SUM(bigint) is NUMERIC in PG — cast back to BIGINT or sqlx can't
+        // decode into the i64 fields of TrafficHistoryBucket.
+        let sql = if daily {
+            "SELECT substr(hour_ts, 1, 10) AS bucket, \
+                    SUM(real_upload)::BIGINT AS real_upload, \
+                    SUM(real_download)::BIGINT AS real_download, \
+                    SUM(billed_total)::BIGINT AS billed_total \
+             FROM traffic_history \
+             WHERE hour_ts >= $1 AND uid = COALESCE($2, uid) AND rule_id = COALESCE($3, rule_id) \
+             GROUP BY bucket ORDER BY bucket"
+        } else {
+            "SELECT hour_ts AS bucket, \
+                    SUM(real_upload)::BIGINT AS real_upload, \
+                    SUM(real_download)::BIGINT AS real_download, \
+                    SUM(billed_total)::BIGINT AS billed_total \
+             FROM traffic_history \
+             WHERE hour_ts >= $1 AND uid = COALESCE($2, uid) AND rule_id = COALESCE($3, rule_id) \
+             GROUP BY bucket ORDER BY bucket"
+        };
+        Ok(sqlx::query_as(sql)
+            .bind(since)
+            .bind(uid)
+            .bind(rule_id)
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
+    async fn prune_traffic_history(&self, cutoff: &str) -> Result<u64, DbError> {
+        Ok(
+            sqlx::query("DELETE FROM traffic_history WHERE hour_ts < $1")
+                .bind(cutoff)
+                .execute(&self.pool)
+                .await?
+                .rows_affected(),
+        )
     }
 }

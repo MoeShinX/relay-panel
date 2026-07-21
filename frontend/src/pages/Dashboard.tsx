@@ -9,6 +9,7 @@ import api from '../api/client';
 import type { ApiEnvelope, User, ForwardRule, DeviceGroup, NodeStatus } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { aggregateNodesByGroup } from '../components/nodes/aggregate';
+import TrafficChart from '../components/TrafficChart';
 import { formatBps, formatBytes } from '../utils/format';
 
 const { Text } = Typography;
@@ -39,6 +40,8 @@ export default function Dashboard() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const [stats, setStats] = useState({ users: 0, rules: 0, groups: 0 });
+  // v1.2.0: kept whole (not just the count) for the traffic chart's drill-down.
+  const [ruleList, setRuleList] = useState<ForwardRule[]>([]);
   const [nodes, setNodes] = useState<NodeStatus[]>([]);
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [showChangelog, setShowChangelog] = useState(false);
@@ -56,6 +59,7 @@ export default function Dashboard() {
         rules: rules.data?.length || 0,
         groups: groups.data?.length || 0,
       });
+      setRuleList(rules.data || []);
     } catch { /* ignore */ }
 
     try {
@@ -268,6 +272,9 @@ export default function Dashboard() {
           <Card className="rp-stat-card"><Statistic title={t('deviceGroups')} value={stats.groups} prefix={<CloudServerOutlined style={{ color: 'var(--rp-primary)' }} />} /></Card>
         </Col>
       </Row>
+
+      {/* v1.2.0: fleet-wide traffic trend, with per-rule drill-down. */}
+      <TrafficChart rules={ruleList.map(r => ({ id: r.id, name: r.name }))} />
 
       <Card title={t('nodeStatus')} extra={<Text type="secondary" style={{ fontSize: 12 }}>{t('autoRefresh10s')}</Text>}>
         {groups.length === 0

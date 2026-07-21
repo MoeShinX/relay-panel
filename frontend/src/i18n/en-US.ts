@@ -514,6 +514,17 @@ export const enUS: Dict = {
   batchPartial: '{ok} succeeded, {fail} failed (unauthorized lines can\'t be resumed)',
   selectedCount: '{count} selected',
 
+  // ── v1.2.0: traffic history ──
+  trafficHistory: 'Traffic',
+  range1d: '24 hours',
+  range7d: '7 days',
+  range30d: '30 days',
+  allRules: 'All rules',
+  billedTraffic: 'Billed traffic',
+  realUpload: 'Real upload',
+  realDownload: 'Real download',
+  noTrafficYet: 'No traffic recorded in this window (recording starts after the panel upgrade)',
+
   // ── v1.2.0: node offline notifications ──
   notifySettings: 'Notifications',
   notifyIntro: 'Node offline alerts',

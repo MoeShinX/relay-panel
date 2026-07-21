@@ -8,6 +8,7 @@ import { useI18n } from '../i18n/context';
 import { formatBytes } from '../utils/format';
 import { makePasswordValidator } from '../utils/password';
 import { useAuth } from '../auth/useAuth';
+import TrafficChart from '../components/TrafficChart';
 
 const { Text } = Typography;
 
@@ -211,6 +212,10 @@ export default function Account() {
           </Descriptions.Item>
         </Descriptions>
       </Card>
+
+      {/* v1.2.0: the user's own traffic trend. No rule filter here — the API
+          pins non-admins to their own uid, so the total IS their usage. */}
+      <TrafficChart />
 
       <Modal
         title={t('changePassword')}

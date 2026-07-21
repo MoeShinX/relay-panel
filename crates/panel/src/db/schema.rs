@@ -250,6 +250,34 @@ CREATE INDEX IF NOT EXISTS idx_redeem_codes_status ON redeem_codes(status);
 CREATE INDEX IF NOT EXISTS idx_redeem_codes_batch ON redeem_codes(batch_id);
 CREATE INDEX IF NOT EXISTS idx_redeem_codes_used_by ON redeem_codes(used_by);
 
+-- v1.2.0: hourly traffic history, written by apply_traffic_batch as an UPSERT
+-- accumulate. Nodes report every ~10s (poll-frequency), so inserting a row per
+-- report would explode; one row per (rule, hour) keeps 100 rules × 35 days at
+-- ~84k rows.
+--
+-- `billed_total` is the SAME number charged to the user in that batch
+-- (round((up+down) × group rate)), accumulated — so the history chart and the
+-- quota deduction can never disagree. real_upload/real_download stay unrated
+-- for the tooltip.
+--
+-- DELIBERATELY no FK on rule_id/uid: deleting a rule (or a user) must not
+-- erase the usage that already happened — a cascade would make "last 7 days"
+-- quietly shrink. Rows die by retention (35 days), not by parent deletion.
+--
+-- hour_ts is 'YYYY-MM-DD HH:00:00' UTC — the schema-wide TEXT timestamp format
+-- whose lexicographic order is chronological.
+CREATE TABLE IF NOT EXISTS traffic_history (
+    rule_id INTEGER NOT NULL,
+    uid INTEGER NOT NULL,
+    hour_ts TEXT NOT NULL,
+    real_upload INTEGER NOT NULL DEFAULT 0,
+    real_download INTEGER NOT NULL DEFAULT 0,
+    billed_total INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (rule_id, hour_ts)
+);
+CREATE INDEX IF NOT EXISTS idx_traffic_history_uid ON traffic_history(uid, hour_ts);
+CREATE INDEX IF NOT EXISTS idx_traffic_history_hour ON traffic_history(hour_ts);
+
 -- v1.0.9: plan ↔ device_group grant map. Buying a plan (with grant_all_groups=0)
 -- REPLACES the user's user_device_groups with these groups (v1.0.8: purchase is
 -- replace, not append — the plan's grant becomes the user's whole authorized
@@ -1465,6 +1493,30 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
         sqlx::query(idx).execute(pool).await?;
     }
     tracing::info!("Migration 39: redeem_codes table present");
+
+    // ── Migration 40: v1.2.0 hourly traffic history ──
+    // See the SCHEMA_SQL comment for why there is no FK and why one row per
+    // (rule, hour).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS traffic_history (
+            rule_id INTEGER NOT NULL,
+            uid INTEGER NOT NULL,
+            hour_ts TEXT NOT NULL,
+            real_upload INTEGER NOT NULL DEFAULT 0,
+            real_download INTEGER NOT NULL DEFAULT 0,
+            billed_total INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (rule_id, hour_ts)
+        )",
+    )
+    .execute(pool)
+    .await?;
+    for idx in [
+        "CREATE INDEX IF NOT EXISTS idx_traffic_history_uid ON traffic_history(uid, hour_ts)",
+        "CREATE INDEX IF NOT EXISTS idx_traffic_history_hour ON traffic_history(hour_ts)",
+    ] {
+        sqlx::query(idx).execute(pool).await?;
+    }
+    tracing::info!("Migration 40: traffic_history table present");
 
     Ok(())
 }

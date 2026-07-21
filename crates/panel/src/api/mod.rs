@@ -216,6 +216,12 @@ pub fn routes() -> Router<AppState> {
         )
         // Stats & monitoring
         .route("/stats", axum::routing::get(stats::get_stats))
+        // v1.2.0: traffic-history chart data. Owner-scoped inside the handler
+        // (non-admins are pinned to their own uid), so it is NOT admin-gated.
+        .route(
+            "/stats/traffic",
+            axum::routing::get(stats::get_traffic_history),
+        )
         // v0.4.10: node status is owner-scoped (a user sees only nodes for
         // groups they own). Renamed /node_status → /nodes.
         .route("/nodes", axum::routing::get(stats::get_node_status))

@@ -184,6 +184,13 @@ impl TrafficRepository for SqliteRepository {
         // trips + no double-counting).
         // v1.0.8: forward_rules += REAL bytes (up+down); users += BILLED bytes
         // (billed_delta = round((up+down) * rate)). ──
+        // v1.2.0: one hour bucket for the whole batch. Nodes report every ~10s,
+        // so history MUST accumulate into (rule, hour) rows — an insert per
+        // report would be ~8.6k rows/rule/day. Computed once so every rule in
+        // the batch lands in the same bucket even across an hour rollover
+        // mid-loop.
+        let hour_ts = chrono::Utc::now().format("%Y-%m-%d %H:00:00").to_string();
+
         for r in &resolved {
             let up = r.delta_up as i64;
             let down = r.delta_down as i64;
@@ -200,9 +207,73 @@ impl TrafficRepository for SqliteRepository {
                 .bind(r.uid)
                 .execute(&mut *tx)
                 .await?;
+            // v1.2.0: history accumulates the SAME billed_delta charged to the
+            // user above — inside the same tx, so the chart and the quota can
+            // never disagree, not even by a crashed half-batch.
+            sqlx::query(
+                "INSERT INTO traffic_history \
+                   (rule_id, uid, hour_ts, real_upload, real_download, billed_total) \
+                 VALUES (?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT(rule_id, hour_ts) DO UPDATE SET \
+                   real_upload = real_upload + excluded.real_upload, \
+                   real_download = real_download + excluded.real_download, \
+                   billed_total = billed_total + excluded.billed_total",
+            )
+            .bind(r.rule_id)
+            .bind(r.uid)
+            .bind(&hour_ts)
+            .bind(up)
+            .bind(down)
+            .bind(r.billed_delta)
+            .execute(&mut *tx)
+            .await?;
         }
 
         tx.commit().await?;
         Ok(vec![TrafficEntryResult::Ok])
+    }
+
+    async fn query_traffic_history(
+        &self,
+        uid: Option<i64>,
+        rule_id: Option<i64>,
+        since: &str,
+        daily: bool,
+    ) -> Result<Vec<TrafficHistoryBucket>, DbError> {
+        // Two statements rather than a parameterised bucket expression — the
+        // GROUP BY column can't be a bind parameter. COALESCE folds the two
+        // optional filters into one prepared statement each (the statistics
+        // query's trick).
+        let sql = if daily {
+            "SELECT substr(hour_ts, 1, 10) AS bucket, \
+                    SUM(real_upload) AS real_upload, \
+                    SUM(real_download) AS real_download, \
+                    SUM(billed_total) AS billed_total \
+             FROM traffic_history \
+             WHERE hour_ts >= ? AND uid = COALESCE(?, uid) AND rule_id = COALESCE(?, rule_id) \
+             GROUP BY bucket ORDER BY bucket"
+        } else {
+            "SELECT hour_ts AS bucket, \
+                    SUM(real_upload) AS real_upload, \
+                    SUM(real_download) AS real_download, \
+                    SUM(billed_total) AS billed_total \
+             FROM traffic_history \
+             WHERE hour_ts >= ? AND uid = COALESCE(?, uid) AND rule_id = COALESCE(?, rule_id) \
+             GROUP BY bucket ORDER BY bucket"
+        };
+        Ok(sqlx::query_as(sql)
+            .bind(since)
+            .bind(uid)
+            .bind(rule_id)
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
+    async fn prune_traffic_history(&self, cutoff: &str) -> Result<u64, DbError> {
+        Ok(sqlx::query("DELETE FROM traffic_history WHERE hour_ts < ?")
+            .bind(cutoff)
+            .execute(&self.pool)
+            .await?
+            .rows_affected())
     }
 }

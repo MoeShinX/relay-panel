@@ -4627,3 +4627,204 @@ async fn pg_list_and_count_filter_by_status() {
     assert_eq!(db.count_redeem_codes(&unused).await.unwrap(), 1);
     cleanup(&db).await;
 }
+
+// ── v1.2.0: traffic history (PG twins) ──
+//
+// The write path differs on both backends (SQLite ON CONFLICT excluded.x vs
+// PG's table-qualified EXCLUDED, NUMERIC SUM vs INTEGER SUM), so the agreement
+// invariant has to hold on each independently.
+
+/// PG twin of the SQLite fixture. Returns uid.
+async fn pg_seed_history_fixture(
+    db: &PgRepository,
+    username: &str,
+    group_id: i64,
+    rule_id: i64,
+    rate: f64,
+) -> i64 {
+    db.insert_user(username, "h", 1).await.unwrap();
+    let uid = db.find_by_username(username).await.unwrap().unwrap().id;
+    sqlx::query(
+        "INSERT INTO device_groups (id, name, group_type, token, uid, rate) \
+         VALUES ($1, 'gin', 'in', $2, $3, $4)",
+    )
+    .bind(group_id)
+    .bind(format!("tok-{group_id}"))
+    .bind(uid)
+    .bind(rate)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO forward_rules \
+         (id, name, uid, listen_port, device_group_in, target_addr, target_port) \
+         VALUES ($1, $2, $3, 20000, $4, '127.0.0.1', 80)",
+    )
+    .bind(rule_id)
+    .bind(format!("r{rule_id}"))
+    .bind(uid)
+    .bind(group_id)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    uid
+}
+
+#[tokio::test]
+async fn pg_traffic_history_agrees_with_quota_charge() {
+    let Some(db) = repo("th_agree").await else {
+        return;
+    };
+    let uid = pg_seed_history_fixture(&db, "hist_a", 60, 200, 3.0).await;
+
+    let res = db
+        .apply_traffic_batch(
+            60,
+            &[relay_shared::protocol::TrafficEntry {
+                rule_id: 200,
+                upload: 1000,
+                download: 2000,
+            }],
+        )
+        .await
+        .unwrap();
+    assert!(matches!(res[0], TrafficEntryResult::Ok));
+
+    let user_used: i64 = sqlx::query_scalar("SELECT traffic_used FROM users WHERE id = $1")
+        .bind(uid)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let (h_up, h_down, h_billed): (i64, i64, i64) = sqlx::query_as(
+        "SELECT COALESCE(SUM(real_upload),0)::BIGINT, COALESCE(SUM(real_download),0)::BIGINT, \
+                COALESCE(SUM(billed_total),0)::BIGINT \
+         FROM traffic_history WHERE rule_id = 200",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+
+    assert_eq!(user_used, 9000, "user is billed real × rate");
+    assert_eq!(h_billed, user_used, "history MUST equal the quota charge");
+    assert_eq!((h_up, h_down), (1000, 2000), "real bytes stay unrated");
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_traffic_history_upserts_within_the_hour() {
+    let Some(db) = repo("th_upsert").await else {
+        return;
+    };
+    pg_seed_history_fixture(&db, "hist_b", 61, 201, 1.0).await;
+
+    for _ in 0..3 {
+        db.apply_traffic_batch(
+            61,
+            &[relay_shared::protocol::TrafficEntry {
+                rule_id: 201,
+                upload: 100,
+                download: 0,
+            }],
+        )
+        .await
+        .unwrap();
+    }
+
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM traffic_history WHERE rule_id = 201")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let total: i64 = sqlx::query_scalar(
+        "SELECT SUM(real_upload)::BIGINT FROM traffic_history WHERE rule_id = 201",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert!(
+        rows <= 2,
+        "3 batches must fold into hour buckets, got {rows}"
+    );
+    assert_eq!(total, 300, "accumulation must not lose bytes");
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_traffic_history_query_scopes_and_aggregates() {
+    let Some(db) = repo("th_scope").await else {
+        return;
+    };
+    let alice = pg_seed_history_fixture(&db, "hist_c", 62, 202, 1.0).await;
+    let bob = pg_seed_history_fixture(&db, "hist_d", 63, 203, 1.0).await;
+
+    for (uid, rule, hour, up) in [
+        (alice, 202i64, "2026-07-20 10:00:00", 100i64),
+        (alice, 202, "2026-07-20 11:00:00", 200),
+        (bob, 203, "2026-07-20 10:00:00", 999),
+    ] {
+        sqlx::query(
+            "INSERT INTO traffic_history (rule_id, uid, hour_ts, real_upload, real_download, billed_total) \
+             VALUES ($1, $2, $3, $4, 0, $5)",
+        )
+        .bind(rule)
+        .bind(uid)
+        .bind(hour)
+        .bind(up)
+        .bind(up)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    let daily = db
+        .query_traffic_history(Some(alice), None, "2026-07-01 00:00:00", true)
+        .await
+        .unwrap();
+    assert_eq!(daily.len(), 1, "two hours of one day fold into one bucket");
+    assert_eq!(daily[0].bucket, "2026-07-20");
+    assert_eq!(daily[0].real_upload, 300, "alice's hours summed");
+
+    let hourly = db
+        .query_traffic_history(Some(alice), None, "2026-07-01 00:00:00", false)
+        .await
+        .unwrap();
+    assert_eq!(hourly.len(), 2);
+
+    let all = db
+        .query_traffic_history(None, None, "2026-07-01 00:00:00", true)
+        .await
+        .unwrap();
+    assert_eq!(all[0].real_upload, 300 + 999, "admin sees everyone");
+
+    let foreign = db
+        .query_traffic_history(Some(alice), Some(203), "2026-07-01 00:00:00", true)
+        .await
+        .unwrap();
+    assert!(foreign.is_empty(), "a foreign rule matches nothing");
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_traffic_history_prune_respects_cutoff() {
+    let Some(db) = repo("th_prune").await else {
+        return;
+    };
+    let uid = pg_seed_history_fixture(&db, "hist_e", 64, 204, 1.0).await;
+    for hour in ["2026-05-01 00:00:00", "2026-07-20 00:00:00"] {
+        sqlx::query(
+            "INSERT INTO traffic_history (rule_id, uid, hour_ts, real_upload, real_download, billed_total) \
+             VALUES (204, $1, $2, 1, 1, 1)",
+        )
+        .bind(uid)
+        .bind(hour)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    let deleted = db
+        .prune_traffic_history("2026-06-15 00:00:00")
+        .await
+        .unwrap();
+    assert_eq!(deleted, 1, "only the pre-cutoff row dies");
+    cleanup(&db).await;
+}
