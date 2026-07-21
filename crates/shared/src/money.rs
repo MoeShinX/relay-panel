@@ -31,6 +31,15 @@ pub const MAX_BALANCE: &str = "9999999999.99";
 /// Total length of `MAX_BALANCE` (used for length checks before parsing).
 const MAX_LEN: usize = 14;
 
+/// v1.2.0: `MAX_BALANCE` expressed in integer cents (999 999 999 999).
+///
+/// Deduction (buy_plan) never needed a ceiling — subtracting only moves a valid
+/// balance toward zero. Top-up (redeeming a code) ADDS, so it can push a
+/// balance past the maximum and persist a value that `parse_balance` would then
+/// reject on the next admin edit — a balance the panel can no longer write.
+/// Redemption checks this and refuses rather than storing an out-of-range value.
+pub const MAX_BALANCE_CENTS: i64 = 999_999_999_999;
+
 /// Validate a balance string and return the canonical (trimmed, two-decimal)
 /// form, or an error describing why the input was rejected.
 ///

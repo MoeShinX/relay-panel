@@ -39,6 +39,34 @@ export default function Account() {
   const [pwForm] = Form.useForm();
   const [pwSubmitting, setPwSubmitting] = useState(false);
 
+  // v1.2.0: redeem-code top-up.
+  const [redeemOpen, setRedeemOpen] = useState(false);
+  const [redeemForm] = Form.useForm();
+  const [redeeming, setRedeeming] = useState(false);
+
+  const handleRedeem = async (values: { code: string }) => {
+    setRedeeming(true);
+    try {
+      const res = await api.post<unknown, ApiEnvelope<{ amount: string; balance: string }>>(
+        '/user/redeem',
+        { code: values.code },
+      );
+      if (res.code !== 0) { message.error(res.message); return; }
+      message.success(
+        t('redeemSuccess')
+          .replace('{amount}', res.data?.amount ?? '')
+          .replace('{balance}', res.data?.balance ?? ''),
+      );
+      setRedeemOpen(false);
+      redeemForm.resetFields();
+      load(); // refresh the balance shown above
+    } catch {
+      message.error(t('redeemFailed'));
+    } finally {
+      setRedeeming(false);
+    }
+  };
+
   const load = async () => {
     setLoading(true);
     setLoadFailed(false);
@@ -146,7 +174,19 @@ export default function Account() {
             )}
           </Descriptions.Item>
           <Descriptions.Item label={t('accountBalance')}>
-            <span className="rp-mono">{me.balance}</span>
+            <Space wrap>
+              <span className="rp-mono">{me.balance}</span>
+              {/* v1.2.0: self-service top-up. It lives on the balance row
+                  because that is exactly where a user looks when they find
+                  they can't afford a plan. */}
+              <Button
+                size="small"
+                type="link"
+                onClick={() => { redeemForm.resetFields(); setRedeemOpen(true); }}
+              >
+                {t('redeem')}
+              </Button>
+            </Space>
           </Descriptions.Item>
           <Descriptions.Item label={t('accountRulesLimit')}>
             {me.current_rules} / {me.max_rules}
@@ -216,6 +256,31 @@ export default function Account() {
             ]}
           >
             <Input.Password autoComplete="new-password" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* v1.2.0: redeem a top-up code. The backend normalizes input (case,
+          dashes, whitespace, O/0 and I/L/1 confusions), so the field is
+          deliberately permissive — no client-side format policing that would
+          reject a code the server would have accepted. */}
+      <Modal
+        title={t('redeem')}
+        open={redeemOpen}
+        onCancel={() => setRedeemOpen(false)}
+        onOk={() => redeemForm.submit()}
+        okText={t('redeemConfirm')}
+        cancelText={t('cancel')}
+        confirmLoading={redeeming}
+      >
+        <Form form={redeemForm} onFinish={handleRedeem} layout="vertical">
+          <Form.Item
+            name="code"
+            label={t('redeemCode')}
+            extra={t('redeemCodeHint')}
+            rules={[{ required: true, message: t('redeemCodeRequired') }]}
+          >
+            <Input placeholder="XXXX-XXXX-XXXX-XXXX" autoComplete="off" />
           </Form.Item>
         </Form>
       </Modal>

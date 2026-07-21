@@ -11,6 +11,7 @@ pub mod geoip;
 pub mod groups;
 pub mod middleware;
 pub mod node;
+pub mod redeem;
 pub mod restart;
 pub mod security_headers;
 pub mod stats;
@@ -51,6 +52,10 @@ pub fn routes() -> Router<AppState> {
         // v1.0.8: self-service plan purchase + order history.
         .route("/user/buy-plan", axum::routing::post(admin::buy_plan))
         .route("/user/orders", axum::routing::get(admin::list_my_orders))
+        // v1.2.0: self-service balance top-up. Scoped to the caller's own id
+        // from the token — there is no user_id in the body, so it can never
+        // credit another account.
+        .route("/user/redeem", axum::routing::post(redeem::redeem_code))
         // v1.0.8: public plan list (hidden excluded) for the shop.
         .route("/plans", axum::routing::get(admin::list_public_plans))
         // Admin
@@ -166,6 +171,18 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/admin/tunnel-profiles/{id}",
             axum::routing::put(admin::update_tunnel_profile).delete(admin::delete_tunnel_profile),
+        )
+        // v1.2.0: redeem-code management. Generation returns the codes once in
+        // display form; the list endpoint can always re-read them.
+        .route(
+            "/admin/redeem-codes",
+            axum::routing::get(redeem::list_codes)
+                .post(redeem::create_codes)
+                .delete(redeem::delete_codes),
+        )
+        .route(
+            "/admin/redeem-codes/{id}/void",
+            axum::routing::post(redeem::void_code),
         )
         .route(
             "/admin/plans",

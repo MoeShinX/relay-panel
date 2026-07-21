@@ -826,6 +826,61 @@ pub trait PlanRepository: Send + Sync {
     ) -> Result<(), BuyPlanError>;
 }
 
+/// v1.2.0: redeem codes (balance top-up). Its own trait rather than more
+/// methods on `PlanRepository` — a code isn't a plan, and the existing repo
+/// layer is already split by concern.
+#[async_trait]
+pub trait RedeemRepository: Send + Sync {
+    /// Insert a generated batch in ONE transaction. Returns how many rows
+    /// landed. A duplicate `code` (astronomically unlikely, but possible) is
+    /// skipped rather than failing the whole batch — an admin asking for 100
+    /// codes would rather get 99 than an error.
+    async fn create_redeem_codes(&self, codes: &[NewRedeemCode]) -> Result<u64, DbError>;
+
+    /// Redeem `code` for `user_id`, crediting the balance ATOMICALLY.
+    ///
+    /// The whole thing is one transaction, and the code is claimed with a
+    /// CONDITIONAL update (`WHERE status = 'unused'`) whose affected-row count
+    /// is checked. That combination is what makes a double-redeem impossible:
+    /// two concurrent requests for the same code both try the update, exactly
+    /// one sees `rows_affected == 1`, and the loser's transaction rolls back
+    /// without touching the balance.
+    ///
+    /// `now` is passed in (not read from the clock here) so expiry is evaluated
+    /// against the same instant the caller used, and so tests can pin it.
+    ///
+    /// Returns the credited amount and the user's NEW balance, both canonical
+    /// strings, for the success message.
+    async fn redeem_code(
+        &self,
+        code: &str,
+        user_id: i64,
+        now: &str,
+    ) -> Result<(String, String), RedeemCodeError>;
+
+    /// List codes for the admin UI, newest first.
+    async fn list_redeem_codes(
+        &self,
+        filter: &RedeemCodeFilter,
+    ) -> Result<Vec<relay_shared::models::RedeemCode>, DbError>;
+
+    /// Count codes matching a filter (for pagination + batch summaries).
+    async fn count_redeem_codes(&self, filter: &RedeemCodeFilter) -> Result<i64, DbError>;
+
+    /// Void an UNUSED code so it can never be redeemed. Returns rows affected;
+    /// 0 means it was already used or voided. A used code is never voidable —
+    /// the money already moved, and rewriting that row would falsify the audit
+    /// trail.
+    async fn void_redeem_code(&self, id: i64) -> Result<u64, DbError>;
+
+    /// Delete codes that were never used. Returns rows deleted.
+    ///
+    /// Deliberately refuses to delete `used` rows: they are the record of money
+    /// entering the system. Cleaning up a mis-generated batch is legitimate;
+    /// erasing a redemption is not.
+    async fn delete_unused_redeem_codes(&self, ids: &[i64]) -> Result<u64, DbError>;
+}
+
 /// v1.0.8: errors from the atomic purchase transaction.
 #[derive(Debug)]
 pub enum BuyPlanError {
@@ -839,6 +894,54 @@ impl From<DbError> for BuyPlanError {
     fn from(e: DbError) -> Self {
         BuyPlanError::Database(e)
     }
+}
+
+/// v1.2.0: outcome of redeeming a top-up code.
+#[derive(Debug)]
+pub enum RedeemCodeError {
+    /// No such code, already used, or voided. ONE variant on purpose — see
+    /// `models::RedeemError::NotRedeemable`: distinguishing "doesn't exist"
+    /// from "already used" tells a stranger which guesses were real codes.
+    NotRedeemable,
+    /// Exists and unused, but past `expires_at`.
+    Expired,
+    /// Crediting would exceed `money::MAX_BALANCE_CENTS`.
+    BalanceOverflow,
+    /// DB error. Caller → 500.
+    Database(DbError),
+}
+
+impl From<DbError> for RedeemCodeError {
+    fn from(e: DbError) -> Self {
+        RedeemCodeError::Database(e)
+    }
+}
+
+impl From<sqlx::Error> for RedeemCodeError {
+    fn from(e: sqlx::Error) -> Self {
+        RedeemCodeError::Database(DbError::from(e))
+    }
+}
+
+/// v1.2.0: one code to insert in a generation batch. `code` is the STORED form
+/// (no dashes, upper-case); `amount` is a canonical balance string.
+#[derive(Debug, Clone)]
+pub struct NewRedeemCode {
+    pub code: String,
+    pub amount: String,
+    pub expires_at: Option<String>,
+    pub batch_id: String,
+    pub remark: String,
+}
+
+/// v1.2.0: filter for listing codes in the admin UI.
+#[derive(Debug, Clone, Default)]
+pub struct RedeemCodeFilter {
+    /// "unused" | "used" | "void"; None = all.
+    pub status: Option<String>,
+    pub batch_id: Option<String>,
+    pub limit: i64,
+    pub offset: i64,
 }
 
 impl From<sqlx::Error> for BuyPlanError {
@@ -922,6 +1025,7 @@ pub trait Repository:
     + PlanRepository
     + SettingsRepository
     + OrderRepository
+    + RedeemRepository
     + Send
     + Sync
 {

@@ -123,6 +123,51 @@ pub struct ForwardRule {
 /// cannot drift apart.
 pub const MIN_AUTO_RESTART_MINUTES: i32 = 5;
 
+/// v1.2.0: a balance top-up code.
+///
+/// `amount` is a canonical balance string (see [`crate::money`]), the same
+/// representation as `users.balance`, so redeeming is exact integer-cent
+/// arithmetic with no float anywhere on the money path.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct RedeemCode {
+    pub id: i64,
+    pub code: String,
+    pub amount: String,
+    /// "unused" | "used" | "void".
+    pub status: String,
+    /// Who redeemed it. NULL when unused — or when the redeeming account was
+    /// later deleted (the FK is ON DELETE SET NULL so the money-in record
+    /// survives the account).
+    pub used_by: Option<i64>,
+    pub used_at: Option<String>,
+    /// NULL = never expires. An expired code is refused but KEEPS its 'unused'
+    /// status, so an admin can extend the batch instead of regenerating it.
+    pub expires_at: Option<String>,
+    pub batch_id: String,
+    pub remark: String,
+    pub created_at: String,
+}
+
+/// Max codes one generation request may create. A batch is written in a single
+/// transaction, so this bounds both the request's memory and how long that
+/// transaction holds the write lock.
+pub const MAX_REDEEM_BATCH: i64 = 1000;
+
+/// v1.2.0: why a redemption was refused. Distinct variants because the user-
+/// facing message differs and "wrong code" must NOT be distinguishable from
+/// "someone else's code" — see the API layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedeemError {
+    /// No such code, or it is already used / voided. Deliberately one variant:
+    /// telling a stranger "this code exists but is already used" leaks that the
+    /// code is real, which turns brute-forcing into a two-step oracle.
+    NotRedeemable,
+    /// The code exists and is unused, but past its expiry.
+    Expired,
+    /// Crediting would push the balance past `money::MAX_BALANCE_CENTS`.
+    BalanceOverflow,
+}
+
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct DeviceGroup {
     pub id: i64,

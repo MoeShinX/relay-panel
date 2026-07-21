@@ -92,6 +92,46 @@ export interface ForwardRule {
   created_at: string;
 }
 
+/** v1.2.0: a balance top-up code. `code` arrives in DISPLAY form (dashed);
+ *  the backend stores it without dashes and normalizes user input, so a user
+ *  may type it with or without them, in any case. */
+export interface RedeemCode {
+  id: number;
+  code: string;
+  amount: string;
+  /** "unused" | "used" | "void" */
+  status: string;
+  used_by?: number | null;
+  used_at?: string | null;
+  /** null = never expires */
+  expires_at?: string | null;
+  batch_id: string;
+  remark: string;
+  created_at: string;
+}
+
+export interface ListCodesResponse {
+  items: RedeemCode[];
+  total: number;
+}
+
+export interface CreateCodesResponse {
+  batch_id: string;
+  /** Rows actually created — a duplicate code is skipped, not fatal. */
+  created: number;
+  /** The generated codes, display form, returned once at generation time. */
+  codes: string[];
+}
+
+export interface RedeemResult {
+  amount: string;
+  balance: string;
+}
+
+/** Max codes one generation request may create. Mirrors
+ *  relay_shared::models::MAX_REDEEM_BATCH. */
+export const MAX_REDEEM_BATCH = 1000;
+
 /** v1.2.0: the API's floor for a non-zero auto_restart_minutes. Mirrors
  *  relay_shared::models::MIN_AUTO_RESTART_MINUTES — the backend rejects
  *  anything between 1 and this, so the form must not offer it. */

@@ -10,6 +10,44 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Added
+
+- **Redeem codes (balance top-up).** The shop could already DEDUCT balance
+  (buying a plan) but nothing could ADD any — balance could only be typed in by
+  an admin, so the selling flow was open-loop. An admin now generates batches of
+  codes and a user redeems one to credit their own balance. No payment gateway,
+  merchant account, or compliance work involved; codes can be sold or handed out
+  offline.
+
+  - **Redemption is exactly-once.** The claim is a conditional
+    `UPDATE ... WHERE status = 'unused'` whose affected-row count is checked,
+    inside the same transaction that credits the balance. Two concurrent
+    redemptions of one code both attempt it, exactly one sees 1 row, and the
+    loser rolls back without touching any balance. SQLite relies on writer
+    serialization, PG adds `SELECT ... FOR UPDATE` — the mechanisms differ, so
+    both backends are tested.
+  - **Codes are made to be typed by a human.** Crockford Base32 (`I`, `L`, `O`,
+    `U` excluded) in `XXXX-XXXX-XXXX-XXXX` form, 80 bits of entropy. Input is
+    normalized before lookup: case, dashes, whitespace, and the classic `O`→`0`
+    / `I`,`L`→`1` misreadings all resolve to the same code.
+  - **A failed redemption never says why in a useful way.** "No such code" and
+    "already used" return one identical message — distinguishing them would let
+    a stranger brute-force codes and learn which guesses were real.
+  - **Used codes are permanent.** They cannot be voided or deleted, and deleting
+    the account that redeemed one nulls the reference but keeps the row
+    (`ON DELETE SET NULL`): it is the record of money entering the system, so it
+    outlives the account.
+  - **Expiry is non-destructive.** An expired code is refused but stays
+    `unused`, so an admin can extend a batch instead of regenerating it.
+  - Crediting is refused if it would push a balance past `MAX_BALANCE` —
+    deduction could never overflow, top-up can, and persisting an out-of-range
+    balance would leave a value the panel can no longer write.
+
+### Schema
+
+- SQLite Migration **39**, PG revision **22** (`PG_SCHEMA_VERSION` 21 → 22):
+  the `redeem_codes` table.
+
 ### Fixed
 
 - **The connection cap is no longer offered on UDP-only rules.** It is enforced

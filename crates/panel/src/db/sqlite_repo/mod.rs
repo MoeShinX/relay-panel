@@ -14,6 +14,7 @@ mod groups;
 mod kvs;
 mod orders;
 mod profiles;
+mod redeem;
 mod rules;
 mod settings;
 mod stats;

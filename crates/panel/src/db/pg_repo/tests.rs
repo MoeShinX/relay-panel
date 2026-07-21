@@ -4375,3 +4375,255 @@ async fn pg_rule_list_auto_restart_rules_excludes_off_and_paused() {
     assert_eq!(got[0].2, 10, "the interval is carried");
     cleanup(&db).await;
 }
+
+// ── v1.2.0: redeem codes (PG twins of the SQLite contract tests) ──
+//
+// These matter more than a usual twin pair: SQLite gets its safety from
+// process-wide writer serialization, while PG relies on an explicit
+// SELECT ... FOR UPDATE. The invariant ("a code credits exactly once") is the
+// same, but the mechanism enforcing it is NOT, so it has to be verified on
+// both backends.
+
+async fn pg_seed_user(db: &PgRepository, id: i64) {
+    sqlx::query("INSERT INTO users (id, username, password, admin) VALUES ($1, $2, 'x', FALSE)")
+        .bind(id)
+        .bind(format!("u{id}"))
+        .execute(&db.pool)
+        .await
+        .unwrap();
+}
+
+async fn pg_seed_code(db: &PgRepository, code: &str, amount: &str, expires: Option<&str>) -> i64 {
+    db.create_redeem_codes(&[NewRedeemCode {
+        code: code.into(),
+        amount: amount.into(),
+        expires_at: expires.map(str::to_string),
+        batch_id: "b1".into(),
+        remark: String::new(),
+    }])
+    .await
+    .unwrap();
+    sqlx::query_scalar::<_, i64>("SELECT id FROM redeem_codes WHERE code = $1")
+        .bind(code)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap()
+}
+
+async fn pg_balance_of(db: &PgRepository, uid: i64) -> String {
+    sqlx::query_scalar::<_, String>("SELECT balance FROM users WHERE id = $1")
+        .bind(uid)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn pg_redeem_credits_balance_and_marks_code_used() {
+    let Some(db) = repo("redeem_credit").await else {
+        return;
+    };
+    pg_seed_user(&db, 10).await;
+    pg_seed_code(&db, "AAAA1111BBBB2222", "10.50", None).await;
+
+    let (amount, new_balance) = db
+        .redeem_code("AAAA1111BBBB2222", 10, "2026-01-01 00:00:00")
+        .await
+        .expect("redeem must succeed");
+    assert_eq!(amount, "10.50");
+    assert_eq!(new_balance, "10.50");
+    assert_eq!(pg_balance_of(&db, 10).await, "10.50");
+
+    let (status, used_by): (String, Option<i64>) =
+        sqlx::query_as("SELECT status, used_by FROM redeem_codes WHERE code = 'AAAA1111BBBB2222'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "used");
+    assert_eq!(used_by, Some(10));
+    cleanup(&db).await;
+}
+
+/// THE money test on PG: the FOR UPDATE lock + conditional claim must make a
+/// second redemption impossible, with the balance untouched.
+#[tokio::test]
+async fn pg_redeem_twice_credits_only_once() {
+    let Some(db) = repo("redeem_twice").await else {
+        return;
+    };
+    pg_seed_user(&db, 10).await;
+    pg_seed_user(&db, 11).await;
+    pg_seed_code(&db, "CCCC3333DDDD4444", "25", None).await;
+
+    db.redeem_code("CCCC3333DDDD4444", 10, "2026-01-01 00:00:00")
+        .await
+        .expect("first redeem succeeds");
+
+    for uid in [10, 11] {
+        let err = db
+            .redeem_code("CCCC3333DDDD4444", uid, "2026-01-01 00:00:01")
+            .await
+            .expect_err("a spent code must never credit again");
+        assert!(matches!(err, RedeemCodeError::NotRedeemable), "got {err:?}");
+    }
+    assert_eq!(pg_balance_of(&db, 10).await, "25", "no double credit");
+    assert_eq!(pg_balance_of(&db, 11).await, "0", "loser gets nothing");
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_redeem_expired_is_refused_and_stays_unused() {
+    let Some(db) = repo("redeem_expired").await else {
+        return;
+    };
+    pg_seed_user(&db, 10).await;
+    pg_seed_code(&db, "EEEE5555FFFF6666", "5", Some("2026-01-01 00:00:00")).await;
+
+    let err = db
+        .redeem_code("EEEE5555FFFF6666", 10, "2026-01-02 00:00:00")
+        .await
+        .expect_err("past expiry must be refused");
+    assert!(matches!(err, RedeemCodeError::Expired), "got {err:?}");
+    assert_eq!(pg_balance_of(&db, 10).await, "0");
+
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM redeem_codes WHERE code = 'EEEE5555FFFF6666'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "unused", "expiry must not consume the code");
+
+    db.redeem_code("EEEE5555FFFF6666", 10, "2026-01-01 00:00:00")
+        .await
+        .expect("redeem AT the expiry instant is allowed");
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_redeem_refuses_to_overflow_the_balance_ceiling() {
+    let Some(db) = repo("redeem_overflow").await else {
+        return;
+    };
+    pg_seed_user(&db, 10).await;
+    sqlx::query("UPDATE users SET balance = $1 WHERE id = 10")
+        .bind(relay_shared::money::MAX_BALANCE)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    pg_seed_code(&db, "GGGG7777HHHH8888", "1", None).await;
+
+    let err = db
+        .redeem_code("GGGG7777HHHH8888", 10, "2026-01-01 00:00:00")
+        .await
+        .expect_err("overflow must be refused");
+    assert!(
+        matches!(err, RedeemCodeError::BalanceOverflow),
+        "got {err:?}"
+    );
+    assert_eq!(
+        pg_balance_of(&db, 10).await,
+        relay_shared::money::MAX_BALANCE,
+        "balance unchanged"
+    );
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_void_and_delete_never_touch_a_used_code() {
+    let Some(db) = repo("redeem_void").await else {
+        return;
+    };
+    pg_seed_user(&db, 10).await;
+    let unused_id = pg_seed_code(&db, "JJJJ9999KKKK0000", "1", None).await;
+    let used_id = pg_seed_code(&db, "MMMM2222NNNN3333", "1", None).await;
+    db.redeem_code("MMMM2222NNNN3333", 10, "2026-01-01 00:00:00")
+        .await
+        .unwrap();
+
+    assert_eq!(db.void_redeem_code(unused_id).await.unwrap(), 1);
+    assert_eq!(
+        db.void_redeem_code(used_id).await.unwrap(),
+        0,
+        "a used code must not be voidable"
+    );
+    let err = db
+        .redeem_code("JJJJ9999KKKK0000", 10, "2026-01-01 00:00:00")
+        .await
+        .expect_err("voided code must be refused");
+    assert!(matches!(err, RedeemCodeError::NotRedeemable), "got {err:?}");
+
+    assert_eq!(
+        db.delete_unused_redeem_codes(&[unused_id, used_id])
+            .await
+            .unwrap(),
+        1,
+        "only the non-used row is deletable"
+    );
+    let survivor: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM redeem_codes WHERE status = 'used'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(survivor, 1, "the redemption record survives");
+    cleanup(&db).await;
+}
+
+/// PG's ON DELETE SET NULL must behave like SQLite's: the account goes, the
+/// money-in record stays.
+#[tokio::test]
+async fn pg_deleting_the_redeemer_keeps_the_code_record() {
+    let Some(db) = repo("redeem_del_user").await else {
+        return;
+    };
+    pg_seed_user(&db, 15).await;
+    pg_seed_code(&db, "PPPP4444QQQQ5555", "9.99", None).await;
+    db.redeem_code("PPPP4444QQQQ5555", 15, "2026-01-01 00:00:00")
+        .await
+        .unwrap();
+
+    sqlx::query("DELETE FROM users WHERE id = 15")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    let (status, used_by, amount): (String, Option<i64>, String) = sqlx::query_as(
+        "SELECT status, used_by, amount FROM redeem_codes WHERE code = 'PPPP4444QQQQ5555'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "used");
+    assert_eq!(used_by, None, "FK nulls the reference, not the row");
+    assert_eq!(amount, "9.99");
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_list_and_count_filter_by_status() {
+    let Some(db) = repo("redeem_list").await else {
+        return;
+    };
+    pg_seed_user(&db, 10).await;
+    pg_seed_code(&db, "AAAA0000AAAA0001", "1", None).await;
+    pg_seed_code(&db, "AAAA0000AAAA0002", "1", None).await;
+    db.redeem_code("AAAA0000AAAA0002", 10, "2026-01-01 00:00:00")
+        .await
+        .unwrap();
+
+    let all = RedeemCodeFilter {
+        limit: 50,
+        ..Default::default()
+    };
+    assert_eq!(db.count_redeem_codes(&all).await.unwrap(), 2);
+
+    let unused = RedeemCodeFilter {
+        status: Some("unused".into()),
+        limit: 50,
+        ..Default::default()
+    };
+    let rows = db.list_redeem_codes(&unused).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].code, "AAAA0000AAAA0001");
+    assert_eq!(db.count_redeem_codes(&unused).await.unwrap(), 1);
+    cleanup(&db).await;
+}

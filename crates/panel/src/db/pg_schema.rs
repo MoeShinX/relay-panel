@@ -179,6 +179,25 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
 
+-- v1.2.0: redeem codes (balance top-up). Mirrors the SQLite baseline; see the
+-- table comment there for why used_by is SET NULL (audit trail outlives the
+-- account) and how the conditional-UPDATE redemption stays race-free.
+CREATE TABLE IF NOT EXISTS redeem_codes (
+    id BIGSERIAL PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,
+    amount TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'unused',
+    used_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    used_at TEXT,
+    expires_at TEXT,
+    batch_id TEXT NOT NULL DEFAULT '',
+    remark TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
+);
+CREATE INDEX IF NOT EXISTS idx_redeem_codes_status ON redeem_codes(status);
+CREATE INDEX IF NOT EXISTS idx_redeem_codes_batch ON redeem_codes(batch_id);
+CREATE INDEX IF NOT EXISTS idx_redeem_codes_used_by ON redeem_codes(used_by);
+
 -- v1.0.9: plan ↔ device_group grant map (mirrors SQLite baseline + Migration 35).
 CREATE TABLE IF NOT EXISTS plan_device_groups (
     plan_id BIGINT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
@@ -285,7 +304,7 @@ INSERT INTO schema_version (version) VALUES (1) ON CONFLICT (version) DO NOTHING
 /// The schema revision this build's baseline `PG_SCHEMA_SQL` represents. When a
 /// future release adds a column/table, bump this and add a matching arm in
 /// `run_pg_migrations`. `apply_pg_schema` seeds `schema_version` with revision 1.
-pub const PG_SCHEMA_VERSION: i32 = 21;
+pub const PG_SCHEMA_VERSION: i32 = 22;
 
 /// Apply PG_SCHEMA_SQL to a pool. PostgreSQL's prepared-statement protocol
 /// rejects multi-statement strings ("cannot insert multiple commands into a
@@ -1113,6 +1132,40 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         tracing::info!(
             "PG migration 21: forward_rules.max_connections + auto_restart_minutes present"
         );
+    }
+
+    if current < 22 {
+        // v1.2.0: redeem codes. See the baseline comment for the SET NULL /
+        // conditional-UPDATE reasoning.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS redeem_codes (
+                id BIGSERIAL PRIMARY KEY,
+                code TEXT NOT NULL UNIQUE,
+                amount TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'unused',
+                used_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+                used_at TEXT,
+                expires_at TEXT,
+                batch_id TEXT NOT NULL DEFAULT '',
+                remark TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
+            )",
+        )
+        .execute(pool)
+        .await?;
+        for idx in [
+            "CREATE INDEX IF NOT EXISTS idx_redeem_codes_status ON redeem_codes(status)",
+            "CREATE INDEX IF NOT EXISTS idx_redeem_codes_batch ON redeem_codes(batch_id)",
+            "CREATE INDEX IF NOT EXISTS idx_redeem_codes_used_by ON redeem_codes(used_by)",
+        ] {
+            sqlx::query(idx).execute(pool).await?;
+        }
+        sqlx::query(
+            "INSERT INTO schema_version (version) VALUES (22) ON CONFLICT (version) DO NOTHING",
+        )
+        .execute(pool)
+        .await?;
+        tracing::info!("PG migration 22: redeem_codes table present");
     }
 
     Ok(())

@@ -216,6 +216,40 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
 
+-- v1.2.0: redeem codes (balance top-up). The panel has a shop + balance
+-- deduction but no way for a user to ADD balance; this closes that loop
+-- without depending on a payment gateway.
+--
+-- `used_by` is ON DELETE SET NULL, NOT CASCADE: deleting a user must not erase
+-- the record that a code was spent. The row is the audit trail for money
+-- entering the system, so it outlives the account that redeemed it.
+--
+-- `amount` is a canonical balance string (see relay_shared::money) — the same
+-- representation as users.balance, so redemption is exact integer-cent math
+-- with no float anywhere.
+--
+-- `status`: 'unused' | 'used' | 'void'. Redemption flips unused -> used with a
+-- conditional UPDATE (WHERE status = 'unused') inside the balance transaction,
+-- so two people racing on the same code can never both be credited.
+CREATE TABLE IF NOT EXISTS redeem_codes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    amount TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'unused',
+    used_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    used_at TEXT,
+    -- NULL = never expires. An expired code is REFUSED but keeps its 'unused'
+    -- status, so an admin can extend the batch instead of regenerating it.
+    expires_at TEXT,
+    -- Groups one generation run so an admin can filter / export a batch.
+    batch_id TEXT NOT NULL DEFAULT '',
+    remark TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_redeem_codes_status ON redeem_codes(status);
+CREATE INDEX IF NOT EXISTS idx_redeem_codes_batch ON redeem_codes(batch_id);
+CREATE INDEX IF NOT EXISTS idx_redeem_codes_used_by ON redeem_codes(used_by);
+
 -- v1.0.9: plan ↔ device_group grant map. Buying a plan (with grant_all_groups=0)
 -- REPLACES the user's user_device_groups with these groups (v1.0.8: purchase is
 -- replace, not append — the plan's grant becomes the user's whole authorized
@@ -1403,6 +1437,34 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
     )
     .await?;
     tracing::info!("Migration 38: forward_rules.max_connections + auto_restart_minutes present");
+
+    // ── Migration 39: v1.2.0 redeem codes (balance top-up) ──
+    // See the table comment in SCHEMA_SQL for why used_by is SET NULL rather
+    // than CASCADE, and why redemption is a conditional UPDATE.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS redeem_codes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL UNIQUE,
+            amount TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'unused',
+            used_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            used_at TEXT,
+            expires_at TEXT,
+            batch_id TEXT NOT NULL DEFAULT '',
+            remark TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+    for idx in [
+        "CREATE INDEX IF NOT EXISTS idx_redeem_codes_status ON redeem_codes(status)",
+        "CREATE INDEX IF NOT EXISTS idx_redeem_codes_batch ON redeem_codes(batch_id)",
+        "CREATE INDEX IF NOT EXISTS idx_redeem_codes_used_by ON redeem_codes(used_by)",
+    ] {
+        sqlx::query(idx).execute(pool).await?;
+    }
+    tracing::info!("Migration 39: redeem_codes table present");
 
     Ok(())
 }
