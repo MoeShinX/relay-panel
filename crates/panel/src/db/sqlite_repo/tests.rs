@@ -4554,3 +4554,216 @@ async fn list_and_count_filter_by_status() {
     assert_eq!(rows[0].code, "AAAA0000AAAA0001");
     assert_eq!(db.count_redeem_codes(&unused).await.unwrap(), 1);
 }
+
+// ── v1.2.0: traffic history ──
+
+/// Seed a user + inbound group + rule, mirroring the traffic-batch fixtures.
+/// Returns (uid, group_id, rule_id).
+async fn seed_history_fixture(
+    db: &SqliteRepository,
+    username: &str,
+    group_id: i64,
+    rule_id: i64,
+    rate: f64,
+) -> i64 {
+    db.insert_user(username, "h", 1).await.unwrap();
+    let uid = db.find_by_username(username).await.unwrap().unwrap().id;
+    sqlx::query(
+        "INSERT INTO device_groups (id, name, group_type, token, uid, rate) \
+         VALUES (?, 'gin', 'in', ?, ?, ?)",
+    )
+    .bind(group_id)
+    .bind(format!("tok-{group_id}"))
+    .bind(uid)
+    .bind(rate)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO forward_rules \
+         (id, name, uid, listen_port, device_group_in, target_addr, target_port) \
+         VALUES (?, ?, ?, 20000, ?, '127.0.0.1', 80)",
+    )
+    .bind(rule_id)
+    .bind(format!("r{rule_id}"))
+    .bind(uid)
+    .bind(group_id)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    uid
+}
+
+/// THE agreement invariant: the history's billed_total is the SAME number that
+/// was charged against the user's quota — written in the same transaction.
+/// With rate 3.0, real 1000+2000 bytes bill 9000; history must say 9000 too.
+/// If these ever diverge, the chart calls the billing a liar (or vice versa).
+#[tokio::test]
+async fn traffic_history_agrees_with_quota_charge() {
+    let db = repo().await;
+    let uid = seed_history_fixture(&db, "hist_a", 60, 200, 3.0).await;
+
+    let res = db
+        .apply_traffic_batch(
+            60,
+            &[relay_shared::protocol::TrafficEntry {
+                rule_id: 200,
+                upload: 1000,
+                download: 2000,
+            }],
+        )
+        .await
+        .unwrap();
+    assert!(matches!(res[0], TrafficEntryResult::Ok));
+
+    let user_used: i64 = sqlx::query_scalar("SELECT traffic_used FROM users WHERE id = ?")
+        .bind(uid)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    // SUM over buckets, not one row: a batch straddling an hour rollover may
+    // legitimately produce two rows.
+    let (h_up, h_down, h_billed): (i64, i64, i64) = sqlx::query_as(
+        "SELECT COALESCE(SUM(real_upload),0), COALESCE(SUM(real_download),0), \
+                COALESCE(SUM(billed_total),0) \
+         FROM traffic_history WHERE rule_id = 200",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+
+    assert_eq!(user_used, 9000, "user is billed real × rate");
+    assert_eq!(h_billed, user_used, "history MUST equal the quota charge");
+    assert_eq!((h_up, h_down), (1000, 2000), "real bytes stay unrated");
+}
+
+/// Reports arrive every ~10s; the second batch in the same hour must FOLD into
+/// the existing (rule, hour) row, not add one. If this regresses, the table
+/// grows ~8.6k rows per rule per day and the retention sweeper can't save it.
+#[tokio::test]
+async fn traffic_history_upserts_within_the_hour() {
+    let db = repo().await;
+    seed_history_fixture(&db, "hist_b", 61, 201, 1.0).await;
+
+    for _ in 0..3 {
+        db.apply_traffic_batch(
+            61,
+            &[relay_shared::protocol::TrafficEntry {
+                rule_id: 201,
+                upload: 100,
+                download: 0,
+            }],
+        )
+        .await
+        .unwrap();
+    }
+
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM traffic_history WHERE rule_id = 201")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let total: i64 =
+        sqlx::query_scalar("SELECT SUM(real_upload) FROM traffic_history WHERE rule_id = 201")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    // ≤ 2 not == 1: the test could legitimately straddle an hour boundary.
+    assert!(
+        rows <= 2,
+        "3 batches must fold into hour buckets, got {rows} rows"
+    );
+    assert_eq!(total, 300, "accumulation must not lose bytes");
+}
+
+/// Owner scoping + daily aggregation. Alice must never see Bob's buckets, and
+/// the daily view must sum a day's hours into one bucket.
+#[tokio::test]
+async fn traffic_history_query_scopes_and_aggregates() {
+    let db = repo().await;
+    let alice = seed_history_fixture(&db, "hist_c", 62, 202, 1.0).await;
+    let bob = seed_history_fixture(&db, "hist_d", 63, 203, 1.0).await;
+
+    // Hand-written buckets with controlled timestamps (yesterday, two hours).
+    for (uid, rule, hour, up) in [
+        (alice, 202, "2026-07-20 10:00:00", 100i64),
+        (alice, 202, "2026-07-20 11:00:00", 200),
+        (bob, 203, "2026-07-20 10:00:00", 999),
+    ] {
+        sqlx::query(
+            "INSERT INTO traffic_history (rule_id, uid, hour_ts, real_upload, real_download, billed_total) \
+             VALUES (?, ?, ?, ?, 0, ?)",
+        )
+        .bind(rule)
+        .bind(uid)
+        .bind(hour)
+        .bind(up)
+        .bind(up)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    // Alice's daily view: ONE bucket for 2026-07-20, summing her two hours,
+    // with zero contamination from Bob.
+    let daily = db
+        .query_traffic_history(Some(alice), None, "2026-07-01 00:00:00", true)
+        .await
+        .unwrap();
+    assert_eq!(daily.len(), 1, "two hours of one day fold into one bucket");
+    assert_eq!(daily[0].bucket, "2026-07-20");
+    assert_eq!(daily[0].real_upload, 300, "alice's hours summed");
+    assert_eq!(daily[0].billed_total, 300);
+
+    // Hourly view keeps the two hours distinct.
+    let hourly = db
+        .query_traffic_history(Some(alice), None, "2026-07-01 00:00:00", false)
+        .await
+        .unwrap();
+    assert_eq!(hourly.len(), 2);
+    assert_eq!(hourly[0].bucket, "2026-07-20 10:00:00");
+
+    // The unscoped (admin) view sees both users.
+    let all = db
+        .query_traffic_history(None, None, "2026-07-01 00:00:00", true)
+        .await
+        .unwrap();
+    assert_eq!(all[0].real_upload, 300 + 999, "admin sees everyone");
+
+    // rule_id drill-down on a FOREIGN rule returns nothing for alice — the
+    // uid pin makes the endpoint useless as a rule-id existence probe.
+    let foreign = db
+        .query_traffic_history(Some(alice), Some(203), "2026-07-01 00:00:00", true)
+        .await
+        .unwrap();
+    assert!(foreign.is_empty(), "a foreign rule matches nothing");
+}
+
+/// Retention: prune removes strictly-older rows and leaves the rest.
+#[tokio::test]
+async fn traffic_history_prune_respects_cutoff() {
+    let db = repo().await;
+    let uid = seed_history_fixture(&db, "hist_e", 64, 204, 1.0).await;
+    for hour in ["2026-05-01 00:00:00", "2026-07-20 00:00:00"] {
+        sqlx::query(
+            "INSERT INTO traffic_history (rule_id, uid, hour_ts, real_upload, real_download, billed_total) \
+             VALUES (204, ?, ?, 1, 1, 1)",
+        )
+        .bind(uid)
+        .bind(hour)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    let deleted = db
+        .prune_traffic_history("2026-06-15 00:00:00")
+        .await
+        .unwrap();
+    assert_eq!(deleted, 1, "only the pre-cutoff row dies");
+    let left: String =
+        sqlx::query_scalar("SELECT hour_ts FROM traffic_history WHERE rule_id = 204")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(left, "2026-07-20 00:00:00");
+}

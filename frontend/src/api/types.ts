@@ -92,6 +92,23 @@ export interface ForwardRule {
   created_at: string;
 }
 
+/** v1.2.0: one traffic-history bucket. `bucket` is 'YYYY-MM-DD HH:00:00' UTC;
+ *  the chart converts to the viewer's timezone. `billed_total` is the exact
+ *  number charged against quota in that hour. */
+export interface TrafficHistoryBucket {
+  bucket: string;
+  real_upload: number;
+  real_download: number;
+  billed_total: number;
+}
+
+export interface TrafficHistoryResponse {
+  granularity: string;
+  /** Inclusive UTC lower bound, for zero-filling leading buckets. */
+  since: string;
+  buckets: TrafficHistoryBucket[];
+}
+
 /** v1.2.0: notification settings as returned by the API.
  *
  *  Credentials are NEVER included — only `*_set` booleans saying whether one is

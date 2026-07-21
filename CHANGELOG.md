@@ -12,6 +12,31 @@ independent `v*` / `node-v*` tracks since this release).
 
 ### Added
 
+- **Traffic history (24h / 7d / 30d).** `forward_rules.traffic_used` was a running
+  total with no time dimension, so nobody could answer "how much did I use this
+  week" or "which rule suddenly burned 500 GB last night" — the two questions
+  that matter when usage looks wrong. Usage is now recorded hourly and charted
+  on the dashboard (fleet-wide, with a per-rule drill-down) and on the account
+  page (the user's own).
+
+  - **The chart's primary series is BILLED traffic — the same number the quota
+    deducts**, accumulated inside the same transaction as the charge. On a line
+    with `rate != 1` the real and billed bytes genuinely differ, and a chart
+    showing only real bytes would read as the panel over-charging. Real
+    upload/download stay in the tooltip.
+  - **One row per (rule, hour), written as an UPSERT.** Nodes report on the poll
+    interval (~10s), so a row per report would be ~8.6k rows/rule/day; hourly
+    accumulation keeps 100 rules × 35 days at ~84k rows.
+  - **Day grouping happens in the VIEWER'S timezone, not the server's.** Buckets
+    are stored in UTC, and a UTC "day" starts at 08:00 for a UTC+8 operator —
+    grouping server-side would visibly misfile yesterday's traffic. The folding
+    logic is a unit-tested pure function, including the UTC+8 case.
+  - **No foreign key on the history table, deliberately.** Deleting a rule must
+    not retroactively shrink "last 7 days". Rows die by retention (35 days,
+    hourly sweeper) and nothing else.
+  - Quiet hours are zero-filled rather than collapsed, so the axis can't imply
+    continuous usage that didn't happen.
+
 - **Node offline alerts (Telegram + email).** A node could die and nothing told
   anyone — the operator found out from a user complaint or by happening to
   refresh the panel. A background watcher now scans node status and notifies
@@ -81,8 +106,8 @@ independent `v*` / `node-v*` tracks since this release).
 
 ### Schema
 
-- SQLite Migration **39**, PG revision **22** (`PG_SCHEMA_VERSION` 21 → 22):
-  the `redeem_codes` table.
+- SQLite Migrations **39-40**, PG revisions **22-23** (`PG_SCHEMA_VERSION` 21 → 23):
+  the `redeem_codes` and `traffic_history` tables.
 
 ### Fixed
 

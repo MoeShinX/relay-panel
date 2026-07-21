@@ -109,6 +109,83 @@ pub async fn get_stats(
     Json(ApiResponse::success(stats))
 }
 
+/// v1.2.0: query for the traffic-history chart.
+#[derive(Debug, serde::Deserialize)]
+pub struct TrafficHistoryQuery {
+    /// "1d" | "7d" | "30d".
+    pub range: String,
+    /// Optional drill-down to one rule.
+    #[serde(default)]
+    pub rule_id: Option<i64>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct TrafficHistoryResponse {
+    /// "hour" | "day" — tells the chart how to format the x axis.
+    pub granularity: String,
+    /// Inclusive UTC lower bound actually used, so the chart can render empty
+    /// leading buckets instead of starting at the first datapoint.
+    pub since: String,
+    pub buckets: Vec<crate::db::repo::TrafficHistoryBucket>,
+}
+
+/// GET /api/v1/stats/traffic?range=1d|7d|30d[&rule_id=N]
+///
+/// Owner-scoped: a regular user's query is FORCED to `uid = caller` regardless
+/// of what they pass — a foreign rule_id then simply matches nothing, which
+/// also means the endpoint can't be used to probe whether a rule id exists.
+/// Admins see everything.
+///
+/// ALWAYS returns hourly buckets, even for 7d/30d (≤ 720 rows — trivial). Day
+/// grouping happens client-side in the VIEWER'S timezone: buckets are stored
+/// in UTC, and a server-side UTC "day" starts at 08:00 for a CST viewer, which
+/// would visibly misfile "yesterday's" traffic for every non-UTC operator.
+/// (The repo's daily aggregation still exists for UTC-day consumers.)
+pub async fn get_traffic_history(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Query(q): Query<TrafficHistoryQuery>,
+) -> Json<ApiResponse<TrafficHistoryResponse>> {
+    let days = match q.range.as_str() {
+        "1d" => 1,
+        "7d" => 7,
+        "30d" => 30,
+        other => {
+            return Json(ApiResponse {
+                code: 400,
+                message: format!("range 只能是 1d / 7d / 30d,收到: {other}"),
+                data: None,
+            });
+        }
+    };
+    let since = (chrono::Utc::now() - chrono::Duration::days(days))
+        .format("%Y-%m-%d %H:00:00")
+        .to_string();
+    // The scope decision, in one place: admin = unrestricted, everyone else =
+    // pinned to their own uid. The repo layer trusts this argument.
+    let uid = if user.admin { None } else { Some(user.user_id) };
+
+    match state
+        .db
+        .query_traffic_history(uid, q.rule_id, &since, false)
+        .await
+    {
+        Ok(buckets) => Json(ApiResponse::success(TrafficHistoryResponse {
+            granularity: "hour".into(),
+            since,
+            buckets,
+        })),
+        Err(e) => {
+            tracing::error!("get_traffic_history: db error: {}", e);
+            Json(ApiResponse {
+                code: 500,
+                message: "数据库错误".into(),
+                data: None,
+            })
+        }
+    }
+}
+
 pub async fn get_node_status(
     user: AuthUser,
     State(state): State<AppState>,

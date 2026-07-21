@@ -121,6 +121,10 @@ async fn main() {
     // doesn't immediately fire for outages that started before.
     service::node_watch::spawn(state.clone());
 
+    // v1.2.0: traffic-history retention. The history table has no FK, so this
+    // sweeper is the only thing that ever deletes its rows.
+    service::history_prune::spawn(state.clone());
+
     let app = app.with_state(state);
 
     let addr: SocketAddr = config.listen.parse().expect("Invalid listen address");

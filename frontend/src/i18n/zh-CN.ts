@@ -513,6 +513,17 @@ export const zhCN = {
   batchPartial: '成功 {ok} 条，失败 {fail} 条（无权限的线路无法启动）',
   selectedCount: '已选 {count} 条',
 
+  // ── v1.2.0: 流量历史 ──
+  trafficHistory: '流量趋势',
+  range1d: '24 小时',
+  range7d: '7 天',
+  range30d: '30 天',
+  allRules: '全部规则',
+  billedTraffic: '计费流量',
+  realUpload: '真实上行',
+  realDownload: '真实下行',
+  noTrafficYet: '该时间段内暂无流量记录(升级面板后开始记录)',
+
   // ── v1.2.0: 节点掉线通知 ──
   notifySettings: '通知设置',
   notifyIntro: '节点掉线告警',
