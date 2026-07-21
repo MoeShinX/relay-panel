@@ -8,6 +8,28 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [1.2.1] - 2026-07-21
+
+### Fixed
+
+- **The panel no longer fails to start against a database whose
+  `traffic_history` predates `group_id`.** The baseline schema re-runs on every
+  boot and creates the table with `IF NOT EXISTS` — a no-op when the table is
+  already there. It then indexed `group_id`, which on such a database runs
+  *before* the migration that adds the column, so startup aborted with "column
+  group_id does not exist" and the container crash-looped.
+
+  The index now lives only in the migration that adds the column (SQLite
+  Migration 41 / PG revision 24). Migrations run on fresh installs too, so it is
+  still created exactly once either way — no schema version change.
+
+  A **released** 1.1.3 deployment is not affected: `traffic_history` did not
+  exist before 1.2.0, so an upgrade builds the table from the baseline with the
+  column already present. This only bites a database carrying the intermediate
+  shape, i.e. one running a pre-release build. Every fresh-install test passed
+  throughout, which is exactly why this reached a tag; there is now a test that
+  boots from the pre-`group_id` shape instead.
+
 ## [1.2.0] - 2026-07-21
 
 ### Added

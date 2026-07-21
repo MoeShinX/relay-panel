@@ -288,7 +288,13 @@ CREATE TABLE IF NOT EXISTS traffic_history (
 );
 CREATE INDEX IF NOT EXISTS idx_traffic_history_uid ON traffic_history(uid, hour_ts);
 CREATE INDEX IF NOT EXISTS idx_traffic_history_hour ON traffic_history(hour_ts);
-CREATE INDEX IF NOT EXISTS idx_traffic_history_group ON traffic_history(group_id, hour_ts);
+-- NOTE: the index on group_id is deliberately NOT here — it lives in Migration
+-- 41, next to the ALTER that adds the column. This schema re-runs on every
+-- boot, and `CREATE TABLE IF NOT EXISTS` is a no-op against a database whose
+-- traffic_history predates group_id. Indexing the column here would then run
+-- BEFORE the ALTER that creates it and abort startup with "no such column:
+-- group_id". Migrations run on fresh installs too, so the index is still
+-- created exactly once either way.
 
 -- v1.0.9: plan ↔ device_group grant map. Buying a plan (with grant_all_groups=0)
 -- REPLACES the user's user_device_groups with these groups (v1.0.8: purchase is
@@ -2289,5 +2295,78 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(still_paused.0, 1);
+    }
+
+    /// A database whose `traffic_history` predates `group_id` must still boot.
+    ///
+    /// SCHEMA_SQL re-runs on every start, and `CREATE TABLE IF NOT EXISTS` is a
+    /// no-op when the table already exists — so any index in the baseline that
+    /// names a column added by a later migration executes BEFORE the ALTER that
+    /// creates it, and startup aborts with "no such column". That is not
+    /// hypothetical: it took the panel down on a box carrying a pre-release
+    /// traffic_history, crash-looping on every restart.
+    ///
+    /// Every fresh-install test passes in that situation, because a fresh
+    /// install builds the table from the baseline WITH the column. Only an
+    /// upgrade from the intermediate shape reproduces it, which is what this
+    /// test pins.
+    #[tokio::test]
+    async fn traffic_history_without_group_id_still_upgrades() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        // The table exactly as it existed BEFORE group_id was introduced.
+        sqlx::query(
+            r#"CREATE TABLE traffic_history (
+                rule_id INTEGER NOT NULL,
+                uid INTEGER NOT NULL,
+                hour_ts TEXT NOT NULL,
+                real_upload INTEGER NOT NULL DEFAULT 0,
+                real_download INTEGER NOT NULL DEFAULT 0,
+                billed_total INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (rule_id, hour_ts)
+            )"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO traffic_history (rule_id, uid, hour_ts, billed_total) VALUES (1, 1, '2026-07-21 10:00:00', 4096)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Booting = applying the baseline, then the migrations. This is the
+        // step that used to fail.
+        sqlx::query(SCHEMA_SQL)
+            .execute(&pool)
+            .await
+            .expect("baseline must tolerate a pre-group_id traffic_history");
+        run_migrations(&pool)
+            .await
+            .expect("migrations must upgrade a pre-group_id traffic_history");
+
+        assert_column(&pool, "traffic_history", "group_id").await;
+
+        // The pre-existing row survives with the documented 0 = unknown default
+        // rather than being dropped or rewritten.
+        let (rows, billed, group): (i64, i64, i64) = sqlx::query_as(
+            "SELECT COUNT(*), MAX(billed_total), MAX(group_id) FROM traffic_history",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows, 1, "existing history must not be lost");
+        assert_eq!(billed, 4096);
+        assert_eq!(group, 0);
+
+        // And the whole thing is re-runnable, since it runs on every boot.
+        sqlx::query(SCHEMA_SQL)
+            .execute(&pool)
+            .await
+            .expect("re-run baseline");
+        run_migrations(&pool).await.expect("re-run migrations");
     }
 }

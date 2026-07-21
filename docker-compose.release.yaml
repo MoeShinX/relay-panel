@@ -21,7 +21,7 @@ services:
     # (RELAYPANEL_PANEL_TAG) and node tag (RELAYPANEL_NODE_TAG) may differ — a
     # panel upgrade does NOT require pulling a new node image. Override either
     # in .env to pin a specific version.
-    image: ghcr.io/moeshinx/relay-panel-panel:${RELAYPANEL_PANEL_TAG:-1.2.0}
+    image: ghcr.io/moeshinx/relay-panel-panel:${RELAYPANEL_PANEL_TAG:-1.2.1}
     ports:
       # RELAYPANEL_WEB_MODE controls how the panel port is published:
       #   direct         → 0.0.0.0:18888:18888  (public, default)

@@ -215,7 +215,13 @@ CREATE TABLE IF NOT EXISTS traffic_history (
 );
 CREATE INDEX IF NOT EXISTS idx_traffic_history_uid ON traffic_history(uid, hour_ts);
 CREATE INDEX IF NOT EXISTS idx_traffic_history_hour ON traffic_history(hour_ts);
-CREATE INDEX IF NOT EXISTS idx_traffic_history_group ON traffic_history(group_id, hour_ts);
+-- NOTE: the index on group_id is deliberately NOT here — it lives in revision
+-- 24, next to the ALTER that adds the column. This whole file re-runs on every
+-- boot, and `CREATE TABLE IF NOT EXISTS` is a no-op against a database whose
+-- traffic_history predates group_id. Indexing the column here would then run
+-- BEFORE the ALTER that creates it and abort startup with "column group_id does
+-- not exist". Revisions run on fresh installs too, so the index is still
+-- created exactly once either way.
 
 -- v1.0.9: plan ↔ device_group grant map (mirrors SQLite baseline + Migration 35).
 CREATE TABLE IF NOT EXISTS plan_device_groups (
