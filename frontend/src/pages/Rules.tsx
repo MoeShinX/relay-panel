@@ -766,6 +766,38 @@ const IMPORT_DEFAULTS = {
     );
   };
 
+  // Load-balance strategy field. The per-strategy explanation used to sit in an
+  // always-open Alert below the select, which is a lot of standing text for
+  // something you read once. It now hangs off a "?" on the label — hover to
+  // read, out of the way otherwise. Same pattern as the rate-limits label.
+  const renderStrategyField = () => (
+    <Form.Item
+      name="load_balance_strategy"
+      initialValue="first"
+      label={
+        <span>
+          {t('loadBalanceStrategy')}{' '}
+          <Tooltip
+            overlayStyle={{ maxWidth: 360 }}
+            title={
+              <div style={{ fontSize: 12 }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>{t('lbStrategyBlockTitle')}</div>
+                <div>• {t('lbFirstDesc')}</div>
+                <div>• {t('lbRoundRobinDesc')}</div>
+                <div>• {t('lbFailoverDesc')}</div>
+                <div style={{ marginTop: 8, opacity: 0.75 }}>{t('lbStrategyBlockFooter')}</div>
+              </div>
+            }
+          >
+            <QuestionCircleOutlined style={{ color: '#999' }} />
+          </Tooltip>
+        </span>
+      }
+    >
+      <Select options={strategyOptions} />
+    </Form.Item>
+  );
+
   const renderTargetsEditor = () => (
     <Form.List name="targets" initialValue={[{ host: '', port: undefined as unknown as number, enabled: true }]}>
       {(fields, { add, remove, move }) => (
@@ -780,7 +812,9 @@ const IMPORT_DEFAULTS = {
                 rules={[{ required: true }]}
                 style={{ marginBottom: 8 }}
               >
-                <Input placeholder={t('targetAddress')} style={{ width: 180 }} />
+                {/* Wide enough for a full IPv6 literal (up to 39 chars) — 180px
+                    truncated them mid-address. */}
+                <Input placeholder={t('targetAddress')} style={{ width: 300 }} />
               </Form.Item>
               <Form.Item
                 {...field}
@@ -952,23 +986,7 @@ const IMPORT_DEFAULTS = {
               label: t('tabForward'),
               children: (<>
                 {renderTargetsEditor()}
-                <Form.Item name="load_balance_strategy" label={t('loadBalanceStrategy')} initialValue="first">
-                  <Select options={strategyOptions} />
-                </Form.Item>
-                <Alert
-                  type="info"
-                  showIcon
-                  style={{ fontSize: 12, marginBottom: 16 }}
-                  title={t('lbStrategyBlockTitle')}
-                  description={
-                    <div>
-                      <div>• {t('lbFirstDesc')}</div>
-                      <div>• {t('lbRoundRobinDesc')}</div>
-                      <div>• {t('lbFailoverDesc')}</div>
-                      <div style={{ marginTop: 8, color: '#888' }}>{t('lbStrategyBlockFooter')}</div>
-                    </div>
-                  }
-                />
+                {renderStrategyField()}
                 <Form.Item
                   label={<span>{t('rateLimits')} <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{t('rateLimitsTooltip')}</span>} overlayStyle={{ maxWidth: 340 }}><QuestionCircleOutlined style={{ color: '#999' }} /></Tooltip></span>}
                   extra={t('rateLimitsHint')}
@@ -1024,23 +1042,7 @@ const IMPORT_DEFAULTS = {
               label: t('tabForward'),
               children: (<>
                 {renderTargetsEditor()}
-                <Form.Item name="load_balance_strategy" label={t('loadBalanceStrategy')} initialValue="first">
-                  <Select options={strategyOptions} />
-                </Form.Item>
-                <Alert
-                  type="info"
-                  showIcon
-                  style={{ fontSize: 12, marginBottom: 16 }}
-                  title={t('lbStrategyBlockTitle')}
-                  description={
-                    <div>
-                      <div>• {t('lbFirstDesc')}</div>
-                      <div>• {t('lbRoundRobinDesc')}</div>
-                      <div>• {t('lbFailoverDesc')}</div>
-                      <div style={{ marginTop: 8, color: '#888' }}>{t('lbStrategyBlockFooter')}</div>
-                    </div>
-                  }
-                />
+                {renderStrategyField()}
                 <Form.Item
                   label={<span>{t('rateLimits')} <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{t('rateLimitsTooltip')}</span>} overlayStyle={{ maxWidth: 340 }}><QuestionCircleOutlined style={{ color: '#999' }} /></Tooltip></span>}
                   extra={t('rateLimitsHint')}
