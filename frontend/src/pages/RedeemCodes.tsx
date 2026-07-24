@@ -159,30 +159,16 @@ export default function RedeemCodes() {
     { title: t('batch'), dataIndex: 'batch_id', key: 'batch_id' },
     { title: t('remark'), dataIndex: 'remark', key: 'remark', render: (v: string) => v || '-' },
     {
-      title: t('action'), key: 'action', width: 160,
+      // Per-row shows VOID only (deletion is done in bulk via the toolbar
+      // button, after ticking rows). A used code is the money-in record — it
+      // can be neither voided nor deleted, so it shows nothing.
+      title: t('action'), key: 'action',
       render: (_: unknown, r: RedeemCode) => (
-        // A used code is the money-in record: it can be neither voided nor
-        // deleted, so it shows no actions. Unused codes can be voided first;
-        // both unused and voided codes can be deleted outright.
-        r.status === 'used' ? (
-          <Text type="secondary">-</Text>
-        ) : (
-          <Space size={0}>
-            {r.status === 'unused' && (
-              <Popconfirm title={t('voidCodeConfirm')} onConfirm={() => handleVoid(r.id)} okButtonProps={{ danger: true }}>
-                <Button size="small" type="text" danger icon={<StopOutlined />}>{t('void')}</Button>
-              </Popconfirm>
-            )}
-            <Popconfirm
-              title={t('deleteCodeConfirm')}
-              description={t('deleteCodesDesc')}
-              onConfirm={() => deleteCodes([r.id])}
-              okButtonProps={{ danger: true }}
-            >
-              <Button size="small" type="text" danger icon={<DeleteOutlined />}>{t('delete')}</Button>
-            </Popconfirm>
-          </Space>
-        )
+        r.status === 'unused' ? (
+          <Popconfirm title={t('voidCodeConfirm')} onConfirm={() => handleVoid(r.id)} okButtonProps={{ danger: true }}>
+            <Button size="small" type="text" danger icon={<StopOutlined />}>{t('void')}</Button>
+          </Popconfirm>
+        ) : <Text type="secondary">-</Text>
       ),
     },
   ];
@@ -203,16 +189,21 @@ export default function RedeemCodes() {
               { value: 'void', label: t('codeVoid') },
             ]}
           />
-          {selectedRowKeys.length > 0 && (
-            <Popconfirm
-              title={t('deleteCodesConfirm').replace('{count}', String(selectedRowKeys.length))}
-              description={t('deleteCodesDesc')}
-              onConfirm={() => deleteCodes(selectedRowKeys)}
-              okButtonProps={{ danger: true }}
-            >
-              <Button danger icon={<DeleteOutlined />}>{t('delete')} ({selectedRowKeys.length})</Button>
-            </Popconfirm>
-          )}
+          {/* Always visible so the delete affordance is discoverable — it was
+              previously hidden until rows were selected, which read as "there is
+              no way to delete". Disabled (and its confirm suppressed) when the
+              selection is empty. Tick the rows to delete, then click. */}
+          <Popconfirm
+            title={t('deleteCodesConfirm').replace('{count}', String(selectedRowKeys.length))}
+            description={t('deleteCodesDesc')}
+            onConfirm={() => deleteCodes(selectedRowKeys)}
+            okButtonProps={{ danger: true }}
+            disabled={selectedRowKeys.length === 0}
+          >
+            <Button danger icon={<DeleteOutlined />} disabled={selectedRowKeys.length === 0}>
+              {selectedRowKeys.length > 0 ? `${t('delete')} (${selectedRowKeys.length})` : t('delete')}
+            </Button>
+          </Popconfirm>
           <Button icon={<ReloadOutlined />} onClick={load}>{t('refresh')}</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => { createForm.resetFields(); setCreateOpen(true); }}>
             {t('generateCodes')}
