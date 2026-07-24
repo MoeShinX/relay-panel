@@ -227,6 +227,7 @@ export const zhCN = {
   editUser: '编辑用户',
   userUpdated: '用户已更新',
   addUser: '新增用户',
+  searchUserPlaceholder: '搜索用户名或 ID',
   // v1.0.7: admin edit-user-plan panel
   editUserPlan: '编辑用户套餐',
   currentPlan: '当前套餐',
@@ -590,6 +591,7 @@ export const zhCN = {
   dismiss: '关闭',
   copied: '已复制',
   deleteCodesConfirm: '确定删除选中的 {count} 张卡密?',
+  deleteCodeConfirm: '确定删除这张卡密?',
   deleteCodesDesc: '已使用的卡密不会被删除 —— 它是资金入账的凭证,必须保留。',
   codesDeleted: '已删除 {count} 张',
   codesDeletedPartial: '已删除 {ok} 张,跳过 {skipped} 张(已使用的卡密不可删除)',

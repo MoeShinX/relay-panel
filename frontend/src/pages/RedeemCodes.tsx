@@ -93,15 +93,18 @@ export default function RedeemCodes() {
     } catch { message.error(t('codeVoidFailed')); }
   };
 
-  const handleDelete = async () => {
-    if (selectedRowKeys.length === 0) return;
+  // Delete a set of codes. Used both by the bulk toolbar button and the
+  // per-row delete action, so the backend "used codes are never deleted" guard
+  // is surfaced identically no matter how the delete was triggered.
+  const deleteCodes = async (ids: number[]) => {
+    if (ids.length === 0) return;
     try {
       const res = await api.delete<unknown, ApiEnvelope<number>>('/admin/redeem-codes', {
-        data: { ids: selectedRowKeys },
+        data: { ids },
       });
       if (res.code !== 0) { message.error(res.message); return; }
       const deleted = res.data ?? 0;
-      const skipped = selectedRowKeys.length - deleted;
+      const skipped = ids.length - deleted;
       if (skipped > 0) {
         // Used codes are never deletable — they are the record of money that
         // entered the system. Say so instead of silently deleting fewer.
@@ -109,7 +112,7 @@ export default function RedeemCodes() {
       } else {
         message.success(t('codesDeleted').replace('{count}', String(deleted)));
       }
-      setSelectedRowKeys([]);
+      setSelectedRowKeys((keys) => keys.filter((k) => !ids.includes(k)));
       load();
     } catch { message.error(t('codesDeleteFailed')); }
   };
@@ -142,23 +145,44 @@ export default function RedeemCodes() {
     { title: t('status'), dataIndex: 'status', key: 'status', render: statusTag },
     {
       title: t('usedBy'), dataIndex: 'used_by', key: 'used_by',
-      // used_by is nulled when the account is deleted, but the row survives —
-      // it's the audit trail for money entering the system.
-      render: (uid: number | null, r: RedeemCode) =>
-        r.status === 'used' ? (uid ? `#${uid}` : t('deletedUser')) : '-',
+      // Prefer the resolved username; fall back to #id if the name didn't
+      // resolve. used_by is nulled when the account is deleted, but the row
+      // survives — it's the audit trail for money entering the system.
+      render: (uid: number | null, r: RedeemCode) => {
+        if (r.status !== 'used') return '-';
+        if (r.used_by_username) return r.used_by_username;
+        return uid ? `#${uid}` : t('deletedUser');
+      },
     },
     { title: t('usedAt'), dataIndex: 'used_at', key: 'used_at', render: (v: string | null) => v ?? '-' },
     { title: t('codeExpiresAt'), dataIndex: 'expires_at', key: 'expires_at', render: (v: string | null) => v ?? t('neverExpires') },
     { title: t('batch'), dataIndex: 'batch_id', key: 'batch_id' },
     { title: t('remark'), dataIndex: 'remark', key: 'remark', render: (v: string) => v || '-' },
     {
-      title: t('action'), key: 'action',
+      title: t('action'), key: 'action', width: 160,
       render: (_: unknown, r: RedeemCode) => (
-        r.status === 'unused' ? (
-          <Popconfirm title={t('voidCodeConfirm')} onConfirm={() => handleVoid(r.id)} okButtonProps={{ danger: true }}>
-            <Button size="small" type="text" danger icon={<StopOutlined />}>{t('void')}</Button>
-          </Popconfirm>
-        ) : <Text type="secondary">-</Text>
+        // A used code is the money-in record: it can be neither voided nor
+        // deleted, so it shows no actions. Unused codes can be voided first;
+        // both unused and voided codes can be deleted outright.
+        r.status === 'used' ? (
+          <Text type="secondary">-</Text>
+        ) : (
+          <Space size={0}>
+            {r.status === 'unused' && (
+              <Popconfirm title={t('voidCodeConfirm')} onConfirm={() => handleVoid(r.id)} okButtonProps={{ danger: true }}>
+                <Button size="small" type="text" danger icon={<StopOutlined />}>{t('void')}</Button>
+              </Popconfirm>
+            )}
+            <Popconfirm
+              title={t('deleteCodeConfirm')}
+              description={t('deleteCodesDesc')}
+              onConfirm={() => deleteCodes([r.id])}
+              okButtonProps={{ danger: true }}
+            >
+              <Button size="small" type="text" danger icon={<DeleteOutlined />}>{t('delete')}</Button>
+            </Popconfirm>
+          </Space>
+        )
       ),
     },
   ];
@@ -183,7 +207,7 @@ export default function RedeemCodes() {
             <Popconfirm
               title={t('deleteCodesConfirm').replace('{count}', String(selectedRowKeys.length))}
               description={t('deleteCodesDesc')}
-              onConfirm={handleDelete}
+              onConfirm={() => deleteCodes(selectedRowKeys)}
               okButtonProps={{ danger: true }}
             >
               <Button danger icon={<DeleteOutlined />}>{t('delete')} ({selectedRowKeys.length})</Button>

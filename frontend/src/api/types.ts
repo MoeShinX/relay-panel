@@ -159,6 +159,9 @@ export interface RedeemCode {
   /** "unused" | "used" | "void" */
   status: string;
   used_by?: number | null;
+  /** Redeemer's username, resolved server-side. Null when unused, or when the
+   *  account was deleted (used_by kept as the money-in record). */
+  used_by_username?: string | null;
   used_at?: string | null;
   /** null = never expires */
   expires_at?: string | null;

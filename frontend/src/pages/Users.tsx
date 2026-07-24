@@ -1,5 +1,5 @@
 import { Table, Button, Tag, Popconfirm, message, Progress, Tooltip, Modal, Form, Input, InputNumber, Switch, Space, Select, DatePicker, Divider } from 'antd';
-import { EditOutlined, ReloadOutlined, UndoOutlined, UserOutlined, PlusOutlined, KeyOutlined, ApiOutlined, ShoppingOutlined } from '@ant-design/icons';
+import { EditOutlined, ReloadOutlined, UndoOutlined, UserOutlined, PlusOutlined, KeyOutlined, ApiOutlined, ShoppingOutlined, SearchOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import dayjs, { type Dayjs } from 'dayjs';
@@ -52,6 +52,9 @@ export default function Users() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const [users, setUsers] = useState<User[]>([]);
+  // Client-side filter over the already-loaded list — /admin/users returns
+  // every user, so searching is instant and needs no round-trip.
+  const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<User | null>(null);
@@ -370,18 +373,33 @@ export default function Users() {
     },
   ];
 
+  // Match on username or id. Trimmed + case-insensitive so " Bob " finds "bob",
+  // and a bare number matches the id column.
+  const q = search.trim().toLowerCase();
+  const filteredUsers = q
+    ? users.filter((u) => u.username.toLowerCase().includes(q) || String(u.id).includes(q))
+    : users;
+
   return (
     <>
       <div className="rp-page-header">
         <h2 className="rp-page-title"><UserOutlined /> {t('users')}</h2>
-        <Space>
+        <Space wrap>
+          <Input
+            allowClear
+            prefix={<SearchOutlined />}
+            placeholder={t('searchUserPlaceholder')}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{ width: 220 }}
+          />
           {isAdmin && (
             <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>{t('addUser')}</Button>
           )}
           <Button icon={<ReloadOutlined />} onClick={load}>{t('refresh')}</Button>
         </Space>
       </div>
-      <Table dataSource={users} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 20 }} />
+      <Table dataSource={filteredUsers} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 20 }} />
 
       <Modal
         title={editing ? `${t('editUser')}: ${editing.username}` : t('editUser')}

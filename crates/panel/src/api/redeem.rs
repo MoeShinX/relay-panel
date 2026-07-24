@@ -141,6 +141,10 @@ pub struct CodeRow {
     pub amount: String,
     pub status: String,
     pub used_by: Option<i64>,
+    /// Username of the redeemer, resolved for display. None when the code is
+    /// unused, or when the account was deleted (used_by is nulled but the row
+    /// survives as the money-in record), or if the id no longer resolves.
+    pub used_by_username: Option<String>,
     pub used_at: Option<String>,
     pub expires_at: Option<String>,
     pub batch_id: String,
@@ -148,14 +152,19 @@ pub struct CodeRow {
     pub created_at: String,
 }
 
-impl From<RedeemCode> for CodeRow {
-    fn from(c: RedeemCode) -> Self {
+impl CodeRow {
+    /// Build a row, resolving the redeemer id to a username via `names`. The
+    /// lookup is a map rather than a per-row query so listing a page is one
+    /// user fetch, not N.
+    fn from_code(c: RedeemCode, names: &std::collections::HashMap<i64, String>) -> Self {
+        let used_by_username = c.used_by.and_then(|uid| names.get(&uid).cloned());
         Self {
             id: c.id,
             code: redeem::to_display(&c.code),
             amount: c.amount,
             status: c.status,
             used_by: c.used_by,
+            used_by_username,
             used_at: c.used_at,
             expires_at: c.expires_at,
             batch_id: c.batch_id,
@@ -192,13 +201,33 @@ pub async fn list_codes(
         offset,
     };
 
-    let items = match state.db.list_redeem_codes(&filter).await {
-        Ok(v) => v.into_iter().map(CodeRow::from).collect(),
+    let codes = match state.db.list_redeem_codes(&filter).await {
+        Ok(v) => v,
         Err(e) => {
             tracing::error!("list_redeem_codes failed: {}", e);
             return Json(err(500, "数据库错误"));
         }
     };
+    // Resolve redeemer ids to usernames for display. Only used codes carry a
+    // used_by, so skip the lookup entirely when this page has none. The map is
+    // built from the (small, self-hosted) user list — one fetch, not one per
+    // row — and any id that no longer resolves stays a bare "#id" client-side.
+    let names: std::collections::HashMap<i64, String> = if codes.iter().any(|c| c.used_by.is_some())
+    {
+        match state.db.list_users_public().await {
+            Ok(users) => users.into_iter().map(|u| (u.id, u.username)).collect(),
+            Err(e) => {
+                tracing::error!("list_users_public (for redeem names) failed: {}", e);
+                return Json(err(500, "数据库错误"));
+            }
+        }
+    } else {
+        std::collections::HashMap::new()
+    };
+    let items = codes
+        .into_iter()
+        .map(|c| CodeRow::from_code(c, &names))
+        .collect();
     let total = match state.db.count_redeem_codes(&filter).await {
         Ok(n) => n,
         Err(e) => {
