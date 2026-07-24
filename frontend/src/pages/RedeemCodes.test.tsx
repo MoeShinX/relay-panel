@@ -69,33 +69,44 @@ describe('RedeemCodes', () => {
     expect(within(rowFor('GONE-GONE-GONE-GONE')).getByText('#7')).toBeInTheDocument();
   });
 
-  it('offers a per-row delete on unused and void codes, but no actions on a used code', async () => {
+  it('shows only VOID per row (delete is a toolbar action), and nothing on a used code', async () => {
     await renderPage();
-    // used → the money-in record: neither void nor delete.
+    // used → the money-in record: no per-row action.
     const used = rowFor('USED-USED-USED-USED');
-    expect(within(used).queryByRole('button', { name: /delete/i })).not.toBeInTheDocument();
     expect(within(used).queryByRole('button', { name: /void/i })).not.toBeInTheDocument();
-    // unused → void + delete.
+    // unused → void only.
     const unused = rowFor('UNUS-0000-0000-000A');
     expect(within(unused).getByRole('button', { name: /void/i })).toBeInTheDocument();
-    expect(within(unused).getByRole('button', { name: /delete/i })).toBeInTheDocument();
-    // void → delete only (can't void an already-void code).
+    expect(within(unused).queryByRole('button', { name: /delete/i })).not.toBeInTheDocument();
+    // void → no per-row action (can't re-void; delete is the toolbar button).
     const voided = rowFor('VOID-VOID-VOID-VOID');
     expect(within(voided).queryByRole('button', { name: /void/i })).not.toBeInTheDocument();
-    expect(within(voided).getByRole('button', { name: /delete/i })).toBeInTheDocument();
   });
 
-  it('per-row delete sends exactly that one id', async () => {
+  it('keeps a delete button in the toolbar, disabled until rows are ticked', async () => {
     const user = userEvent.setup();
-    mockDelete.mockResolvedValue(ok(1));
+    mockDelete.mockResolvedValue(ok(2));
     await renderPage();
 
+    // Always present so the affordance is discoverable, but disabled with no
+    // selection — the discoverability fix that prompted this. (The accessible
+    // name is "delete delete": the DeleteOutlined icon's aria-label plus the
+    // button text, both the raw i18n key in this provider-less harness.)
+    const delBtn = screen.getByRole('button', { name: /^delete delete$/i });
+    expect(delBtn).toBeDisabled();
+
+    // Tick two rows via their row checkboxes, then the button enables.
     const unused = rowFor('UNUS-0000-0000-000A');
-    await user.click(within(unused).getByRole('button', { name: /delete/i }));
-    // Confirm in the popconfirm.
+    const voided = rowFor('VOID-VOID-VOID-VOID');
+    await user.click(within(unused).getByRole('checkbox'));
+    await user.click(within(voided).getByRole('checkbox'));
+
+    const enabled = screen.getByRole('button', { name: /delete.*\(2\)/i });
+    expect(enabled).toBeEnabled();
+    await user.click(enabled);
     const confirm = await screen.findByRole('button', { name: /^OK$/i });
     await user.click(confirm);
 
-    expect(mockDelete).toHaveBeenCalledWith('/admin/redeem-codes', { data: { ids: [3] } });
+    expect(mockDelete).toHaveBeenCalledWith('/admin/redeem-codes', { data: { ids: [3, 5] } });
   });
 });

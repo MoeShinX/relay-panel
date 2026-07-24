@@ -592,7 +592,6 @@ export const enUS: Dict = {
   dismiss: 'Dismiss',
   copied: 'Copied',
   deleteCodesConfirm: 'Delete {count} selected codes?',
-  deleteCodeConfirm: 'Delete this code?',
   deleteCodesDesc: 'Used codes are never deleted — they are the record of money that entered the system.',
   codesDeleted: 'Deleted {count}',
   codesDeletedPartial: 'Deleted {ok}, skipped {skipped} (used codes cannot be deleted)',
