@@ -8,6 +8,50 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [1.2.2] - 2026-07-25
+
+Admin-console usability. Panel only — no node release, no schema change, and
+nothing to reconfigure: upgrade the panel image and you're done.
+
+### Added
+
+- **Search users by username or ID** on the user-management page. The list was
+  unfiltered, so finding one account on a populated panel meant scrolling. The
+  filter runs client-side over the list already fetched, so it responds as you
+  type without a round-trip.
+
+### Changed
+
+- **Redeem codes show WHO redeemed them, by username rather than `#id`.** An id
+  is only useful if you already know who it is. The name is resolved server-side
+  in one lookup per page (not one per row), and only when the page actually
+  contains a used code. A code whose account was later deleted still shows the
+  id — that row is the money-in record and outlives the account.
+
+- **The redeem-code delete button is always visible**, disabled until rows are
+  ticked. It previously appeared only *after* a selection was made, so with
+  nothing selected the page looked like it had no way to delete at all — the
+  feature existed and was simply invisible.
+
+- **The target address field is wide enough for IPv6.** At its old width a full
+  IPv6 literal was cut off mid-address, which is exactly when you need to read
+  it carefully.
+
+- **The load-balancing explanation moved into a "?" tooltip** on the strategy
+  field. It used to be an always-open info panel — four lines of standing text
+  for something you read once and then scroll past forever.
+
+### Docs
+
+- Node upgrade now leads with **one-click upgrade from the panel** instead of
+  re-running the install script, which is the fallback path. Both node docs and
+  both READMEs. Also documents two things that were missing everywhere: an
+  upgrade **drops that node's live forwarding connections**, and one-click is
+  **systemd-only** (Docker shows an "update the image" hint; a manually-run node
+  has nothing to restart it).
+- The feature highlights list features instead of implementation details, and
+  covers the v1.2.0 additions that were missing from it.
+
 ## [1.2.1] - 2026-07-21
 
 ### Fixed
