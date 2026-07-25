@@ -952,7 +952,7 @@ const IMPORT_DEFAULTS = {
       />
 
       <Modal title={t('addRule')} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={() => createForm.submit()} okText={t('create')} cancelText={t('cancel')} width={620}>
-        <Form form={createForm} onFinish={handleCreate} layout="vertical">
+        <Form form={createForm} onFinish={handleCreate} layout="vertical" className="rp-rule-form">
           <Tabs items={[
             {
               key: 'basic',
@@ -1012,7 +1012,7 @@ const IMPORT_DEFAULTS = {
       </Modal>
 
       <Modal title={t('editRule')} open={editOpen} onCancel={() => setEditOpen(false)} onOk={() => editForm.submit()} okText={t('save')} cancelText={t('cancel')} width={620}>
-        <Form form={editForm} onFinish={handleUpdate} layout="vertical">
+        <Form form={editForm} onFinish={handleUpdate} layout="vertical" className="rp-rule-form">
           <Tabs items={[
             {
               key: 'basic',

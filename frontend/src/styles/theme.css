@@ -185,3 +185,23 @@ html, body, #root {
   border-radius: 2px;
   background-size: cover;
 }
+
+/* v1.2.3: cap single-value form controls in the rule dialogs.
+   These forms sit in a 620px modal, so a control at the default width:100%
+   spans ~530px — a name, a port, or a strategy dropdown does not need that,
+   and a column of equally-long boxes reads as a wall.
+
+   Applied as ONE rule rather than a width on each Form.Item because the basic
+   fields are defined twice (create + edit dialog); a per-field width would be
+   a dozen edits that drift apart.
+
+   Only max-width, so anything with a deliberately narrower inline width keeps
+   it (inline wins): the target address stays 300 for a full IPv6 literal, and
+   the small integer fields stay 200-300. The targets row is unaffected — its
+   controls already carry explicit widths. */
+.rp-rule-form .ant-form-item-control-input-content > .ant-input,
+.rp-rule-form .ant-form-item-control-input-content > .ant-select,
+.rp-rule-form .ant-form-item-control-input-content > .ant-input-number,
+.rp-rule-form .ant-form-item-control-input-content > .ant-input-number-group-wrapper {
+  max-width: 320px;
+}
