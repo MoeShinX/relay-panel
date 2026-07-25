@@ -185,3 +185,25 @@ html, body, #root {
   border-radius: 2px;
   background-size: cover;
 }
+
+/* v1.2.3: give the forwarding tab one field width.
+
+   The four controls there used to disagree. 负载策略 and 最大连接数 are a
+   plain Select / InputNumber, so width:100% made them span the form (572px
+   in the 620px dialog). 限速 and 自动重启间隔 carry addons (上行/下行, Mbps,
+   分钟) and antd wraps those in a Space.Compact group — width:100% then
+   applies to the number box INSIDE the group, leaving the group sized to its
+   content (~252px). Two long rows and two short ones in the same column.
+
+   All four are now 252: the addon groups keep their natural size and the two
+   plain controls are capped to match (their cap is inline, on the component).
+   A rule name or a strategy dropdown does not need half the dialog anyway.
+
+   Scoped to the rule dialogs and to addon groups only, so nothing else moves:
+   the basic tab stays full-width, and the targets row keeps its explicit
+   widths (address 320, port 110) — which is what keeps that row on one line. */
+.rp-rule-form .ant-form-item-control-input-content .ant-space-compact,
+.rp-rule-form .ant-form-item-control-input-content .ant-input-number-group-wrapper {
+  width: 100%;
+  max-width: 252px;
+}
