@@ -1,4 +1,4 @@
-import { Card, Form, Switch, Input, InputNumber, Button, Space, message, Spin, Alert, Typography, Divider } from 'antd';
+import { Card, Form, Switch, Input, InputNumber, Button, message, Spin, Alert, Typography, Row, Col } from 'antd';
 import { SendOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState } from 'react';
 import api from '../api/client';
@@ -7,6 +7,30 @@ import { MIN_OFFLINE_ALERT_SECS } from '../api/types';
 import { useI18n } from '../i18n/context';
 
 const { Text } = Typography;
+
+/**
+ * A boolean row: label + hint on the left, switch on the right.
+ *
+ * The default vertical Form.Item puts the label above the control, so every
+ * toggle cost three stacked lines for one bit of state. Pairing them on one
+ * line is both shorter and easier to scan — the switches line up in a column
+ * you can read down.
+ */
+function SwitchRow({ name, label, hint }: { name: string; label: string; hint?: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '6px 0' }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div>{label}</div>
+        {hint && (
+          <div style={{ color: 'var(--rp-text-tertiary)', fontSize: 12, marginTop: 2 }}>{hint}</div>
+        )}
+      </div>
+      <Form.Item name={name} valuePropName="checked" noStyle>
+        <Switch />
+      </Form.Item>
+    </div>
+  );
+}
 
 /**
  * v1.2.0: node-offline notification settings.
@@ -132,45 +156,66 @@ export default function NotifySettings() {
       />
 
       <Spin spinning={loading}>
+      {/* Laid out in columns rather than one long stack of full-width inputs.
+          A chat id or a port is a short value; giving each its own full-width
+          row made the page scroll for no reason. Everything collapses to a
+          single column below `lg`. */}
       <Form form={form} layout="vertical">
-        <Form.Item name="enabled" label={t('notifyEnabled')} valuePropName="checked">
-          <Switch />
-        </Form.Item>
+        <Row gutter={16}>
+        <Col xs={24} lg={12}>
+        <Card size="small" style={{ marginBottom: 16 }} styles={{ body: { minHeight: 168 } }}>
+          <SwitchRow name="enabled" label={t('notifyEnabled')} />
+          <Form.Item
+            name="offline_alert_secs"
+            label={t('offlineAlertSecs')}
+            extra={t('offlineAlertSecsHint').replace('{min}', String(MIN_OFFLINE_ALERT_SECS))}
+            style={{ marginTop: 12, marginBottom: 12 }}
+            rules={[{
+              validator: (_, v) => (Number(v) >= MIN_OFFLINE_ALERT_SECS
+                ? Promise.resolve()
+                : Promise.reject(new Error(
+                  t('offlineAlertSecsTooSmall').replace('{min}', String(MIN_OFFLINE_ALERT_SECS)),
+                ))),
+            }]}
+          >
+            <InputNumber min={MIN_OFFLINE_ALERT_SECS} style={{ width: 180 }} addonAfter={t('seconds')} />
+          </Form.Item>
+          <SwitchRow name="notify_recovery" label={t('notifyRecovery')} hint={t('notifyRecoveryHint')} />
+        </Card>
+        </Col>
 
-        <Form.Item
-          name="offline_alert_secs"
-          label={t('offlineAlertSecs')}
-          extra={t('offlineAlertSecsHint').replace('{min}', String(MIN_OFFLINE_ALERT_SECS))}
-          rules={[{
-            validator: (_, v) => (Number(v) >= MIN_OFFLINE_ALERT_SECS
-              ? Promise.resolve()
-              : Promise.reject(new Error(
-                t('offlineAlertSecsTooSmall').replace('{min}', String(MIN_OFFLINE_ALERT_SECS)),
-              ))),
-          }]}
+        {/* Telegram sits beside the global block, top-aligned with it: it only
+            has two fields, so on its own row it wasted most of the width. */}
+        <Col xs={24} lg={12}>
+
+        <Card
+          size="small"
+          title="Telegram"
+          /* The channel's on/off lives in the header rather than as a labelled
+             row inside: it governs the whole card, and putting it there removes
+             a full field from each channel. */
+          extra={
+            <Form.Item name="telegram_enabled" valuePropName="checked" noStyle>
+              <Switch size="small" />
+            </Form.Item>
+          }
+          style={{ marginBottom: 16 }}
         >
-          <InputNumber min={MIN_OFFLINE_ALERT_SECS} style={{ width: '100%' }} addonAfter={t('seconds')} />
-        </Form.Item>
-
-        <Form.Item name="notify_recovery" label={t('notifyRecovery')} extra={t('notifyRecoveryHint')} valuePropName="checked">
-          <Switch />
-        </Form.Item>
-
-        <Divider>Telegram</Divider>
-
-        <Form.Item name="telegram_enabled" label={t('enableChannel')} valuePropName="checked">
-          <Switch />
-        </Form.Item>
-        <Form.Item name="telegram_bot_token" label="Bot Token" extra={t('credentialKeepHint')}>
-          <Input.Password
-            autoComplete="off"
-            placeholder={cfg?.telegram_bot_token_set ? t('credentialConfigured') : t('credentialEmpty')}
-          />
-        </Form.Item>
-        <Form.Item name="telegram_chat_id" label="Chat ID" extra={t('telegramChatIdHint')}>
-          <Input autoComplete="off" placeholder="-1001234567890" />
-        </Form.Item>
-        <Form.Item>
+          <Row gutter={16}>
+            <Col xs={24} md={12}>
+              <Form.Item name="telegram_bot_token" label="Bot Token" extra={t('credentialKeepHint')}>
+                <Input.Password
+                  autoComplete="off"
+                  placeholder={cfg?.telegram_bot_token_set ? t('credentialConfigured') : t('credentialEmpty')}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="telegram_chat_id" label="Chat ID" extra={t('telegramChatIdHint')}>
+                <Input autoComplete="off" placeholder="-1001234567890" />
+              </Form.Item>
+            </Col>
+          </Row>
           <Button
             icon={<SendOutlined />}
             loading={testing === 'telegram'}
@@ -178,48 +223,73 @@ export default function NotifySettings() {
           >
             {t('saveAndTest')}
           </Button>
-        </Form.Item>
+        </Card>
+        </Col>
+        </Row>
 
-        <Divider>{t('email')}</Divider>
-
-        <Form.Item name="email_enabled" label={t('enableChannel')} valuePropName="checked">
-          <Switch />
-        </Form.Item>
-        <Form.Item name="smtp_host" label={t('smtpHost')}>
-          <Input autoComplete="off" placeholder="smtp.example.com" />
-        </Form.Item>
-        <Form.Item name="smtp_port" label={t('smtpPort')} extra={t('smtpPortHint')}>
-          <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="465" />
-        </Form.Item>
-        <Form.Item name="smtp_tls" label={t('smtpTls')} extra={t('smtpTlsHint')} valuePropName="checked">
-          <Switch />
-        </Form.Item>
-        <Form.Item name="smtp_username" label={t('smtpUsername')}>
-          <Input autoComplete="off" placeholder="ops@example.com" />
-        </Form.Item>
-        <Form.Item name="smtp_password" label={t('smtpPassword')} extra={t('credentialKeepHint')}>
-          <Input.Password
-            autoComplete="new-password"
-            placeholder={cfg?.smtp_password_set ? t('credentialConfigured') : t('credentialEmpty')}
-          />
-        </Form.Item>
-        <Form.Item name="smtp_from" label={t('smtpFrom')} extra={t('smtpFromHint')}>
-          <Input autoComplete="off" placeholder="ops@example.com" />
-        </Form.Item>
-        <Form.Item name="smtp_to" label={t('smtpTo')} extra={t('smtpToHint')}>
-          <Input autoComplete="off" placeholder="admin@example.com" />
-        </Form.Item>
-        <Form.Item>
-          <Space>
-            <Button
-              icon={<SendOutlined />}
-              loading={testing === 'email'}
-              onClick={() => onTest('email')}
-            >
-              {t('saveAndTest')}
-            </Button>
-          </Space>
-        </Form.Item>
+        <Card
+          size="small"
+          title={t('email')}
+          extra={
+            <Form.Item name="email_enabled" valuePropName="checked" noStyle>
+              <Switch size="small" />
+            </Form.Item>
+          }
+          style={{ marginBottom: 16 }}
+        >
+          {/* Full width, so the seven fields fit in two dense rows instead of
+              seven stacked ones. Grouped by what you set together: the server
+              (host/port/TLS) on one line, then credentials and addresses. */}
+          <Row gutter={16}>
+            <Col xs={24} md={12} lg={8}>
+              <Form.Item name="smtp_host" label={t('smtpHost')}>
+                <Input autoComplete="off" placeholder="smtp.example.com" />
+              </Form.Item>
+            </Col>
+            <Col xs={12} md={6} lg={4}>
+              <Form.Item name="smtp_port" label={t('smtpPort')} extra={t('smtpPortHint')}>
+                <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="465" />
+              </Form.Item>
+            </Col>
+            <Col xs={12} md={6} lg={4}>
+              <Form.Item name="smtp_tls" label={t('smtpTls')} extra={t('smtpTlsHint')} valuePropName="checked">
+                <Switch />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12} lg={8}>
+              <Form.Item name="smtp_username" label={t('smtpUsername')}>
+                <Input autoComplete="off" placeholder="ops@example.com" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={16}>
+            <Col xs={24} md={8}>
+              <Form.Item name="smtp_password" label={t('smtpPassword')} extra={t('credentialKeepHint')}>
+                <Input.Password
+                  autoComplete="new-password"
+                  placeholder={cfg?.smtp_password_set ? t('credentialConfigured') : t('credentialEmpty')}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item name="smtp_from" label={t('smtpFrom')} extra={t('smtpFromHint')}>
+                <Input autoComplete="off" placeholder="ops@example.com" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item name="smtp_to" label={t('smtpTo')} extra={t('smtpToHint')}>
+                <Input autoComplete="off" placeholder="admin@example.com" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Button
+            icon={<SendOutlined />}
+            loading={testing === 'email'}
+            onClick={() => onTest('email')}
+          >
+            {t('saveAndTest')}
+          </Button>
+        </Card>
 
         <Text type="secondary" style={{ fontSize: 12 }}>{t('notifyCredentialNote')}</Text>
       </Form>
