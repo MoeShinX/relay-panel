@@ -1,5 +1,5 @@
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, message, Popconfirm, Typography, Tag, Tooltip, Alert, Switch } from 'antd';
-import { PlusOutlined, ReloadOutlined, CopyOutlined, EditOutlined, CloudServerOutlined, CodeOutlined, ApiOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, CopyOutlined, EditOutlined, CloudServerOutlined, CodeOutlined, ApiOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import api from '../api/client';
 import type { ApiEnvelope, DeviceGroup, User, NodeStatus } from '../api/types';
@@ -32,6 +32,13 @@ export default function Groups() {
   const [cmdModalOpen, setCmdModalOpen] = useState(false);
   const [cmdModalContent, setCmdModalContent] = useState<{ title: ReactNode; body: ReactNode }>({ title: null, body: null });
   const [editing, setEditing] = useState<DeviceGroup | null>(null);
+  // v1.2.3: node-token rotation. `rotating` is the target group; `confirmName`
+  // is the typed group name that unlocks the button — rotation kicks every node
+  // in the group offline until each is re-enrolled, so it must not be one
+  // careless click away.
+  const [rotating, setRotating] = useState<DeviceGroup | null>(null);
+  const [confirmName, setConfirmName] = useState('');
+  const [rotateBusy, setRotateBusy] = useState(false);
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
 
@@ -167,6 +174,55 @@ export default function Groups() {
     setCmdModalOpen(true);
   };
 
+  /**
+   * Rotate the group's node token. The backend invalidates the old token and
+   * force-closes this group's live WS connections (a node that reconnected with
+   * the revoked token used to fetch an empty config and tear down all its
+   * listeners), so every node here is offline until re-enrolled.
+   *
+   * The new token is shown once, together with the ready-to-paste enrollment
+   * command — this is the moment the operator needs it, and hunting for it
+   * afterwards while nodes are down is the wrong time to go looking.
+   */
+  const handleRotateToken = async () => {
+    if (!rotating) return;
+    setRotateBusy(true);
+    try {
+      const res = await api.post<unknown, ApiEnvelope<{ token: string }>>(
+        `/groups/${rotating.id}/rotate-token`,
+      );
+      if (res.code !== 0 || !res.data) { message.error(res.message || t('tokenRotateFailed')); return; }
+      const newToken = res.data.token;
+      const panelUrl = await panelUrlRef();
+      const cmd = buildInstallCommand(newToken, panelUrl);
+      setRotating(null);
+      setConfirmName('');
+      load();
+      setCmdModalContent({
+        title: <span>{t('tokenRotated')}</span>,
+        body: (
+          <>
+            <Alert type="warning" showIcon style={{ marginBottom: 12 }} title={t('tokenRotatedHint')} />
+            <div style={{ marginBottom: 6 }}><Text strong>{t('nodeToken')}</Text></div>
+            <Input value={newToken} readOnly style={{ fontFamily: 'var(--rp-font-mono)', fontSize: 12, marginBottom: 12 }} />
+            <div style={{ marginBottom: 6 }}><Text strong>{t('installCommandTitle')}</Text></div>
+            <Input.TextArea value={cmd} readOnly autoSize={{ minRows: 3, maxRows: 5 }} style={{ fontFamily: 'var(--rp-font-mono)', fontSize: 12 }} />
+            <div style={{ textAlign: 'right', marginTop: 8 }}>
+              <Button type="primary" icon={<CopyOutlined />} onClick={() => doCopy(cmd, t('installCommandCopied'))}>
+                {t('copyInstallCommand')}
+              </Button>
+            </div>
+          </>
+        ),
+      });
+      setCmdModalOpen(true);
+    } catch {
+      message.error(t('tokenRotateFailed'));
+    } finally {
+      setRotateBusy(false);
+    }
+  };
+
   const typeColor = (gt: string) => {
     switch (gt) {
       case 'in': return 'green';
@@ -232,10 +288,20 @@ export default function Groups() {
         hidden ? <Tag>{t('yes')}</Tag> : <span style={{ color: 'var(--rp-text-tertiary)' }}>-</span>,
     },
     {
-      title: t('action'), key: 'action', width: 120,
+      title: t('action'), key: 'action', width: 190,
       render: (_: unknown, g: DeviceGroup) => (
-        <Space>
+        <Space size={0}>
           <Button size="small" type="text" icon={<EditOutlined />} onClick={() => handleEdit(g)}>{t('edit')}</Button>
+          <Tooltip title={t('rotateTokenHint')}>
+            <Button
+              size="small"
+              type="text"
+              icon={<SafetyCertificateOutlined />}
+              onClick={() => { setConfirmName(''); setRotating(g); }}
+            >
+              {t('rotateToken')}
+            </Button>
+          </Tooltip>
           <Popconfirm title={t('deleteGroupConfirm')} onConfirm={() => handleDelete(g.id)}>
             <Button danger size="small" type="text">{t('delete')}</Button>
           </Popconfirm>
@@ -343,6 +409,42 @@ export default function Groups() {
 
       <Modal title={cmdModalContent.title} open={cmdModalOpen} onCancel={() => setCmdModalOpen(false)} footer={null} width={580}>
         {cmdModalContent.body}
+      </Modal>
+
+      {/* v1.2.3: rotate confirmation. Deliberately heavier than a Popconfirm —
+          this disconnects every node in the group until each one is manually
+          re-enrolled, so it states the node count and requires the group name
+          to be typed. */}
+      <Modal
+        title={t('rotateTokenConfirmTitle')}
+        open={!!rotating}
+        onCancel={() => { setRotating(null); setConfirmName(''); }}
+        onOk={handleRotateToken}
+        okText={t('rotateTokenConfirmOk')}
+        cancelText={t('cancel')}
+        confirmLoading={rotateBusy}
+        okButtonProps={{ danger: true, disabled: confirmName.trim() !== (rotating?.name ?? '') }}
+      >
+        {rotating && (
+          <>
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 12 }}
+              title={t('rotateTokenWarnTitle').replace('{count}', String(nodeCount(rotating.id)))}
+              description={t('rotateTokenWarnDesc')}
+            />
+            <div style={{ marginBottom: 6 }}>
+              {t('rotateTokenTypeName').replace('{name}', rotating.name)}
+            </div>
+            <Input
+              value={confirmName}
+              onChange={(e) => setConfirmName(e.target.value)}
+              placeholder={rotating.name}
+              autoComplete="off"
+            />
+          </>
+        )}
       </Modal>
     </>
   );
