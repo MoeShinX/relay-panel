@@ -741,7 +741,7 @@ const IMPORT_DEFAULTS = {
         extra={udpOnly ? t('maxConnectionsUdpUnsupported') : t('maxConnectionsHint')}
         initialValue={0}
       >
-        <InputNumber min={0} style={{ width: '100%' }} placeholder="0" disabled={udpOnly} />
+        <InputNumber min={0} style={{ width: '100%', maxWidth: 252 }} placeholder="0" disabled={udpOnly} />
       </Form.Item>
       <Form.Item
         name="auto_restart_minutes"
@@ -794,7 +794,7 @@ const IMPORT_DEFAULTS = {
         </span>
       }
     >
-      <Select options={strategyOptions} />
+      <Select options={strategyOptions} style={{ maxWidth: 252 }} />
     </Form.Item>
   );
 
@@ -814,7 +814,7 @@ const IMPORT_DEFAULTS = {
               >
                 {/* Wide enough for a full IPv6 literal (up to 39 chars) — 180px
                     truncated them mid-address. */}
-                <Input placeholder={t('targetAddress')} style={{ width: 300 }} />
+                <Input placeholder={t('targetAddress')} style={{ width: 320, maxWidth: 320 }} />
               </Form.Item>
               <Form.Item
                 {...field}
@@ -949,7 +949,7 @@ const IMPORT_DEFAULTS = {
       />
 
       <Modal title={t('addRule')} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={() => createForm.submit()} okText={t('create')} cancelText={t('cancel')} width={620}>
-        <Form form={createForm} onFinish={handleCreate} layout="vertical">
+        <Form form={createForm} onFinish={handleCreate} layout="vertical" className="rp-rule-form">
           <Tabs items={[
             {
               key: 'basic',
@@ -1009,7 +1009,7 @@ const IMPORT_DEFAULTS = {
       </Modal>
 
       <Modal title={t('editRule')} open={editOpen} onCancel={() => setEditOpen(false)} onOk={() => editForm.submit()} okText={t('save')} cancelText={t('cancel')} width={620}>
-        <Form form={editForm} onFinish={handleUpdate} layout="vertical">
+        <Form form={editForm} onFinish={handleUpdate} layout="vertical" className="rp-rule-form">
           <Tabs items={[
             {
               key: 'basic',
