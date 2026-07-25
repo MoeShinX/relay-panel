@@ -28,28 +28,30 @@
 
 ## ✨ Features
 
-- 🔀 **Forwarding rules** — TCP/UDP port forwarding with multi-target, failover and round-robin load balancing; low latency and jitter on long chains
-- 🛡️ **Circuit breaker** — a target that keeps failing is skipped for a while; all-down triggers probe mode for auto-recovery
-- 🌐 **Domain targets & DDNS following** — targets can be domain names; a DDNS target that changes IP is followed automatically, with no manual rule/node restart
-- ♻️ **High-concurrency stability** — dead connections left by dropped links are reclaimed automatically, sustaining long-running high-connection load
-- 🚦 **Per-rule connection cap** — each rule can cap its own concurrent connections; anything beyond it is refused (TCP)
-- 🔄 **Rule restart** — restart one rule, batch-restart a selection, or set an automatic interval; a restart drops the connections established on that rule and rebuilds its listeners
-- 🛒 **Plan shop & billing** — self-service purchase (balance charge) with order history; admin plan CRUD, plans grant lines and auto-authorize on purchase
-- 💳 **Redeem codes** — admins generate codes in batches; users top up their own balance from the account page or the shop, with no payment gateway involved
-- 💰 **Up + down billing + per-line rate** — charged as `(upload + download) × line rate (0.1–100)` against the plan quota
-- 🔁 **Single current plan** — one plan per user: buying the **same** plan renews it (stack traffic / extend a time plan), buying a **different** plan switches (full replace, with a confirm); rules on lost lines auto-pause and auto-resume once re-authorized
-- 📈 **Traffic & quotas** — per-rule and per-user tracking with configurable limits (rule count, bandwidth, traffic cap)
-- 📊 **Traffic charts** — usage over the last 1 / 7 / 30 days, stacked by line in distinct colours so you can see which line is consuming the quota
-- 🔔 **Node offline alerts** — Telegram or email notification when a node stays unreachable past a threshold, and again when it recovers
-- 📋 **Multi-plan registration** — admins configure allowed plans; users choose on sign-up
-- 👤 **User management** — manage any user's rules, plan (assign / renew / switch / expiry / remove), reset traffic, reset password, ban/unban
-- 🖥️ **Device group management** — expandable groups with node listings; a "hidden" toggle hides a group from regular users' Node Status page only (rules keep working); node removal does not affect groups or rules
-- ⬆️ **One-click node upgrade** — trigger from the panel; the node self-updates from the official release, upgrade-only and never downgrading, without logging into the node
-- 🖱️ **Minimal rule import/export** — batch import / batch pause-resume with automatic node distribution
-- 🖥️ **Live node status** — CPU, memory, connections, node version (highlighted when an upgrade is available)
-- 🌍 **Node region detection** — automatically identifies each node's country/region with flag display
-- 🗄️ **Dual database** — SQLite (default, zero-config) or PostgreSQL
+- 🔀 **Forwarding rules** — TCP/UDP multi-target forwarding, failover / round-robin balancing, circuit breaker with auto-recovery, domain targets that follow DDNS
+- 🚦 **Connection control** — per-rule concurrent-connection cap; restart one rule, a batch, or on a schedule — dropping old connections and rebuilding listeners
+- 🛒 **Plans & billing** — self-service plan purchase and redeem-code top-ups; charged as `(upload + download) × line rate`; one plan per user, renewals stack and switching replaces
+- 📊 **Traffic visibility** — per-rule and per-user metering, with 1 / 7 / 30-day charts stacked by line so you can see which one is consuming the quota
+- 🖥️ **Node management** — live CPU / memory / connections, region detection, Telegram or email alerts on offline, one-click upgrade from the panel (no SSH)
+- 👤 **Users & groups** — manage any user's rules and plan, reset traffic or password, ban; device groups can be hidden, and removing a node doesn't affect rules
+- 🗄️ **Deployment-friendly** — SQLite (zero-config) or PostgreSQL; panel and node both support amd64 / arm64
 - 🔒 **Security** — first login forces password change; node auth via Bearer token
+
+Full feature reference and user docs: **[relaypanel.dev](https://relaypanel.dev)**
+
+---
+
+## 🚀 Quick start
+
+**One command deploy:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MoeShinX/relay-panel/main/install.sh | bash
+```
+
+> 🔑 **Default login `admin` / `admin123` — first login forces a password change.**
+
+📖 Full guide: **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
 
 ---
 
@@ -67,43 +69,15 @@
 
 ---
 
-## 🚀 Quick start
-
-**One command deploy:**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/MoeShinX/relay-panel/main/install.sh | bash
-```
-
-> 🔑 **Default login `admin` / `admin123` — first login forces a password change.**
-
-> 🖥️ **Platform**: both the panel image and the node support **amd64 / arm64**, so ARM servers can deploy directly. The panel image is a multi-arch manifest (`docker pull` picks the right arch automatically) and the node install script auto-detects the arch via `uname -m` — no manual selection needed.
-
-📖 Full guide: **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
-
----
-
 ## 🔄 Update
+
+**Panel** (back up `.env` and your database first):
 
 ```bash
 cd /opt/relay-panel && git pull --quiet && ./deploy.sh
 ```
 
-> ⚠️ Back up `.env` and your database before updating.
-
-**Forwarding nodes: Panel → Node Status → click "Upgrade" on each node.** No SSH
-required. The panel pushes the upgrade to the node, which pulls the new version
-from the official Release itself (sha256 verified, never downgrades). Upgrading a
-node drops the forwarding connections currently running on it.
-
-> **One-click upgrade is available for systemd nodes only** — self-upgrade relies
-> on "old process exits, supervisor starts the new one". Docker nodes show an
-> "update the image" hint instead (pull the latest image and recreate the
-> container); a node run manually in the foreground has nothing to restart it, so
-> the button is greyed out.
-
-Manual upgrade (when one-click isn't available): **Device Groups → Copy Install
-Command** → paste on the node. See the [node documentation](docs/NODE.md#update).
+**Nodes**: Panel → Node Status → click "Upgrade". No SSH. systemd nodes only (Docker nodes update the image instead); upgrading drops that node's live forwarding connections. See the [node documentation](docs/NODE.md#update).
 
 ---
 
@@ -119,14 +93,7 @@ python3 tests/e2e_test.py                   # end-to-end test
 
 ## 📦 Tech stack
 
-| Layer | Choice |
-|-------|--------|
-| Backend | Rust · Axum 0.8 · Tokio · sqlx |
-| Database | SQLite / PostgreSQL |
-| Auth | JWT · bcrypt |
-| Forward | Tokio async TCP + UDP |
-| Frontend | React 19 · TypeScript · Ant Design |
-| Deploy | Docker multi-stage · Compose |
+Rust · Axum · Tokio · sqlx · SQLite/PostgreSQL · JWT · React 19 · TypeScript · Ant Design · Docker Compose
 
 ---
 
