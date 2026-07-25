@@ -741,7 +741,10 @@ const IMPORT_DEFAULTS = {
         extra={udpOnly ? t('maxConnectionsUdpUnsupported') : t('maxConnectionsHint')}
         initialValue={0}
       >
-        <InputNumber min={0} style={{ width: '100%' }} placeholder="0" disabled={udpOnly} />
+        {/* Caps the width instead of filling the row: this holds a small
+            integer, and a 530px box for "0" reads as if something is missing.
+            maxWidth (not a fixed width) so it still shrinks on a narrow modal. */}
+        <InputNumber min={0} style={{ width: '100%', maxWidth: 200 }} placeholder="0" disabled={udpOnly} />
       </Form.Item>
       <Form.Item
         name="auto_restart_minutes"
@@ -760,7 +763,7 @@ const IMPORT_DEFAULTS = {
           },
         }]}
       >
-        <InputNumber min={0} style={{ width: '100%' }} addonAfter={t('minutes')} placeholder="0" />
+        <InputNumber min={0} style={{ width: '100%', maxWidth: 220 }} addonAfter={t('minutes')} placeholder="0" />
       </Form.Item>
     </>
     );
@@ -992,8 +995,8 @@ const IMPORT_DEFAULTS = {
                   extra={t('rateLimitsHint')}
                 >
                   <Space orientation="vertical" style={{ width: '100%' }}>
-                    <Form.Item name="upload_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('uploadLimit')} addonAfter="Mbps" style={{ width: '100%' }} placeholder="0" /></Form.Item>
-                    <Form.Item name="download_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('downloadLimit')} addonAfter="Mbps" style={{ width: '100%' }} placeholder="0" /></Form.Item>
+                    <Form.Item name="upload_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('uploadLimit')} addonAfter="Mbps" style={{ width: '100%', maxWidth: 300 }} placeholder="0" /></Form.Item>
+                    <Form.Item name="download_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('downloadLimit')} addonAfter="Mbps" style={{ width: '100%', maxWidth: 300 }} placeholder="0" /></Form.Item>
                   </Space>
                 </Form.Item>
                 {/* v1.2.0: the connection cap / auto-restart controls are
@@ -1048,8 +1051,8 @@ const IMPORT_DEFAULTS = {
                   extra={t('rateLimitsHint')}
                 >
                   <Space orientation="vertical" style={{ width: '100%' }}>
-                    <Form.Item name="upload_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('uploadLimit')} addonAfter="Mbps" style={{ width: '100%' }} placeholder="0" /></Form.Item>
-                    <Form.Item name="download_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('downloadLimit')} addonAfter="Mbps" style={{ width: '100%' }} placeholder="0" /></Form.Item>
+                    <Form.Item name="upload_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('uploadLimit')} addonAfter="Mbps" style={{ width: '100%', maxWidth: 300 }} placeholder="0" /></Form.Item>
+                    <Form.Item name="download_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('downloadLimit')} addonAfter="Mbps" style={{ width: '100%', maxWidth: 300 }} placeholder="0" /></Form.Item>
                   </Space>
                 </Form.Item>
                 {renderConnectionControls(editProto)}
