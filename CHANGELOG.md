@@ -8,6 +8,50 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [1.2.3] - 2026-07-26
+
+Admin-console layout and a token-rotation button. Panel only — no node
+release, no schema change, nothing to reconfigure: pull the image and restart.
+
+### Added
+
+- **Rotate a device group's node token from the UI.** The endpoint has existed
+  since v0.3.9 but nothing ever called it. Rotation is a hard cutover, not a
+  handover: the panel cannot push a new token to a node over the existing
+  connection, because the token is exactly what that node authenticates with.
+  Every node in the group is disconnected until re-enrolled, so the button
+  states how many will drop, asks for the group name to be typed, and then
+  hands back the new token together with the ready-to-paste enrollment command.
+  Use it when a token has leaked.
+
+### Changed
+
+- **The forwarding tab now has one field width.** 负载策略 and 最大连接数 were
+  full-width while 限速 and 自动重启间隔 came out around half that — the latter
+  two carry addons, which antd wraps in a group that `width:100%` doesn't
+  stretch. All four now line up. The target address is a little wider, sized to
+  the most the row takes before the delete button wraps onto its own line.
+
+- **The notification settings are laid out in columns.** Thirteen full-width
+  fields in one stack meant a chat id got an 1800px input on a wide screen, and
+  configuring email meant scrolling past Telegram. Global settings and Telegram
+  now sit side by side, email spans the row beneath them, and each channel's
+  on/off moved into its card header. Everything collapses to a single column on
+  narrow screens.
+
+### Docs
+
+- **Troubleshooting is now maintained in one place — the site.** It had drifted
+  into three places that didn't cross-link and covered different problems: a
+  node showing offline had no answer on the site, and a panel failing with
+  PoolTimedOut had none in the repo. The site now covers both panel deployment
+  and node problems; `docs/DEPLOYMENT.md` and the node docs keep a short
+  first-resort list and link out. Two entries that existed only in
+  `DEPLOYMENT.md` were moved to the site rather than dropped.
+- The READMEs are down to what someone needs to decide whether the panel fits:
+  8 grouped feature bullets instead of 22, and the upgrade section no longer
+  repeats what the node docs already say.
+
 ## [1.2.2] - 2026-07-25
 
 Admin-console usability. Panel only — no node release, no schema change, and
