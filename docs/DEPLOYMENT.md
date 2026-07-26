@@ -409,16 +409,22 @@ per-binary systemd service — both run inside containers.
 
 ## Troubleshooting
 
+The full, maintained troubleshooting guide lives at
+**[relaypanel.dev/troubleshooting](https://relaypanel.dev/troubleshooting.html)**
+— panel deployment (PoolTimedOut, PG auth, leftover networks, panel not
+reachable) and node problems (offline, forwarding broken, connection count
+stuck) with the actual commands to run. It is kept in one place so the two
+don't drift apart.
+
+The first-resort checks, for when you don't want to leave this file:
+
 | Symptom | Fix |
 |---------|-----|
 | `JWT_SECRET must be set` | You didn't create `.env` or it's empty. Run step 2. |
-| Panel unreachable | `docker compose logs panel` — check for binding errors. |
+| Panel unreachable | `docker compose logs panel` — the log names the actual cause. |
+| Node shows offline but the process is running | The node can't reach the panel over HTTP (firewall / `PUBLIC_PANEL_URL`). Check `journalctl -u relay-node` for `report_status` errors. |
 | Node not forwarding | Verify `NODE_TOKEN` matches a group token from the UI. |
 | Port already in use | Another process holds the listen port; pick a different one in the rule. |
-| Users kicked to login page repeatedly | The panel's DB is temporarily unreachable (lock contention / disk full). Check `docker compose logs panel` for `auth db lookup failed`. This is a 500, not a token problem — the page recovers once the DB is healthy. |
-| Node shows "离线" but process is running | The node can't reach the panel over HTTP (firewall / `PUBLIC_PANEL_URL`). Check `journalctl -u relay-node` for `report_status` errors. |
-| Traffic keeps growing without bounds | A rule's target is unreachable and connections are piling up. Check the node's listener errors column on the Nodes page. |
-| PostgreSQL connection failed | `deploy.sh` fails fast with "Cannot connect to external PostgreSQL". Check host, port, user, password, database name, and firewall. For embedded PG: `docker compose logs postgres`. |
 
 ### Logging
 

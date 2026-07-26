@@ -268,6 +268,8 @@ rm -rf /opt/relay-node
 
 ## 故障排查
 
+> 完整版(含面板部署问题)在 **[relaypanel.dev/troubleshooting](https://relaypanel.dev/troubleshooting.html)**。下面是节点侧的速查。
+
 ### 节点在面板里显示「离线」
 - 检查 `systemctl status relay-node` 是否 `active (running)`
 - 检查节点能否访问面板：`curl -sf $PANEL_URL/`

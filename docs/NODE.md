@@ -325,6 +325,8 @@ rm -rf /opt/relay-node
 
 ## Troubleshooting
 
+> The full guide, including panel-deployment issues, is at **[relaypanel.dev/troubleshooting](https://relaypanel.dev/en/troubleshooting.html)**. Below is the node-side quick reference.
+
 ### Node shows "offline" in the panel
 - Check `systemctl status relay-node` is `active (running)`
 - Check `PANEL_URL` is reachable from the node: `curl -sf $PANEL_URL/`
