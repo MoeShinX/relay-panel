@@ -13,7 +13,7 @@ import type { ApiEnvelope, SiteNotice } from '../api/types';
  * Same cache + subscriber shape as useSite, for the same reason — an admin who
  * edits the announcement should see the banner change, not a stale copy.
  */
-const EMPTY: SiteNotice = { announcement: '', contact: '' };
+const EMPTY: SiteNotice = { announcement: '', announcement_type: 'info', contact: '' };
 
 let cached: Promise<SiteNotice> | null = null;
 const subscribers = new Set<(n: SiteNotice) => void>();

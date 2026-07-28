@@ -923,6 +923,7 @@ mod tests {
                 site_name: "我的中转".into(),
                 subtitle: "私有部署".into(),
                 announcement: secret_notice.into(),
+                announcement_type: "warning".into(),
                 contact: "tg:@someone".into(),
             }),
         )

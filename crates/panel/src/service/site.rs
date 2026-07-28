@@ -34,10 +34,26 @@ pub struct SiteConfig {
     pub subtitle: String,
     /// Free text shown to signed-in users on the dashboard and account page.
     /// Empty = the banner is not rendered at all, rather than an empty box.
+    ///
+    /// v1.3.0: a small Markdown subset (bold / italic / code / links / lists)
+    /// is rendered by the frontend. Stored verbatim — the rendering side turns
+    /// it into React elements, never into HTML, so there is nothing to escape
+    /// here.
     pub announcement: String,
+    /// Banner colour: "info" | "success" | "warning" | "error".
+    ///
+    /// An enum-by-convention rather than free-form CSS. Letting an operator
+    /// type a colour would mean shipping their string into a style attribute,
+    /// which is exactly the kind of thing that turns an announcement field into
+    /// an injection point — and four severities is what a banner actually needs.
+    pub announcement_type: String,
     /// How users reach the operator (Telegram handle, email, whatever).
     pub contact: String,
 }
+
+/// Allowed values for `announcement_type`, and the fallback for anything else.
+pub const ANNOUNCEMENT_TYPES: [&str; 4] = ["info", "success", "warning", "error"];
+pub const DEFAULT_ANNOUNCEMENT_TYPE: &str = "info";
 
 impl SiteConfig {
     /// Tolerates a missing, empty, or corrupt row — the panel must render its
@@ -49,6 +65,11 @@ impl SiteConfig {
             .unwrap_or_default();
         if cfg.site_name.trim().is_empty() {
             cfg.site_name = DEFAULT_NAME.to_string();
+        }
+        // Rows written before v1.3.0 have no type at all, and a bad value must
+        // not reach the frontend as an unknown antd Alert type.
+        if !ANNOUNCEMENT_TYPES.contains(&cfg.announcement_type.as_str()) {
+            cfg.announcement_type = DEFAULT_ANNOUNCEMENT_TYPE.to_string();
         }
         cfg
     }
@@ -66,6 +87,14 @@ impl SiteConfig {
             site_name: clamp(&self.site_name, MAX_NAME),
             subtitle: clamp(&self.subtitle, MAX_SUBTITLE),
             announcement: clamp(&self.announcement, MAX_ANNOUNCEMENT),
+            // Whitelist, not clamp: this value is handed straight to antd's
+            // Alert `type`, so anything outside the four known severities has
+            // to become a known one rather than be passed through shortened.
+            announcement_type: if ANNOUNCEMENT_TYPES.contains(&self.announcement_type.as_str()) {
+                self.announcement_type.clone()
+            } else {
+                DEFAULT_ANNOUNCEMENT_TYPE.to_string()
+            },
             contact: clamp(&self.contact, MAX_CONTACT),
         };
         if out.site_name.is_empty() {
@@ -94,6 +123,39 @@ mod tests {
         ] {
             let cfg = SiteConfig::from_json(raw);
             assert_eq!(cfg.site_name, DEFAULT_NAME, "for {raw:?}");
+        }
+    }
+
+    /// An unknown or absent banner type must become a known one. It is handed
+    /// straight to antd's Alert `type`, and rows written before v1.3.0 have no
+    /// value at all.
+    #[test]
+    fn announcement_type_falls_back_to_a_known_severity() {
+        for raw in [
+            None,
+            Some("{}"),
+            Some(r#"{"announcement_type":""}"#),
+            Some(r#"{"announcement_type":"chartreuse"}"#),
+            // The reason this is a whitelist and not a clamp.
+            Some(r#"{"announcement_type":"red; background:url(x)"}"#),
+        ] {
+            assert_eq!(
+                SiteConfig::from_json(raw).announcement_type,
+                DEFAULT_ANNOUNCEMENT_TYPE,
+                "for {raw:?}"
+            );
+        }
+    }
+
+    /// Each of the four supported severities survives a round trip.
+    #[test]
+    fn announcement_type_keeps_every_supported_value() {
+        for want in ANNOUNCEMENT_TYPES {
+            let cfg = SiteConfig {
+                announcement_type: want.to_string(),
+                ..Default::default()
+            };
+            assert_eq!(cfg.sanitized().announcement_type, want);
         }
     }
 

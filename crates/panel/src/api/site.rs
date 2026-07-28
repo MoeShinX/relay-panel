@@ -45,6 +45,9 @@ pub async fn get_public_site(State(state): State<AppState>) -> Json<ApiResponse<
 #[derive(Debug, Serialize)]
 pub struct SiteNotice {
     pub announcement: String,
+    /// "info" | "success" | "warning" | "error" — already validated by
+    /// SiteConfig::from_json, so the frontend can use it directly.
+    pub announcement_type: String,
     pub contact: String,
 }
 
@@ -56,6 +59,7 @@ pub async fn get_site_notice(
     let cfg = load(&state).await;
     Json(ApiResponse::success(SiteNotice {
         announcement: cfg.announcement,
+        announcement_type: cfg.announcement_type,
         contact: cfg.contact,
     }))
 }
@@ -77,6 +81,8 @@ pub struct UpdateSiteRequest {
     #[serde(default)]
     pub announcement: String,
     #[serde(default)]
+    pub announcement_type: String,
+    #[serde(default)]
     pub contact: String,
 }
 
@@ -92,6 +98,7 @@ pub async fn update_site_settings(
         site_name: req.site_name,
         subtitle: req.subtitle,
         announcement: req.announcement,
+        announcement_type: req.announcement_type,
         contact: req.contact,
     }
     .sanitized();

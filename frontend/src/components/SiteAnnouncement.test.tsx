@@ -20,7 +20,7 @@ const renderBanner = async () => { await act(async () => { render(<SiteAnnouncem
 
 describe('SiteAnnouncement', () => {
   it('renders the announcement text when the operator set one', async () => {
-    mockGet.mockResolvedValue(ok({ announcement: '今晚 02:00 维护', contact: '' }));
+    mockGet.mockResolvedValue(ok({ announcement: '今晚 02:00 维护', announcement_type: 'warning', contact: '' }));
     await renderBanner();
     expect(screen.getByText('今晚 02:00 维护')).toBeInTheDocument();
   });
@@ -28,7 +28,7 @@ describe('SiteAnnouncement', () => {
   it('renders nothing at all when the announcement is empty', async () => {
     // An operator who never writes one must not get a permanent empty box —
     // this is the default state for every fresh install.
-    mockGet.mockResolvedValue(ok({ announcement: '', contact: 'tg:@ops' }));
+    mockGet.mockResolvedValue(ok({ announcement: '', announcement_type: 'info', contact: 'tg:@ops' }));
     const { container } = await act(async () => render(<SiteAnnouncement />)) as unknown as { container: HTMLElement };
     expect(container).toBeEmptyDOMElement();
   });
@@ -41,10 +41,31 @@ describe('SiteAnnouncement', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it('uses the configured banner severity', async () => {
+    mockGet.mockResolvedValue(ok({ announcement: '维护', announcement_type: 'error', contact: '' }));
+    await renderBanner();
+    expect(document.querySelector('.ant-alert-error')).not.toBeNull();
+  });
+
+  it('falls back to info when the severity is unknown', async () => {
+    // The backend coerces this already; the component must not pass an unknown
+    // value through to antd, where it would render as an unstyled banner.
+    mockGet.mockResolvedValue(ok({ announcement: '维护', announcement_type: 'chartreuse', contact: '' }));
+    await renderBanner();
+    expect(document.querySelector('.ant-alert-info')).not.toBeNull();
+  });
+
+  it('renders the markdown subset', async () => {
+    mockGet.mockResolvedValue(ok({ announcement: '**加粗** 和 [链接](https://example.com)', announcement_type: 'info', contact: '' }));
+    await renderBanner();
+    expect(document.querySelector('.ant-alert strong')?.textContent).toBe('加粗');
+    expect(document.querySelector('.ant-alert a')?.getAttribute('href')).toBe('https://example.com');
+  });
+
   it('never renders the announcement as HTML', async () => {
     // Admin-authored, but injecting markup into every user's page is not a
     // capability this field should hand out.
-    mockGet.mockResolvedValue(ok({ announcement: '<img src=x onerror=alert(1)>', contact: '' }));
+    mockGet.mockResolvedValue(ok({ announcement: '<img src=x onerror=alert(1)>', announcement_type: 'info', contact: '' }));
     await renderBanner();
     expect(screen.getByText('<img src=x onerror=alert(1)>')).toBeInTheDocument();
     expect(document.querySelector('img')).toBeNull();

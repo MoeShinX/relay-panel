@@ -219,6 +219,8 @@ export interface PublicSite {
 /** v1.3.0: the signed-in half of the site config. */
 export interface SiteNotice {
   announcement: string;
+  /** "info" | "success" | "warning" | "error" — validated server-side. */
+  announcement_type: string;
   contact: string;
 }
 
