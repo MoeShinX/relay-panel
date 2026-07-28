@@ -17,6 +17,12 @@ const MAX_SUBTITLE = 128;
 const MAX_ANNOUNCEMENT = 4000;
 const MAX_CONTACT = 256;
 
+// The severities the backend accepts. Kept as a const tuple so the preview can
+// hand antd's Alert a properly narrowed type — Form.useWatch only knows the
+// field is a string.
+const ALERT_TYPES = ['info', 'success', 'warning', 'error'] as const;
+type AlertType = (typeof ALERT_TYPES)[number];
+
 /**
  * v1.3.0: site identity — name, subtitle, announcement, support contact.
  *
@@ -36,6 +42,9 @@ export default function SiteSettings() {
   // making the operator save and navigate to see what they wrote.
   const announcement = Form.useWatch('announcement', form);
   const announcementType = Form.useWatch('announcement_type', form);
+  const previewType: AlertType = (ALERT_TYPES as readonly string[]).includes(announcementType)
+    ? (announcementType as AlertType)
+    : 'info';
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -145,7 +154,7 @@ export default function SiteSettings() {
         {announcement?.trim() ? (
           <Form.Item label={t('siteAnnouncementPreview')}>
             <Alert
-              type={announcementType || 'info'}
+              type={previewType}
               showIcon
               description={
                 <div style={{ whiteSpace: 'pre-wrap' }}>{renderMarkdown(announcement)}</div>
