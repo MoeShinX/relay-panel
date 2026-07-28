@@ -712,4 +712,7 @@ export const enUS: Dict = {
   configViewer: 'Configuration',
   singBoxConfig: 'sing-box Config',
   secret: 'Secret',
+  enabled: 'Enabled',
+  yes: 'Yes',
+  no: 'No',
 };
