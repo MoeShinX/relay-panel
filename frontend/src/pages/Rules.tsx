@@ -1,6 +1,6 @@
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, message, Popconfirm, Tag, Alert, Typography, Dropdown, Switch, Tabs, Spin, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
-import { PlusOutlined, ReloadOutlined, EditOutlined, ApiOutlined, CopyOutlined, DownloadOutlined, UploadOutlined, PauseCircleOutlined, PlayCircleOutlined, DeleteOutlined, ArrowUpOutlined, ArrowDownOutlined, MedicineBoxOutlined, QuestionCircleOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, EditOutlined, ApiOutlined, CopyOutlined, DownloadOutlined, UploadOutlined, PauseCircleOutlined, PlayCircleOutlined, DeleteOutlined, ArrowUpOutlined, ArrowDownOutlined, MedicineBoxOutlined, QuestionCircleOutlined, ThunderboltOutlined, SearchOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api/client';
@@ -90,6 +90,9 @@ export default function Rules() {
   // v0.4.9: group-name column + filter. selectedGroup === null means "all".
   // (Explicit null, not !selectedGroup, so a future id of 0 wouldn't be falsy.)
   const [selectedGroup, setSelectedGroup] = useState<number | null>(null);
+  // Client-side filter over the already-loaded rules — /rules returns the whole
+  // (owner-scoped) set, so searching needs no round-trip.
+  const [ruleSearch, setRuleSearch] = useState('');
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
 
   const load = useCallback(async () => {
@@ -188,12 +191,26 @@ export default function Rules() {
     }
     return m;
   }, [groups, sharedGroups]);
-  // The rules actually shown: filtered by the selected inbound group, or all
-  // when selectedGroup === null. Computed once so the table + count stay in sync.
-  const visibleRules = useMemo(
-    () => rules.filter(r => selectedGroup === null || r.device_group_in === selectedGroup),
-    [rules, selectedGroup],
-  );
+  // The rules actually shown: the group filter and the search box compose, so
+  // "this group, port 443" works. Computed once so the table + count stay in
+  // sync.
+  //
+  // Search matches name, listen port and target address. Targets are read via
+  // ruleTargets() rather than target_addr alone: a multi-target rule keeps the
+  // first target in that column, and searching for a backup target should still
+  // find the rule.
+  const visibleRules = useMemo(() => {
+    const q = ruleSearch.trim().toLowerCase();
+    return rules.filter(r => {
+      if (selectedGroup !== null && r.device_group_in !== selectedGroup) return false;
+      if (!q) return true;
+      if (r.name.toLowerCase().includes(q)) return true;
+      if (String(r.listen_port).includes(q)) return true;
+      return ruleTargets(r).some(
+        tgt => tgt.host.toLowerCase().includes(q) || String(tgt.port).includes(q),
+      );
+    });
+  }, [rules, selectedGroup, ruleSearch]);
 
   const handleCreate = async (values: {
     name: string; listen_port: number | null; protocol: string;
@@ -864,7 +881,15 @@ const IMPORT_DEFAULTS = {
     <>
       <div className="rp-page-header">
         <h2 className="rp-page-title"><ApiOutlined /> {t('forwardRules')}</h2>
-        <Space>
+        <Space wrap>
+          <Input
+            allowClear
+            prefix={<SearchOutlined />}
+            placeholder={t('searchRulePlaceholder')}
+            value={ruleSearch}
+            onChange={(e) => { setRuleSearch(e.target.value); setSelectedRowKeys([]); }}
+            style={{ width: 220 }}
+          />
           {/* v0.4.9: filter by inbound group. Only groups that actually have
               rules are offered, so the list stays short for large fleets. */}
           <Select
