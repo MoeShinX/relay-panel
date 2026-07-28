@@ -16,6 +16,7 @@ pub mod notify;
 pub mod redeem;
 pub mod restart;
 pub mod security_headers;
+pub mod site;
 pub mod stats;
 pub mod system;
 pub mod ws;
@@ -47,6 +48,16 @@ pub fn routes() -> Router<AppState> {
             "/auth/registration-status",
             axum::routing::get(auth::registration_status),
         )
+        // v1.3.0: public site branding. Unauthenticated because the login page
+        // renders the operator's name before anyone has a token. Carries ONLY
+        // name + subtitle — the announcement and support contact are behind
+        // /user/site-notice.
+        .route("/site", axum::routing::get(site::get_public_site))
+        // v1.3.0: the signed-in half of the site config.
+        .route(
+            "/user/site-notice",
+            axum::routing::get(site::get_site_notice),
+        )
         // Any authenticated user can change their own password
         .route("/user/password", axum::routing::put(admin::change_password))
         // Any authenticated user can read their own account info (no password)
@@ -58,6 +69,12 @@ pub fn routes() -> Router<AppState> {
         // from the token — there is no user_id in the body, so it can never
         // credit another account.
         .route("/user/redeem", axum::routing::post(redeem::redeem_code))
+        // v1.3.0: the caller's own top-up history, for the account page. Scoped
+        // to the token's uid — there is no id in the path.
+        .route(
+            "/user/redeem-records",
+            axum::routing::get(redeem::list_my_redeem_records),
+        )
         // v1.0.8: public plan list (hidden excluded) for the shop.
         .route("/plans", axum::routing::get(admin::list_public_plans))
         // Admin
@@ -199,6 +216,11 @@ pub fn routes() -> Router<AppState> {
             "/admin/settings/registration",
             axum::routing::get(admin::get_registration_settings)
                 .put(admin::update_registration_settings),
+        )
+        // v1.3.0: site identity (name / subtitle / announcement / contact).
+        .route(
+            "/admin/settings/site",
+            axum::routing::get(site::get_site_settings).put(site::update_site_settings),
         )
         // v1.2.0: node-offline notification settings. GET never returns the bot
         // token / SMTP password (only whether one is set); PUT treats an empty

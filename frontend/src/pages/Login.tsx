@@ -6,6 +6,7 @@ import api from '../api/client';
 import type { ApiEnvelope, LoginResponse, RegistrationStatus } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { useAuth } from '../auth/useAuth';
+import { useSite } from '../hooks/useSite';
 
 const { Title, Text } = Typography;
 
@@ -13,6 +14,7 @@ export default function Login() {
   const navigate = useNavigate();
   const { t, lang, setLang } = useI18n();
   const { login } = useAuth();
+  const site = useSite();
   // v0.4.10 PR3: whether to show the "create account" link. null = still
   // loading (don't flash the link then remove it); a network failure leaves
   // it hidden rather than guessing.
@@ -68,8 +70,10 @@ export default function Login() {
       </div>
       <Card style={{ width: 380, boxShadow: 'var(--rp-shadow)' }}>
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
-          <Title level={3} style={{ margin: 0, fontWeight: 600 }}>{t('brand')}</Title>
-          <Text type="secondary" style={{ fontSize: 13 }}>{t('subtitle')}</Text>
+          {/* v1.3.0: operator-configurable branding, falling back to the
+              translated default so an unconfigured panel looks unchanged. */}
+          <Title level={3} style={{ margin: 0, fontWeight: 600 }}>{site.site_name || t('brand')}</Title>
+          <Text type="secondary" style={{ fontSize: 13 }}>{site.subtitle || t('subtitle')}</Text>
         </div>
 
         {/* v0.3.6 / v0.4.22: first-login security reminder. Only shown when

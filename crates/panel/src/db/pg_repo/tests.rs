@@ -5225,3 +5225,55 @@ async fn pg_audit_prune_keeps_the_cutoff_row() {
     assert_eq!(rows.len(), 2);
     assert!(rows.iter().all(|e| e.ts.as_str() >= "2026-07-10 10:00:00"));
 }
+
+// ── v1.3.0: per-user redeem history ──
+
+/// The account page is reachable by every user, so this query must be scoped by
+/// construction. If it ever returned another account's top-ups, one user could
+/// read another's payment history from their own page.
+#[tokio::test]
+async fn pg_redeem_history_is_scoped_to_the_asking_user() {
+    let Some(db) = repo("redeem_hist_scope").await else {
+        return;
+    };
+    db.insert_user("alice", "h", 1).await.unwrap();
+    db.insert_user("bob", "h", 1).await.unwrap();
+    let alice = db.find_by_username("alice").await.unwrap().unwrap().id;
+    let bob = db.find_by_username("bob").await.unwrap().unwrap().id;
+
+    pg_seed_code(&db, "AAAAAAAAAAAAAAAA", "10.00", None).await;
+    pg_seed_code(&db, "BBBBBBBBBBBBBBBB", "20.00", None).await;
+    db.redeem_code("AAAAAAAAAAAAAAAA", alice, "2026-07-28 10:00:00")
+        .await
+        .unwrap();
+    db.redeem_code("BBBBBBBBBBBBBBBB", bob, "2026-07-28 10:00:01")
+        .await
+        .unwrap();
+
+    let mine = db.list_redeem_codes_by_user(alice).await.unwrap();
+    assert_eq!(mine.len(), 1, "alice must see exactly her own top-up");
+    assert_eq!(mine[0].code, "AAAAAAAAAAAAAAAA");
+    assert_eq!(mine[0].amount, "10.00");
+}
+
+/// Unused and voided codes are not top-ups and must not appear — the history is
+/// a record of money that actually moved.
+#[tokio::test]
+async fn pg_redeem_history_lists_only_used_codes() {
+    let Some(db) = repo("redeem_hist_used").await else {
+        return;
+    };
+    db.insert_user("alice", "h", 1).await.unwrap();
+    let alice = db.find_by_username("alice").await.unwrap().unwrap().id;
+
+    pg_seed_code(&db, "CCCCCCCCCCCCCCCC", "5.00", None).await;
+    let unused = pg_seed_code(&db, "DDDDDDDDDDDDDDDD", "9.00", None).await;
+    db.redeem_code("CCCCCCCCCCCCCCCC", alice, "2026-07-28 10:00:00")
+        .await
+        .unwrap();
+    db.void_redeem_code(unused).await.unwrap();
+
+    let mine = db.list_redeem_codes_by_user(alice).await.unwrap();
+    assert_eq!(mine.len(), 1);
+    assert_eq!(mine[0].status, "used");
+}

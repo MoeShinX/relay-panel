@@ -12,6 +12,7 @@ import { aggregateNodesByGroup } from '../components/nodes/aggregate';
 import TrafficChart from '../components/TrafficChart';
 import NodeMetricsChart from '../components/NodeMetricsChart';
 import { formatBps, formatBytes } from '../utils/format';
+import SiteAnnouncement from '../components/SiteAnnouncement';
 
 const { Text } = Typography;
 
@@ -203,6 +204,10 @@ export default function Dashboard() {
 
   return (
     <>
+      {/* v1.3.0: operator announcement. Renders nothing when unset. Sits above
+          the version alerts — it is the operator's own message, and a stale
+          update warning should not push it below the fold. */}
+      <SiteAnnouncement />
       {versionInfo?.check_failed && (
         <Alert
           type="warning"

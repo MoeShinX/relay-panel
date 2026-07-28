@@ -9,6 +9,9 @@ import { formatBytes } from '../utils/format';
 import { makePasswordValidator } from '../utils/password';
 import { useAuth } from '../auth/useAuth';
 import TrafficChart from '../components/TrafficChart';
+import SiteAnnouncement from '../components/SiteAnnouncement';
+import { useSiteNotice } from '../hooks/useSiteNotice';
+import AccountRecords from '../components/AccountRecords';
 
 const { Text } = Typography;
 
@@ -31,6 +34,7 @@ export default function Account() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const { logout: authLogout } = useAuth();
+  const notice = useSiteNotice();
   const [me, setMe] = useState<UserSelf | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -129,6 +133,9 @@ export default function Account() {
 
   return (
     <>
+      {/* v1.3.0: operator announcement. Regular users land here rather than on
+          the dashboard, so without this they would never see one. */}
+      <SiteAnnouncement />
       {/* v1.0.8: suspended banner — the user can still log in and buy a plan
           (buying does NOT auto-unsuspend), but forwarding is gated off. */}
       {me.suspended && (
@@ -216,6 +223,13 @@ export default function Account() {
           <Descriptions.Item label={t('accountMemberSince')}>
             <span className="rp-mono">{me.registered_at || '-'}</span>
           </Descriptions.Item>
+          {/* v1.3.0: only rendered when the operator filled it in — an empty
+              "Support" row would just look like something is broken. */}
+          {notice.contact && (
+            <Descriptions.Item label={t('siteContact')}>
+              <span style={{ whiteSpace: 'pre-wrap' }}>{notice.contact}</span>
+            </Descriptions.Item>
+          )}
         </Descriptions>
       </Card>
 
@@ -226,6 +240,11 @@ export default function Account() {
           per-rule drill-down) on the dashboard, and an admin's "personal"
           traffic is a near-meaningless number. The same card on two pages is
           just noise. */}
+      {/* v1.3.0: the user's own top-up and purchase history. Above the traffic
+          chart — "where did my money go" is the question that brings people to
+          this page, and it should not sit below a chart. */}
+      <AccountRecords />
+
       {!me.admin && <TrafficChart />}
 
       <Modal

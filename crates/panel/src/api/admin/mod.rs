@@ -908,6 +908,55 @@ mod tests {
         }
     }
 
+    /// v1.3.0: the public site endpoint is reachable with NO token, so it must
+    /// carry branding only. The announcement and support contact were kept off
+    /// the login page deliberately; serving them to any unauthenticated caller
+    /// would make that choice meaningless.
+    #[tokio::test]
+    async fn public_site_endpoint_exposes_branding_but_not_the_announcement() {
+        let (state, _pool) = test_state().await;
+        let secret_notice = "内部维护通知-勿外传";
+        let Json(saved) = crate::api::site::update_site_settings(
+            AdminOnly { user_id: 1 },
+            State(state.clone()),
+            Json(crate::api::site::UpdateSiteRequest {
+                site_name: "我的中转".into(),
+                subtitle: "私有部署".into(),
+                announcement: secret_notice.into(),
+                contact: "tg:@someone".into(),
+            }),
+        )
+        .await;
+        assert_eq!(saved.code, 0, "save must succeed: {}", saved.message);
+
+        // The public view: no AuthUser / AdminOnly extractor at all.
+        let Json(public) = crate::api::site::get_public_site(State(state.clone())).await;
+        let body = serde_json::to_string(&public.data.expect("public site data")).unwrap();
+        assert!(body.contains("我的中转"), "branding must be public");
+        assert!(
+            !body.contains(secret_notice),
+            "public endpoint leaked the announcement"
+        );
+        assert!(
+            !body.contains("tg:@someone"),
+            "public endpoint leaked the support contact"
+        );
+
+        // The signed-in view does carry them — otherwise the feature is broken
+        // in the other direction and this test would pass vacuously.
+        let Json(notice) = crate::api::site::get_site_notice(
+            AuthUser {
+                user_id: 1,
+                admin: true,
+            },
+            State(state),
+        )
+        .await;
+        let notice = notice.data.expect("notice data");
+        assert_eq!(notice.announcement, secret_notice);
+        assert_eq!(notice.contact, "tg:@someone");
+    }
+
     /// An empty group can be deleted successfully.
     #[tokio::test]
     async fn delete_empty_group_succeeds() {

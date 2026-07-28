@@ -200,6 +200,31 @@ export interface ListCodesResponse {
   total: number;
 }
 
+/** v1.3.0: one of the caller's own redeem-code top-ups. `code` arrives already
+ *  masked to the last group — the server never sends the full value here. */
+export interface MyRedeemRecord {
+  id: number;
+  code: string;
+  amount: string;
+  used_at: string | null;
+}
+
+/** v1.3.0: public site branding. No announcement/contact — those are behind
+ *  the authenticated /user/site-notice endpoint. */
+export interface PublicSite {
+  site_name: string;
+  subtitle: string;
+}
+
+/** v1.3.0: the signed-in half of the site config. */
+export interface SiteNotice {
+  announcement: string;
+  contact: string;
+}
+
+/** v1.3.0: the full site config, as the admin form reads and writes it. */
+export interface SiteConfig extends PublicSite, SiteNotice {}
+
 /** v1.3.0: one recorded admin action. */
 export interface AuditEntry {
   id: number;

@@ -29,6 +29,7 @@ const SystemSettings = lazy(() => import('./pages/SystemSettings'));
 const Plans = lazy(() => import('./pages/Plans'));
 const RedeemCodes = lazy(() => import('./pages/RedeemCodes'));
 const AuditLog = lazy(() => import('./pages/AuditLog'));
+const SiteSettings = lazy(() => import('./pages/SiteSettings'));
 const Shop = lazy(() => import('./pages/Shop'));
 const Forbidden = lazy(() => import('./pages/Forbidden'));
 const RoleHome = lazy(() => import('./RoleHome'));
@@ -79,6 +80,9 @@ export const router = createBrowserRouter([
       { path: 'audit-log', element: <RequireAdmin><AuditLog /></RequireAdmin> },
       // v0.4.20: tunnel-profiles route hidden; component kept for future recovery.
       { path: 'users', element: <RequireAdmin><Users /></RequireAdmin> },
+      // v1.3.0: operator-configurable site identity, separate from the
+      // registration policy that lives on /settings.
+      { path: 'site-settings', element: <RequireAdmin><SiteSettings /></RequireAdmin> },
       { path: 'settings', element: <RequireAdmin><SystemSettings /></RequireAdmin> },
       // Account is open to every authenticated user (admin or not).
       { path: 'account', element: <Account /> },

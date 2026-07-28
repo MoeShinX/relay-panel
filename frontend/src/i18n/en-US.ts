@@ -579,6 +579,23 @@ export const enUS: Dict = {
   notifyCredentialNote: 'Note: the bot token and SMTP password are stored in plaintext (same as node tokens). The API never returns them to the browser.',
 
   // ── v1.2.0: redeem codes ──
+  // ── v1.3.0: account money history ──
+  rechargeHistory: 'Top-up History',
+  rechargeAmount: 'Amount',
+  rechargeTime: 'Redeemed at',
+  noRecharges: 'No top-ups yet',
+  // ── v1.3.0: site settings ──
+  siteSettings: 'Site Settings',
+  siteName: 'Site name',
+  siteNameHint: 'Shown on the login page, in the sidebar, and as the browser tab title. Empty falls back to RelayPanel.',
+  siteSubtitle: 'Subtitle',
+  siteSubtitleHint: 'Small text under the name on the login page. Empty keeps the default.',
+  siteAnnouncement: 'Announcement',
+  siteAnnouncementHint: 'Shown at the top of the dashboard and account page; line breaks are kept. Empty hides the banner entirely. Visible to signed-in users only.',
+  siteContact: 'Support contact',
+  siteContactHint: 'Shown on the account page — a Telegram handle, an email, whatever. Empty hides the row.',
+  siteFieldTooLong: 'Too long',
+  siteSettingsHint: 'Takes effect immediately. The announcement and contact require sign-in to read and never appear on the login page.',
   // ── v1.3.0: audit log ──
   auditLog: 'Audit Log',
   auditTime: 'Time (UTC)',

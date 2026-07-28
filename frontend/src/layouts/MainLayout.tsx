@@ -12,11 +12,13 @@ import {
   ShoppingOutlined,
   GiftOutlined,
   FileSearchOutlined,
+  GlobalOutlined,
 } from '@ant-design/icons';
 import { useI18n } from '../i18n/context';
 import api from '../api/client';
 import type { ApiEnvelope } from '../api/types';
 import { useAuth } from '../auth/useAuth';
+import { useSite } from '../hooks/useSite';
 import { makePasswordValidator } from '../utils/password';
 
 const { Sider, Content, Header } = Layout;
@@ -27,6 +29,7 @@ export default function MainLayout() {
   const location = useLocation();
   const { t, lang, setLang } = useI18n();
   const { isAdmin, logout: authLogout } = useAuth();
+  const site = useSite();
   const [changePwOpen, setChangePwOpen] = useState(false);
   const [pwForm] = Form.useForm();
   const [pwSubmitting, setPwSubmitting] = useState(false);
@@ -49,6 +52,7 @@ export default function MainLayout() {
     { key: '/redeem-codes', icon: <GiftOutlined />, label: t('redeemCodes') },
     { key: '/users', icon: <UserOutlined />, label: t('users') },
     { key: '/audit-log', icon: <FileSearchOutlined />, label: t('auditLog') },
+    { key: '/site-settings', icon: <GlobalOutlined />, label: t('siteSettings') },
     { key: '/settings', icon: <SettingOutlined />, label: t('systemSettings') },
   ];
   const menuItems = isAdmin
@@ -91,7 +95,7 @@ export default function MainLayout() {
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           color: '#fff', fontSize: 17, fontWeight: 600, letterSpacing: 0.5,
         }}>
-          RelayPanel
+          {site.site_name || t('brand')}
         </div>
         <Menu
           theme="dark"

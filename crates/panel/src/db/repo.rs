@@ -1004,6 +1004,17 @@ pub trait RedeemRepository: Send + Sync {
         now: &str,
     ) -> Result<(String, String), RedeemCodeError>;
 
+    /// v1.3.0: the codes a given user redeemed, newest first.
+    ///
+    /// Separate from `list_redeem_codes` rather than another filter on it: this
+    /// one is reachable by a NON-admin (their own account page), so the uid
+    /// filter must be structural, not one more optional field that a future
+    /// caller could forget to set.
+    async fn list_redeem_codes_by_user(
+        &self,
+        user_id: i64,
+    ) -> Result<Vec<relay_shared::models::RedeemCode>, DbError>;
+
     /// List codes for the admin UI, newest first.
     async fn list_redeem_codes(
         &self,

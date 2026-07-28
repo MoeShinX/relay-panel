@@ -10,5 +10,6 @@ pub mod profiles;
 pub mod redeem;
 pub mod rules;
 pub mod settings;
+pub mod site;
 pub mod traffic;
 pub mod users;

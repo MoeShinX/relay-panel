@@ -250,6 +250,65 @@ pub async fn list_codes(
     Json(ApiResponse::success(ListCodesResponse { items, total }))
 }
 
+/// One of the caller's own top-ups.
+#[derive(Debug, Serialize)]
+pub struct MyRedeemRecord {
+    pub id: i64,
+    /// Masked to the last group (`****-****-****-CDEF`).
+    ///
+    /// The user typed this code themselves, so showing it in full would not
+    /// leak anything they don't know — but it would put a live-looking
+    /// credential in a page that gets screenshotted and pasted into support
+    /// chats, and the last group is already enough to match a receipt against.
+    pub code: String,
+    pub amount: String,
+    pub used_at: Option<String>,
+}
+
+/// GET /api/v1/user/redeem-records — the caller's own top-up history.
+///
+/// Scoped to `user.user_id` from the token, exactly like /user/redeem: there is
+/// no id in the path or query, so this endpoint cannot read anyone else's.
+pub async fn list_my_redeem_records(
+    user: AuthUser,
+    State(state): State<AppState>,
+) -> Json<ApiResponse<Vec<MyRedeemRecord>>> {
+    match state.db.list_redeem_codes_by_user(user.user_id).await {
+        Ok(rows) => Json(ApiResponse::success(
+            rows.into_iter()
+                .map(|c| MyRedeemRecord {
+                    id: c.id,
+                    code: mask_code(&c.code),
+                    amount: c.amount,
+                    used_at: c.used_at,
+                })
+                .collect(),
+        )),
+        Err(e) => {
+            tracing::error!("list_my_redeem_records for user {}: {}", user.user_id, e);
+            Json(err(500, "数据库错误"))
+        }
+    }
+}
+
+/// `0123456789ABCDEF` -> `****-****-****-CDEF`.
+fn mask_code(stored: &str) -> String {
+    let display = redeem::to_display(stored);
+    match display.rsplit_once('-') {
+        // Keep the shape so it still reads as a code, not as a broken string.
+        Some((head, tail)) => {
+            let masked: String = head
+                .chars()
+                .map(|c| if c == '-' { '-' } else { '*' })
+                .collect();
+            format!("{masked}-{tail}")
+        }
+        // No dash at all (a code shorter than one group) — mask everything
+        // rather than falling through and printing it.
+        None => "*".repeat(display.chars().count()),
+    }
+}
+
 /// POST /api/v1/admin/redeem-codes/{id}/void — burn an unused code.
 pub async fn void_code(
     _admin: AdminOnly,
@@ -385,5 +444,38 @@ pub async fn redeem_code(
             tracing::error!("redeem_code failed for user {}: {}", user.user_id, e);
             Json(err(500, "数据库错误"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mask_code;
+
+    /// A used code is still credential-shaped. The account page shows only the
+    /// last group — enough to match against a receipt, not enough to retype.
+    #[test]
+    fn mask_keeps_only_the_last_group() {
+        assert_eq!(mask_code("0123456789ABCDEF"), "****-****-****-CDEF");
+    }
+
+    /// The masked prefix must contain none of the original characters — a
+    /// partial mask that left, say, the first group would defeat the point.
+    #[test]
+    fn mask_leaks_nothing_from_the_head() {
+        let masked = mask_code("ZZZZ1111222233CD");
+        let (head, _) = masked.rsplit_once('-').unwrap();
+        assert!(
+            head.chars().all(|c| c == '*' || c == '-'),
+            "head must be fully masked, got {head}"
+        );
+    }
+
+    /// A code too short to have a group separator must be masked entirely
+    /// rather than printed through the fallback branch.
+    #[test]
+    fn mask_hides_a_code_with_no_separator() {
+        let masked = mask_code("ABC");
+        assert_eq!(masked, "***");
+        assert!(!masked.contains('A'));
     }
 }

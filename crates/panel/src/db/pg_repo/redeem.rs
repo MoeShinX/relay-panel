@@ -138,6 +138,18 @@ impl RedeemRepository for PgRepository {
         Ok((amount, new_balance))
     }
 
+    async fn list_redeem_codes_by_user(&self, user_id: i64) -> Result<Vec<RedeemCode>, DbError> {
+        // status = 'used' as well as the uid: a code whose redeemer was later
+        // cleared would otherwise be invisible anyway, and this keeps the query
+        // honest about what it returns — the user's top-up history.
+        Ok(sqlx::query_as(
+            "SELECT * FROM redeem_codes              WHERE used_by = $1 AND status = 'used'              ORDER BY used_at DESC, id DESC",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
     async fn list_redeem_codes(
         &self,
         filter: &RedeemCodeFilter,
