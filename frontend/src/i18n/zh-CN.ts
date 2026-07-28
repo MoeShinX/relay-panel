@@ -705,7 +705,6 @@ export const zhCN = {
   groupIn: '入口分组',
   groupOut: '出口分组',
   groupOutTooltip: '留空则隧道不转发到出口（仅作为 sing-box 监听端）',
-  listenPort: '监听端口',
   configRegenerated: '配置已重新生成',
   viewConfig: '查看配置',
   regenerate: '重新生成',

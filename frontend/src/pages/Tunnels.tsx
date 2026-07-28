@@ -1,4 +1,4 @@
-import { Table, Button, Modal, Form, Input, Select, Space, message, Popconfirm, Tag, Tooltip } from 'antd';
+import { Table, Button, Modal, Form, Input, Select, Space, message, Popconfirm, Tag } from 'antd';
 import { PlusOutlined, ReloadOutlined, EditOutlined, ThunderboltOutlined, CodeOutlined, UnlockOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import api from '../api/client';
@@ -49,7 +49,7 @@ export default function Tunnels() {
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
   const [detailOpen, setDetailOpen] = useState(false);
-  const [detailData, setDetailData] = useState<{ config: unknown; secret: unknown } | null>(null);
+  const [detailData, setDetailData] = useState<[unknown, unknown] | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -218,8 +218,8 @@ export default function Tunnels() {
           <Form.Item name="listen_port" label={t('listenPort')} rules={[{ required: true }]}>
             <Input type="number" min={1} max={65535} />
           </Form.Item>
-          <Form.Item name="enabled" label={t('enabled')} valuePropName="checked">
-            <Select options={[{ value: true, label: t('yes') }, { value: false, label: t('no') }]} />
+          <Form.Item name="enabled" label="启用" valuePropName="checked">
+            <Select options={[{ value: true, label: '是' }, { value: false, label: '否' }]} />
           </Form.Item>
         </Form>
       </Modal>

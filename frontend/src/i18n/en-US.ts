@@ -706,7 +706,6 @@ export const enUS: Dict = {
   groupIn: 'Entrance Group',
   groupOut: 'Exit Group',
   groupOutTooltip: 'Leave blank for a standalone sing-box listener (no exit forwarding)',
-  listenPort: 'Listen Port',
   configRegenerated: 'Config regenerated',
   viewConfig: 'View Config',
   regenerate: 'Regenerate',
