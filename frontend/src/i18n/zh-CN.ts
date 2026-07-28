@@ -88,6 +88,7 @@ export const zhCN = {
 
   // Rules page
   addRule: '新增规则',
+  searchRulePlaceholder: '搜索名称 / 端口 / 目标',
   listenIp: '监听 IP',
   listenPort: '监听端口',
   notConfigured: '未配置',

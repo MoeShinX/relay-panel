@@ -89,6 +89,7 @@ export const enUS: Dict = {
 
   // Rules page
   addRule: 'Add Rule',
+  searchRulePlaceholder: 'Search name / port / target',
   listenIp: 'Listen IP',
   listenPort: 'Listen Port',
   notConfigured: 'Not configured',
