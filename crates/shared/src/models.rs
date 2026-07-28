@@ -309,6 +309,22 @@ pub struct TunnelProfile {
     pub created_at: String,
 }
 
+/// v1.3: tunnel forwarding (entrance → exit via sing-box).
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Tunnels {
+    pub id: i64,
+    pub name: String,
+    pub group_in: i64,
+    pub group_out: Option<i64>,
+    pub protocol: String,
+    pub listen_port: i32,
+    pub config_json: String,
+    pub secret_json: String,
+    pub enabled: bool,
+    pub uid: i64,
+    pub created_at: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Plan {
     pub id: i64,

@@ -7,7 +7,7 @@
 //! logging — those depend on `node_connections`, not the `Repository`.
 
 use crate::db::error::DbError;
-use crate::db::repo::ResourceScope;
+use crate::db::repo::{GroupRepository, ResourceScope, TunnelRepository};
 use crate::db::Repository;
 use crate::service::rules::group_type_to_str;
 use relay_shared::models::DeviceGroup;
@@ -162,18 +162,20 @@ impl std::fmt::Display for GroupInUseError {
 impl std::error::Error for GroupInUseError {}
 
 /// Delete an admin-owned device group. Before deleting, checks that no
-/// forward_rules reference this group via device_group_in, device_group_out,
-/// or fallback_group. Returns `GroupInUseError` with the rule count if any
-/// references exist, so the handler can return a clear 409.
+/// forward_rules or tunnels reference this group via device_group_in,
+/// device_group_out, or fallback_group. Returns `GroupInUseError` with the
+/// combined count if any references exist.
 pub async fn delete_group(
     db: &dyn Repository,
     id: i64,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-    let count = db.count_rules_by_group(id).await?;
-    if count > 0 {
+    let rule_count = db.count_rules_by_group(id).await?;
+    let tunnel_count = db.find_by_group_in(id).await?.map_or(0, |_| 1);
+    let total_refs = rule_count + tunnel_count;
+    if total_refs > 0 {
         return Err(Box::new(GroupInUseError {
             group_id: id,
-            rule_count: count,
+            rule_count: total_refs,
         }));
     }
     Ok(db.delete_group(id, &ResourceScope::All).await? > 0)

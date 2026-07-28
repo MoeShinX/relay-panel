@@ -29,6 +29,7 @@ const SystemSettings = lazy(() => import('./pages/SystemSettings'));
 const Plans = lazy(() => import('./pages/Plans'));
 const RedeemCodes = lazy(() => import('./pages/RedeemCodes'));
 const Shop = lazy(() => import('./pages/Shop'));
+const Tunnels = lazy(() => import('./pages/Tunnels'));
 const Forbidden = lazy(() => import('./pages/Forbidden'));
 const RoleHome = lazy(() => import('./RoleHome'));
 
@@ -74,6 +75,8 @@ export const router = createBrowserRouter([
       { path: 'plans', element: <RequireAdmin><Plans /></RequireAdmin> },
       // v1.2.0: redeem-code management (admin-only).
       { path: 'redeem-codes', element: <RequireAdmin><RedeemCodes /></RequireAdmin> },
+      // v1.3: tunnel forwarding management (admin-only).
+      { path: 'tunnels', element: <RequireAdmin><Tunnels /></RequireAdmin> },
       // v0.4.20: tunnel-profiles route hidden; component kept for future recovery.
       { path: 'users', element: <RequireAdmin><Users /></RequireAdmin> },
       { path: 'settings', element: <RequireAdmin><SystemSettings /></RequireAdmin> },

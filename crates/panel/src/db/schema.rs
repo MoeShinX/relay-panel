@@ -114,6 +114,26 @@ CREATE TABLE IF NOT EXISTS tunnel_profiles (
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- v1.3: tunnel forwarding (entrance → exit via sing-box).
+-- group_in UNIQUE ensures each ingress node can unambiguously determine
+-- which tunnel to use. group_out has no uniqueness constraint: an exit
+-- service may serve multiple entrances, and "multi-entrance → single exit"
+-- is a natural growth path — no need to lock it now.
+CREATE TABLE IF NOT EXISTS tunnels (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL,
+    group_in        INTEGER NOT NULL REFERENCES device_groups(id),
+    group_out       INTEGER REFERENCES device_groups(id),
+    protocol        TEXT NOT NULL DEFAULT 'vless_reality',
+    listen_port     INTEGER NOT NULL,
+    config_json     TEXT NOT NULL DEFAULT '{}',
+    secret_json     TEXT NOT NULL DEFAULT '{}',
+    enabled         INTEGER NOT NULL DEFAULT 0,
+    uid             INTEGER NOT NULL REFERENCES users(id),
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(group_in)
+);
+
 CREATE TABLE IF NOT EXISTS forward_rules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -1571,6 +1591,63 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
         "Migration 41: traffic_history.group_id present ({} row(s) backfilled)",
         backfilled
     );
+
+    // ── Migration 42: v1.3 tunnels.group_in UNIQUE (one tunnel per entrance group) ──
+    // UNIQUE(group_in) is required so that each ingress node can unambiguously
+    // determine which tunnel to use. SQLite cannot add UNIQUE via ALTER TABLE
+    // without rebuilding the entire table, so we do it the hard way: create a
+    // new table, copy data, drop the old, rename.
+    //
+    // Guard against fresh installs: if the table doesn't exist, Migration 41
+    // already created it with the UNIQUE constraint (via SCHEMA_SQL), so we
+    // can safely skip.
+    {
+        let exists: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master \
+             WHERE type='table' AND name='tunnels'",
+        )
+        .fetch_one(pool)
+        .await?;
+        if exists.0 > 0 {
+            sqlx::query("BEGIN TRANSACTION").execute(pool).await?;
+
+            sqlx::query(
+                "CREATE TABLE IF NOT EXISTS tunnels_new (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name            TEXT NOT NULL,
+                    group_in        INTEGER NOT NULL REFERENCES device_groups(id),
+                    group_out       INTEGER REFERENCES device_groups(id),
+                    protocol        TEXT NOT NULL DEFAULT 'vless_reality',
+                    listen_port     INTEGER NOT NULL,
+                    config_json     TEXT NOT NULL DEFAULT '{}',
+                    secret_json     TEXT NOT NULL DEFAULT '{}',
+                    enabled         INTEGER NOT NULL DEFAULT 0,
+                    uid             INTEGER NOT NULL REFERENCES users(id),
+                    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                    UNIQUE(group_in)
+                )",
+            )
+            .execute(pool)
+            .await?;
+
+            sqlx::query(
+                "INSERT OR REPLACE INTO tunnels_new \
+                 (id, name, group_in, group_out, protocol, listen_port, config_json, secret_json, enabled, uid, created_at) \
+                 SELECT id, name, group_in, group_out, protocol, listen_port, config_json, secret_json, enabled, uid, created_at \
+                 FROM tunnels",
+            )
+            .execute(pool)
+            .await?;
+
+            sqlx::query("DROP TABLE tunnels").execute(pool).await?;
+            sqlx::query("ALTER TABLE tunnels_new RENAME TO tunnels")
+                .execute(pool)
+                .await?;
+
+            sqlx::query("COMMIT").execute(pool).await?;
+        }
+    }
+    tracing::info!("Migration 42: tunnels.group_in UNIQUE constraint applied");
 
     Ok(())
 }

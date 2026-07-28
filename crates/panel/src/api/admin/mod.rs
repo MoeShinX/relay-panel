@@ -10,6 +10,7 @@ mod profiles;
 mod rules;
 mod settings;
 mod shop;
+mod tunnels;
 mod users;
 
 pub use groups::*;
@@ -18,6 +19,7 @@ pub use plans::*;
 pub use profiles::*;
 pub use rules::*;
 pub use settings::*;
+pub use tunnels::*;
 pub use shop::*;
 pub use users::*;
 
@@ -1565,90 +1567,6 @@ mod tests {
         );
     }
 
-    /// v0.4.20: create_rule rejects forward_mode="group".
-    #[tokio::test]
-    async fn create_rule_rejects_group_forward_mode() {
-        let (state, pool) = test_state().await;
-        add_user(&pool, 2, "alice", false).await;
-        add_group(&pool, 20, 1, "shared-in").await;
-
-        let Json(resp) = create_rule(
-            auth(2, false),
-            State(state.clone()),
-            Json(CreateRuleRequest {
-                forward_mode: "group".into(),
-                ..rule_req("test", 20000, 20, None)
-            }),
-        )
-        .await;
-        assert_eq!(resp.code, 400, "{}", resp.message);
-        assert!(resp.message.contains("direct"));
-    }
-
-    /// v0.4.20: create_rule rejects non-null device_group_out.
-    #[tokio::test]
-    async fn create_rule_rejects_device_group_out() {
-        let (state, pool) = test_state().await;
-        add_user(&pool, 2, "alice", false).await;
-        add_group(&pool, 20, 1, "shared-in").await;
-
-        let Json(resp) = create_rule(
-            auth(2, false),
-            State(state.clone()),
-            Json(CreateRuleRequest {
-                device_group_out: Some(99),
-                ..rule_req("test", 20000, 20, None)
-            }),
-        )
-        .await;
-        assert_eq!(resp.code, 400, "{}", resp.message);
-        assert!(resp.message.contains("device_group_out"));
-    }
-
-    /// v0.4.20: update_rule rejects forward_mode="group".
-    #[tokio::test]
-    async fn update_rule_rejects_group_forward_mode() {
-        let (state, pool) = test_state().await;
-        add_user(&pool, 2, "alice", false).await;
-        add_group(&pool, 20, 1, "shared-in").await;
-        add_rule(&pool, 200, 2, 20, 12000, 0).await;
-
-        let Json(resp) = update_rule(
-            auth(2, false),
-            State(state.clone()),
-            Path(200),
-            Json(UpdateRuleRequest {
-                forward_mode: Some("group".into()),
-                ..Default::default()
-            }),
-        )
-        .await;
-        assert_eq!(resp.code, 400, "{}", resp.message);
-        assert!(resp.message.contains("direct"));
-    }
-
-    /// v0.4.20: update_rule rejects non-null device_group_out.
-    #[tokio::test]
-    async fn update_rule_rejects_device_group_out() {
-        let (state, pool) = test_state().await;
-        add_user(&pool, 2, "alice", false).await;
-        add_group(&pool, 20, 1, "shared-in").await;
-        add_rule(&pool, 200, 2, 20, 12000, 0).await;
-
-        let Json(resp) = update_rule(
-            auth(2, false),
-            State(state.clone()),
-            Path(200),
-            Json(UpdateRuleRequest {
-                device_group_out: Some(99),
-                ..Default::default()
-            }),
-        )
-        .await;
-        assert_eq!(resp.code, 400, "{}", resp.message);
-        assert!(resp.message.contains("device_group_out"));
-    }
-
     #[tokio::test]
     async fn group_access_is_owner_scoped() {
         let (state, pool) = test_state().await;
@@ -1838,8 +1756,9 @@ mod tests {
         assert!(resp.message.contains("device_group_in"));
     }
 
-    /// v0.4.20: device_group_out is no longer supported — any non-null value
-    /// is rejected at the API boundary before ownership checks.
+    /// v0.5.0: device_group_out is now allowed — outbound-group forwarding is
+    /// back. The rule owner must own the outbound group (standard ownership
+    /// check). Foreign outbound groups are rejected.
     #[tokio::test]
     async fn update_rule_rejects_foreign_outbound_group() {
         let (state, pool) = test_state().await;
@@ -1849,6 +1768,7 @@ mod tests {
         add_group(&pool, 30, 3, "bob-out").await;
         add_rule(&pool, 200, 2, 20, 12000, 0).await;
 
+        // Foreign outbound group → forbidden (ownership check).
         let Json(resp) = update_rule(
             auth(2, false),
             State(state.clone()),
@@ -1860,7 +1780,20 @@ mod tests {
         )
         .await;
         assert_eq!(resp.code, 400, "{}", resp.message);
-        assert!(resp.message.contains("device_group_out"));
+
+        // Own outbound group → allowed.
+        add_group(&pool, 31, 2, "alice-out").await;
+        let Json(ok) = update_rule(
+            auth(2, false),
+            State(state.clone()),
+            Path(200),
+            Json(UpdateRuleRequest {
+                device_group_out: Some(31),
+                ..Default::default()
+            }),
+        )
+        .await;
+        assert_eq!(ok.code, 0, "{}", ok.message);
     }
 
     /// v0.4.12 PR1: a regular user re-pointing their rule at one of their OWN
@@ -2637,5 +2570,30 @@ mod tests {
         )
         .await;
         assert_eq!(resp.code, 400, "{}", resp.message);
+    }
+
+    /// v1.3: deleting a group that a tunnel references must be blocked.
+    #[tokio::test]
+    async fn delete_group_blocked_by_tunnel_reference() {
+        let (state, pool) = test_state().await;
+        // test_state() already created admin id=1, just use the group.
+        add_group(&pool, 10, 1, "tunnel-in").await;
+        // Insert a tunnel referencing group 10.
+        sqlx::query(
+            "INSERT INTO tunnels (name, group_in, protocol, listen_port, config_json, secret_json, uid) \
+             VALUES ('test', 10, 'vless_reality', 443, '{}', '{}', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Attempting to delete group 10 must fail.
+        let result = crate::service::groups::delete_group(state.db.as_ref(), 10).await;
+        assert!(result.is_err(), "group deletion must be blocked by tunnel reference");
+        let err = result.unwrap_err();
+        assert!(
+            format!("{:?}", err).contains("10"),
+            "error must reference group id 10"
+        );
     }
 }

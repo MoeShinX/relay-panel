@@ -234,6 +234,21 @@ export interface TunnelProfile {
   created_at: string;
 }
 
+/** v1.3: a tunnel forwarding rule (matches backend Tunnels struct). */
+export interface Tunnel {
+  id: number;
+  name: string;
+  group_in: number;
+  group_out: number | null;
+  protocol: string;
+  listen_port: number;
+  config_json: string;
+  secret_json: string;
+  enabled: boolean;
+  uid: number;
+  created_at: string;
+}
+
 export interface DeviceGroup {
   id: number;
   name: string;

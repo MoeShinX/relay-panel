@@ -699,4 +699,18 @@ export const enUS: Dict = {
   unsuspendConfirm: 'Restore this user? Forwarding resumes automatically.',
   userSuspended: 'User suspended',
   userUnsuspended: 'User restored',
+  // v1.3: tunnel forwarding
+  tunnels: 'Tunnels',
+  addTunnel: 'Add Tunnel',
+  editTunnel: 'Edit Tunnel',
+  groupIn: 'Entrance Group',
+  groupOut: 'Exit Group',
+  groupOutTooltip: 'Leave blank for a standalone sing-box listener (no exit forwarding)',
+  listenPort: 'Listen Port',
+  configRegenerated: 'Config regenerated',
+  viewConfig: 'View Config',
+  regenerate: 'Regenerate',
+  configViewer: 'Configuration',
+  singBoxConfig: 'sing-box Config',
+  secret: 'Secret',
 };

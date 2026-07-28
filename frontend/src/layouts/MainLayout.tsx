@@ -46,6 +46,7 @@ export default function MainLayout() {
     { key: '/groups', icon: <CloudServerOutlined />, label: t('deviceGroups') },
     { key: '/plans', icon: <ShoppingOutlined />, label: t('planManagement') },
     { key: '/redeem-codes', icon: <GiftOutlined />, label: t('redeemCodes') },
+    { key: '/tunnels', icon: <LockOutlined />, label: t('tunnels') },
     { key: '/users', icon: <UserOutlined />, label: t('users') },
     { key: '/settings', icon: <SettingOutlined />, label: t('systemSettings') },
   ];

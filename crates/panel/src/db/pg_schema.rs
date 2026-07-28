@@ -108,6 +108,22 @@ CREATE TABLE IF NOT EXISTS tunnel_profiles (
     created_at      TEXT NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
+-- v1.3: tunnel forwarding (entrance → exit via sing-box).
+CREATE TABLE IF NOT EXISTS tunnels (
+    id              BIGSERIAL PRIMARY KEY,
+    name            TEXT NOT NULL,
+    group_in        BIGINT NOT NULL REFERENCES device_groups(id),
+    group_out       BIGINT REFERENCES device_groups(id),
+    protocol        TEXT NOT NULL DEFAULT 'vless_reality',
+    listen_port     INTEGER NOT NULL,
+    config_json     TEXT NOT NULL DEFAULT '{}',
+    secret_json     TEXT NOT NULL DEFAULT '{}',
+    enabled         BOOLEAN NOT NULL DEFAULT FALSE,
+    uid             BIGINT NOT NULL REFERENCES users(id),
+    created_at      TEXT NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
+    CONSTRAINT tunnels_group_in_unique UNIQUE(group_in)
+);
+
 CREATE TABLE IF NOT EXISTS forward_rules (
     id BIGSERIAL PRIMARY KEY,
     name TEXT NOT NULL,
@@ -329,7 +345,7 @@ INSERT INTO schema_version (version) VALUES (1) ON CONFLICT (version) DO NOTHING
 /// The schema revision this build's baseline `PG_SCHEMA_SQL` represents. When a
 /// future release adds a column/table, bump this and add a matching arm in
 /// `run_pg_migrations`. `apply_pg_schema` seeds `schema_version` with revision 1.
-pub const PG_SCHEMA_VERSION: i32 = 24;
+pub const PG_SCHEMA_VERSION: i32 = 25;
 
 /// Apply PG_SCHEMA_SQL to a pool. PostgreSQL's prepared-statement protocol
 /// rejects multi-statement strings ("cannot insert multiple commands into a
@@ -1257,6 +1273,29 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
             "PG migration 24: traffic_history.group_id present ({} row(s) backfilled)",
             backfilled
         );
+    }
+
+    // ── Migration 25: v1.3 tunnels ──
+    if current < 25 {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS tunnels (
+                id              BIGSERIAL PRIMARY KEY,
+                name            TEXT NOT NULL,
+                group_in        BIGINT NOT NULL REFERENCES device_groups(id),
+                group_out       BIGINT REFERENCES device_groups(id),
+                protocol        TEXT NOT NULL DEFAULT 'vless_reality',
+                listen_port     INTEGER NOT NULL,
+                config_json     TEXT NOT NULL DEFAULT '{}',
+                secret_json     TEXT NOT NULL DEFAULT '{}',
+                enabled         BOOLEAN NOT NULL DEFAULT FALSE,
+                uid             BIGINT NOT NULL REFERENCES users(id),
+                created_at      TEXT NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
+                CONSTRAINT tunnels_group_in_unique UNIQUE(group_in)
+            )",
+        )
+        .execute(pool)
+        .await?;
+        tracing::info!("PG migration 25: tunnels table created");
     }
 
     Ok(())

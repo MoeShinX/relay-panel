@@ -25,7 +25,7 @@
 use async_trait::async_trait;
 use relay_shared::models::{
     DeviceGroup, ForwardRule, ForwardRuleTarget, Order, Plan, SharedGroupSummary, Statistic,
-    TunnelProfile, User,
+    Tunnels, TunnelProfile, User,
 };
 use relay_shared::protocol::{RuleTargetRequest, TrafficEntry};
 use serde::Serialize;
@@ -627,6 +627,48 @@ pub trait TunnelProfileRepository: Send + Sync {
     async fn delete_profile(&self, id: i64, scope: &ResourceScope) -> Result<u64, DbError>;
 }
 
+// ── Tunnels (v1.3) ──
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct CreateTunnelRequest {
+    pub name: String,
+    pub group_in: i64,
+    pub group_out: Option<i64>,
+    pub protocol: String,
+    pub listen_port: i32,
+    pub config_json: String,
+    pub secret_json: String,
+    pub uid: i64,
+}
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct UpdateTunnelRequest {
+    pub name: Option<String>,
+    pub group_in: Option<i64>,
+    pub group_out: Option<Option<i64>>,
+    pub protocol: Option<String>,
+    pub listen_port: Option<i32>,
+    pub config_json: Option<String>,
+    pub secret_json: Option<String>,
+    pub enabled: Option<bool>,
+}
+
+#[async_trait]
+pub trait TunnelRepository: Send + Sync {
+    async fn list_tunnels(&self, uid: i64) -> Result<Vec<Tunnels>, DbError>;
+    async fn find_by_id(&self, id: i64, uid: i64) -> Result<Option<Tunnels>, DbError>;
+    /// Find a tunnel by its group_in id (unique). `None` = no such tunnel.
+    async fn find_by_group_in(&self, group_in: i64) -> Result<Option<Tunnels>, DbError>;
+    async fn create_tunnel(&self, req: &CreateTunnelRequest) -> Result<i64, DbError>;
+    async fn update_tunnel_fields(
+        &self,
+        id: i64,
+        uid: i64,
+        req: &UpdateTunnelRequest,
+    ) -> Result<u64, DbError>;
+    async fn delete_tunnel(&self, id: i64, uid: i64) -> Result<u64, DbError>;
+}
+
 // ── Traffic (atomic batch) ──
 
 /// Outcome of a traffic batch.
@@ -1062,6 +1104,7 @@ pub trait Repository:
     + GroupRepository
     + DeviceGroupAuthRepository
     + TunnelProfileRepository
+    + TunnelRepository
     + TrafficRepository
     + KvsRepository
     + StatisticsRepository

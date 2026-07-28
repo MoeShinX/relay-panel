@@ -173,6 +173,21 @@ pub fn routes() -> Router<AppState> {
             "/admin/tunnel-profiles/{id}",
             axum::routing::put(admin::update_tunnel_profile).delete(admin::delete_tunnel_profile),
         )
+        // v1.3: tunnel forwarding CRUD (admin-only).
+        .route(
+            "/admin/tunnels",
+            axum::routing::get(admin::list_tunnels).post(admin::create_tunnel),
+        )
+        .route(
+            "/admin/tunnels/{id}",
+            axum::routing::get(admin::get_tunnel)
+                .put(admin::update_tunnel)
+                .delete(admin::delete_tunnel),
+        )
+        .route(
+            "/admin/tunnels/{id}/regenerate-config",
+            axum::routing::post(admin::regenerate_tunnel_config),
+        )
         // v1.2.0: redeem-code management. Generation returns the codes once in
         // display form; the list endpoint can always re-read them.
         .route(

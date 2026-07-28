@@ -10,4 +10,5 @@ pub mod redeem;
 pub mod rules;
 pub mod settings;
 pub mod traffic;
+pub mod tunnels;
 pub mod users;

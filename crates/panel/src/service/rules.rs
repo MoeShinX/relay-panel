@@ -12,14 +12,6 @@ use relay_shared::protocol::{
     CreateRuleRequest, GroupType, Protocol, PublicTransport, RuleTargetRequest, UpdateRuleRequest,
 };
 
-/// v0.4.20: forward_mode is locked to "direct" at the API boundary
-/// (create_rule / update_rule reject group/chain). This validator is retained
-/// for potential future re-enablement and for config-generation compatibility.
-#[allow(dead_code)]
-pub fn validate_forward_mode(mode: &str) -> bool {
-    matches!(mode, "group" | "direct")
-}
-
 /// Is `transport` accepted by the admin API in the current release?
 ///
 /// v0.4.1: `Raw` + `Ws` + `TlsSimple` (node terminates TLS via rustls).
@@ -354,23 +346,6 @@ pub async fn create_rule(
     // The scope for validating referenced groups = the FINAL owner.
     let owner_scope = ResourceScope::Owner(owner_uid);
 
-    // v0.4.20: only direct forward_mode is supported. Group/chain forwarding
-    // is no longer exposed in the UI and is rejected at the API boundary.
-    // Existing rules with group forwarding still generate valid config, but
-    // new rules must use direct.
-    if req.forward_mode != "direct" {
-        return Err(CreateRuleError::BadRequest(
-            "forward_mode: only 'direct' is supported; group/chain forwarding is no longer available"
-                .into(),
-        ));
-    }
-    if req.device_group_out.is_some() {
-        return Err(CreateRuleError::BadRequest(
-            "device_group_out: outbound-group forwarding is no longer supported; remove device_group_out"
-                .into(),
-        ));
-    }
-
     // v0.4.12 PR1: device_group_in MUST be an inbound group (`group_type='in'`)
     // owned by an ADMIN.
     validate_admin_owned_inbound_group(db, req.device_group_in, "create_rule").await?;
@@ -577,22 +552,6 @@ pub async fn update_rule(
     scope: &ResourceScope,
     req: &UpdateRuleRequest,
 ) -> Result<(), UpdateRuleError> {
-    // v0.4.20: only direct forward_mode is supported.
-    if let Some(ref mode) = req.forward_mode {
-        if mode != "direct" {
-            return Err(UpdateRuleError::BadRequest(
-                "forward_mode: only 'direct' is supported; group/chain forwarding is no longer available"
-                    .into(),
-            ));
-        }
-    }
-    if req.device_group_out.is_some() {
-        return Err(UpdateRuleError::BadRequest(
-            "device_group_out: outbound-group forwarding is no longer supported; remove device_group_out"
-                .into(),
-        ));
-    }
-
     if let Some(ref transport) = req.public_transport {
         if !is_public_transport_accepted(*transport) {
             return Err(UpdateRuleError::BadRequest(
