@@ -4976,3 +4976,137 @@ async fn pg_migration_41_backfills_group_id_from_the_rule() {
     assert_eq!(orphan, 0, "an orphan keeps 0 — never invent an attribution");
     cleanup(&db).await;
 }
+
+// ── v1.3.0: node metrics history ──
+
+fn pg_metric(
+    node: &str,
+    group: i64,
+    hour: &str,
+    cpu: f64,
+    mem: f64,
+    conns: i64,
+) -> NodeMetricSample {
+    NodeMetricSample {
+        node_id: node.to_string(),
+        group_id: group,
+        hour_ts: hour.to_string(),
+        cpu,
+        mem,
+        connections: conns,
+    }
+}
+
+/// Three reports in one hour collapse into ONE row whose average is the mean of
+/// the samples and whose max is the peak. The two must differ here, or a spike
+/// would be invisible — which is the entire reason both are stored.
+#[tokio::test]
+async fn pg_node_metrics_average_and_peak_are_independent() {
+    let Some(db) = repo("nm_avgpeak").await else {
+        return;
+    };
+    let h = "2026-07-28 10:00:00";
+    for cpu in [0.1_f64, 0.9, 0.2] {
+        db.record_node_metrics(&pg_metric("n1", 1, h, cpu, 0.5, 10))
+            .await
+            .unwrap();
+    }
+
+    let rows = db
+        .query_node_metrics("2026-07-28 00:00:00", false)
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "three reports in one hour must be one bucket"
+    );
+    assert!(
+        (rows[0].cpu_avg - 0.4).abs() < 1e-9,
+        "avg was {}",
+        rows[0].cpu_avg
+    );
+    assert!(
+        (rows[0].cpu_max - 0.9).abs() < 1e-9,
+        "peak was {}",
+        rows[0].cpu_max
+    );
+}
+
+/// Rolling hours into a day must weight each hour by its sample count. An hour
+/// with 3 samples and an hour with 1 are not equal halves — averaging the two
+/// averages would say 0.5 here; the sample-weighted answer is 0.35.
+#[tokio::test]
+async fn pg_node_metrics_daily_average_is_sample_weighted() {
+    let Some(db) = repo("nm_daily").await else {
+        return;
+    };
+    for cpu in [0.2_f64, 0.2, 0.2] {
+        db.record_node_metrics(&pg_metric("n1", 1, "2026-07-28 10:00:00", cpu, 0.0, 0))
+            .await
+            .unwrap();
+    }
+    db.record_node_metrics(&pg_metric("n1", 1, "2026-07-28 11:00:00", 0.8, 0.0, 0))
+        .await
+        .unwrap();
+
+    let rows = db
+        .query_node_metrics("2026-07-28 00:00:00", true)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(
+        (rows[0].cpu_avg - 0.35).abs() < 1e-9,
+        "sample-weighted average expected 0.35, got {}",
+        rows[0].cpu_avg
+    );
+}
+
+/// Each node keeps its own series — two nodes reporting in the same hour must
+/// stay two lines, never merge into one.
+#[tokio::test]
+async fn pg_node_metrics_keep_one_series_per_node() {
+    let Some(db) = repo("nm_series").await else {
+        return;
+    };
+    let h = "2026-07-28 10:00:00";
+    db.record_node_metrics(&pg_metric("n1", 1, h, 0.1, 0.1, 5))
+        .await
+        .unwrap();
+    db.record_node_metrics(&pg_metric("n2", 1, h, 0.9, 0.9, 50))
+        .await
+        .unwrap();
+
+    let rows = db
+        .query_node_metrics("2026-07-28 00:00:00", false)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    let mut ids: Vec<&str> = rows.iter().map(|r| r.node_id.as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec!["n1", "n2"]);
+}
+
+/// The sweeper is the only thing that deletes these rows (no FK), so prune must
+/// remove strictly what is older than the cutoff and leave the rest.
+#[tokio::test]
+async fn pg_node_metrics_prune_respects_the_cutoff() {
+    let Some(db) = repo("nm_prune").await else {
+        return;
+    };
+    db.record_node_metrics(&pg_metric("n1", 1, "2026-07-01 10:00:00", 0.5, 0.5, 1))
+        .await
+        .unwrap();
+    db.record_node_metrics(&pg_metric("n1", 1, "2026-07-28 10:00:00", 0.5, 0.5, 1))
+        .await
+        .unwrap();
+
+    let deleted = db.prune_node_metrics("2026-07-20 00:00:00").await.unwrap();
+    assert_eq!(deleted, 1);
+    let rows = db
+        .query_node_metrics("2026-01-01 00:00:00", false)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].bucket, "2026-07-28 10:00:00");
+}

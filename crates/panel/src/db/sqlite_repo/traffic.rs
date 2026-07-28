@@ -295,4 +295,59 @@ impl TrafficRepository for SqliteRepository {
             .await?
             .rows_affected())
     }
+
+    async fn record_node_metrics(&self, m: &NodeMetricSample) -> Result<(), DbError> {
+        // One UPSERT per report. Sums and the sample count accumulate; the
+        // maxima keep whichever is larger, so a spike survives even when the
+        // hour's average is unremarkable — which is the entire point of storing
+        // both.
+        sqlx::query(
+            "INSERT INTO node_metrics_history                  (node_id, group_id, hour_ts, samples, cpu_sum, cpu_max,                   mem_sum, mem_max, conn_sum, conn_max)              VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)              ON CONFLICT(node_id, hour_ts) DO UPDATE SET                  group_id = excluded.group_id,                  samples  = node_metrics_history.samples + 1,                  cpu_sum  = node_metrics_history.cpu_sum + excluded.cpu_sum,                  cpu_max  = MAX(node_metrics_history.cpu_max, excluded.cpu_max),                  mem_sum  = node_metrics_history.mem_sum + excluded.mem_sum,                  mem_max  = MAX(node_metrics_history.mem_max, excluded.mem_max),                  conn_sum = node_metrics_history.conn_sum + excluded.conn_sum,                  conn_max = MAX(node_metrics_history.conn_max, excluded.conn_max)",
+        )
+        .bind(&m.node_id)
+        .bind(m.group_id)
+        .bind(&m.hour_ts)
+        .bind(m.cpu)
+        .bind(m.cpu)
+        .bind(m.mem)
+        .bind(m.mem)
+        .bind(m.connections)
+        .bind(m.connections)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn query_node_metrics(
+        &self,
+        since: &str,
+        daily: bool,
+    ) -> Result<Vec<NodeMetricBucket>, DbError> {
+        // Averages are computed here from sum/samples rather than stored, so
+        // rolling hours up into a day stays correct: summing the sums and the
+        // counts separately weights each hour by how many samples it actually
+        // had, which averaging the averages would not.
+        //
+        // The LEFT JOIN resolves the group name for the legend but never gates
+        // the row — a deleted group must still show its history as "#id".
+        let sql = if daily {
+            "SELECT substr(nm.hour_ts, 1, 10) AS bucket,                     nm.node_id AS node_id,                     nm.group_id AS group_id,                     COALESCE(dg.name, '#' || nm.group_id) AS group_name,                     SUM(nm.cpu_sum) / MAX(SUM(nm.samples), 1) AS cpu_avg,                     MAX(nm.cpu_max) AS cpu_max,                     SUM(nm.mem_sum) / MAX(SUM(nm.samples), 1) AS mem_avg,                     MAX(nm.mem_max) AS mem_max,                     CAST(SUM(nm.conn_sum) AS REAL) / MAX(SUM(nm.samples), 1) AS conn_avg,                     MAX(nm.conn_max) AS conn_max              FROM node_metrics_history nm              LEFT JOIN device_groups dg ON dg.id = nm.group_id              WHERE nm.hour_ts >= ?              GROUP BY bucket, nm.node_id, nm.group_id, group_name              ORDER BY bucket, nm.node_id"
+        } else {
+            "SELECT nm.hour_ts AS bucket,                     nm.node_id AS node_id,                     nm.group_id AS group_id,                     COALESCE(dg.name, '#' || nm.group_id) AS group_name,                     nm.cpu_sum / MAX(nm.samples, 1) AS cpu_avg,                     nm.cpu_max AS cpu_max,                     nm.mem_sum / MAX(nm.samples, 1) AS mem_avg,                     nm.mem_max AS mem_max,                     CAST(nm.conn_sum AS REAL) / MAX(nm.samples, 1) AS conn_avg,                     nm.conn_max AS conn_max              FROM node_metrics_history nm              LEFT JOIN device_groups dg ON dg.id = nm.group_id              WHERE nm.hour_ts >= ?              ORDER BY nm.hour_ts, nm.node_id"
+        };
+        Ok(sqlx::query_as(sql)
+            .bind(since)
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
+    async fn prune_node_metrics(&self, cutoff: &str) -> Result<u64, DbError> {
+        Ok(
+            sqlx::query("DELETE FROM node_metrics_history WHERE hour_ts < ?")
+                .bind(cutoff)
+                .execute(&self.pool)
+                .await?
+                .rows_affected(),
+        )
+    }
 }

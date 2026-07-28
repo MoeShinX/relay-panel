@@ -84,6 +84,13 @@ export const zhCN = {
 
   // Dashboard
   autoRefresh10s: '自动刷新 10s',
+  nodeMetricsHistory: '节点指标趋势',
+  metricCpu: 'CPU',
+  metricMem: '内存',
+  metricConn: '连接数',
+  metricAvg: '均值',
+  metricPeak: '峰值',
+  noNodeMetricsYet: '暂无节点指标。节点上报后会开始记录,数据保留 7 天。',
   noNodesReporting: '暂无节点上报。启动 relay-node 后可查看实时状态。',
 
   // Rules page

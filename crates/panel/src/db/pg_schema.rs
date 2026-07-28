@@ -215,6 +215,24 @@ CREATE TABLE IF NOT EXISTS traffic_history (
 );
 CREATE INDEX IF NOT EXISTS idx_traffic_history_uid ON traffic_history(uid, hour_ts);
 CREATE INDEX IF NOT EXISTS idx_traffic_history_hour ON traffic_history(hour_ts);
+
+-- v1.3.0: hourly node metrics (mirrors the SQLite baseline — see there for why
+-- sum+samples+max instead of a running average, and why there is no FK).
+CREATE TABLE IF NOT EXISTS node_metrics_history (
+    node_id TEXT NOT NULL,
+    group_id BIGINT NOT NULL DEFAULT 0,
+    hour_ts TEXT NOT NULL,
+    samples BIGINT NOT NULL DEFAULT 0,
+    cpu_sum DOUBLE PRECISION NOT NULL DEFAULT 0,
+    cpu_max DOUBLE PRECISION NOT NULL DEFAULT 0,
+    mem_sum DOUBLE PRECISION NOT NULL DEFAULT 0,
+    mem_max DOUBLE PRECISION NOT NULL DEFAULT 0,
+    conn_sum BIGINT NOT NULL DEFAULT 0,
+    conn_max BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (node_id, hour_ts)
+);
+CREATE INDEX IF NOT EXISTS idx_node_metrics_hour ON node_metrics_history(hour_ts);
+CREATE INDEX IF NOT EXISTS idx_node_metrics_group ON node_metrics_history(group_id, hour_ts);
 -- NOTE: the index on group_id is deliberately NOT here — it lives in revision
 -- 24, next to the ALTER that adds the column. This whole file re-runs on every
 -- boot, and `CREATE TABLE IF NOT EXISTS` is a no-op against a database whose
@@ -329,7 +347,7 @@ INSERT INTO schema_version (version) VALUES (1) ON CONFLICT (version) DO NOTHING
 /// The schema revision this build's baseline `PG_SCHEMA_SQL` represents. When a
 /// future release adds a column/table, bump this and add a matching arm in
 /// `run_pg_migrations`. `apply_pg_schema` seeds `schema_version` with revision 1.
-pub const PG_SCHEMA_VERSION: i32 = 24;
+pub const PG_SCHEMA_VERSION: i32 = 25;
 
 /// Apply PG_SCHEMA_SQL to a pool. PostgreSQL's prepared-statement protocol
 /// rejects multi-statement strings ("cannot insert multiple commands into a
@@ -1257,6 +1275,45 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
             "PG migration 24: traffic_history.group_id present ({} row(s) backfilled)",
             backfilled
         );
+    }
+
+    if current < 25 {
+        // v1.3.0: hourly node metrics. See the baseline for why sum+samples+max
+        // rather than a running average. Nothing to backfill — node status was
+        // only ever a snapshot, so there is no prior history to recover.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS node_metrics_history (
+                node_id TEXT NOT NULL,
+                group_id BIGINT NOT NULL DEFAULT 0,
+                hour_ts TEXT NOT NULL,
+                samples BIGINT NOT NULL DEFAULT 0,
+                cpu_sum DOUBLE PRECISION NOT NULL DEFAULT 0,
+                cpu_max DOUBLE PRECISION NOT NULL DEFAULT 0,
+                mem_sum DOUBLE PRECISION NOT NULL DEFAULT 0,
+                mem_max DOUBLE PRECISION NOT NULL DEFAULT 0,
+                conn_sum BIGINT NOT NULL DEFAULT 0,
+                conn_max BIGINT NOT NULL DEFAULT 0,
+                PRIMARY KEY (node_id, hour_ts)
+            )",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_node_metrics_hour              ON node_metrics_history(hour_ts)",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_node_metrics_group              ON node_metrics_history(group_id, hour_ts)",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO schema_version (version) VALUES (25) ON CONFLICT (version) DO NOTHING",
+        )
+        .execute(pool)
+        .await?;
+        tracing::info!("PG migration 25: node_metrics_history table present");
     }
 
     Ok(())

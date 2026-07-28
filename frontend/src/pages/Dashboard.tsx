@@ -10,6 +10,7 @@ import type { ApiEnvelope, User, ForwardRule, DeviceGroup, NodeStatus } from '..
 import { useI18n } from '../i18n/context';
 import { aggregateNodesByGroup } from '../components/nodes/aggregate';
 import TrafficChart from '../components/TrafficChart';
+import NodeMetricsChart from '../components/NodeMetricsChart';
 import { formatBps, formatBytes } from '../utils/format';
 
 const { Text } = Typography;
@@ -275,6 +276,12 @@ export default function Dashboard() {
 
       {/* v1.2.0: fleet-wide traffic trend, with per-rule drill-down. */}
       <TrafficChart rules={ruleList.map(r => ({ id: r.id, name: r.name }))} />
+
+      {/* v1.3.0: node CPU / memory / connections, directly below the traffic
+          chart — the two answer "how much" and "was the box coping", which is
+          the order you ask them in. Admin-only endpoint, and this page is
+          already admin-only. */}
+      <NodeMetricsChart />
 
       <Card title={t('nodeStatus')} extra={<Text type="secondary" style={{ fontSize: 12 }}>{t('autoRefresh10s')}</Text>}>
         {groups.length === 0

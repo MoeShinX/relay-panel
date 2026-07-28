@@ -286,6 +286,37 @@ pub async fn report_status(
             .await
             .map_err(|e| tracing::warn!("report_status: kvs set failed: {}", e));
 
+        // v1.3.0: fold this report into the node's hourly metrics bucket. The
+        // status written above is a snapshot each report overwrites; this is the
+        // only thing that survives to answer "what was it doing last night".
+        //
+        // Best-effort like the status write — a metrics failure must never break
+        // the report cycle, or the node would stop reporting traffic too.
+        //
+        // Skipped for legacy nodes that send no node_id: the series is keyed by
+        // node, and bucketing anonymous reports under a synthetic key would
+        // silently merge several machines into one line.
+        if let Some(nid) = req
+            .node_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let sample = crate::db::repo::NodeMetricSample {
+                node_id: nid.to_string(),
+                group_id: g.id,
+                hour_ts: chrono::Utc::now().format("%Y-%m-%d %H:00:00").to_string(),
+                cpu: req.cpu_usage as f64,
+                mem: req.mem_usage as f64,
+                connections: req.active_connections as i64,
+            };
+            let _ = state
+                .db
+                .record_node_metrics(&sample)
+                .await
+                .map_err(|e| tracing::warn!("report_status: node metrics failed: {}", e));
+        }
+
         // v0.4.19: async GeoIP enrichment — fire-and-forget, never blocks the
         // status report or node forwarding. Only runs when GEOIP_ENABLED=true.
         // Uses built-in primary + fallback providers (ipinfo.io → ipwho.is).

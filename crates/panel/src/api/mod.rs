@@ -222,6 +222,13 @@ pub fn routes() -> Router<AppState> {
             "/stats/traffic",
             axum::routing::get(stats::get_traffic_history),
         )
+        // v1.3.0: node CPU / memory / connection history. Admin-gated inside
+        // the handler (AdminOnly) — unlike traffic, these are properties of the
+        // operator's machines, not of any tenant's rules.
+        .route(
+            "/stats/node-metrics",
+            axum::routing::get(stats::get_node_metrics),
+        )
         // v0.4.10: node status is owner-scoped (a user sees only nodes for
         // groups they own). Renamed /node_status → /nodes.
         .route("/nodes", axum::routing::get(stats::get_node_status))

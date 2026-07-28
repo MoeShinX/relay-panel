@@ -85,6 +85,13 @@ export const enUS: Dict = {
 
   // Dashboard
   autoRefresh10s: 'auto-refresh 10s',
+  nodeMetricsHistory: 'Node metrics',
+  metricCpu: 'CPU',
+  metricMem: 'Memory',
+  metricConn: 'Connections',
+  metricAvg: 'avg',
+  metricPeak: 'peak',
+  noNodeMetricsYet: 'No node metrics yet. Recording starts once nodes report; kept for 7 days.',
   noNodesReporting: 'No nodes reporting. Start a relay-node to see live status.',
 
   // Rules page

@@ -186,6 +186,65 @@ pub async fn get_traffic_history(
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct NodeMetricsQuery {
+    pub range: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct NodeMetricsResponse {
+    pub granularity: String,
+    pub since: String,
+    pub buckets: Vec<crate::db::repo::NodeMetricBucket>,
+}
+
+/// GET /api/v1/stats/node-metrics?range=1d|7d
+///
+/// ADMIN ONLY, unlike the traffic chart. Traffic is owner-scoped because a user
+/// owns their own rules' traffic; node CPU/memory is a property of the operator's
+/// machines, and a tenant has no business reading it.
+///
+/// Hourly buckets, like the traffic endpoint, for the same reason: day grouping
+/// belongs in the viewer's timezone, which only the client knows.
+pub async fn get_node_metrics(
+    _admin: AdminOnly,
+    State(state): State<AppState>,
+    Query(q): Query<NodeMetricsQuery>,
+) -> Json<ApiResponse<NodeMetricsResponse>> {
+    // Capped at 7d because that is the retention — offering 30d would render
+    // an empty left half and look like data loss.
+    let days = match q.range.as_str() {
+        "1d" => 1,
+        "7d" => 7,
+        other => {
+            return Json(ApiResponse {
+                code: 400,
+                message: format!("range 只能是 1d / 7d,收到: {other}"),
+                data: None,
+            });
+        }
+    };
+    let since = (chrono::Utc::now() - chrono::Duration::days(days))
+        .format("%Y-%m-%d %H:00:00")
+        .to_string();
+
+    match state.db.query_node_metrics(&since, false).await {
+        Ok(buckets) => Json(ApiResponse::success(NodeMetricsResponse {
+            granularity: "hour".into(),
+            since,
+            buckets,
+        })),
+        Err(e) => {
+            tracing::error!("get_node_metrics: db error: {}", e);
+            Json(ApiResponse {
+                code: 500,
+                message: "数据库错误".into(),
+                data: None,
+            })
+        }
+    }
+}
+
 pub async fn get_node_status(
     user: AuthUser,
     State(state): State<AppState>,

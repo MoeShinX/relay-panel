@@ -296,6 +296,39 @@ CREATE INDEX IF NOT EXISTS idx_traffic_history_hour ON traffic_history(hour_ts);
 -- group_id". Migrations run on fresh installs too, so the index is still
 -- created exactly once either way.
 
+-- v1.3.0: hourly node metrics (CPU / memory / connections).
+--
+-- Node status is a SNAPSHOT — each report overwrites the last — so "why was it
+-- slow last night" had no data to answer with. This keeps an hourly rollup.
+--
+-- Stores sum + samples rather than a running average: the average is then
+-- exact at read time, instead of drifting through repeated incremental
+-- updates. `*_max` is kept separately because stalls are caused by peaks, and
+-- an hourly average flattens exactly the spike you are looking for.
+--
+-- Retention is shorter than traffic history (7 vs 35 days): a report every
+-- ~10s is far denser than per-rule traffic, and week-old CPU is rarely useful.
+--
+-- No foreign key on node_id, deliberately — same reasoning as traffic_history:
+-- removing a node must not retroactively erase the history that explains what
+-- it did.
+CREATE TABLE IF NOT EXISTS node_metrics_history (
+    node_id TEXT NOT NULL,
+    group_id INTEGER NOT NULL DEFAULT 0,
+    hour_ts TEXT NOT NULL,
+    samples INTEGER NOT NULL DEFAULT 0,
+    cpu_sum REAL NOT NULL DEFAULT 0,
+    cpu_max REAL NOT NULL DEFAULT 0,
+    mem_sum REAL NOT NULL DEFAULT 0,
+    mem_max REAL NOT NULL DEFAULT 0,
+    conn_sum INTEGER NOT NULL DEFAULT 0,
+    conn_max INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (node_id, hour_ts)
+);
+CREATE INDEX IF NOT EXISTS idx_node_metrics_hour ON node_metrics_history(hour_ts);
+CREATE INDEX IF NOT EXISTS idx_node_metrics_group ON node_metrics_history(group_id, hour_ts);
+
+
 -- v1.0.9: plan ↔ device_group grant map. Buying a plan (with grant_all_groups=0)
 -- REPLACES the user's user_device_groups with these groups (v1.0.8: purchase is
 -- replace, not append — the plan's grant becomes the user's whole authorized
@@ -1571,6 +1604,41 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
         "Migration 41: traffic_history.group_id present ({} row(s) backfilled)",
         backfilled
     );
+
+    // ── Migration 42: v1.3.0 hourly node metrics ──
+    // See SCHEMA_SQL for why sum+samples+max rather than a running average, and
+    // why there is no FK on node_id. Nothing to backfill: node status was only
+    // ever a snapshot, so there is no history to recover.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS node_metrics_history (
+            node_id TEXT NOT NULL,
+            group_id INTEGER NOT NULL DEFAULT 0,
+            hour_ts TEXT NOT NULL,
+            samples INTEGER NOT NULL DEFAULT 0,
+            cpu_sum REAL NOT NULL DEFAULT 0,
+            cpu_max REAL NOT NULL DEFAULT 0,
+            mem_sum REAL NOT NULL DEFAULT 0,
+            mem_max REAL NOT NULL DEFAULT 0,
+            conn_sum INTEGER NOT NULL DEFAULT 0,
+            conn_max INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (node_id, hour_ts)
+        )",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_node_metrics_hour \
+         ON node_metrics_history(hour_ts)",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_node_metrics_group \
+         ON node_metrics_history(group_id, hour_ts)",
+    )
+    .execute(pool)
+    .await?;
+    tracing::info!("Migration 42: node_metrics_history table present");
 
     Ok(())
 }

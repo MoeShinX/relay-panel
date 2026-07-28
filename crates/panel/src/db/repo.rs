@@ -706,6 +706,57 @@ pub trait TrafficRepository: Send + Sync {
     /// the retention sweeper; the table has no FK so this is the ONLY way rows
     /// die.
     async fn prune_traffic_history(&self, cutoff: &str) -> Result<u64, DbError>;
+
+    /// v1.3.0: fold one status report into the node's hourly metrics bucket.
+    ///
+    /// Called on every report (~10s), so it must be a single UPSERT: sums and
+    /// the sample count accumulate, the maxima take whichever is larger. The
+    /// average is derived at read time from sum/samples so it stays exact
+    /// instead of drifting through repeated incremental updates.
+    async fn record_node_metrics(&self, m: &NodeMetricSample) -> Result<(), DbError>;
+
+    /// Hourly (or daily, when `daily`) metric series per node since `since`.
+    /// Admin-only data — this layer trusts its arguments.
+    async fn query_node_metrics(
+        &self,
+        since: &str,
+        daily: bool,
+    ) -> Result<Vec<NodeMetricBucket>, DbError>;
+
+    /// Delete rows with `hour_ts < cutoff`. Returns rows deleted. Same
+    /// contract as prune_traffic_history — no FK, so this is the only way
+    /// rows die.
+    async fn prune_node_metrics(&self, cutoff: &str) -> Result<u64, DbError>;
+}
+
+/// One status report, reduced to the fields the history keeps.
+#[derive(Debug, Clone)]
+pub struct NodeMetricSample {
+    pub node_id: String,
+    pub group_id: i64,
+    /// 'YYYY-MM-DD HH:00:00' UTC — the bucket this sample lands in.
+    pub hour_ts: String,
+    pub cpu: f64,
+    pub mem: f64,
+    pub connections: i64,
+}
+
+/// One point of the node-metric series, per (bucket, node).
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
+pub struct NodeMetricBucket {
+    /// 'YYYY-MM-DD HH:00:00' (hourly) or 'YYYY-MM-DD' (daily), UTC.
+    pub bucket: String,
+    pub node_id: String,
+    pub group_id: i64,
+    /// The group's name at query time, or "#id" once the group is deleted —
+    /// resolved in SQL so the chart legend needs no second round trip.
+    pub group_name: String,
+    pub cpu_avg: f64,
+    pub cpu_max: f64,
+    pub mem_avg: f64,
+    pub mem_max: f64,
+    pub conn_avg: f64,
+    pub conn_max: i64,
 }
 
 /// One point of the traffic-history series, per (bucket, line).

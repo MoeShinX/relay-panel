@@ -255,4 +255,55 @@ impl TrafficRepository for PgRepository {
                 .rows_affected(),
         )
     }
+
+    async fn record_node_metrics(&self, m: &NodeMetricSample) -> Result<(), DbError> {
+        // Mirrors the SQLite UPSERT (see there for why sums + maxima are both
+        // kept). PG spells the pairwise maximum GREATEST, not MAX — MAX is the
+        // aggregate here and would be a type error in this position.
+        sqlx::query(
+            "INSERT INTO node_metrics_history                  (node_id, group_id, hour_ts, samples, cpu_sum, cpu_max,                   mem_sum, mem_max, conn_sum, conn_max)              VALUES ($1, $2, $3, 1, $4, $5, $6, $7, $8, $9)              ON CONFLICT (node_id, hour_ts) DO UPDATE SET                  group_id = EXCLUDED.group_id,                  samples  = node_metrics_history.samples + 1,                  cpu_sum  = node_metrics_history.cpu_sum + EXCLUDED.cpu_sum,                  cpu_max  = GREATEST(node_metrics_history.cpu_max, EXCLUDED.cpu_max),                  mem_sum  = node_metrics_history.mem_sum + EXCLUDED.mem_sum,                  mem_max  = GREATEST(node_metrics_history.mem_max, EXCLUDED.mem_max),                  conn_sum = node_metrics_history.conn_sum + EXCLUDED.conn_sum,                  conn_max = GREATEST(node_metrics_history.conn_max, EXCLUDED.conn_max)",
+        )
+        .bind(&m.node_id)
+        .bind(m.group_id)
+        .bind(&m.hour_ts)
+        .bind(m.cpu)
+        .bind(m.cpu)
+        .bind(m.mem)
+        .bind(m.mem)
+        .bind(m.connections)
+        .bind(m.connections)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn query_node_metrics(
+        &self,
+        since: &str,
+        daily: bool,
+    ) -> Result<Vec<NodeMetricBucket>, DbError> {
+        // See the SQLite version for why the averages are derived from
+        // sum/samples rather than stored. GREATEST(..., 1) guards the divide;
+        // samples can only be 0 for a row that was never updated, but a
+        // division by zero here would take down the whole chart.
+        let sql = if daily {
+            "SELECT LEFT(nm.hour_ts, 10) AS bucket,                     nm.node_id AS node_id,                     nm.group_id AS group_id,                     COALESCE(dg.name, '#' || nm.group_id::text) AS group_name,                     SUM(nm.cpu_sum) / GREATEST(SUM(nm.samples), 1) AS cpu_avg,                     MAX(nm.cpu_max) AS cpu_max,                     SUM(nm.mem_sum) / GREATEST(SUM(nm.samples), 1) AS mem_avg,                     MAX(nm.mem_max) AS mem_max,                     SUM(nm.conn_sum)::double precision                         / GREATEST(SUM(nm.samples), 1) AS conn_avg,                     MAX(nm.conn_max) AS conn_max              FROM node_metrics_history nm              LEFT JOIN device_groups dg ON dg.id = nm.group_id              WHERE nm.hour_ts >= $1              GROUP BY bucket, nm.node_id, nm.group_id, group_name              ORDER BY bucket, nm.node_id"
+        } else {
+            "SELECT nm.hour_ts AS bucket,                     nm.node_id AS node_id,                     nm.group_id AS group_id,                     COALESCE(dg.name, '#' || nm.group_id::text) AS group_name,                     nm.cpu_sum / GREATEST(nm.samples, 1) AS cpu_avg,                     nm.cpu_max AS cpu_max,                     nm.mem_sum / GREATEST(nm.samples, 1) AS mem_avg,                     nm.mem_max AS mem_max,                     nm.conn_sum::double precision                         / GREATEST(nm.samples, 1) AS conn_avg,                     nm.conn_max AS conn_max              FROM node_metrics_history nm              LEFT JOIN device_groups dg ON dg.id = nm.group_id              WHERE nm.hour_ts >= $1              ORDER BY nm.hour_ts, nm.node_id"
+        };
+        Ok(sqlx::query_as(sql)
+            .bind(since)
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
+    async fn prune_node_metrics(&self, cutoff: &str) -> Result<u64, DbError> {
+        Ok(
+            sqlx::query("DELETE FROM node_metrics_history WHERE hour_ts < $1")
+                .bind(cutoff)
+                .execute(&self.pool)
+                .await?
+                .rows_affected(),
+        )
+    }
 }

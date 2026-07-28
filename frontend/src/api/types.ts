@@ -108,6 +108,31 @@ export interface TrafficHistoryBucket {
   billed_total: number;
 }
 
+/** v1.3.0: one node's metrics for one bucket. CPU/memory are 0..1 fractions;
+ *  connections is a raw count. `*_avg` is the sample-weighted mean of the
+ *  bucket, `*_max` its peak — both are kept because an average alone flattens
+ *  the spike that caused a stall. */
+export interface NodeMetricBucket {
+  /** 'YYYY-MM-DD HH:00:00' UTC — the chart converts to the viewer's timezone. */
+  bucket: string;
+  node_id: string;
+  group_id: number;
+  /** The line's name, or "#id" once the group is deleted. */
+  group_name: string;
+  cpu_avg: number;
+  cpu_max: number;
+  mem_avg: number;
+  mem_max: number;
+  conn_avg: number;
+  conn_max: number;
+}
+
+export interface NodeMetricsResponse {
+  granularity: string;
+  since: string;
+  buckets: NodeMetricBucket[];
+}
+
 export interface TrafficHistoryResponse {
   granularity: string;
   /** Inclusive UTC lower bound, for zero-filling leading buckets. */
