@@ -1296,6 +1296,11 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
         tracing::info!("PG migration 25: tunnels table created");
+        sqlx::query(
+            "INSERT INTO schema_version (version) VALUES (25) ON CONFLICT (version) DO NOTHING",
+        )
+        .execute(pool)
+        .await?;
     }
 
     Ok(())
