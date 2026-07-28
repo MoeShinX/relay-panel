@@ -865,6 +865,49 @@ mod tests {
         );
     }
 
+    /// v1.3.0: the audit trail must never become a place to read a live node
+    /// credential out of. Rotation is exactly the operation that produces one,
+    /// and `detail` is free-form text a future edit could carelessly widen —
+    /// so pin it: the new token must appear in NO column of the audit row.
+    #[tokio::test]
+    async fn rotate_group_token_never_writes_the_token_into_the_audit_log() {
+        let (state, pool) = test_state().await;
+        add_group(&pool, 30, 1, "rotate-me").await;
+
+        let Json(resp) =
+            super::rotate_group_token(AdminOnly { user_id: 1 }, State(state.clone()), Path(30))
+                .await;
+        assert_eq!(resp.code, 0, "rotation must succeed: {}", resp.message);
+        // Read the landed token from the DB rather than the response struct:
+        // it is the same value, and the stored credential is the thing that
+        // must not be discoverable through the audit log.
+        let token: String = sqlx::query_scalar("SELECT token FROM device_groups WHERE id = 30")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(
+            !token.is_empty(),
+            "a blank token would make this test vacuous"
+        );
+
+        let rows = state.db.query_audit_log(None, 50, 0).await.unwrap();
+        let entry = rows
+            .iter()
+            .find(|e| e.action == "rotate_group_token")
+            .expect("rotation must be audited");
+        for (column, value) in [
+            ("detail", &entry.detail),
+            ("target_id", &entry.target_id),
+            ("actor_name", &entry.actor_name),
+            ("target_type", &entry.target_type),
+        ] {
+            assert!(
+                !value.contains(&token),
+                "audit column {column} leaked the rotated node token"
+            );
+        }
+    }
+
     /// An empty group can be deleted successfully.
     #[tokio::test]
     async fn delete_empty_group_succeeds() {

@@ -183,6 +183,12 @@ pub async fn delete_rule(
     Path(id): Path<i64>,
 ) -> Json<ApiResponse<()>> {
     let scope = user.resource_scope();
+    // Snapshot the name before the delete — afterwards there is no row to read
+    // it from, and "rule 12" alone doesn't answer "who deleted my rule".
+    let rule_name = match state.db.find_rule_by_id(id, &scope).await {
+        Ok(Some(r)) => r.name,
+        _ => String::new(),
+    };
     // v0.3.6: check rows_affected(). A non-existent rule previously returned
     // success AND broadcast config_changed — a no-op mutation that needlessly
     // triggered a node re-fetch. Now 404 + no broadcast when nothing was deleted.
@@ -198,6 +204,17 @@ pub async fn delete_rule(
                 actor_admin = user.admin,
                 "destructive op"
             );
+            // Recorded for non-admins too: a rule can be deleted by its owner,
+            // and "it wasn't an admin" is itself the answer sometimes.
+            crate::service::audit::record(
+                &state,
+                Some(user.user_id),
+                "delete_rule",
+                "rule",
+                id,
+                &rule_name,
+            )
+            .await;
             state
                 .node_connections
                 .broadcast_all(r#"{"type":"config_changed"}"#)

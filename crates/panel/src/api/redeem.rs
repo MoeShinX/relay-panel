@@ -108,6 +108,18 @@ pub async fn create_codes(
                 amount = %amount,
                 "redeem codes generated"
             );
+            // The batch id and face value, never `display` — a redeem code is a
+            // bearer credential, and anything written here is readable by every
+            // admin for a year.
+            crate::service::audit::record(
+                &state,
+                Some(_admin.user_id),
+                "create_redeem_codes",
+                "redeem_batch",
+                &batch_id,
+                &format!("{created} 张 × {amount}"),
+            )
+            .await;
             Json(ApiResponse::success(CreateCodesResponse {
                 batch_id,
                 created,
@@ -247,6 +259,15 @@ pub async fn void_code(
     match state.db.void_redeem_code(id).await {
         Ok(1) => {
             tracing::info!(action = "void_redeem_code", code_id = id, "code voided");
+            crate::service::audit::record(
+                &state,
+                Some(_admin.user_id),
+                "void_redeem_code",
+                "redeem_code",
+                id,
+                "",
+            )
+            .await;
             Json(ApiResponse::success(()))
         }
         // 0 rows = already used or already void. A used code is deliberately
@@ -282,6 +303,15 @@ pub async fn delete_codes(
                 deleted = n,
                 "codes deleted (used codes are never deleted)"
             );
+            crate::service::audit::record(
+                &state,
+                Some(_admin.user_id),
+                "delete_redeem_codes",
+                "redeem_code",
+                "",
+                &format!("选中 {} 张，实际删除 {n} 张", req.ids.len()),
+            )
+            .await;
             Json(ApiResponse::success(n))
         }
         Err(e) => {
@@ -325,6 +355,17 @@ pub async fn redeem_code(
                 amount = %amount,
                 "code redeemed"
             );
+            // The amount, not the code — a successful redemption doesn't make
+            // the code any less of a credential to anyone reading this later.
+            crate::service::audit::record(
+                &state,
+                Some(user.user_id),
+                "redeem_code",
+                "redeem_code",
+                "",
+                &format!("充值 {amount}"),
+            )
+            .await;
             Json(ApiResponse::success(RedeemResponse { amount, balance }))
         }
         // ONE message for "no such code" and "already used". Distinguishing

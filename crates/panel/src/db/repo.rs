@@ -727,6 +727,58 @@ pub trait TrafficRepository: Send + Sync {
     /// contract as prune_traffic_history — no FK, so this is the only way
     /// rows die.
     async fn prune_node_metrics(&self, cutoff: &str) -> Result<u64, DbError>;
+
+    /// v1.3.0: append one audit entry. Best-effort at the call site — see
+    /// service::audit for why a failure here must not undo the operation that
+    /// was just performed.
+    async fn record_audit(&self, e: &NewAuditEntry) -> Result<(), DbError>;
+
+    /// Most recent entries first. `action` filters to one action when given.
+    /// Admin-only data — this layer trusts its arguments.
+    async fn query_audit_log(
+        &self,
+        action: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<AuditEntry>, DbError>;
+
+    /// Total matching rows, for pagination.
+    async fn count_audit_log(&self, action: Option<&str>) -> Result<i64, DbError>;
+
+    /// Delete entries older than `cutoff`. The retention sweeper is the only
+    /// thing that removes them.
+    async fn prune_audit_log(&self, cutoff: &str) -> Result<u64, DbError>;
+}
+
+/// An audit entry being written.
+///
+/// `detail` MUST NOT contain secrets. Record that a token was rotated, never
+/// the token; that notification settings changed, never the credentials.
+#[derive(Debug, Clone)]
+pub struct NewAuditEntry {
+    pub ts: String,
+    /// None for actions with no authenticated actor (system/scheduler).
+    pub actor_id: Option<i64>,
+    /// Snapshot of the actor's username — survives deletion of the account.
+    pub actor_name: String,
+    pub action: String,
+    pub target_type: String,
+    /// TEXT because targets are not uniformly numeric (rule id vs node id).
+    pub target_id: String,
+    pub detail: String,
+}
+
+/// An audit entry being read back.
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
+pub struct AuditEntry {
+    pub id: i64,
+    pub ts: String,
+    pub actor_id: Option<i64>,
+    pub actor_name: String,
+    pub action: String,
+    pub target_type: String,
+    pub target_id: String,
+    pub detail: String,
 }
 
 /// One status report, reduced to the fields the history keeps.

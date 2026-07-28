@@ -130,6 +130,22 @@ pub async fn update_notify_settings(
         email = cfg.email_enabled,
         "notification settings updated"
     );
+    // Which channels are on, never the bot token or SMTP password that this
+    // very handler just took care not to leak back to the browser.
+    crate::service::audit::record(
+        &state,
+        Some(_admin.user_id),
+        "update_notify_settings",
+        "settings",
+        "notify",
+        &format!(
+            "总开关 {} / Telegram {} / 邮件 {}",
+            if cfg.enabled { "开" } else { "关" },
+            if cfg.telegram_enabled { "开" } else { "关" },
+            if cfg.email_enabled { "开" } else { "关" },
+        ),
+    )
+    .await;
     Json(ApiResponse::success(NotifyConfigPublic::from(&cfg)))
 }
 

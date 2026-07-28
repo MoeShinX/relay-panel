@@ -11,6 +11,7 @@ import {
   SettingOutlined,
   ShoppingOutlined,
   GiftOutlined,
+  FileSearchOutlined,
 } from '@ant-design/icons';
 import { useI18n } from '../i18n/context';
 import api from '../api/client';
@@ -47,6 +48,7 @@ export default function MainLayout() {
     { key: '/plans', icon: <ShoppingOutlined />, label: t('planManagement') },
     { key: '/redeem-codes', icon: <GiftOutlined />, label: t('redeemCodes') },
     { key: '/users', icon: <UserOutlined />, label: t('users') },
+    { key: '/audit-log', icon: <FileSearchOutlined />, label: t('auditLog') },
     { key: '/settings', icon: <SettingOutlined />, label: t('systemSettings') },
   ];
   const menuItems = isAdmin

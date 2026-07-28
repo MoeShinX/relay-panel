@@ -200,6 +200,27 @@ export interface ListCodesResponse {
   total: number;
 }
 
+/** v1.3.0: one recorded admin action. */
+export interface AuditEntry {
+  id: number;
+  ts: string;
+  /** Null when the actor's account was deleted or the action was automatic. */
+  actor_id: number | null;
+  /** Snapshot of the actor's username, stored at write time so it survives
+   *  deletion of the account. */
+  actor_name: string;
+  action: string;
+  target_type: string;
+  target_id: string;
+  /** Free-form context. Never contains a secret — see service::audit. */
+  detail: string;
+}
+
+export interface AuditLogResponse {
+  items: AuditEntry[];
+  total: number;
+}
+
 export interface CreateCodesResponse {
   batch_id: string;
   /** Rows actually created — a duplicate code is skipped, not fatal. */

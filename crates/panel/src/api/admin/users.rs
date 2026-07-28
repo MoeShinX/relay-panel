@@ -49,6 +49,15 @@ pub async fn create_user(
                 "admin created user {:?}",
                 req.username
             );
+            crate::service::audit::record(
+                &state,
+                Some(_admin.user_id),
+                "create_user",
+                "user",
+                &req.username,
+                "",
+            )
+            .await;
             Json(ApiResponse::success(()))
         }
         Err(CreateUserError::InvalidUsername) => Json(err(
@@ -105,6 +114,15 @@ pub async fn delete_user(
         return Json(err(404, "用户不存在（或为管理员，无法删除）"));
     }
 
+    // Read the target's name BEFORE the cascade — after it, the row is gone and
+    // the audit entry could only say "user 47", which is not an answer to
+    // "who deleted zhangsan".
+    let target_name = match crate::db::repo::UserRepository::find_by_id(state.db.as_ref(), id).await
+    {
+        Ok(Some(u)) => u.username,
+        _ => String::new(),
+    };
+
     // Atomic cascade delete: removes the user's rules, tunnel_profiles and
     // device_groups, then the user row itself, all in ONE transaction with the
     // admin guard baked in. Returns 0 (and rolls back) if the target is an admin
@@ -118,6 +136,15 @@ pub async fn delete_user(
                 actor_admin_id = _admin.user_id,
                 "destructive admin op"
             );
+            crate::service::audit::record(
+                &state,
+                Some(_admin.user_id),
+                "delete_user",
+                "user",
+                id,
+                &target_name,
+            )
+            .await;
             Json(ApiResponse::success(()))
         }
         Err(e) => {
@@ -469,6 +496,15 @@ pub async fn admin_buy_plan_for_user(
                 plan_id = plan.id,
                 "admin assigned plan to user"
             );
+            crate::service::audit::record(
+                &state,
+                Some(_admin.user_id),
+                "admin_buy_plan",
+                "user",
+                id,
+                &format!("套餐 {}", plan.name),
+            )
+            .await;
             state
                 .node_connections
                 .broadcast_all(r#"{"type":"config_changed"}"#)
@@ -536,6 +572,19 @@ pub async fn admin_set_user_plan(
         "admin edited user plan (clear={})",
         req.clear
     );
+    crate::service::audit::record(
+        &state,
+        Some(_admin.user_id),
+        "admin_set_plan",
+        "user",
+        id,
+        if req.clear {
+            "移除套餐"
+        } else {
+            "调整到期时间"
+        },
+    )
+    .await;
     // Expiry / authorization changes feed list_active_for_config — refresh nodes.
     state
         .node_connections

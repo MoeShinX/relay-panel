@@ -5,6 +5,7 @@ use axum::Router;
 use std::sync::Arc;
 
 pub mod admin;
+pub mod audit;
 pub mod auth;
 pub mod diagnose;
 pub mod geoip;
@@ -229,6 +230,9 @@ pub fn routes() -> Router<AppState> {
             "/stats/node-metrics",
             axum::routing::get(stats::get_node_metrics),
         )
+        // v1.3.0: admin audit trail (read side). AdminOnly inside the handler,
+        // and never owner-scoped — the rows record who acted on whom.
+        .route("/admin/audit-log", axum::routing::get(audit::get_audit_log))
         // v0.4.10: node status is owner-scoped (a user sees only nodes for
         // groups they own). Renamed /node_status → /nodes.
         .route("/nodes", axum::routing::get(stats::get_node_status))

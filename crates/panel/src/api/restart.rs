@@ -236,6 +236,15 @@ pub async fn restart_rule(
         restarted,
         nodes.len()
     );
+    crate::service::audit::record(
+        &state,
+        Some(user.user_id),
+        "restart_rule",
+        "rule",
+        rule_id,
+        &format!("{} — 生效 {}/{} 个节点", rule.name, restarted, nodes.len()),
+    )
+    .await;
 
     Json(ApiResponse::success(RestartResponse {
         rule_id,

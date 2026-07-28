@@ -233,6 +233,21 @@ CREATE TABLE IF NOT EXISTS node_metrics_history (
 );
 CREATE INDEX IF NOT EXISTS idx_node_metrics_hour ON node_metrics_history(hour_ts);
 CREATE INDEX IF NOT EXISTS idx_node_metrics_group ON node_metrics_history(group_id, hour_ts);
+
+-- v1.3.0: admin audit trail (mirrors the SQLite baseline — see there for why
+-- actor_name is a snapshot and why detail must never carry a secret).
+CREATE TABLE IF NOT EXISTS audit_log (
+    id BIGSERIAL PRIMARY KEY,
+    ts TEXT NOT NULL,
+    actor_id BIGINT,
+    actor_name TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL,
+    target_type TEXT NOT NULL DEFAULT '',
+    target_id TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
+CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action, ts);
 -- NOTE: the index on group_id is deliberately NOT here — it lives in revision
 -- 24, next to the ALTER that adds the column. This whole file re-runs on every
 -- boot, and `CREATE TABLE IF NOT EXISTS` is a no-op against a database whose
@@ -347,7 +362,7 @@ INSERT INTO schema_version (version) VALUES (1) ON CONFLICT (version) DO NOTHING
 /// The schema revision this build's baseline `PG_SCHEMA_SQL` represents. When a
 /// future release adds a column/table, bump this and add a matching arm in
 /// `run_pg_migrations`. `apply_pg_schema` seeds `schema_version` with revision 1.
-pub const PG_SCHEMA_VERSION: i32 = 25;
+pub const PG_SCHEMA_VERSION: i32 = 26;
 
 /// Apply PG_SCHEMA_SQL to a pool. PostgreSQL's prepared-statement protocol
 /// rejects multi-statement strings ("cannot insert multiple commands into a
@@ -1314,6 +1329,38 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
         tracing::info!("PG migration 25: node_metrics_history table present");
+    }
+
+    if current < 26 {
+        // v1.3.0: admin audit trail. See the baseline for the snapshot/secret
+        // rules. Nothing to backfill — prior actions only ever hit the process
+        // log, which this cannot recover.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS audit_log (
+                id BIGSERIAL PRIMARY KEY,
+                ts TEXT NOT NULL,
+                actor_id BIGINT,
+                actor_name TEXT NOT NULL DEFAULT '',
+                action TEXT NOT NULL,
+                target_type TEXT NOT NULL DEFAULT '',
+                target_id TEXT NOT NULL DEFAULT '',
+                detail TEXT NOT NULL DEFAULT ''
+            )",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts)")
+            .execute(pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action, ts)")
+            .execute(pool)
+            .await?;
+        sqlx::query(
+            "INSERT INTO schema_version (version) VALUES (26) ON CONFLICT (version) DO NOTHING",
+        )
+        .execute(pool)
+        .await?;
+        tracing::info!("PG migration 26: audit_log table present");
     }
 
     Ok(())

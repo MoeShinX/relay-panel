@@ -350,4 +350,57 @@ impl TrafficRepository for SqliteRepository {
                 .rows_affected(),
         )
     }
+
+    async fn record_audit(&self, e: &NewAuditEntry) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT INTO audit_log                  (ts, actor_id, actor_name, action, target_type, target_id, detail)              VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&e.ts)
+        .bind(e.actor_id)
+        .bind(&e.actor_name)
+        .bind(&e.action)
+        .bind(&e.target_type)
+        .bind(&e.target_id)
+        .bind(&e.detail)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn query_audit_log(
+        &self,
+        action: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<AuditEntry>, DbError> {
+        // COALESCE folds the optional filter into one prepared statement, the
+        // same trick the statistics and traffic-history queries use.
+        // Ordered by id, not ts: several entries can share a second, and only
+        // the id gives a stable total order for pagination.
+        Ok(sqlx::query_as(
+            "SELECT id, ts, actor_id, actor_name, action, target_type, target_id, detail              FROM audit_log              WHERE action = COALESCE(?, action)              ORDER BY id DESC LIMIT ? OFFSET ?",
+        )
+        .bind(action)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    async fn count_audit_log(&self, action: Option<&str>) -> Result<i64, DbError> {
+        let (n,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM audit_log WHERE action = COALESCE(?, action)")
+                .bind(action)
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(n)
+    }
+
+    async fn prune_audit_log(&self, cutoff: &str) -> Result<u64, DbError> {
+        Ok(sqlx::query("DELETE FROM audit_log WHERE ts < ?")
+            .bind(cutoff)
+            .execute(&self.pool)
+            .await?
+            .rows_affected())
+    }
 }

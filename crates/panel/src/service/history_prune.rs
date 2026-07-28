@@ -1,4 +1,5 @@
-//! v1.2.0: history retention sweeper (traffic, and since v1.3.0 node metrics).
+//! v1.2.0: history retention sweeper (traffic, and since v1.3.0 node metrics
+//! and the audit log).
 //!
 //! Neither table has an FK — rows are never deleted by a parent cascade
 //! (deliberate: deleting a rule must not shrink "last 7 days", and removing a
@@ -27,9 +28,10 @@ pub fn spawn(state: AppState) {
         let mut ticker = tokio::time::interval(TICK);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         tracing::info!(
-            "history sweeper started (traffic {}d, node metrics {}d, tick {}s)",
+            "history sweeper started (traffic {}d, node metrics {}d, audit {}d, tick {}s)",
             RETENTION_DAYS,
             METRICS_RETENTION_DAYS,
+            crate::service::audit::RETENTION_DAYS,
             TICK.as_secs()
         );
         loop {
@@ -58,6 +60,19 @@ pub fn spawn(state: AppState) {
                     metrics_cutoff
                 ),
                 Err(e) => tracing::error!("node-metrics: prune failed: {}", e),
+            }
+
+            // v1.3.0: the audit trail, on its own much longer cutoff. Swept in
+            // the same pass but independently — one table failing must not skip
+            // the others.
+            let audit_cutoff = (chrono::Utc::now()
+                - chrono::Duration::days(crate::service::audit::RETENTION_DAYS))
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string();
+            match state.db.prune_audit_log(&audit_cutoff).await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!("audit-log: pruned {} rows older than {}", n, audit_cutoff),
+                Err(e) => tracing::error!("audit-log: prune failed: {}", e),
             }
         }
     });

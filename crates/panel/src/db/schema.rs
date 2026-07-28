@@ -328,6 +328,38 @@ CREATE TABLE IF NOT EXISTS node_metrics_history (
 CREATE INDEX IF NOT EXISTS idx_node_metrics_hour ON node_metrics_history(hour_ts);
 CREATE INDEX IF NOT EXISTS idx_node_metrics_group ON node_metrics_history(group_id, hour_ts);
 
+-- v1.3.0: admin audit trail.
+--
+-- Destructive operations were only ever written to the process log: it rotates,
+-- it dies with the container, and it is not visible from the panel. "Who
+-- deleted my rule" had no answer anyone could look up.
+--
+-- actor_name is a SNAPSHOT, not a join. Deleting the admin who did something
+-- must not erase who did it — the same reasoning as orders.plan_name and the
+-- redeem-code money trail. actor_id keeps the link while the account exists.
+--
+-- target_id is TEXT because targets are not uniformly numeric: a rule is an
+-- integer id, a node is a string id. One column, one type, no per-action
+-- special casing at the call site.
+--
+-- detail is a short human-readable summary and MUST NEVER contain a secret.
+-- Rotating a token records that it happened, never the new token; updating the
+-- notification settings records that they changed, never the bot token or SMTP
+-- password. A test pins the rotate case.
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    actor_id INTEGER,
+    actor_name TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL,
+    target_type TEXT NOT NULL DEFAULT '',
+    target_id TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
+CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action, ts);
+
+
 
 -- v1.0.9: plan ↔ device_group grant map. Buying a plan (with grant_all_groups=0)
 -- REPLACES the user's user_device_groups with these groups (v1.0.8: purchase is
@@ -1639,6 +1671,32 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
     .execute(pool)
     .await?;
     tracing::info!("Migration 42: node_metrics_history table present");
+
+    // ── Migration 43: v1.3.0 admin audit trail ──
+    // See SCHEMA_SQL for why actor_name is a snapshot and why detail must never
+    // carry a secret. Nothing to backfill: destructive actions were previously
+    // only in the process log, which this cannot recover.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            actor_id INTEGER,
+            actor_name TEXT NOT NULL DEFAULT '',
+            action TEXT NOT NULL,
+            target_type TEXT NOT NULL DEFAULT '',
+            target_id TEXT NOT NULL DEFAULT '',
+            detail TEXT NOT NULL DEFAULT ''
+        )",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts)")
+        .execute(pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action, ts)")
+        .execute(pool)
+        .await?;
+    tracing::info!("Migration 43: audit_log table present");
 
     Ok(())
 }

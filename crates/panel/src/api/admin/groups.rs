@@ -99,6 +99,18 @@ pub async fn rotate_group_token(
                 closed_connections = closed,
                 "admin rotated node token"
             );
+            // `detail` carries the blast radius (how many nodes got kicked),
+            // NEVER `new_token`. The audit log is readable by every admin and
+            // is retained for a year; a node credential must not live there.
+            crate::service::audit::record(
+                &state,
+                Some(_admin.user_id),
+                "rotate_group_token",
+                "group",
+                id,
+                &format!("断开 {closed} 个节点连接"),
+            )
+            .await;
             Json(ApiResponse::success(RotatedToken { token: new_token }))
         }
         Err(e) => {
@@ -170,6 +182,15 @@ pub async fn delete_group(
                 actor_admin = true,
                 "destructive op"
             );
+            crate::service::audit::record(
+                &state,
+                Some(admin.user_id),
+                "delete_group",
+                "group",
+                id,
+                "",
+            )
+            .await;
             // v1.0.4: close WS connections for the deleted group so nodes
             // stop reporting. Node status entries naturally expire via the
             // existing 2-minute timeout sweep.

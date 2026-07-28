@@ -77,6 +77,20 @@ pub async fn reset_user_password(
                 must_change_password = req.must_change_password,
                 "admin reset a user's password (sessions revoked)"
             );
+            // Never the password or its hash — only that a reset happened.
+            crate::service::audit::record(
+                &state,
+                Some(admin.user_id),
+                "reset_password",
+                "user",
+                id,
+                if req.must_change_password {
+                    "要求下次登录修改"
+                } else {
+                    ""
+                },
+            )
+            .await;
             Json(ApiResponse::success(()))
         }
         Err(e) => {
@@ -122,6 +136,15 @@ pub async fn reset_user_traffic(
                 actor_admin_id = _admin.user_id,
                 "destructive admin op"
             );
+            crate::service::audit::record(
+                &state,
+                Some(_admin.user_id),
+                "reset_traffic",
+                "user",
+                id,
+                "",
+            )
+            .await;
             Json(ApiResponse::success(()))
         }
         Err(e) => {

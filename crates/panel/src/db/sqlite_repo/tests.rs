@@ -5033,3 +5033,111 @@ async fn node_metrics_prune_respects_the_cutoff() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].bucket, "2026-07-28 10:00:00");
 }
+
+// ── Audit log (v1.3.0) ──
+
+fn audit(actor: Option<i64>, name: &str, action: &str, ts: &str) -> NewAuditEntry {
+    NewAuditEntry {
+        ts: ts.to_string(),
+        actor_id: actor,
+        actor_name: name.to_string(),
+        action: action.to_string(),
+        target_type: "user".to_string(),
+        target_id: "7".to_string(),
+        detail: String::new(),
+    }
+}
+
+/// Pagination orders by id, not by ts. Several actions routinely land in the
+/// same second (a bulk delete, a script), and ts alone leaves their relative
+/// order undefined — so page 2 could repeat or skip a row that page 1 showed.
+#[tokio::test]
+async fn audit_log_pages_in_a_stable_order_within_one_second() {
+    let db = repo().await;
+    let ts = "2026-07-28 10:00:00";
+    for action in ["first", "second", "third"] {
+        db.record_audit(&audit(Some(1), "admin", action, ts))
+            .await
+            .unwrap();
+    }
+
+    let page1 = db.query_audit_log(None, 2, 0).await.unwrap();
+    let page2 = db.query_audit_log(None, 2, 2).await.unwrap();
+
+    // Newest first, and the two pages partition the rows with no overlap.
+    let seen: Vec<&str> = page1
+        .iter()
+        .chain(page2.iter())
+        .map(|e| e.action.as_str())
+        .collect();
+    assert_eq!(seen, vec!["third", "second", "first"]);
+}
+
+/// The action filter must constrain the count too. If `total` counted every row
+/// while the page was filtered, the UI would render pages that are always empty
+/// past the first one.
+#[tokio::test]
+async fn audit_log_filter_applies_to_both_page_and_count() {
+    let db = repo().await;
+    for action in ["delete_user", "delete_rule", "delete_user"] {
+        db.record_audit(&audit(Some(1), "admin", action, "2026-07-28 10:00:00"))
+            .await
+            .unwrap();
+    }
+
+    assert_eq!(db.count_audit_log(Some("delete_user")).await.unwrap(), 2);
+    assert_eq!(db.count_audit_log(None).await.unwrap(), 3);
+    let rows = db
+        .query_audit_log(Some("delete_user"), 50, 0)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|e| e.action == "delete_user"));
+}
+
+/// actor_name is a stored snapshot, not a join. Deleting the admin who acted
+/// must not turn the history into a row of anonymous ids — "who deleted my
+/// rule" is exactly the question asked after that admin is gone.
+#[tokio::test]
+async fn audit_actor_name_survives_deletion_of_the_actor() {
+    let db = repo().await;
+    db.insert_user("tempadmin", "hash", 1).await.unwrap();
+    let actor_id = db.find_by_username("tempadmin").await.unwrap().unwrap().id;
+    db.record_audit(&audit(
+        Some(actor_id),
+        "tempadmin",
+        "delete_rule",
+        "2026-07-28 10:00:00",
+    ))
+    .await
+    .unwrap();
+
+    db.delete_user_cascade(actor_id).await.unwrap();
+
+    let rows = db.query_audit_log(None, 50, 0).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].actor_name, "tempadmin");
+    assert_eq!(rows[0].actor_id, Some(actor_id));
+}
+
+/// Retention deletes strictly older than the cutoff and keeps the boundary row,
+/// so a sweep can't eat the oldest entry it was meant to preserve.
+#[tokio::test]
+async fn audit_prune_keeps_the_cutoff_row() {
+    let db = repo().await;
+    for ts in [
+        "2026-07-01 10:00:00",
+        "2026-07-10 10:00:00",
+        "2026-07-20 10:00:00",
+    ] {
+        db.record_audit(&audit(Some(1), "admin", "delete_user", ts))
+            .await
+            .unwrap();
+    }
+
+    let removed = db.prune_audit_log("2026-07-10 10:00:00").await.unwrap();
+    assert_eq!(removed, 1);
+    let rows = db.query_audit_log(None, 50, 0).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|e| e.ts.as_str() >= "2026-07-10 10:00:00"));
+}

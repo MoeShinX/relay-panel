@@ -563,6 +563,15 @@ pub async fn upgrade_node(
         target = %target_version,
         "sent self-upgrade command to node"
     );
+    crate::service::audit::record(
+        &state,
+        Some(_admin.user_id),
+        "upgrade_node",
+        "node",
+        &node_id,
+        &format!("分组 {group_id} → {target_version}"),
+    )
+    .await;
     Json(ApiResponse::success(()))
 }
 
