@@ -713,6 +713,4 @@ export const enUS: Dict = {
   singBoxConfig: 'sing-box Config',
   secret: 'Secret',
   enabled: 'Enabled',
-  yes: 'Yes',
-  no: 'No',
 };

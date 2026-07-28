@@ -712,8 +712,6 @@ export const zhCN = {
   singBoxConfig: 'sing-box 配置',
   secret: '密钥',
   enabled: '启用',
-  yes: '是',
-  no: '否',
 };
 
 export type Dict = typeof zhCN;
