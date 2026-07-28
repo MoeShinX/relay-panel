@@ -11,7 +11,7 @@ import { useAuth } from '../auth/useAuth';
 import TrafficChart from '../components/TrafficChart';
 import SiteAnnouncement from '../components/SiteAnnouncement';
 import { useSiteNotice } from '../hooks/useSiteNotice';
-import AccountRecords from '../components/AccountRecords';
+import RedeemHistory from '../components/RedeemHistory';
 
 const { Text } = Typography;
 
@@ -240,10 +240,11 @@ export default function Account() {
           per-rule drill-down) on the dashboard, and an admin's "personal"
           traffic is a near-meaningless number. The same card on two pages is
           just noise. */}
-      {/* v1.3.0: the user's own top-up and purchase history. Above the traffic
-          chart — "where did my money go" is the question that brings people to
-          this page, and it should not sit below a chart. */}
-      <AccountRecords />
+      {/* v1.3.0: the user's own top-up history. Above the traffic chart —
+          "where did my balance come from" is the question that brings people to
+          this page, and it should not sit below a chart. Purchase history is
+          not duplicated here; it stays on the shop page. */}
+      <RedeemHistory />
 
       {!me.admin && <TrafficChart />}
 
