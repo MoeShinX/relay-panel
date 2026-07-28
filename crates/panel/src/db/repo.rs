@@ -25,7 +25,7 @@
 use async_trait::async_trait;
 use relay_shared::models::{
     DeviceGroup, ForwardRule, ForwardRuleTarget, Order, Plan, SharedGroupSummary, Statistic,
-    Tunnels, TunnelProfile, User,
+    TunnelProfile, Tunnels, User,
 };
 use relay_shared::protocol::{RuleTargetRequest, TrafficEntry};
 use serde::Serialize;

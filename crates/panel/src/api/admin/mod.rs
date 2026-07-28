@@ -19,8 +19,8 @@ pub use plans::*;
 pub use profiles::*;
 pub use rules::*;
 pub use settings::*;
-pub use tunnels::*;
 pub use shop::*;
+pub use tunnels::*;
 pub use users::*;
 
 /// A user WITHOUT the password hash — for API responses. Never expose the
@@ -2589,7 +2589,10 @@ mod tests {
 
         // Attempting to delete group 10 must fail.
         let result = crate::service::groups::delete_group(state.db.as_ref(), 10).await;
-        assert!(result.is_err(), "group deletion must be blocked by tunnel reference");
+        assert!(
+            result.is_err(),
+            "group deletion must be blocked by tunnel reference"
+        );
         let err = result.unwrap_err();
         assert!(
             format!("{:?}", err).contains("10"),

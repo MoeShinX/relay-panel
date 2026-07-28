@@ -56,8 +56,8 @@ pub async fn create_tunnel(
     // Auto-populate config_json and secret_json if empty.
     let mut req = req;
     if req.config_json.is_empty() {
-        req.config_json = serde_json::to_string(
-            &crate::service::tunnels::generate_tunnel_config(&Tunnels {
+        req.config_json =
+            serde_json::to_string(&crate::service::tunnels::generate_tunnel_config(&Tunnels {
                 id: 0,
                 name: req.name.clone(),
                 group_in: req.group_in,
@@ -69,14 +69,12 @@ pub async fn create_tunnel(
                 enabled: false,
                 uid: admin.user_id,
                 created_at: String::new(),
-            }),
-        )
-        .unwrap_or_else(|_| "{}".to_string());
+            }))
+            .unwrap_or_else(|_| "{}".to_string());
     }
     if req.secret_json.is_empty() {
-        req.secret_json =
-            serde_json::to_string(&crate::service::tunnels::generate_tunnel_secret())
-                .unwrap_or_else(|_| "{}".to_string());
+        req.secret_json = serde_json::to_string(&crate::service::tunnels::generate_tunnel_secret())
+            .unwrap_or_else(|_| "{}".to_string());
     }
 
     let id = match svc_create_tunnel(state.db.as_ref(), &req).await {
@@ -90,15 +88,14 @@ pub async fn create_tunnel(
         }
     };
 
-    let tunnel =
-        match TunnelRepository::find_by_id(state.db.as_ref(), id, admin.user_id).await {
-            Ok(Some(t)) => t,
-            Ok(None) => return Json(err(500, "创建隧道后无法读取")),
-            Err(e) => {
-                tracing::error!("create_tunnel: find_by_id failed: {}", e);
-                return Json(err(500, "数据库错误"));
-            }
-        };
+    let tunnel = match TunnelRepository::find_by_id(state.db.as_ref(), id, admin.user_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return Json(err(500, "创建隧道后无法读取")),
+        Err(e) => {
+            tracing::error!("create_tunnel: find_by_id failed: {}", e);
+            return Json(err(500, "数据库错误"));
+        }
+    };
     Json(ApiResponse::success(tunnel))
 }
 

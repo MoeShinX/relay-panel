@@ -256,12 +256,9 @@ pub async fn update_tunnel(
     // Pre-check group_in uniqueness if changing.
     if let Some(new_group_in) = req.group_in {
         // Skip self.
-        if let Ok(Some(existing)) =
-            TunnelRepository::find_by_id(db, id, uid).await
-        {
+        if let Ok(Some(existing)) = TunnelRepository::find_by_id(db, id, uid).await {
             if existing.group_in != new_group_in {
-                if let Ok(Some(other)) =
-                    TunnelRepository::find_by_group_in(db, new_group_in).await
+                if let Ok(Some(other)) = TunnelRepository::find_by_group_in(db, new_group_in).await
                 {
                     if other.id != id {
                         return Err(UpdateTunnelError::DuplicateGroupIn);
