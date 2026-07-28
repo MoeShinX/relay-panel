@@ -7,7 +7,7 @@
 //! logging — those depend on `node_connections`, not the `Repository`.
 
 use crate::db::error::DbError;
-use crate::db::repo::{GroupRepository, ResourceScope, TunnelRepository};
+use crate::db::repo::{ResourceScope, TunnelRepository};
 use crate::db::Repository;
 use crate::service::rules::group_type_to_str;
 use relay_shared::models::DeviceGroup;
@@ -170,7 +170,9 @@ pub async fn delete_group(
     id: i64,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     let rule_count = db.count_rules_by_group(id).await?;
-    let tunnel_count = db.find_by_group_in(id).await?.map_or(0, |_| 1);
+    let tunnel_count = TunnelRepository::find_by_group_in(db, id)
+        .await?
+        .map_or(0, |_| 1);
     let total_refs = rule_count + tunnel_count;
     if total_refs > 0 {
         return Err(Box::new(GroupInUseError {

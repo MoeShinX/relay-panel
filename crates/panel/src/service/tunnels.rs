@@ -13,7 +13,7 @@ use uuid::Uuid;
 /// to `group_out` as an outbound. The user can override the generated JSON by
 /// writing their own config before storing.
 pub fn generate_tunnel_config(tunnel: &Tunnels) -> Value {
-    let listener_id = Uuid::new_v4().to_string();
+    let _listener_id = Uuid::new_v4().to_string();
     let outbound_id = Uuid::new_v4().to_string();
 
     json!({
@@ -202,7 +202,6 @@ impl fmt::Display for CreateTunnelError {
 
 #[derive(Debug)]
 pub enum UpdateTunnelError {
-    NotFound,
     DuplicateGroupIn,
     Database(DbError),
 }
@@ -210,7 +209,6 @@ pub enum UpdateTunnelError {
 impl fmt::Display for UpdateTunnelError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            UpdateTunnelError::NotFound => write!(f, "tunnel not found"),
             UpdateTunnelError::DuplicateGroupIn => write!(f, "duplicate group_in"),
             UpdateTunnelError::Database(e) => write!(f, "database error: {}", e),
         }

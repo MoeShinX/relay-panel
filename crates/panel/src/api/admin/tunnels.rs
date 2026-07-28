@@ -5,7 +5,7 @@ use crate::db::repo::{CreateTunnelRequest, TunnelRepository, UpdateTunnelRequest
 use crate::service::tunnels::{
     create_tunnel as svc_create_tunnel, delete_tunnel as svc_delete_tunnel,
     regenerate_config as svc_regenerate_config, update_tunnel as svc_update_tunnel,
-    CreateTunnelError, DeleteTunnelError, UpdateTunnelError,
+    CreateTunnelError, UpdateTunnelError,
 };
 use axum::{
     extract::{Path, State},
@@ -107,7 +107,6 @@ pub async fn update_tunnel(
 ) -> Json<ApiResponse<()>> {
     let affected = match svc_update_tunnel(state.db.as_ref(), id, _admin.user_id, &req).await {
         Ok(n) => n,
-        Err(UpdateTunnelError::NotFound) => return Json(err(404, "隧道不存在")),
         Err(UpdateTunnelError::DuplicateGroupIn) => {
             return Json(err(400, "该入口组已绑定隧道"));
         }
