@@ -3,8 +3,7 @@ import api from '../api/client';
 import type { ApiEnvelope, SiteNotice } from '../api/types';
 
 /**
- * v1.3.0: the signed-in half of the site config — announcement + support
- * contact, from the AUTHENTICATED `/user/site-notice`.
+ * v1.3.0: the signed-in half of the site config — the support contact, from the AUTHENTICATED `/user/site-notice`.
  *
  * Separate from `useSite` (public branding) because the two have different auth
  * requirements, not just different fields: the login page reads branding with
@@ -13,7 +12,7 @@ import type { ApiEnvelope, SiteNotice } from '../api/types';
  * Same cache + subscriber shape as useSite, for the same reason — an admin who
  * edits the announcement should see the banner change, not a stale copy.
  */
-const EMPTY: SiteNotice = { announcement: '', announcement_type: 'info', contact: '' };
+const EMPTY: SiteNotice = { contact: '' };
 
 let cached: Promise<SiteNotice> | null = null;
 const subscribers = new Set<(n: SiteNotice) => void>();

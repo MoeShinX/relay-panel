@@ -750,6 +750,69 @@ pub trait TrafficRepository: Send + Sync {
     async fn prune_audit_log(&self, cutoff: &str) -> Result<u64, DbError>;
 }
 
+/// v1.3.0: one site announcement.
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct Announcement {
+    pub id: i64,
+    pub title: String,
+    pub content: String,
+    /// "info" | "success" | "warning" | "error".
+    pub kind: String,
+    pub pinned: bool,
+    pub published_at: String,
+    /// None = never auto-hides.
+    pub expires_at: Option<String>,
+    pub author_id: Option<i64>,
+    /// Snapshot of who posted it — survives deletion of that admin account.
+    pub author_name: String,
+}
+
+/// The writable half, for create and update.
+#[derive(Debug, Clone)]
+pub struct NewAnnouncement {
+    pub title: String,
+    pub content: String,
+    pub kind: String,
+    pub pinned: bool,
+    pub published_at: String,
+    pub expires_at: Option<String>,
+    pub author_id: Option<i64>,
+    pub author_name: String,
+}
+
+// ── Announcements (v1.3.0) ──
+
+#[async_trait]
+pub trait AnnouncementRepository: Send + Sync {
+    /// The notice the banner shows, or None.
+    ///
+    /// Pinned first, then newest, with expired rows excluded. `now` is passed
+    /// in rather than read here so one clock decides and tests can pin it.
+    async fn active_announcement(&self, now: &str) -> Result<Option<Announcement>, DbError>;
+
+    /// History, newest first. `include_expired` is what separates the user's
+    /// archive (true — reading old notices is the point) from callers that
+    /// only want live ones.
+    async fn list_announcements(
+        &self,
+        include_expired: bool,
+        now: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Announcement>, DbError>;
+
+    async fn count_announcements(&self, include_expired: bool, now: &str) -> Result<i64, DbError>;
+
+    async fn find_announcement(&self, id: i64) -> Result<Option<Announcement>, DbError>;
+
+    async fn create_announcement(&self, a: &NewAnnouncement) -> Result<i64, DbError>;
+
+    /// Returns rows affected: 0 = no such id.
+    async fn update_announcement(&self, id: i64, a: &NewAnnouncement) -> Result<u64, DbError>;
+
+    async fn delete_announcement(&self, id: i64) -> Result<u64, DbError>;
+}
+
 /// An audit entry being written.
 ///
 /// `detail` MUST NOT contain secrets. Record that a token was rotated, never
@@ -1183,6 +1246,7 @@ pub trait Repository:
     + SettingsRepository
     + OrderRepository
     + RedeemRepository
+    + AnnouncementRepository
     + Send
     + Sync
 {

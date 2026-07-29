@@ -62,6 +62,26 @@ boot; nothing to reconfigure.
   have used, with the code masked to its last group. Purchase history stays on
   the shop page, where buying and reading the receipt happen together.
 
+### Added
+
+- **Announcements are a table with history.** The old field held exactly one
+  notice and overwrote it on every edit, so the previous text was unrecoverable
+  and users had nowhere to read past notices.
+
+  Each notice now has a title, a severity, an optional expiry and a pinned
+  flag. The banner shows ONE — the pinned notice, else the newest unexpired one
+  — because stacking banners pushes the actual page off the screen and trains
+  people to ignore all of them. Everything else lives on a 公告 page open to
+  every signed-in user.
+
+  Expiry is what makes "tonight's maintenance" disappear on its own: past its
+  date it leaves the banner but stays readable in the archive. `author_name` is
+  a snapshot, like the audit log's — deleting the admin who posted a notice
+  must not erase who posted it.
+
+  Migration 44 / PG revision 27 carry the existing announcement out of the site
+  config into the new table, so upgrading does not blank a notice that is live.
+
 ### Changed
 
 - **The admin menu is grouped into two submenus.** It had reached twelve

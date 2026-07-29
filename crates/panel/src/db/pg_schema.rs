@@ -248,6 +248,23 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
 CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action, ts);
+
+-- v1.3.0: site announcements (mirrors the SQLite baseline — see there for why
+-- this replaced the single announcement string in the site:config kvs blob and
+-- why author_name is a snapshot).
+CREATE TABLE IF NOT EXISTS announcements (
+    id BIGSERIAL PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'info',
+    pinned BOOLEAN NOT NULL DEFAULT FALSE,
+    published_at TEXT NOT NULL,
+    expires_at TEXT,
+    author_id BIGINT,
+    author_name TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_announcements_published ON announcements(published_at);
+CREATE INDEX IF NOT EXISTS idx_announcements_pinned ON announcements(pinned, published_at);
 -- NOTE: the index on group_id is deliberately NOT here — it lives in revision
 -- 24, next to the ALTER that adds the column. This whole file re-runs on every
 -- boot, and `CREATE TABLE IF NOT EXISTS` is a no-op against a database whose
@@ -362,7 +379,7 @@ INSERT INTO schema_version (version) VALUES (1) ON CONFLICT (version) DO NOTHING
 /// The schema revision this build's baseline `PG_SCHEMA_SQL` represents. When a
 /// future release adds a column/table, bump this and add a matching arm in
 /// `run_pg_migrations`. `apply_pg_schema` seeds `schema_version` with revision 1.
-pub const PG_SCHEMA_VERSION: i32 = 26;
+pub const PG_SCHEMA_VERSION: i32 = 27;
 
 /// Apply PG_SCHEMA_SQL to a pool. PostgreSQL's prepared-statement protocol
 /// rejects multi-statement strings ("cannot insert multiple commands into a
@@ -1361,6 +1378,72 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
         tracing::info!("PG migration 26: audit_log table present");
+    }
+
+    if current < 27 {
+        // v1.3.0: site announcements. Carries the single announcement out of
+        // the site:config kvs blob so an upgrade does not silently blank a
+        // notice the operator has live. The "table is empty" guard makes the
+        // carry-over run exactly once — a flag would not survive a restore from
+        // a backup taken before the migration.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS announcements (
+                id BIGSERIAL PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '',
+                content TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'info',
+                pinned BOOLEAN NOT NULL DEFAULT FALSE,
+                published_at TEXT NOT NULL,
+                expires_at TEXT,
+                author_id BIGINT,
+                author_name TEXT NOT NULL DEFAULT ''
+            )",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_announcements_published ON announcements(published_at)",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_announcements_pinned ON announcements(pinned, published_at)",
+        )
+        .execute(pool)
+        .await?;
+        // Same guard as the SQLite side: a sufficiently old database may not
+        // have kvs yet, and a migration that assumes a table exists is exactly
+        // how v1.2.0 crash-looped on boot.
+        let has_kvs: bool = sqlx::query_scalar("SELECT to_regclass('kvs') IS NOT NULL")
+            .fetch_one(pool)
+            .await?;
+        // kvs.value is TEXT here, so it is cast to jsonb before extraction.
+        let carried = if !has_kvs {
+            0
+        } else {
+            sqlx::query(
+                "INSERT INTO announcements (title, content, kind, published_at, author_name)
+             SELECT '', value::jsonb ->> 'announcement',
+                    COALESCE(NULLIF(value::jsonb ->> 'announcement_type', ''), 'info'),
+                    to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'), ''
+             FROM kvs
+             WHERE key = 'site:config'
+               AND COALESCE(value::jsonb ->> 'announcement', '') <> ''
+                   AND NOT EXISTS (SELECT 1 FROM announcements)",
+            )
+            .execute(pool)
+            .await?
+            .rows_affected()
+        };
+        sqlx::query(
+            "INSERT INTO schema_version (version) VALUES (27) ON CONFLICT (version) DO NOTHING",
+        )
+        .execute(pool)
+        .await?;
+        tracing::info!(
+            "PG migration 27: announcements table present ({} carried over from site config)",
+            carried
+        );
     }
 
     Ok(())

@@ -5277,3 +5277,155 @@ async fn pg_redeem_history_lists_only_used_codes() {
     assert_eq!(mine.len(), 1);
     assert_eq!(mine[0].status, "used");
 }
+
+// ── v1.3.0: announcements ──
+
+fn ann(content: &str, published: &str, pinned: bool, expires: Option<&str>) -> NewAnnouncement {
+    NewAnnouncement {
+        title: format!("t-{content}"),
+        content: content.to_string(),
+        kind: "info".into(),
+        pinned,
+        published_at: published.to_string(),
+        expires_at: expires.map(str::to_string),
+        author_id: Some(1),
+        author_name: "admin".into(),
+    }
+}
+
+/// The banner shows the newest live notice.
+#[tokio::test]
+async fn pg_active_announcement_picks_the_newest() {
+    let Some(db) = repo("ann_newest").await else {
+        return;
+    };
+    db.create_announcement(&ann("old", "2026-07-01 10:00:00", false, None))
+        .await
+        .unwrap();
+    db.create_announcement(&ann("new", "2026-07-20 10:00:00", false, None))
+        .await
+        .unwrap();
+
+    let a = db
+        .active_announcement("2026-07-28 10:00:00")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(a.content, "new");
+}
+
+/// Pinned wins over newer. That is the entire point of the flag — otherwise
+/// posting anything else silently buries the notice being kept up.
+#[tokio::test]
+async fn pg_pinned_announcement_outranks_a_newer_one() {
+    let Some(db) = repo("ann_pinned").await else {
+        return;
+    };
+    db.create_announcement(&ann("pinned", "2026-07-01 10:00:00", true, None))
+        .await
+        .unwrap();
+    db.create_announcement(&ann("newer", "2026-07-20 10:00:00", false, None))
+        .await
+        .unwrap();
+
+    let a = db
+        .active_announcement("2026-07-28 10:00:00")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(a.content, "pinned");
+}
+
+/// An expired notice leaves the banner but stays in the archive — the whole
+/// reason expiry exists is "tonight's maintenance" disappearing on its own.
+#[tokio::test]
+async fn pg_expired_announcement_leaves_the_banner_but_stays_in_history() {
+    let Some(db) = repo("ann_expired").await else {
+        return;
+    };
+    db.create_announcement(&ann(
+        "gone",
+        "2026-07-01 10:00:00",
+        false,
+        Some("2026-07-02 00:00:00"),
+    ))
+    .await
+    .unwrap();
+
+    let now = "2026-07-28 10:00:00";
+    assert!(
+        db.active_announcement(now).await.unwrap().is_none(),
+        "expired must not show"
+    );
+
+    let history = db.list_announcements(true, now, 50, 0).await.unwrap();
+    assert_eq!(history.len(), 1, "history keeps it");
+    assert_eq!(db.count_announcements(true, now).await.unwrap(), 1);
+    // The live-only view agrees with the banner.
+    assert_eq!(db.count_announcements(false, now).await.unwrap(), 0);
+}
+
+/// The expiry comparison is strict: a notice expiring exactly now is over.
+#[tokio::test]
+async fn pg_expiry_boundary_is_exclusive() {
+    let Some(db) = repo("ann_boundary").await else {
+        return;
+    };
+    let t = "2026-07-28 10:00:00";
+    db.create_announcement(&ann("boundary", "2026-07-01 10:00:00", false, Some(t)))
+        .await
+        .unwrap();
+
+    assert!(
+        db.active_announcement(t).await.unwrap().is_none(),
+        "at the instant it expires it is gone"
+    );
+    assert!(db
+        .active_announcement("2026-07-28 09:59:59")
+        .await
+        .unwrap()
+        .is_some());
+}
+
+/// Editing must not re-date a notice or reassign its author — a typo fix would
+/// otherwise jump the notice back to the top of the archive.
+#[tokio::test]
+async fn pg_update_keeps_published_at_and_author() {
+    let Some(db) = repo("ann_update").await else {
+        return;
+    };
+    let id = db
+        .create_announcement(&ann("v1", "2026-07-01 10:00:00", false, None))
+        .await
+        .unwrap();
+
+    let mut edit = ann("v2", "2099-01-01 00:00:00", true, None);
+    edit.author_name = "someone else".into();
+    edit.author_id = Some(999);
+    assert_eq!(db.update_announcement(id, &edit).await.unwrap(), 1);
+
+    let a = db.find_announcement(id).await.unwrap().unwrap();
+    assert_eq!(a.content, "v2", "content is updated");
+    assert!(a.pinned, "pinned is updated");
+    assert_eq!(
+        a.published_at, "2026-07-01 10:00:00",
+        "publish date is NOT rewritten"
+    );
+    assert_eq!(a.author_name, "admin", "author is NOT reassigned");
+}
+
+/// Updating or deleting an id that does not exist reports 0 rather than
+/// pretending to succeed.
+#[tokio::test]
+async fn pg_update_and_delete_report_a_missing_row() {
+    let Some(db) = repo("ann_missing").await else {
+        return;
+    };
+    assert_eq!(
+        db.update_announcement(999, &ann("x", "2026-07-01 10:00:00", false, None))
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(db.delete_announcement(999).await.unwrap(), 0);
+}

@@ -359,6 +359,37 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
 CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action, ts);
 
+-- v1.3.0: site announcements.
+--
+-- Replaces the single `announcement` string that lived in the site:config kvs
+-- blob. That field could only hold one notice and overwrote it on every edit,
+-- so the previous text was unrecoverable and users had nowhere to read past
+-- notices.
+--
+-- `kind` is one of info/success/warning/error, validated in the service layer
+-- before it reaches antd's Alert. `expires_at` NULL means it never auto-hides.
+-- `author_name` is a SNAPSHOT, like audit_log.actor_name: deleting the admin
+-- who posted a notice must not erase who posted it.
+--
+-- NOTE: the index on (pinned, published_at) is deliberately created here AND in
+-- Migration 44 next to the CREATE, never only here — see the comment on
+-- traffic_history.group_id for the boot-crash this rule exists to prevent.
+CREATE TABLE IF NOT EXISTS announcements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'info',
+    -- 1 keeps this notice on the banner regardless of newer ones.
+    pinned INTEGER NOT NULL DEFAULT 0,
+    published_at TEXT NOT NULL,
+    -- NULL = never expires.
+    expires_at TEXT,
+    author_id INTEGER,
+    author_name TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_announcements_published ON announcements(published_at);
+CREATE INDEX IF NOT EXISTS idx_announcements_pinned ON announcements(pinned, published_at);
+
 
 
 -- v1.0.9: plan ↔ device_group grant map. Buying a plan (with grant_all_groups=0)
@@ -1697,6 +1728,71 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
         .execute(pool)
         .await?;
     tracing::info!("Migration 43: audit_log table present");
+
+    // ── Migration 44: v1.3.0 site announcements ──
+    //
+    // Carries the single announcement out of the site:config kvs blob so an
+    // upgrade does not silently blank a notice the operator has live. Runs
+    // once: the guard is "the table is empty", not a flag, because a second
+    // pass would otherwise re-insert the same text as a duplicate notice.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS announcements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL DEFAULT '',
+            content TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'info',
+            pinned INTEGER NOT NULL DEFAULT 0,
+            published_at TEXT NOT NULL,
+            expires_at TEXT,
+            author_id INTEGER,
+            author_name TEXT NOT NULL DEFAULT ''
+        )",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_announcements_published ON announcements(published_at)",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_announcements_pinned ON announcements(pinned, published_at)",
+    )
+    .execute(pool)
+    .await?;
+
+    // The carry-over reads kvs, which a sufficiently old database may not have
+    // yet — run_migrations is also exercised against pre-kvs shapes, and a
+    // migration that assumes a table exists is exactly how v1.2.0 crash-looped
+    // on boot. Skip the carry-over rather than fail the migration.
+    let has_kvs: bool = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'kvs'",
+    )
+    .fetch_one(pool)
+    .await?
+        > 0;
+    let carried: i64 = if !has_kvs {
+        0
+    } else {
+        sqlx::query_scalar(
+            "INSERT INTO announcements (title, content, kind, published_at, author_name)
+         SELECT '', json_extract(value, '$.announcement'),
+                COALESCE(NULLIF(json_extract(value, '$.announcement_type'), ''), 'info'),
+                strftime('%Y-%m-%d %H:%M:%S', 'now'), ''
+         FROM kvs
+         WHERE key = 'site:config'
+           AND COALESCE(json_extract(value, '$.announcement'), '') != ''
+           AND NOT EXISTS (SELECT 1 FROM announcements)
+             RETURNING 1",
+        )
+        .fetch_optional(pool)
+        .await?
+        .unwrap_or(0)
+    };
+    tracing::info!(
+        "Migration 44: announcements table present ({} carried over from site config)",
+        carried
+    );
 
     Ok(())
 }

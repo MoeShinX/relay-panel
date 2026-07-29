@@ -11,6 +11,7 @@ import {
   SettingOutlined,
   ShoppingOutlined,
   TeamOutlined,
+  NotificationOutlined,
 } from '@ant-design/icons';
 import { useI18n } from '../i18n/context';
 import api from '../api/client';
@@ -43,6 +44,9 @@ export default function MainLayout() {
     { key: '/shop', icon: <ShoppingOutlined />, label: t('shop') },
     { key: '/rules', icon: <ApiOutlined />, label: t('myRules') },
     { key: '/nodes', icon: <CloudServerOutlined />, label: t('availableNodes') },
+    // v1.3.0: the archive is for everyone — a regular user's only way to
+    // read a notice the banner has already replaced.
+    { key: '/announcements', icon: <NotificationOutlined />, label: t('announcements') },
   ];
   // v1.3.0: the admin list had grown to seven top-level entries. Grouped into
   // two submenus by what they ARE, not just to shorten the list:
@@ -61,6 +65,7 @@ export default function MainLayout() {
   const systemChildren = [
     { key: '/settings', label: t('basicSettings') },
     { key: '/notify-settings', label: t('notifySettings') },
+    { key: '/announcement-admin', label: t('announcementAdmin') },
     { key: '/site-settings', label: t('siteSettings') },
     { key: '/audit-log', label: t('auditLog') },
   ];

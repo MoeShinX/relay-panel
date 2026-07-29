@@ -10,6 +10,7 @@
 
 use sqlx::SqlitePool;
 
+mod announcements;
 mod groups;
 mod kvs;
 mod orders;

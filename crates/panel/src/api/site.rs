@@ -42,12 +42,13 @@ pub async fn get_public_site(State(state): State<AppState>) -> Json<ApiResponse<
 }
 
 /// The signed-in half.
+///
+/// v1.3.0: no longer carries the announcement. That moved to its own table
+/// with history; the copy still sitting in site:config is frozen at whatever
+/// Migration 44 carried over, and serving it would show stale text beside the
+/// live banner.
 #[derive(Debug, Serialize)]
 pub struct SiteNotice {
-    pub announcement: String,
-    /// "info" | "success" | "warning" | "error" — already validated by
-    /// SiteConfig::from_json, so the frontend can use it directly.
-    pub announcement_type: String,
     pub contact: String,
 }
 
@@ -58,8 +59,6 @@ pub async fn get_site_notice(
 ) -> Json<ApiResponse<SiteNotice>> {
     let cfg = load(&state).await;
     Json(ApiResponse::success(SiteNotice {
-        announcement: cfg.announcement,
-        announcement_type: cfg.announcement_type,
         contact: cfg.contact,
     }))
 }

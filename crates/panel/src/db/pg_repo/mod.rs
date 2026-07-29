@@ -26,6 +26,7 @@
 
 use sqlx::PgPool;
 
+mod announcements;
 mod groups;
 mod kvs;
 mod orders;

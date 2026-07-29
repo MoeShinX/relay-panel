@@ -5,6 +5,7 @@ use axum::Router;
 use std::sync::Arc;
 
 pub mod admin;
+pub mod announcements;
 pub mod audit;
 pub mod auth;
 pub mod diagnose;
@@ -47,6 +48,25 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/auth/registration-status",
             axum::routing::get(auth::registration_status),
+        )
+        // v1.3.0: site announcements. Reading requires sign-in (the archive is
+        // for this operator's users, and the banner was deliberately kept off
+        // the login page); writing is admin-only.
+        .route(
+            "/user/announcements",
+            axum::routing::get(announcements::list_for_user),
+        )
+        .route(
+            "/user/announcements/active",
+            axum::routing::get(announcements::active_for_user),
+        )
+        .route(
+            "/admin/announcements",
+            axum::routing::get(announcements::list_for_admin).post(announcements::create),
+        )
+        .route(
+            "/admin/announcements/{id}",
+            axum::routing::put(announcements::update).delete(announcements::delete),
         )
         // v1.3.0: public site branding. Unauthenticated because the login page
         // renders the operator's name before anyone has a token. Carries ONLY

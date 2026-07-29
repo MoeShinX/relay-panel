@@ -909,21 +909,22 @@ mod tests {
     }
 
     /// v1.3.0: the public site endpoint is reachable with NO token, so it must
-    /// carry branding only. The announcement and support contact were kept off
-    /// the login page deliberately; serving them to any unauthenticated caller
-    /// would make that choice meaningless.
+    /// carry branding only. The support contact is for this operator's users,
+    /// not for anyone who can reach the port.
+    ///
+    /// (The announcement used to be checked here too. It moved to its own table
+    /// in v1.3.0 and is served by an authenticated endpoint of its own.)
     #[tokio::test]
-    async fn public_site_endpoint_exposes_branding_but_not_the_announcement() {
+    async fn public_site_endpoint_exposes_branding_but_not_the_contact() {
         let (state, _pool) = test_state().await;
-        let secret_notice = "内部维护通知-勿外传";
         let Json(saved) = crate::api::site::update_site_settings(
             AdminOnly { user_id: 1 },
             State(state.clone()),
             Json(crate::api::site::UpdateSiteRequest {
                 site_name: "我的中转".into(),
                 subtitle: "私有部署".into(),
-                announcement: secret_notice.into(),
-                announcement_type: "warning".into(),
+                announcement: String::new(),
+                announcement_type: "info".into(),
                 contact: "tg:@someone".into(),
             }),
         )
@@ -935,16 +936,12 @@ mod tests {
         let body = serde_json::to_string(&public.data.expect("public site data")).unwrap();
         assert!(body.contains("我的中转"), "branding must be public");
         assert!(
-            !body.contains(secret_notice),
-            "public endpoint leaked the announcement"
-        );
-        assert!(
             !body.contains("tg:@someone"),
             "public endpoint leaked the support contact"
         );
 
-        // The signed-in view does carry them — otherwise the feature is broken
-        // in the other direction and this test would pass vacuously.
+        // The signed-in view does carry it — otherwise this test would pass
+        // vacuously with the field simply missing everywhere.
         let Json(notice) = crate::api::site::get_site_notice(
             AuthUser {
                 user_id: 1,
@@ -953,9 +950,7 @@ mod tests {
             State(state),
         )
         .await;
-        let notice = notice.data.expect("notice data");
-        assert_eq!(notice.announcement, secret_notice);
-        assert_eq!(notice.contact, "tg:@someone");
+        assert_eq!(notice.data.expect("notice data").contact, "tg:@someone");
     }
 
     /// An empty group can be deleted successfully.
