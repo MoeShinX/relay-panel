@@ -84,12 +84,30 @@ describe('SiteAnnouncement', () => {
     expect(document.querySelector('.ant-alert-info')).not.toBeNull();
   });
 
-  it('renders the markdown subset and shows who posted it', async () => {
+  it('shows a plain-text summary, not rendered markdown', async () => {
+    // The banner is a prompt, not a reading surface. A two-line excerpt with
+    // half a bold run reads worse than the same words plain, and the full
+    // formatting is one click away on the archive.
     mockGet.mockResolvedValue(ok(ann({ content: '**加粗** 和 [链接](https://example.com)' })));
     await renderBanner();
-    expect(document.querySelector('.ant-alert strong')?.textContent).toBe('加粗');
-    expect(document.querySelector('.ant-alert a[href="https://example.com"]')).not.toBeNull();
-    expect(screen.getByText(/admin/)).toBeInTheDocument();
+    expect(screen.getByText('加粗 和 链接')).toBeInTheDocument();
+    expect(document.querySelector('.ant-alert strong')).toBeNull();
+    expect(document.querySelector('.ant-alert-description a')).toBeNull();
+  });
+
+  it('offers a way through to the archive', async () => {
+    mockGet.mockResolvedValue(ok(ann()));
+    await renderBanner();
+    expect(screen.getByText(/viewAnnouncementDetail/)).toBeInTheDocument();
+  });
+
+  it('does not put the author or timestamp in the banner', async () => {
+    // They belong on the archive page — in the banner they were noise that
+    // added a whole line to every notice.
+    mockGet.mockResolvedValue(ok(ann({ author_name: 'admin' })));
+    await renderBanner();
+    expect(screen.queryByText(/admin/)).toBeNull();
+    expect(screen.queryByText(/2026-07-28/)).toBeNull();
   });
 
   it('never renders the announcement as HTML', async () => {
@@ -97,6 +115,8 @@ describe('SiteAnnouncement', () => {
     // capability this field should hand out.
     mockGet.mockResolvedValue(ok(ann({ content: '<img src=x onerror=alert(1)>' })));
     await renderBanner();
+    // Stripping markdown must not unwrap HTML — React renders it as a text
+    // node either way, but the summary should show what was typed.
     expect(screen.getByText('<img src=x onerror=alert(1)>')).toBeInTheDocument();
     expect(document.querySelector('.ant-alert img')).toBeNull();
   });

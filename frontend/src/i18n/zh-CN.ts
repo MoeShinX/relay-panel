@@ -593,6 +593,7 @@ export const zhCN = {
   announcementContentRequired: '请输入公告内容',
   noAnnouncements: '暂无公告',
   viewAllAnnouncements: '查看全部公告',
+  viewAnnouncementDetail: '查看详情',
   publishedAt: '发布时间',
   expiresAt: '到期时间',
   pinned: '置顶',

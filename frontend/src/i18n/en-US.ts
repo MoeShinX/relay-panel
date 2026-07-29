@@ -595,6 +595,7 @@ export const enUS: Dict = {
   announcementContentRequired: 'Content is required',
   noAnnouncements: 'No announcements yet',
   viewAllAnnouncements: 'View all',
+  viewAnnouncementDetail: 'Details',
   publishedAt: 'Published',
   expiresAt: 'Expires',
   pinned: 'Pinned',

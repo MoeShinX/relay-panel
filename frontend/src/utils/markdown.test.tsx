@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { renderMarkdown, renderInline } from './markdown';
+import { renderMarkdown, renderInline, stripMarkdown } from './markdown';
 
 const show = (src: string) => render(<div data-testid="out">{renderMarkdown(src)}</div>);
 const out = () => screen.getByTestId('out');
@@ -96,5 +96,44 @@ describe('renderMarkdown never emits raw HTML', () => {
     show('[<img src=x onerror=alert(1)>](https://example.com)');
     expect(out().querySelector('img')).toBeNull();
     expect(out().querySelector('a')?.textContent).toContain('<img');
+  });
+});
+
+describe('stripMarkdown', () => {
+  it('removes every marker the parser treats as markup', () => {
+    // If the two ever disagree, the marker characters leak into the summary
+    // bar — which is the one place they must not appear.
+    expect(stripMarkdown('**粗** 和 *斜* 和 `码`')).toBe('粗 和 斜 和 码');
+  });
+
+  it('keeps a link label and drops the URL', () => {
+    expect(stripMarkdown('详见 [公告页](https://example.com/x)')).toBe('详见 公告页');
+  });
+
+  it('flattens list markers and blank lines into one run', () => {
+    const src = ['维护通知', '', '- 香港不受影响', '- 日本重启', '', '结束'].join('\n');
+    expect(stripMarkdown(src)).toBe('维护通知 香港不受影响 日本重启 结束');
+  });
+
+  it('leaves a mid-sentence hyphen and a lone asterisk alone', () => {
+    // Only line-leading "- " is a list marker, and a single asterisk is not
+    // emphasis — the summary should read like what the operator typed.
+    expect(stripMarkdown('02:00 - 04:00 维护,2 * 3 = 6')).toBe('02:00 - 04:00 维护,2 * 3 = 6');
+  });
+
+  it('does not turn bold into a stray italic marker', () => {
+    // Stripping italic first would leave "*x*" behind.
+    expect(stripMarkdown('**x**')).toBe('x');
+  });
+
+  it('leaves unsupported syntax as typed', () => {
+    expect(stripMarkdown('# 不是标题')).toBe('# 不是标题');
+    expect(stripMarkdown('~~不是删除线~~')).toBe('~~不是删除线~~');
+  });
+
+  it('does not execute or unwrap HTML', () => {
+    // The summary is rendered as a React text node, so this stays literal —
+    // asserted here so a future "smarter" stripper cannot quietly unwrap it.
+    expect(stripMarkdown('<b>x</b>')).toBe('<b>x</b>');
   });
 });

@@ -60,6 +60,35 @@ const RULES: Rule[] = [
   },
 ];
 
+/**
+ * Flatten the markdown subset to plain text, for the account-page summary bar.
+ *
+ * The banner is a prompt, not a reading surface: a two-line excerpt with half a
+ * bold run and a dangling list dash reads worse than the same words plain. The
+ * formatting is rendered in full on the archive page.
+ *
+ * Mirrors the RULES above deliberately — anything the parser treats as markup
+ * has to be stripped here too, or the marker characters leak into the summary.
+ */
+export function stripMarkdown(src: string): string {
+  return (
+    src
+      // Code first, so ** inside a code span is not read as bold.
+      .replace(/`([^`\n]+)`/g, '$1')
+      // Links keep their label; the URL is noise in a one-line summary.
+      .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, '$1')
+      // Bold before italic, so **x** does not degrade to *x*.
+      .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+      .replace(/\*([^*\n]+)\*/g, '$1')
+      // List markers only at the start of a line — a hyphen mid-sentence stays.
+      .replace(/^\s*-\s+/gm, '')
+      // Blank lines and newlines collapse: the summary is one flowing run.
+      .replace(/\s*\n+\s*/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+  );
+}
+
 /** Parse one line's inline markup into React nodes. */
 export function renderInline(line: string, keyPrefix = ''): ReactNode[] {
   const out: ReactNode[] = [];

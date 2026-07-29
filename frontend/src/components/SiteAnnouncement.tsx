@@ -1,11 +1,11 @@
-import { Alert, Typography } from 'antd';
-import { NotificationOutlined } from '@ant-design/icons';
-import { Link } from 'react-router-dom';
+import { Alert, Button, Typography } from 'antd';
+import { NotificationOutlined, RightOutlined } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import { useActiveAnnouncement } from '../hooks/useActiveAnnouncement';
 import { useI18n } from '../i18n/context';
-import { renderMarkdown } from '../utils/markdown';
+import { stripMarkdown } from '../utils/markdown';
 
-const { Text } = Typography;
+const { Paragraph } = Typography;
 
 /** The four severities the backend allows. Anything else was already coerced
  *  server-side; this is the last stop before antd's Alert. */
@@ -13,18 +13,23 @@ const TYPES = ['info', 'success', 'warning', 'error'] as const;
 type AlertType = (typeof TYPES)[number];
 
 /**
- * v1.3.0: the operator's current announcement, at the top of the dashboard and
- * the account page.
+ * v1.3.0: a one-glance summary of the current announcement.
  *
- * Shows ONE notice — the pinned one, else the newest unexpired one. Stacking
- * several banners would push the actual page content off the screen and train
- * people to ignore all of them. Past notices live on the archive page, linked
- * from here.
+ * Deliberately NOT the full text. Carrying the whole notice made this 299px —
+ * a third of the viewport — for a routine maintenance message, pushing the
+ * account details the page exists for below the fold. A banner is a prompt;
+ * the archive page is the reading surface.
+ *
+ * So: title, two clamped lines of plain text, and a link. The body is stripped
+ * of markup rather than rendered, because a two-line excerpt with half a bold
+ * run and a dangling list dash reads worse than the same words plain — and the
+ * formatting is intact one click away.
  *
  * Renders nothing at all when there is no live notice.
  */
 export default function SiteAnnouncement() {
   const { t } = useI18n();
+  const navigate = useNavigate();
   const active = useActiveAnnouncement();
 
   if (!active) return null;
@@ -33,31 +38,36 @@ export default function SiteAnnouncement() {
     ? (active.kind as AlertType)
     : 'info';
 
+  const summary = stripMarkdown(active.content);
+
   return (
     <Alert
       type={type}
       showIcon
       icon={<NotificationOutlined />}
       style={{ marginBottom: 16 }}
-      // antd v6 renamed Alert's `message` prop to `title`; `message` is
-      // silently ignored, which is how the heading first came out blank.
       title={active.title || undefined}
       description={
-        <div>
-          {/* renderMarkdown returns React elements, never an HTML string — see
-              utils/markdown. That is what keeps operator-authored text from
-              becoming markup on every signed-in user's page. */}
-          <div style={{ whiteSpace: 'pre-wrap' }}>{renderMarkdown(active.content)}</div>
-          <div style={{ marginTop: 6 }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {active.published_at}
-              {active.author_name ? ` · ${active.author_name}` : ''}
-            </Text>
-            <Link to="/announcements" style={{ fontSize: 12, marginLeft: 12 }}>
-              {t('viewAllAnnouncements')}
-            </Link>
-          </div>
-        </div>
+        <Paragraph
+          type="secondary"
+          // antd's own multi-line ellipsis. A hand-rolled -webkit-line-clamp
+          // did not survive to the DOM here — the other two clamp properties
+          // landed in the inline style and this one was dropped — so rather
+          // than fight whatever swallows it, use the API built for this. It is
+          // what bounds the banner: a 4000-character notice takes exactly as
+          // much room as a short one.
+          ellipsis={{ rows: 2, tooltip: summary }}
+          style={{ marginBottom: 0 }}
+        >
+          {summary}
+        </Paragraph>
+      }
+      // `action` keeps the link out of the text flow, so it cannot be pushed
+      // around by the length of the summary.
+      action={
+        <Button type="link" size="small" onClick={() => navigate('/announcements')}>
+          {t('viewAnnouncementDetail')} <RightOutlined />
+        </Button>
       }
     />
   );
