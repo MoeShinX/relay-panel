@@ -32,6 +32,10 @@ const ACTIONS = [
   'delete_redeem_codes',
   'redeem_code',
   'update_notify_settings',
+  'update_site_settings',
+  'create_announcement',
+  'update_announcement',
+  'delete_announcement',
 ] as const;
 
 /** Actions that destroy something get a red tag, so a delete stands out when
@@ -45,6 +49,7 @@ const DESTRUCTIVE = new Set<string>([
   'reset_password',
   'reset_traffic',
   'void_redeem_code',
+  'delete_announcement',
 ]);
 
 const PAGE_SIZE = 20;
@@ -94,6 +99,31 @@ export default function AuditLog() {
     return translated === `audit_${key}` ? key : translated;
   };
 
+  /** Translate a stored target type. Falls back to the raw value so a type
+   *  added on the backend before its label lands still reads as something. */
+  const targetTypeLabel = (type: string) => {
+    // "settings" alone says nothing useful — which settings is the whole
+    // point, and that lives in target_id.
+    const key =
+      type === 'settings'
+        ? undefined
+        : (`auditTarget${type.replace(/(^|_)(\w)/g, (_m, _s, c: string) => c.toUpperCase())}` as Parameters<typeof t>[0]);
+    if (!key) return t('auditTargetSettings');
+    const translated = t(key);
+    return translated === key ? type : translated;
+  };
+
+  /** The whole target cell: a readable type plus whatever identifies the row. */
+  const targetLabel = (type: string, id: string) => {
+    if (!type) return '-';
+    if (type === 'settings') {
+      if (id === 'notify') return t('auditTargetSettingsNotify');
+      if (id === 'site') return t('auditTargetSettingsSite');
+      return t('auditTargetSettings');
+    }
+    return id ? `${targetTypeLabel(type)} ${id}` : targetTypeLabel(type);
+  };
+
   const columns = [
     {
       title: t('auditTime'),
@@ -128,8 +158,7 @@ export default function AuditLog() {
       title: t('auditTarget'),
       key: 'target',
       width: 160,
-      render: (_: unknown, row: AuditEntry) =>
-        row.target_id ? `${row.target_type} ${row.target_id}` : row.target_type || '-',
+      render: (_: unknown, row: AuditEntry) => targetLabel(row.target_type, row.target_id),
     },
     {
       title: t('auditDetail'),

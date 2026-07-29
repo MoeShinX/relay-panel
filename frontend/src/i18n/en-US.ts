@@ -612,6 +612,22 @@ export const enUS: Dict = {
   allOrders: 'All Purchases',
   orderUser: 'User',
   noOrdersAll: 'No purchases yet',
+  audit_update_site_settings: 'Update site settings',
+  audit_create_announcement: 'Post announcement',
+  audit_update_announcement: 'Edit announcement',
+  audit_delete_announcement: 'Delete announcement',
+  // Target types: the table stores wire values (user/rule/...); the list reads
+  // them as words.
+  auditTargetUser: 'User',
+  auditTargetRule: 'Rule',
+  auditTargetGroup: 'Group',
+  auditTargetNode: 'Node',
+  auditTargetAnnouncement: 'Announcement',
+  auditTargetRedeemCode: 'Redeem code',
+  auditTargetRedeemBatch: 'Code batch',
+  auditTargetSettings: 'Settings',
+  auditTargetSettingsNotify: 'Notification settings',
+  auditTargetSettingsSite: 'Site settings',
   // ── v1.3.0: site settings ──
   siteSettings: 'Site Settings',
   siteName: 'Site name',
