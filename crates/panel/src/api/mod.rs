@@ -61,6 +61,10 @@ pub fn routes() -> Router<AppState> {
             axum::routing::get(announcements::active_for_user),
         )
         .route(
+            "/user/announcements/latest-id",
+            axum::routing::get(announcements::latest_id),
+        )
+        .route(
             "/admin/announcements",
             axum::routing::get(announcements::list_for_admin).post(announcements::create),
         )

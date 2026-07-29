@@ -4,6 +4,8 @@ import api from '../api/client';
 import type { ApiEnvelope, Announcement, AnnouncementList } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { renderMarkdown } from '../utils/markdown';
+import { useAnnouncementBadge } from '../hooks/useAnnouncementBadge';
+import { useAuth } from '../auth/useAuth';
 
 const { Text, Title } = Typography;
 
@@ -26,6 +28,8 @@ const TAG_COLOR: Record<string, string> = {
  */
 export default function Announcements() {
   const { t } = useI18n();
+  const { user } = useAuth();
+  const { latestId, markSeen } = useAnnouncementBadge(user?.id ?? null);
   const [items, setItems] = useState<Announcement[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -53,6 +57,12 @@ export default function Announcements() {
   }, [page]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Clear the header dot once the archive has actually rendered — marking on
+  // click would clear it even if the page then failed to load.
+  useEffect(() => {
+    if (latestId > 0) markSeen();
+  }, [latestId, markSeen]);
 
   const isExpired = (a: Announcement) =>
     !!a.expires_at && a.expires_at <= new Date().toISOString().slice(0, 19).replace('T', ' ');
