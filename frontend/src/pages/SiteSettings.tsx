@@ -145,11 +145,27 @@ export default function SiteSettings() {
         <Form.Item
           name="announcement"
           label={t('siteAnnouncement')}
-          extra={t('siteAnnouncementHint')}
           rules={[{ max: MAX_ANNOUNCEMENT, message: t('siteFieldTooLong') }]}
+          // No `extra` here on purpose. For a TextArea, antd renders showCount's
+          // counter absolutely at bottom:-22px, which is the exact band
+          // Form.Item puts extra text in — a hint long enough to reach the
+          // right edge runs underneath "118 / 4000".
+          //
+          // The help sits below the item instead, and the bottom margin has to
+          // clear that 22px overhang or the counter simply overlaps the help
+          // text rather than the extra text. 28px leaves a visible gap.
+          style={{ marginBottom: 28 }}
         >
           <Input.TextArea rows={6} showCount maxLength={MAX_ANNOUNCEMENT} />
         </Form.Item>
+        <div style={{ marginBottom: 24 }}>
+          <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
+            {t('siteAnnouncementHint')}
+          </Text>
+          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 2 }}>
+            {t('siteAnnouncementSyntax')}
+          </Text>
+        </div>
         {/* Preview exactly as users will see it — same Alert, same renderer. */}
         {announcement?.trim() ? (
           <Form.Item label={t('siteAnnouncementPreview')}>
