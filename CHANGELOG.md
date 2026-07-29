@@ -8,6 +8,80 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+Panel only so far — no node release and no node change is required. Two new
+tables (node metric history, audit log) are created by migrations on first
+boot; nothing to reconfigure.
+
+### Added
+
+- **Rule search.** The rules page has a search box filtering by name, listen
+  port or target address, composing with the existing group filter. Same shape
+  as the user search.
+
+- **Node CPU / memory / connection history.** Node status was a snapshot each
+  report overwrote, so "why was it slow last night" had nothing behind it.
+  Hourly rollups are now kept for 7 days and charted below the traffic chart,
+  one line per node. The series plots the hourly average and the tooltip
+  carries the peak beside it — an average alone flattens exactly the spike that
+  caused the stall. Lines are never aggregated across nodes: the mean of three
+  machines hides the one pinned at 100%.
+
+- **Audit log.** Destructive admin actions are recorded to the database and
+  readable from a new 操作审计 page, filterable by action. The process log
+  rotates and dies with the container, so "who deleted my rule" had no answer
+  an operator could look up. Covers user create/delete, password and traffic
+  reset, plan assign/adjust, rule delete/restart, group delete, node token
+  rotation, node upgrade, redeem-code create/void/delete/redeem, and settings
+  changes. Retained one year.
+
+  The actor's name is stored at write time, not joined at read time, so
+  deleting the admin who acted does not turn the history into anonymous ids.
+  The detail column never contains a secret: a token rotation records how many
+  nodes were disconnected, never the new token.
+
+- **Site settings.** A new 站点设置 page makes the panel's identity the
+  operator's: site name and subtitle replace the hardcoded "RelayPanel" on the
+  login page, in the sidebar and in the browser tab title; an announcement
+  shows at the top of the dashboard and account page; a support contact shows
+  on the account page.
+
+  The announcement supports a banner severity (info / success / warning /
+  error) for colour and a small Markdown subset — `**bold**`, `*italic*`,
+  `` `code` ``, `[links](https://…)` and `- lists`. It renders to React
+  elements, never to an HTML string, so operator-authored text cannot become
+  markup on another user's page; links are restricted to http/https.
+
+  Site name and subtitle are served unauthenticated because the login page
+  needs them before anyone has a token. The announcement and contact are NOT:
+  they require sign-in, so declining to show them on the login page is not
+  undone by the API handing them to anyone who can reach the port.
+
+- **Top-up history on the account page.** Users can see the redeem codes they
+  have used, with the code masked to its last group. Purchase history stays on
+  the shop page, where buying and reading the receipt happen together.
+
+### Fixed
+
+- **Node metric percentages were multiplied by 100.** CPU and memory arrive
+  from the node already as 0..100 percentages, but the chart formatted them as
+  fractions, so a node at 20% CPU charted as 2026.7% and the axis topped out
+  above 2000%. It now uses the same `formatPercent` helper as the node tables
+  and detail drawer, so all four surfaces agree by construction.
+
+- **The metric chart legend no longer appends a random id to single-node
+  groups.** The suffix is the first six hex characters of an id the node
+  generates from `/dev/urandom` on first boot — it means nothing to a reader
+  and exists only to keep two nodes in one group from collapsing onto a single
+  legend entry. It is now added only to groups that actually have more than
+  one node reporting.
+
+- **A source file contained raw NUL bytes.** The metric chart used a literal
+  control character as a map-key separator instead of the `\u0000` escape.
+  Behaviour was correct, but grep and ripgrep classified the file as binary and
+  skipped it in searches.
+
 ## [1.2.3] - 2026-07-26
 
 Admin-console layout and a token-rotation button. Panel only — no node
