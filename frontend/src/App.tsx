@@ -12,7 +12,7 @@ import { useSite } from './hooks/useSite';
 
 function AppInner() {
   const { lang } = useI18n();
-  // v1.3.0: the browser tab title follows the operator's site name. Done here,
+  // v1.2.4: the browser tab title follows the operator's site name. Done here,
   // once, rather than in each page — the title is a property of the app, and a
   // per-page effect would fight itself on navigation.
   const site = useSite();

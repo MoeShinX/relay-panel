@@ -8,11 +8,16 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
-## [Unreleased]
+## [1.2.4] - 2026-07-29
 
-Panel only so far — no node release and no node change is required. Two new
-tables (node metric history, audit log) are created by migrations on first
-boot; nothing to reconfigure.
+Panel only — no node release, and no node change is required (the config
+protocol is unchanged at version 4, so existing nodes keep working as-is).
+
+Three tables are created by migrations on first boot: node metric history, the
+audit log, and announcements. Nothing to reconfigure. One thing to know: the
+announcement you have configured today is carried out of the site config into
+the new announcements table by the migration, so it survives the upgrade — it
+appears as the first entry on the new 公告 page.
 
 ### Added
 

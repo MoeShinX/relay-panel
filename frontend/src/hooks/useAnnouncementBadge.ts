@@ -3,7 +3,7 @@ import api from '../api/client';
 import type { ApiEnvelope } from '../api/types';
 
 /**
- * v1.3.0: unread state for the header announcement bell.
+ * v1.2.4: unread state for the header announcement bell.
  *
  * "Unread" is `latest id > the id this account last looked at`. The id, not a
  * timestamp: editing an old notice must not re-notify everyone, and only a new

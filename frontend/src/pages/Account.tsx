@@ -133,7 +133,7 @@ export default function Account() {
 
   return (
     <>
-      {/* v1.3.0: operator announcement. Regular users land here rather than on
+      {/* v1.2.4: operator announcement. Regular users land here rather than on
           the dashboard, so without this they would never see one. */}
       <SiteAnnouncement />
       {/* v1.0.8: suspended banner — the user can still log in and buy a plan
@@ -223,7 +223,7 @@ export default function Account() {
           <Descriptions.Item label={t('accountMemberSince')}>
             <span className="rp-mono">{me.registered_at || '-'}</span>
           </Descriptions.Item>
-          {/* v1.3.0: only rendered when the operator filled it in — an empty
+          {/* v1.2.4: only rendered when the operator filled it in — an empty
               "Support" row would just look like something is broken. */}
           {notice.contact && (
             <Descriptions.Item label={t('siteContact')}>
@@ -240,7 +240,7 @@ export default function Account() {
           per-rule drill-down) on the dashboard, and an admin's "personal"
           traffic is a near-meaningless number. The same card on two pages is
           just noise. */}
-      {/* v1.3.0: the user's own top-up history. Above the traffic chart —
+      {/* v1.2.4: the user's own top-up history. Above the traffic chart —
           "where did my balance come from" is the question that brings people to
           this page, and it should not sit below a chart. Purchase history is
           not duplicated here; it stays on the shop page. */}

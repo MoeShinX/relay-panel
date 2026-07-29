@@ -296,7 +296,7 @@ CREATE INDEX IF NOT EXISTS idx_traffic_history_hour ON traffic_history(hour_ts);
 -- group_id". Migrations run on fresh installs too, so the index is still
 -- created exactly once either way.
 
--- v1.3.0: hourly node metrics (CPU / memory / connections).
+-- v1.2.4: hourly node metrics (CPU / memory / connections).
 --
 -- Node status is a SNAPSHOT — each report overwrites the last — so "why was it
 -- slow last night" had no data to answer with. This keeps an hourly rollup.
@@ -328,7 +328,7 @@ CREATE TABLE IF NOT EXISTS node_metrics_history (
 CREATE INDEX IF NOT EXISTS idx_node_metrics_hour ON node_metrics_history(hour_ts);
 CREATE INDEX IF NOT EXISTS idx_node_metrics_group ON node_metrics_history(group_id, hour_ts);
 
--- v1.3.0: admin audit trail.
+-- v1.2.4: admin audit trail.
 --
 -- Destructive operations were only ever written to the process log: it rotates,
 -- it dies with the container, and it is not visible from the panel. "Who
@@ -359,7 +359,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
 CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action, ts);
 
--- v1.3.0: site announcements.
+-- v1.2.4: site announcements.
 --
 -- Replaces the single `announcement` string that lived in the site:config kvs
 -- blob. That field could only hold one notice and overwrote it on every edit,
@@ -1668,7 +1668,7 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
         backfilled
     );
 
-    // ── Migration 42: v1.3.0 hourly node metrics ──
+    // ── Migration 42: v1.2.4 hourly node metrics ──
     // See SCHEMA_SQL for why sum+samples+max rather than a running average, and
     // why there is no FK on node_id. Nothing to backfill: node status was only
     // ever a snapshot, so there is no history to recover.
@@ -1703,7 +1703,7 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
     .await?;
     tracing::info!("Migration 42: node_metrics_history table present");
 
-    // ── Migration 43: v1.3.0 admin audit trail ──
+    // ── Migration 43: v1.2.4 admin audit trail ──
     // See SCHEMA_SQL for why actor_name is a snapshot and why detail must never
     // carry a secret. Nothing to backfill: destructive actions were previously
     // only in the process log, which this cannot recover.
@@ -1729,7 +1729,7 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
         .await?;
     tracing::info!("Migration 43: audit_log table present");
 
-    // ── Migration 44: v1.3.0 site announcements ──
+    // ── Migration 44: v1.2.4 site announcements ──
     //
     // Carries the single announcement out of the site:config kvs blob so an
     // upgrade does not silently blank a notice the operator has live. Runs

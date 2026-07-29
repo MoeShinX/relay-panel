@@ -20,7 +20,7 @@ const TAG_COLOR: Record<string, string> = {
 };
 
 /**
- * v1.3.0: the announcement archive, for any signed-in user.
+ * v1.2.4: the announcement archive, for any signed-in user.
  *
  * The banner only ever shows one notice, so without this page everything the
  * operator ever announced was unreadable the moment the next one went up.

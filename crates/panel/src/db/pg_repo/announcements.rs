@@ -3,7 +3,7 @@ use crate::db::error::DbError;
 use crate::db::repo::*;
 use async_trait::async_trait;
 
-// ── AnnouncementRepository (v1.3.0) ──
+// ── AnnouncementRepository (v1.2.4) ──
 //
 // Mirrors the SQLite impl; see there for the ordering and update-semantics
 // notes. Placeholders are numbered ($1) rather than positional (?).

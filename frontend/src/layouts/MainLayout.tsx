@@ -49,7 +49,7 @@ export default function MainLayout() {
     { key: '/rules', icon: <ApiOutlined />, label: t('myRules') },
     { key: '/nodes', icon: <CloudServerOutlined />, label: t('availableNodes') },
   ];
-  // v1.3.0: the admin list had grown to seven top-level entries. Grouped into
+  // v1.2.4: the admin list had grown to seven top-level entries. Grouped into
   // two submenus by what they ARE, not just to shorten the list:
   //
   //   billing  — records you create, edit and delete day to day
@@ -154,7 +154,7 @@ export default function MainLayout() {
           borderBottom: '1px solid var(--rp-border)',
         }}>
           <Space size="middle">
-            {/* v1.3.0: announcements live here rather than in the sidebar.
+            {/* v1.2.4: announcements live here rather than in the sidebar.
                 The banner already carries the current notice, so a menu row
                 would only be a route to the archive — a low-frequency
                 destination sitting beside pages people use daily. A bell also

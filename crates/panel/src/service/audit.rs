@@ -1,4 +1,4 @@
-//! v1.3.0: admin audit trail.
+//! v1.2.4: admin audit trail.
 //!
 //! Destructive operations already emitted a `tracing` line with
 //! `action = "..."`, but the process log rotates, dies with the container, and

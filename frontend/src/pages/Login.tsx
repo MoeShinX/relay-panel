@@ -70,7 +70,7 @@ export default function Login() {
       </div>
       <Card style={{ width: 380, boxShadow: 'var(--rp-shadow)' }}>
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
-          {/* v1.3.0: operator-configurable branding, falling back to the
+          {/* v1.2.4: operator-configurable branding, falling back to the
               translated default so an unconfigured panel looks unchanged. */}
           <Title level={3} style={{ margin: 0, fontWeight: 600 }}>{site.site_name || t('brand')}</Title>
           <Text type="secondary" style={{ fontSize: 13 }}>{site.subtitle || t('subtitle')}</Text>

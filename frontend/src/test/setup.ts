@@ -52,7 +52,7 @@ window.getComputedStyle = ((elt: Element) =>
 // library; the page tests keep testing the page around it.
 vi.mock('@ant-design/charts', () => ({
   Column: () => null,
-  // v1.3.0: NodeMetricsChart uses Line. A chart component missing from this
+  // v1.2.4: NodeMetricsChart uses Line. A chart component missing from this
   // stub throws at import time and fails every test on the page that embeds
   // it — add the export here when a page starts using a new chart type.
   Line: () => null,

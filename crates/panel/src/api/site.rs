@@ -1,4 +1,4 @@
-//! v1.3.0: site identity endpoints.
+//! v1.2.4: site identity endpoints.
 //!
 //! Split across THREE auth levels on purpose:
 //!
@@ -43,7 +43,7 @@ pub async fn get_public_site(State(state): State<AppState>) -> Json<ApiResponse<
 
 /// The signed-in half.
 ///
-/// v1.3.0: no longer carries the announcement. That moved to its own table
+/// v1.2.4: no longer carries the announcement. That moved to its own table
 /// with history; the copy still sitting in site:config is frozen at whatever
 /// Migration 44 carried over, and serving it would show stale text beside the
 /// live banner.

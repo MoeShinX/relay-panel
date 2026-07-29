@@ -13,7 +13,7 @@ const TYPES = ['info', 'success', 'warning', 'error'] as const;
 type AlertType = (typeof TYPES)[number];
 
 /**
- * v1.3.0: a one-glance summary of the current announcement.
+ * v1.2.4: a one-glance summary of the current announcement.
  *
  * Deliberately NOT the full text. Carrying the whole notice made this 299px —
  * a third of the viewport — for a routine maintenance message, pushing the

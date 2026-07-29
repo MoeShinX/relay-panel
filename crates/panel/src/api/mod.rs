@@ -49,7 +49,7 @@ pub fn routes() -> Router<AppState> {
             "/auth/registration-status",
             axum::routing::get(auth::registration_status),
         )
-        // v1.3.0: site announcements. Reading requires sign-in (the archive is
+        // v1.2.4: site announcements. Reading requires sign-in (the archive is
         // for this operator's users, and the banner was deliberately kept off
         // the login page); writing is admin-only.
         .route(
@@ -72,12 +72,12 @@ pub fn routes() -> Router<AppState> {
             "/admin/announcements/{id}",
             axum::routing::put(announcements::update).delete(announcements::delete),
         )
-        // v1.3.0: public site branding. Unauthenticated because the login page
+        // v1.2.4: public site branding. Unauthenticated because the login page
         // renders the operator's name before anyone has a token. Carries ONLY
         // name + subtitle — the announcement and support contact are behind
         // /user/site-notice.
         .route("/site", axum::routing::get(site::get_public_site))
-        // v1.3.0: the signed-in half of the site config.
+        // v1.2.4: the signed-in half of the site config.
         .route(
             "/user/site-notice",
             axum::routing::get(site::get_site_notice),
@@ -89,14 +89,14 @@ pub fn routes() -> Router<AppState> {
         // v1.0.8: self-service plan purchase + order history.
         .route("/user/buy-plan", axum::routing::post(admin::buy_plan))
         .route("/user/orders", axum::routing::get(admin::list_my_orders))
-        // v1.3.0: every user's orders, for the plan-management page. Admin-only
+        // v1.2.4: every user's orders, for the plan-management page. Admin-only
         // and paginated — this table only grows.
         .route("/admin/orders", axum::routing::get(admin::list_all_orders))
         // v1.2.0: self-service balance top-up. Scoped to the caller's own id
         // from the token — there is no user_id in the body, so it can never
         // credit another account.
         .route("/user/redeem", axum::routing::post(redeem::redeem_code))
-        // v1.3.0: the caller's own top-up history, for the account page. Scoped
+        // v1.2.4: the caller's own top-up history, for the account page. Scoped
         // to the token's uid — there is no id in the path.
         .route(
             "/user/redeem-records",
@@ -244,7 +244,7 @@ pub fn routes() -> Router<AppState> {
             axum::routing::get(admin::get_registration_settings)
                 .put(admin::update_registration_settings),
         )
-        // v1.3.0: site identity (name / subtitle / announcement / contact).
+        // v1.2.4: site identity (name / subtitle / announcement / contact).
         .route(
             "/admin/settings/site",
             axum::routing::get(site::get_site_settings).put(site::update_site_settings),
@@ -272,14 +272,14 @@ pub fn routes() -> Router<AppState> {
             "/stats/traffic",
             axum::routing::get(stats::get_traffic_history),
         )
-        // v1.3.0: node CPU / memory / connection history. Admin-gated inside
+        // v1.2.4: node CPU / memory / connection history. Admin-gated inside
         // the handler (AdminOnly) — unlike traffic, these are properties of the
         // operator's machines, not of any tenant's rules.
         .route(
             "/stats/node-metrics",
             axum::routing::get(stats::get_node_metrics),
         )
-        // v1.3.0: admin audit trail (read side). AdminOnly inside the handler,
+        // v1.2.4: admin audit trail (read side). AdminOnly inside the handler,
         // and never owner-scoped — the rows record who acted on whom.
         .route("/admin/audit-log", axum::routing::get(audit::get_audit_log))
         // v0.4.10: node status is owner-scoped (a user sees only nodes for

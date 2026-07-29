@@ -1,4 +1,4 @@
-//! v1.3.0: site announcement endpoints.
+//! v1.2.4: site announcement endpoints.
 //!
 //! Auth split mirrors the site config: signed-in users read (the archive is for
 //! them), admins write. Nothing here is public — the announcement was

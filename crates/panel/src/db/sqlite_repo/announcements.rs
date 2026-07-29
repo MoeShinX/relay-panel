@@ -3,7 +3,7 @@ use crate::db::error::DbError;
 use crate::db::repo::*;
 use async_trait::async_trait;
 
-// ── AnnouncementRepository (v1.3.0) ──
+// ── AnnouncementRepository (v1.2.4) ──
 
 /// Ordering shared by the banner pick and the history list: pinned first, then
 /// newest. `id DESC` breaks ties because several notices can share a second and

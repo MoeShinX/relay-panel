@@ -21,7 +21,7 @@ interface AdminOrderRow {
 }
 
 /**
- * v1.3.0: every user's purchases, under the plan-management table.
+ * v1.2.4: every user's purchases, under the plan-management table.
  *
  * The shop page shows a user their own orders; this is the operator's view of
  * all of them, which is what answers "who bought what this week". Paginated

@@ -79,18 +79,18 @@ export const router = createBrowserRouter([
       { path: 'plans', element: <RequireAdmin><Plans /></RequireAdmin> },
       // v1.2.0: redeem-code management (admin-only).
       { path: 'redeem-codes', element: <RequireAdmin><RedeemCodes /></RequireAdmin> },
-      // v1.3.0: admin audit trail (read-only).
+      // v1.2.4: admin audit trail (read-only).
       { path: 'audit-log', element: <RequireAdmin><AuditLog /></RequireAdmin> },
       // v0.4.20: tunnel-profiles route hidden; component kept for future recovery.
       { path: 'users', element: <RequireAdmin><Users /></RequireAdmin> },
-      // v1.3.0: operator-configurable site identity, separate from the
+      // v1.2.4: operator-configurable site identity, separate from the
       // registration policy that lives on /settings.
       { path: 'site-settings', element: <RequireAdmin><SiteSettings /></RequireAdmin> },
       { path: 'settings', element: <RequireAdmin><SystemSettings /></RequireAdmin> },
-      // v1.3.0: notification settings were a second card on /settings; they
+      // v1.2.4: notification settings were a second card on /settings; they
       // are their own entry now that 系统设置 is a submenu.
       { path: 'notify-settings', element: <RequireAdmin><NotifySettings /></RequireAdmin> },
-      // v1.3.0: the announcement archive is for every signed-in user; the
+      // v1.2.4: the announcement archive is for every signed-in user; the
       // management page is admin-only.
       { path: 'announcements', element: <Announcements /> },
       { path: 'announcement-admin', element: <RequireAdmin><AnnouncementAdmin /></RequireAdmin> },

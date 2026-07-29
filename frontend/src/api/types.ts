@@ -108,7 +108,7 @@ export interface TrafficHistoryBucket {
   billed_total: number;
 }
 
-/** v1.3.0: one node's metrics for one bucket. CPU/memory are 0..1 fractions;
+/** v1.2.4: one node's metrics for one bucket. CPU/memory are 0..1 fractions;
  *  connections is a raw count. `*_avg` is the sample-weighted mean of the
  *  bucket, `*_max` its peak — both are kept because an average alone flattens
  *  the spike that caused a stall. */
@@ -200,7 +200,7 @@ export interface ListCodesResponse {
   total: number;
 }
 
-/** v1.3.0: one of the caller's own redeem-code top-ups. `code` arrives already
+/** v1.2.4: one of the caller's own redeem-code top-ups. `code` arrives already
  *  masked to the last group — the server never sends the full value here. */
 export interface MyRedeemRecord {
   id: number;
@@ -209,7 +209,7 @@ export interface MyRedeemRecord {
   used_at: string | null;
 }
 
-/** v1.3.0: one site announcement. Replaces the single announcement string that
+/** v1.2.4: one site announcement. Replaces the single announcement string that
  *  used to live in the site config. */
 export interface Announcement {
   id: number;
@@ -231,7 +231,7 @@ export interface AnnouncementList {
   total: number;
 }
 
-/** v1.3.0: one site announcement. Replaces the single announcement string that
+/** v1.2.4: one site announcement. Replaces the single announcement string that
  *  used to live in the site config. */
 export interface Announcement {
   id: number;
@@ -253,22 +253,22 @@ export interface AnnouncementList {
   total: number;
 }
 
-/** v1.3.0: public site branding. No announcement/contact — those are behind
+/** v1.2.4: public site branding. No announcement/contact — those are behind
  *  the authenticated /user/site-notice endpoint. */
 export interface PublicSite {
   site_name: string;
   subtitle: string;
 }
 
-/** v1.3.0: the signed-in half of the site config. */
+/** v1.2.4: the signed-in half of the site config. */
 export interface SiteNotice {
   contact: string;
 }
 
-/** v1.3.0: the full site config, as the admin form reads and writes it. */
+/** v1.2.4: the full site config, as the admin form reads and writes it. */
 export interface SiteConfig extends PublicSite, SiteNotice {}
 
-/** v1.3.0: one recorded admin action. */
+/** v1.2.4: one recorded admin action. */
 export interface AuditEntry {
   id: number;
   ts: string;

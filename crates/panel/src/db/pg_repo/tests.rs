@@ -4977,7 +4977,7 @@ async fn pg_migration_41_backfills_group_id_from_the_rule() {
     cleanup(&db).await;
 }
 
-// ── v1.3.0: node metrics history ──
+// ── v1.2.4: node metrics history ──
 
 fn pg_metric(
     node: &str,
@@ -5111,7 +5111,7 @@ async fn pg_node_metrics_prune_respects_the_cutoff() {
     assert_eq!(rows[0].bucket, "2026-07-28 10:00:00");
 }
 
-// ── Audit log (v1.3.0) ──
+// ── Audit log (v1.2.4) ──
 
 fn pg_audit(actor: Option<i64>, name: &str, action: &str, ts: &str) -> NewAuditEntry {
     NewAuditEntry {
@@ -5226,7 +5226,7 @@ async fn pg_audit_prune_keeps_the_cutoff_row() {
     assert!(rows.iter().all(|e| e.ts.as_str() >= "2026-07-10 10:00:00"));
 }
 
-// ── v1.3.0: per-user redeem history ──
+// ── v1.2.4: per-user redeem history ──
 
 /// The account page is reachable by every user, so this query must be scoped by
 /// construction. If it ever returned another account's top-ups, one user could
@@ -5278,7 +5278,7 @@ async fn pg_redeem_history_lists_only_used_codes() {
     assert_eq!(mine[0].status, "used");
 }
 
-// ── v1.3.0: announcements ──
+// ── v1.2.4: announcements ──
 
 fn ann(content: &str, published: &str, pinned: bool, expires: Option<&str>) -> NewAnnouncement {
     NewAnnouncement {
@@ -5430,7 +5430,7 @@ async fn pg_update_and_delete_report_a_missing_row() {
     assert_eq!(db.delete_announcement(999).await.unwrap(), 0);
 }
 
-// ── v1.3.0: admin-wide order list ──
+// ── v1.2.4: admin-wide order list ──
 
 /// The admin list spans every account, unlike list_orders_by_user. Getting this
 /// wrong in the other direction — scoping it to the caller — would make the

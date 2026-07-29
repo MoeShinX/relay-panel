@@ -216,7 +216,7 @@ CREATE TABLE IF NOT EXISTS traffic_history (
 CREATE INDEX IF NOT EXISTS idx_traffic_history_uid ON traffic_history(uid, hour_ts);
 CREATE INDEX IF NOT EXISTS idx_traffic_history_hour ON traffic_history(hour_ts);
 
--- v1.3.0: hourly node metrics (mirrors the SQLite baseline — see there for why
+-- v1.2.4: hourly node metrics (mirrors the SQLite baseline — see there for why
 -- sum+samples+max instead of a running average, and why there is no FK).
 CREATE TABLE IF NOT EXISTS node_metrics_history (
     node_id TEXT NOT NULL,
@@ -234,7 +234,7 @@ CREATE TABLE IF NOT EXISTS node_metrics_history (
 CREATE INDEX IF NOT EXISTS idx_node_metrics_hour ON node_metrics_history(hour_ts);
 CREATE INDEX IF NOT EXISTS idx_node_metrics_group ON node_metrics_history(group_id, hour_ts);
 
--- v1.3.0: admin audit trail (mirrors the SQLite baseline — see there for why
+-- v1.2.4: admin audit trail (mirrors the SQLite baseline — see there for why
 -- actor_name is a snapshot and why detail must never carry a secret).
 CREATE TABLE IF NOT EXISTS audit_log (
     id BIGSERIAL PRIMARY KEY,
@@ -249,7 +249,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
 CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action, ts);
 
--- v1.3.0: site announcements (mirrors the SQLite baseline — see there for why
+-- v1.2.4: site announcements (mirrors the SQLite baseline — see there for why
 -- this replaced the single announcement string in the site:config kvs blob and
 -- why author_name is a snapshot).
 CREATE TABLE IF NOT EXISTS announcements (
@@ -1310,7 +1310,7 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     }
 
     if current < 25 {
-        // v1.3.0: hourly node metrics. See the baseline for why sum+samples+max
+        // v1.2.4: hourly node metrics. See the baseline for why sum+samples+max
         // rather than a running average. Nothing to backfill — node status was
         // only ever a snapshot, so there is no prior history to recover.
         sqlx::query(
@@ -1349,7 +1349,7 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     }
 
     if current < 26 {
-        // v1.3.0: admin audit trail. See the baseline for the snapshot/secret
+        // v1.2.4: admin audit trail. See the baseline for the snapshot/secret
         // rules. Nothing to backfill — prior actions only ever hit the process
         // log, which this cannot recover.
         sqlx::query(
@@ -1381,7 +1381,7 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     }
 
     if current < 27 {
-        // v1.3.0: site announcements. Carries the single announcement out of
+        // v1.2.4: site announcements. Carries the single announcement out of
         // the site:config kvs blob so an upgrade does not silently blank a
         // notice the operator has live. The "table is empty" guard makes the
         // carry-over run exactly once — a flag would not survive a restore from

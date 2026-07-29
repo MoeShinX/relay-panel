@@ -707,7 +707,7 @@ pub trait TrafficRepository: Send + Sync {
     /// die.
     async fn prune_traffic_history(&self, cutoff: &str) -> Result<u64, DbError>;
 
-    /// v1.3.0: fold one status report into the node's hourly metrics bucket.
+    /// v1.2.4: fold one status report into the node's hourly metrics bucket.
     ///
     /// Called on every report (~10s), so it must be a single UPSERT: sums and
     /// the sample count accumulate, the maxima take whichever is larger. The
@@ -728,7 +728,7 @@ pub trait TrafficRepository: Send + Sync {
     /// rows die.
     async fn prune_node_metrics(&self, cutoff: &str) -> Result<u64, DbError>;
 
-    /// v1.3.0: append one audit entry. Best-effort at the call site — see
+    /// v1.2.4: append one audit entry. Best-effort at the call site — see
     /// service::audit for why a failure here must not undo the operation that
     /// was just performed.
     async fn record_audit(&self, e: &NewAuditEntry) -> Result<(), DbError>;
@@ -750,7 +750,7 @@ pub trait TrafficRepository: Send + Sync {
     async fn prune_audit_log(&self, cutoff: &str) -> Result<u64, DbError>;
 }
 
-/// v1.3.0: one site announcement.
+/// v1.2.4: one site announcement.
 #[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
 pub struct Announcement {
     pub id: i64,
@@ -780,7 +780,7 @@ pub struct NewAnnouncement {
     pub author_name: String,
 }
 
-// ── Announcements (v1.3.0) ──
+// ── Announcements (v1.2.4) ──
 
 #[async_trait]
 pub trait AnnouncementRepository: Send + Sync {
@@ -1075,7 +1075,7 @@ pub trait RedeemRepository: Send + Sync {
         now: &str,
     ) -> Result<(String, String), RedeemCodeError>;
 
-    /// v1.3.0: the codes a given user redeemed, newest first.
+    /// v1.2.4: the codes a given user redeemed, newest first.
     ///
     /// Separate from `list_redeem_codes` rather than another filter on it: this
     /// one is reachable by a NON-admin (their own account page), so the uid
@@ -1227,7 +1227,7 @@ pub trait SettingsRepository: Send + Sync {
 pub trait OrderRepository: Send + Sync {
     /// List a user's orders, newest first.
     async fn list_orders_by_user(&self, user_id: i64) -> Result<Vec<Order>, DbError>;
-    /// v1.3.0: every user's orders, newest first, for the admin view.
+    /// v1.2.4: every user's orders, newest first, for the admin view.
     ///
     /// Paginated rather than returning the lot: this table only grows, and the
     /// per-user list it sits beside is naturally small enough not to need it.

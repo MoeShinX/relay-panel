@@ -199,7 +199,7 @@ export default function Plans() {
       </div>
       <Table dataSource={plans} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 20 }} />
 
-      {/* v1.3.0: the operator's view of every purchase. Below the plan
+      {/* v1.2.4: the operator's view of every purchase. Below the plan
           table because it is a consequence of it — you set the prices here,
           you see what sold here. */}
       <AllOrders />

@@ -579,12 +579,12 @@ export const zhCN = {
   notifyTestFailed: '测试发送失败',
   notifyCredentialNote: '说明:Bot Token 和 SMTP 密码以明文存储在数据库中(与节点令牌一致),接口不会把它们返回给浏览器。',
 
-  // ── v1.3.0: 个人中心账目记录 ──
+  // ── v1.2.4: 个人中心账目记录 ──
   rechargeHistory: '卡密充值记录',
   rechargeAmount: '充值金额',
   rechargeTime: '充值时间',
   noRecharges: '暂无充值记录',
-  // ── v1.3.0: 公告 ──
+  // ── v1.2.4: 公告 ──
   announcements: '公告',
   announcementAdmin: '公告管理',
   announcementTitle: '标题',
@@ -625,7 +625,7 @@ export const zhCN = {
   auditTargetSettings: '设置',
   auditTargetSettingsNotify: '通知设置',
   auditTargetSettingsSite: '站点设置',
-  // ── v1.3.0: 站点设置 ──
+  // ── v1.2.4: 站点设置 ──
   siteSettings: '站点设置',
   siteName: '站点名称',
   siteNameHint: '显示在登录页、左侧边栏和浏览器标签标题。留空则使用 RelayPanel。',
@@ -645,7 +645,7 @@ export const zhCN = {
   siteContactHint: '显示在个人中心,例如 Telegram 或邮箱。留空则不显示该行。',
   siteFieldTooLong: '内容过长',
   siteSettingsHint: '保存后立即生效。公告和客服方式需要登录才能读取,不会出现在登录页。',
-  // ── v1.3.0: 操作审计 ──
+  // ── v1.2.4: 操作审计 ──
   auditLog: '操作审计',
   auditTime: '时间 (UTC)',
   auditActor: '操作人',

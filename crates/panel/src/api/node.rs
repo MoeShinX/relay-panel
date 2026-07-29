@@ -286,7 +286,7 @@ pub async fn report_status(
             .await
             .map_err(|e| tracing::warn!("report_status: kvs set failed: {}", e));
 
-        // v1.3.0: fold this report into the node's hourly metrics bucket. The
+        // v1.2.4: fold this report into the node's hourly metrics bucket. The
         // status written above is a snapshot each report overwrites; this is the
         // only thing that survives to answer "what was it doing last night".
         //

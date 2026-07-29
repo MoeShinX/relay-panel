@@ -55,7 +55,7 @@ const DESTRUCTIVE = new Set<string>([
 const PAGE_SIZE = 20;
 
 /**
- * v1.3.0: admin audit trail.
+ * v1.2.4: admin audit trail.
  *
  * Answers "who deleted my rule" from the panel instead of from a container log
  * that rotates and dies with the process.

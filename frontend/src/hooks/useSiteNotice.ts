@@ -3,7 +3,7 @@ import api from '../api/client';
 import type { ApiEnvelope, SiteNotice } from '../api/types';
 
 /**
- * v1.3.0: the signed-in half of the site config — the support contact, from the AUTHENTICATED `/user/site-notice`.
+ * v1.2.4: the signed-in half of the site config — the support contact, from the AUTHENTICATED `/user/site-notice`.
  *
  * Separate from `useSite` (public branding) because the two have different auth
  * requirements, not just different fields: the login page reads branding with

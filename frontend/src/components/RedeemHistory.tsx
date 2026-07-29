@@ -5,7 +5,7 @@ import type { ApiEnvelope, MyRedeemRecord } from '../api/types';
 import { useI18n } from '../i18n/context';
 
 /**
- * v1.3.0: the user's own redeem-code top-ups, on the account page.
+ * v1.2.4: the user's own redeem-code top-ups, on the account page.
  *
  * Purchase history is deliberately NOT here — it lives on the shop page, where
  * buying and seeing the receipt happen in the same place. Showing the same

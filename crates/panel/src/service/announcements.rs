@@ -1,4 +1,4 @@
-//! v1.3.0: site announcements.
+//! v1.2.4: site announcements.
 //!
 //! Replaces the single `announcement` string in the site:config blob. That
 //! field held one notice, overwrote it on every edit, and kept no history — so

@@ -1,4 +1,4 @@
-//! v1.2.0: history retention sweeper (traffic, and since v1.3.0 node metrics
+//! v1.2.0: history retention sweeper (traffic, and since v1.2.4 node metrics
 //! and the audit log).
 //!
 //! Neither table has an FK — rows are never deleted by a parent cascade
@@ -14,7 +14,7 @@ use crate::api::AppState;
 /// straddles the boundary mid-query never disappears from under a chart.
 const RETENTION_DAYS: i64 = 35;
 
-/// v1.3.0: node metrics keep a week. A report every ~10s is far denser than
+/// v1.2.4: node metrics keep a week. A report every ~10s is far denser than
 /// per-rule traffic, and week-old CPU is rarely what you are looking for —
 /// paying 35 days of rows for it would be the wrong trade.
 const METRICS_RETENTION_DAYS: i64 = 7;
@@ -62,7 +62,7 @@ pub fn spawn(state: AppState) {
                 Err(e) => tracing::error!("node-metrics: prune failed: {}", e),
             }
 
-            // v1.3.0: the audit trail, on its own much longer cutoff. Swept in
+            // v1.2.4: the audit trail, on its own much longer cutoff. Swept in
             // the same pass but independently — one table failing must not skip
             // the others.
             let audit_cutoff = (chrono::Utc::now()

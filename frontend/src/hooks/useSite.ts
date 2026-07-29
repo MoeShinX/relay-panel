@@ -3,7 +3,7 @@ import api from '../api/client';
 import type { ApiEnvelope, PublicSite } from '../api/types';
 
 /**
- * v1.3.0: the operator's site branding (name + subtitle).
+ * v1.2.4: the operator's site branding (name + subtitle).
  *
  * Served by the PUBLIC `/site` endpoint, because the login page renders the
  * brand before anyone has a token. The announcement and support contact are

@@ -865,7 +865,7 @@ mod tests {
         );
     }
 
-    /// v1.3.0: the audit trail must never become a place to read a live node
+    /// v1.2.4: the audit trail must never become a place to read a live node
     /// credential out of. Rotation is exactly the operation that produces one,
     /// and `detail` is free-form text a future edit could carelessly widen —
     /// so pin it: the new token must appear in NO column of the audit row.
@@ -908,12 +908,12 @@ mod tests {
         }
     }
 
-    /// v1.3.0: the public site endpoint is reachable with NO token, so it must
+    /// v1.2.4: the public site endpoint is reachable with NO token, so it must
     /// carry branding only. The support contact is for this operator's users,
     /// not for anyone who can reach the port.
     ///
     /// (The announcement used to be checked here too. It moved to its own table
-    /// in v1.3.0 and is served by an authenticated endpoint of its own.)
+    /// in v1.2.4 and is served by an authenticated endpoint of its own.)
     #[tokio::test]
     async fn public_site_endpoint_exposes_branding_but_not_the_contact() {
         let (state, _pool) = test_state().await;

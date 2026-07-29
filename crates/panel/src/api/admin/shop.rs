@@ -187,7 +187,7 @@ pub async fn buy_plan(
 }
 
 /// GET /user/orders — the calling user's purchase history, newest first.
-/// v1.3.0: one order with the buyer's name resolved for display.
+/// v1.2.4: one order with the buyer's name resolved for display.
 #[derive(Debug, serde::Serialize)]
 pub struct AdminOrderRow {
     pub id: i64,

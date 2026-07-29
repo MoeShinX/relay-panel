@@ -17,13 +17,13 @@ const MAX_CONTACT = 256;
 
 
 /**
- * v1.3.0: site identity — name, subtitle, support contact.
+ * v1.2.4: site identity — name, subtitle, support contact.
  *
  * Separate from "System Settings", which is registration policy (open
  * registration / allowed plans / default plan). Different concerns, and folding
  * them into one page would make both harder to scan.
  *
- * The announcement moved out in v1.3.0: it became a table with history, so it
+ * The announcement moved out in v1.2.4: it became a table with history, so it
  * has its own management page rather than one overwritable field here.
  */
 export default function SiteSettings() {

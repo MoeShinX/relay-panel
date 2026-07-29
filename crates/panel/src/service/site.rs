@@ -1,4 +1,4 @@
-//! v1.3.0: operator-configurable site identity.
+//! v1.2.4: operator-configurable site identity.
 //!
 //! The brand string was hardcoded in three places (login page, sidebar, browser
 //! title), so every operator running this panel showed "RelayPanel" to their own
@@ -35,7 +35,7 @@ pub struct SiteConfig {
     /// Free text shown to signed-in users on the dashboard and account page.
     /// Empty = the banner is not rendered at all, rather than an empty box.
     ///
-    /// v1.3.0: a small Markdown subset (bold / italic / code / links / lists)
+    /// v1.2.4: a small Markdown subset (bold / italic / code / links / lists)
     /// is rendered by the frontend. Stored verbatim — the rendering side turns
     /// it into React elements, never into HTML, so there is nothing to escape
     /// here.
@@ -66,7 +66,7 @@ impl SiteConfig {
         if cfg.site_name.trim().is_empty() {
             cfg.site_name = DEFAULT_NAME.to_string();
         }
-        // Rows written before v1.3.0 have no type at all, and a bad value must
+        // Rows written before v1.2.4 have no type at all, and a bad value must
         // not reach the frontend as an unknown antd Alert type.
         if !ANNOUNCEMENT_TYPES.contains(&cfg.announcement_type.as_str()) {
             cfg.announcement_type = DEFAULT_ANNOUNCEMENT_TYPE.to_string();
@@ -127,7 +127,7 @@ mod tests {
     }
 
     /// An unknown or absent banner type must become a known one. It is handed
-    /// straight to antd's Alert `type`, and rows written before v1.3.0 have no
+    /// straight to antd's Alert `type`, and rows written before v1.2.4 have no
     /// value at all.
     #[test]
     fn announcement_type_falls_back_to_a_known_severity() {

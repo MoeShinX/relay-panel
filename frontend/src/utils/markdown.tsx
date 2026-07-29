@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 
 /**
- * v1.3.0: a deliberately tiny Markdown subset for the site announcement.
+ * v1.2.4: a deliberately tiny Markdown subset for the site announcement.
  *
  * Renders to **React elements, never to an HTML string**. That is the whole
  * design: React escapes text nodes, so there is no sanitizer to get wrong and

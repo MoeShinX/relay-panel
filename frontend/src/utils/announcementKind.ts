@@ -1,7 +1,7 @@
 import type { Dict } from '../i18n/zh-CN';
 
 /**
- * v1.3.0: the display label for an announcement severity.
+ * v1.2.4: the display label for an announcement severity.
  *
  * The raw value (`info` / `success` / `warning` / `error`) is a wire value, not
  * something to show an operator. The tag labels are deliberately SHORT — the

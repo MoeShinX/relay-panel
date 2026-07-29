@@ -18,7 +18,7 @@ interface Point {
 }
 
 /**
- * v1.3.0: node CPU / memory / connection history.
+ * v1.2.4: node CPU / memory / connection history.
  *
  * Node status is a snapshot each report overwrites, so "why was it slow last
  * night" previously had no data behind it. This charts the hourly rollup.

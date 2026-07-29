@@ -1,4 +1,4 @@
-//! v1.3.0: read side of the admin audit trail.
+//! v1.2.4: read side of the admin audit trail.
 //!
 //! Write side is `service::audit::record`, called from each destructive handler.
 

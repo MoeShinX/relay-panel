@@ -581,12 +581,12 @@ export const enUS: Dict = {
   notifyCredentialNote: 'Note: the bot token and SMTP password are stored in plaintext (same as node tokens). The API never returns them to the browser.',
 
   // ── v1.2.0: redeem codes ──
-  // ── v1.3.0: account money history ──
+  // ── v1.2.4: account money history ──
   rechargeHistory: 'Top-up History',
   rechargeAmount: 'Amount',
   rechargeTime: 'Redeemed at',
   noRecharges: 'No top-ups yet',
-  // ── v1.3.0: announcements ──
+  // ── v1.2.4: announcements ──
   announcements: 'Announcements',
   announcementAdmin: 'Announcements',
   announcementTitle: 'Title',
@@ -628,7 +628,7 @@ export const enUS: Dict = {
   auditTargetSettings: 'Settings',
   auditTargetSettingsNotify: 'Notification settings',
   auditTargetSettingsSite: 'Site settings',
-  // ── v1.3.0: site settings ──
+  // ── v1.2.4: site settings ──
   siteSettings: 'Site Settings',
   siteName: 'Site name',
   siteNameHint: 'Shown on the login page, in the sidebar, and as the browser tab title. Empty falls back to RelayPanel.',
@@ -648,7 +648,7 @@ export const enUS: Dict = {
   siteContactHint: 'Shown on the account page — a Telegram handle, an email, whatever. Empty hides the row.',
   siteFieldTooLong: 'Too long',
   siteSettingsHint: 'Takes effect immediately. The announcement and contact require sign-in to read and never appear on the login page.',
-  // ── v1.3.0: audit log ──
+  // ── v1.2.4: audit log ──
   auditLog: 'Audit Log',
   auditTime: 'Time (UTC)',
   auditActor: 'Actor',

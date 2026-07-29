@@ -35,7 +35,7 @@ interface FormValues {
 }
 
 /**
- * v1.3.0: announcement management.
+ * v1.2.4: announcement management.
  *
  * Replaces the single announcement field on the site-settings page. That field
  * held one notice and overwrote it on every edit; this keeps every notice, so

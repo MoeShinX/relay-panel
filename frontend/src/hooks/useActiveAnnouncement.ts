@@ -3,7 +3,7 @@ import api from '../api/client';
 import type { ApiEnvelope, Announcement } from '../api/types';
 
 /**
- * v1.3.0: the one announcement the banner shows, from the authenticated
+ * v1.2.4: the one announcement the banner shows, from the authenticated
  * `/user/announcements/active`.
  *
  * `null` means there is nothing live — no pinned notice, and everything else
