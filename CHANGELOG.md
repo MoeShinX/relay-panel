@@ -62,6 +62,22 @@ boot; nothing to reconfigure.
   have used, with the code masked to its last group. Purchase history stays on
   the shop page, where buying and reading the receipt happen together.
 
+### Changed
+
+- **The admin menu is grouped into two submenus.** It had reached twelve
+  top-level entries. 用户与计费 holds 用户管理 / 套餐管理 / 卡密管理; 系统设置
+  holds 基础设置 / 通知设置 / 站点设置 / 操作审计. Top level drops to eight.
+
+  Plans and redeem codes are deliberately NOT under 系统设置: they are records
+  you create and delete as routine work, not configuration you set once, and a
+  daily CRUD page buried in "system settings" costs a click every time.
+
+  Regular users are unaffected — their menu was already four entries.
+
+  Notification settings, previously a second card on the system-settings page,
+  are now their own entry at `/notify-settings`; the remaining registration
+  card is retitled 基础设置 so the submenu does not read "系统设置 > 系统设置".
+
 ### Fixed
 
 - **Node metric percentages were multiplied by 100.** CPU and memory arrive
