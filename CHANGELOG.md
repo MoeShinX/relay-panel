@@ -82,6 +82,14 @@ boot; nothing to reconfigure.
   Migration 44 / PG revision 27 carry the existing announcement out of the site
   config into the new table, so upgrading does not blank a notice that is live.
 
+  The entry point is a bell in the header rather than a sidebar row. The banner
+  already carries the current notice, so a menu row would only be a route to
+  the archive — a low-frequency destination sitting beside pages people use
+  daily. A bell also does what a menu row cannot: show a dot when something is
+  new. Unread is "latest id > the id this account last opened", kept in
+  localStorage per account; the server stores no per-user read state, which
+  would be a table and a write on every page view for a dot.
+
 ### Changed
 
 - **The admin menu is grouped into two submenus.** It had reached twelve

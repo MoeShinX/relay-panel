@@ -90,6 +90,28 @@ pub async fn active_for_user(
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct LatestId {
+    pub latest_id: i64,
+}
+
+/// GET /api/v1/user/announcements/latest-id
+///
+/// Feeds the header bell. Returns 0 when there are no announcements at all, so
+/// a fresh install shows no dot rather than a permanent one.
+pub async fn latest_id(
+    _user: AuthUser,
+    State(state): State<AppState>,
+) -> Json<ApiResponse<LatestId>> {
+    match state.db.latest_announcement_id().await {
+        Ok(latest_id) => Json(ApiResponse::success(LatestId { latest_id })),
+        Err(e) => {
+            tracing::error!("latest_announcement_id: {}", e);
+            Json(err(500, "数据库错误"))
+        }
+    }
+}
+
 /// GET /api/v1/admin/announcements — same archive, for the management page.
 pub async fn list_for_admin(
     _admin: AdminOnly,

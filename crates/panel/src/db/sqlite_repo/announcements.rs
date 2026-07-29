@@ -111,4 +111,11 @@ impl AnnouncementRepository for SqliteRepository {
             .await?
             .rows_affected())
     }
+    async fn latest_announcement_id(&self) -> Result<i64, DbError> {
+        Ok(
+            sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM announcements")
+                .fetch_one(&self.pool)
+                .await?,
+        )
+    }
 }

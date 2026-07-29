@@ -1,4 +1,4 @@
-import { Layout, Menu, Button, Space, Typography, Segmented, Modal, Form, Input, message, Spin } from 'antd';
+import { Layout, Menu, Button, Space, Typography, Segmented, Modal, Form, Input, message, Spin, Badge, Tooltip } from 'antd';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useState, Suspense } from 'react';
 import {
@@ -18,6 +18,7 @@ import api from '../api/client';
 import type { ApiEnvelope } from '../api/types';
 import { useAuth } from '../auth/useAuth';
 import { useSite } from '../hooks/useSite';
+import { useAnnouncementBadge } from '../hooks/useAnnouncementBadge';
 import { makePasswordValidator } from '../utils/password';
 
 const { Sider, Content, Header } = Layout;
@@ -27,8 +28,11 @@ export default function MainLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { t, lang, setLang } = useI18n();
-  const { isAdmin, logout: authLogout } = useAuth();
+  const { isAdmin, user, logout: authLogout } = useAuth();
   const site = useSite();
+  // Marked seen by the archive page itself, so the dot clears only once the
+  // notices have actually been shown.
+  const { unread } = useAnnouncementBadge(user?.id ?? null);
   const [changePwOpen, setChangePwOpen] = useState(false);
   const [pwForm] = Form.useForm();
   const [pwSubmitting, setPwSubmitting] = useState(false);
@@ -44,9 +48,6 @@ export default function MainLayout() {
     { key: '/shop', icon: <ShoppingOutlined />, label: t('shop') },
     { key: '/rules', icon: <ApiOutlined />, label: t('myRules') },
     { key: '/nodes', icon: <CloudServerOutlined />, label: t('availableNodes') },
-    // v1.3.0: the archive is for everyone — a regular user's only way to
-    // read a notice the banner has already replaced.
-    { key: '/announcements', icon: <NotificationOutlined />, label: t('announcements') },
   ];
   // v1.3.0: the admin list had grown to seven top-level entries. Grouped into
   // two submenus by what they ARE, not just to shorten the list:
@@ -153,6 +154,22 @@ export default function MainLayout() {
           borderBottom: '1px solid var(--rp-border)',
         }}>
           <Space size="middle">
+            {/* v1.3.0: announcements live here rather than in the sidebar.
+                The banner already carries the current notice, so a menu row
+                would only be a route to the archive — a low-frequency
+                destination sitting beside pages people use daily. A bell also
+                does what a menu row cannot: say that something is new. */}
+            <Tooltip title={t('announcements')}>
+              <Badge dot={unread} offset={[-2, 2]}>
+                <Button
+                  type="text"
+                  size="small"
+                  aria-label={t('announcements')}
+                  icon={<NotificationOutlined />}
+                  onClick={() => navigate('/announcements')}
+                />
+              </Badge>
+            </Tooltip>
             <Segmented
               size="small"
               value={lang}

@@ -811,6 +811,14 @@ pub trait AnnouncementRepository: Send + Sync {
     async fn update_announcement(&self, id: i64, a: &NewAnnouncement) -> Result<u64, DbError>;
 
     async fn delete_announcement(&self, id: i64) -> Result<u64, DbError>;
+
+    /// Highest announcement id, or 0 when there are none.
+    ///
+    /// Drives the header bell's unread dot: the client stores the id it last
+    /// looked at and compares. Deliberately the id and not a timestamp —
+    /// editing an old notice must not re-notify everyone, and only a new row
+    /// raises the maximum.
+    async fn latest_announcement_id(&self) -> Result<i64, DbError>;
 }
 
 /// An audit entry being written.
