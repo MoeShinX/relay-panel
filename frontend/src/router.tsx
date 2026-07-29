@@ -30,6 +30,7 @@ const Plans = lazy(() => import('./pages/Plans'));
 const RedeemCodes = lazy(() => import('./pages/RedeemCodes'));
 const AuditLog = lazy(() => import('./pages/AuditLog'));
 const SiteSettings = lazy(() => import('./pages/SiteSettings'));
+const NotifySettings = lazy(() => import('./pages/NotifySettings'));
 const Shop = lazy(() => import('./pages/Shop'));
 const Forbidden = lazy(() => import('./pages/Forbidden'));
 const RoleHome = lazy(() => import('./RoleHome'));
@@ -84,6 +85,9 @@ export const router = createBrowserRouter([
       // registration policy that lives on /settings.
       { path: 'site-settings', element: <RequireAdmin><SiteSettings /></RequireAdmin> },
       { path: 'settings', element: <RequireAdmin><SystemSettings /></RequireAdmin> },
+      // v1.3.0: notification settings were a second card on /settings; they
+      // are their own entry now that 系统设置 is a submenu.
+      { path: 'notify-settings', element: <RequireAdmin><NotifySettings /></RequireAdmin> },
       // Account is open to every authenticated user (admin or not).
       { path: 'account', element: <Account /> },
       // v0.4.10: explicit 403 page for admin-only routes a regular user

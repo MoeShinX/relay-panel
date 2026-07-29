@@ -10,9 +10,7 @@ import {
   LockOutlined,
   SettingOutlined,
   ShoppingOutlined,
-  GiftOutlined,
-  FileSearchOutlined,
-  GlobalOutlined,
+  TeamOutlined,
 } from '@ant-design/icons';
 import { useI18n } from '../i18n/context';
 import api from '../api/client';
@@ -46,18 +44,51 @@ export default function MainLayout() {
     { key: '/rules', icon: <ApiOutlined />, label: t('myRules') },
     { key: '/nodes', icon: <CloudServerOutlined />, label: t('availableNodes') },
   ];
+  // v1.3.0: the admin list had grown to seven top-level entries. Grouped into
+  // two submenus by what they ARE, not just to shorten the list:
+  //
+  //   billing  — records you create, edit and delete day to day
+  //   system   — configuration you set once, plus the audit trail
+  //
+  // Plans and redeem codes deliberately did NOT go under 系统设置: generating
+  // codes is a routine task, and burying a daily CRUD page inside "system
+  // settings" costs a click every time and misfiles it besides.
+  const billingChildren = [
+    { key: '/users', label: t('users') },
+    { key: '/plans', label: t('planManagement') },
+    { key: '/redeem-codes', label: t('redeemCodes') },
+  ];
+  const systemChildren = [
+    { key: '/settings', label: t('basicSettings') },
+    { key: '/notify-settings', label: t('notifySettings') },
+    { key: '/site-settings', label: t('siteSettings') },
+    { key: '/audit-log', label: t('auditLog') },
+  ];
   const adminOnlyItems = [
     { key: '/groups', icon: <CloudServerOutlined />, label: t('deviceGroups') },
-    { key: '/plans', icon: <ShoppingOutlined />, label: t('planManagement') },
-    { key: '/redeem-codes', icon: <GiftOutlined />, label: t('redeemCodes') },
-    { key: '/users', icon: <UserOutlined />, label: t('users') },
-    { key: '/audit-log', icon: <FileSearchOutlined />, label: t('auditLog') },
-    { key: '/site-settings', icon: <GlobalOutlined />, label: t('siteSettings') },
-    { key: '/settings', icon: <SettingOutlined />, label: t('systemSettings') },
+    {
+      key: 'grp-billing',
+      icon: <TeamOutlined />,
+      label: t('userAndBilling'),
+      children: billingChildren,
+    },
+    {
+      key: 'grp-system',
+      icon: <SettingOutlined />,
+      label: t('systemSettings'),
+      children: systemChildren,
+    },
   ];
   const menuItems = isAdmin
     ? [dashboardItem, ...sharedItems, ...adminOnlyItems]
     : sharedItems;
+
+  // Expand whichever group holds the current page. Computed from the path, not
+  // stored, so landing on /site-settings from a bookmark opens 系统设置 too.
+  const openKeys = [
+    billingChildren.some((c) => c.key === location.pathname) ? 'grp-billing' : '',
+    systemChildren.some((c) => c.key === location.pathname) ? 'grp-system' : '',
+  ].filter(Boolean);
 
   const logout = () => {
     authLogout();
@@ -101,8 +132,11 @@ export default function MainLayout() {
           theme="dark"
           mode="inline"
           selectedKeys={[location.pathname]}
+          defaultOpenKeys={openKeys}
           items={menuItems}
-          onClick={({ key }) => navigate(key)}
+          // Parent entries carry a `grp-` key and no route — clicking one only
+          // expands it, so navigating on them would 404.
+          onClick={({ key }) => { if (!key.startsWith('grp-')) navigate(key); }}
           style={{ borderRight: 0 }}
         />
       </Sider>

@@ -483,6 +483,8 @@ export const zhCN = {
   registrationStatusFailed: '无法获取注册状态，请检查网络后重试。',
   retry: '重试',
   systemSettings: '系统设置',
+  basicSettings: '基础设置',
+  userAndBilling: '用户与计费',
   registrationEnabled: '开放注册',
   defaultPlan: '默认选中套餐',
   defaultPlanRequired: '请选择默认套餐。',

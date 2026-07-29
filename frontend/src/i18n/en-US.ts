@@ -484,6 +484,8 @@ export const enUS: Dict = {
   registrationStatusFailed: 'Could not check registration status. Check your connection and retry.',
   retry: 'Retry',
   systemSettings: 'System settings',
+  basicSettings: 'Basic settings',
+  userAndBilling: 'Users & billing',
   registrationEnabled: 'Open registration',
   defaultPlan: 'Default selected plan',
   defaultPlanRequired: 'Please select a default plan.',
