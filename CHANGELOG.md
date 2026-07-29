@@ -114,6 +114,9 @@ boot; nothing to reconfigure.
   half a bold run and a dangling list dash reads worse than the same words
   plain, and the formatting is intact one click away.
 
+  The header bell is labelled 公告 rather than a bare icon. Every other control
+  in that header is icon + text, so an icon alone read as decoration.
+
 - **The admin menu is grouped into two submenus.** It had reached twelve
   top-level entries. 用户与计费 holds 用户管理 / 套餐管理 / 卡密管理; 系统设置
   holds 基础设置 / 通知设置 / 站点设置 / 操作审计. Top level drops to eight.

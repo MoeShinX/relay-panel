@@ -1,4 +1,4 @@
-import { Layout, Menu, Button, Space, Typography, Segmented, Modal, Form, Input, message, Spin, Badge, Tooltip } from 'antd';
+import { Layout, Menu, Button, Space, Typography, Segmented, Modal, Form, Input, message, Spin, Badge } from 'antd';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useState, Suspense } from 'react';
 import {
@@ -158,18 +158,22 @@ export default function MainLayout() {
                 The banner already carries the current notice, so a menu row
                 would only be a route to the archive — a low-frequency
                 destination sitting beside pages people use daily. A bell also
-                does what a menu row cannot: say that something is new. */}
-            <Tooltip title={t('announcements')}>
-              <Badge dot={unread} offset={[-2, 2]}>
-                <Button
-                  type="text"
-                  size="small"
-                  aria-label={t('announcements')}
-                  icon={<NotificationOutlined />}
-                  onClick={() => navigate('/announcements')}
-                />
-              </Badge>
-            </Tooltip>
+                does what a menu row cannot: say that something is new.
+
+                Labelled, not bare: every other control in this header is icon
+                + text, so an icon alone read as decoration and people did not
+                find it. The Tooltip is gone with it — a tooltip that repeats
+                the visible label is noise. */}
+            <Badge dot={unread} offset={[-4, 2]}>
+              <Button
+                type="text"
+                size="small"
+                icon={<NotificationOutlined />}
+                onClick={() => navigate('/announcements')}
+              >
+                {t('announcements')}
+              </Button>
+            </Badge>
             <Segmented
               size="small"
               value={lang}
