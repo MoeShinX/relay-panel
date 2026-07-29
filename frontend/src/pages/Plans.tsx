@@ -5,6 +5,7 @@ import api from '../api/client';
 import type { ApiEnvelope, Plan, DeviceGroup } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { formatBytes } from '../utils/format';
+import AllOrders from '../components/AllOrders';
 
 const { Text } = Typography;
 
@@ -197,6 +198,11 @@ export default function Plans() {
         </Space>
       </div>
       <Table dataSource={plans} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 20 }} />
+
+      {/* v1.3.0: the operator's view of every purchase. Below the plan
+          table because it is a consequence of it — you set the prices here,
+          you see what sold here. */}
+      <AllOrders />
 
       <Modal title={t('addPlan')} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={() => createForm.submit()} okText={t('create')} cancelText={t('cancel')} width={520}>
         <Form form={createForm} onFinish={handleCreate} layout="vertical" initialValues={{ plan_type: 'data', duration_days: 0, hidden: false, reset_traffic: false, description: '', grant_all_groups: false, device_group_ids: [] }}>

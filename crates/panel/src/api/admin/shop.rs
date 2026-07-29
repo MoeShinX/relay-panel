@@ -187,6 +187,85 @@ pub async fn buy_plan(
 }
 
 /// GET /user/orders — the calling user's purchase history, newest first.
+/// v1.3.0: one order with the buyer's name resolved for display.
+#[derive(Debug, serde::Serialize)]
+pub struct AdminOrderRow {
+    pub id: i64,
+    pub user_id: i64,
+    /// None when the account was deleted — the order row survives as the
+    /// money-in record, so the id is kept and only the name goes missing.
+    pub username: Option<String>,
+    pub plan_name: String,
+    pub price: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct AdminOrdersQuery {
+    #[serde(default)]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct AdminOrdersResponse {
+    pub items: Vec<AdminOrderRow>,
+    pub total: i64,
+}
+
+/// GET /api/v1/admin/orders — every user's purchases.
+///
+/// The shop page shows the caller their own; this is the operator's view of
+/// all of them, which is what answers "who bought what this week".
+pub async fn list_all_orders(
+    _admin: crate::api::middleware::AdminOnly,
+    State(state): State<AppState>,
+    axum::extract::Query(q): axum::extract::Query<AdminOrdersQuery>,
+) -> Json<ApiResponse<AdminOrdersResponse>> {
+    let limit = q.limit.unwrap_or(20).clamp(1, 200);
+    let offset = q.offset.unwrap_or(0).max(0);
+
+    let total = match state.db.count_all_orders().await {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::error!("list_all_orders: count failed: {}", e);
+            return Json(err(500, "数据库错误"));
+        }
+    };
+    let orders = match state.db.list_all_orders(limit, offset).await {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::error!("list_all_orders: query failed: {}", e);
+            return Json(err(500, "数据库错误"));
+        }
+    };
+
+    // One user fetch for the page, not one per row — the same shape the redeem
+    // list uses. An id that no longer resolves stays None rather than blocking
+    // the page: the order outlives the account on purpose.
+    let names: std::collections::HashMap<i64, String> = match state.db.list_users_public().await {
+        Ok(users) => users.into_iter().map(|u| (u.id, u.username)).collect(),
+        Err(e) => {
+            tracing::error!("list_all_orders: user lookup failed: {}", e);
+            return Json(err(500, "数据库错误"));
+        }
+    };
+
+    let items = orders
+        .into_iter()
+        .map(|o| AdminOrderRow {
+            id: o.id,
+            user_id: o.user_id,
+            username: names.get(&o.user_id).cloned(),
+            plan_name: o.plan_name,
+            price: o.price,
+            created_at: o.created_at,
+        })
+        .collect();
+    Json(ApiResponse::success(AdminOrdersResponse { items, total }))
+}
+
 pub async fn list_my_orders(
     user: AuthUser,
     State(state): State<AppState>,

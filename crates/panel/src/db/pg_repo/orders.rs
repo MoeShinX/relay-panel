@@ -37,4 +37,21 @@ impl OrderRepository for PgRepository {
         .await?;
         Ok(())
     }
+    async fn list_all_orders(&self, limit: i64, offset: i64) -> Result<Vec<Order>, DbError> {
+        // id DESC breaks ties: several purchases can land in the same second,
+        // and only the id gives a stable total order for pagination.
+        Ok(sqlx::query_as(
+            "SELECT * FROM orders ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2",
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    async fn count_all_orders(&self) -> Result<i64, DbError> {
+        Ok(sqlx::query_scalar("SELECT COUNT(*) FROM orders")
+            .fetch_one(&self.pool)
+            .await?)
+    }
 }

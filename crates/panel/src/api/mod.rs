@@ -89,6 +89,9 @@ pub fn routes() -> Router<AppState> {
         // v1.0.8: self-service plan purchase + order history.
         .route("/user/buy-plan", axum::routing::post(admin::buy_plan))
         .route("/user/orders", axum::routing::get(admin::list_my_orders))
+        // v1.3.0: every user's orders, for the plan-management page. Admin-only
+        // and paginated — this table only grows.
+        .route("/admin/orders", axum::routing::get(admin::list_all_orders))
         // v1.2.0: self-service balance top-up. Scoped to the caller's own id
         // from the token — there is no user_id in the body, so it can never
         // credit another account.

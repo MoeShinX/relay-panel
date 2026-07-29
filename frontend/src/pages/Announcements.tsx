@@ -6,6 +6,7 @@ import { useI18n } from '../i18n/context';
 import { renderMarkdown } from '../utils/markdown';
 import { useAnnouncementBadge } from '../hooks/useAnnouncementBadge';
 import { useAuth } from '../auth/useAuth';
+import { kindLabel } from '../utils/announcementKind';
 
 const { Text, Title } = Typography;
 
@@ -80,7 +81,7 @@ export default function Announcements() {
               renderItem={(a) => (
                 <List.Item key={a.id}>
                   <div style={{ marginBottom: 6 }}>
-                    <Tag color={TAG_COLOR[a.kind] ?? 'blue'}>{t(`announcementType${a.kind.charAt(0).toUpperCase()}${a.kind.slice(1)}` as Parameters<typeof t>[0])}</Tag>
+                    <Tag color={TAG_COLOR[a.kind] ?? 'blue'}>{kindLabel(t, a.kind)}</Tag>
                     {a.pinned && <Tag color="gold">{t('pinned')}</Tag>}
                     {isExpired(a) && <Tag>{t('expired')}</Tag>}
                     {a.title && (

@@ -5329,3 +5329,58 @@ async fn update_and_delete_report_a_missing_row() {
     );
     assert_eq!(db.delete_announcement(999).await.unwrap(), 0);
 }
+
+// ── v1.3.0: admin-wide order list ──
+
+/// The admin list spans every account, unlike list_orders_by_user. Getting this
+/// wrong in the other direction — scoping it to the caller — would make the
+/// operator's view silently show only their own purchases.
+#[tokio::test]
+async fn admin_order_list_spans_all_users() {
+    let db = repo().await;
+    db.insert_user("alice", "h", 1).await.unwrap();
+    db.insert_user("bob", "h", 1).await.unwrap();
+    let alice = db.find_by_username("alice").await.unwrap().unwrap().id;
+    let bob = db.find_by_username("bob").await.unwrap().unwrap().id;
+
+    db.insert_order(alice, Some(1), "basic", "10.00")
+        .await
+        .unwrap();
+    db.insert_order(bob, Some(1), "pro", "50.00").await.unwrap();
+
+    assert_eq!(db.count_all_orders().await.unwrap(), 2);
+    let all = db.list_all_orders(50, 0).await.unwrap();
+    assert_eq!(all.len(), 2);
+    let mut buyers: Vec<i64> = all.iter().map(|o| o.user_id).collect();
+    buyers.sort_unstable();
+    assert_eq!(buyers, vec![alice, bob]);
+
+    // The per-user list still sees only its own — the two must not converge.
+    assert_eq!(db.list_orders_by_user(alice).await.unwrap().len(), 1);
+}
+
+/// Pagination must partition the rows, not repeat or drop any. Orders routinely
+/// share a created_at second, which is why the ordering falls back to the id.
+#[tokio::test]
+async fn admin_order_list_pages_without_overlap() {
+    let db = repo().await;
+    db.insert_user("alice", "h", 1).await.unwrap();
+    let alice = db.find_by_username("alice").await.unwrap().unwrap().id;
+    for name in ["a", "b", "c"] {
+        db.insert_order(alice, Some(1), name, "1.00").await.unwrap();
+    }
+
+    let page1 = db.list_all_orders(2, 0).await.unwrap();
+    let page2 = db.list_all_orders(2, 2).await.unwrap();
+    assert_eq!(page1.len(), 2);
+    assert_eq!(page2.len(), 1);
+
+    let mut ids: Vec<i64> = page1.iter().chain(page2.iter()).map(|o| o.id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(
+        ids.len(),
+        3,
+        "the two pages must cover all three rows exactly once"
+    );
+}

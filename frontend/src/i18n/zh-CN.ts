@@ -600,6 +600,15 @@ export const zhCN = {
   expired: '已过期',
   actions: '操作',
   confirmDelete: '确定删除?',
+  // 标签用短名(表格里颜色已由 Tag 本身表达,再写"(蓝)"是噪音);
+  // 表单选择器仍用带颜色的长名,因为那里选的就是颜色。
+  announcementKindInfo: '信息',
+  announcementKindSuccess: '成功',
+  announcementKindWarning: '提醒',
+  announcementKindError: '警告',
+  allOrders: '全部购买记录',
+  orderUser: '用户',
+  noOrdersAll: '暂无购买记录',
   // ── v1.3.0: 站点设置 ──
   siteSettings: '站点设置',
   siteName: '站点名称',

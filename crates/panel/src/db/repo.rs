@@ -1227,6 +1227,12 @@ pub trait SettingsRepository: Send + Sync {
 pub trait OrderRepository: Send + Sync {
     /// List a user's orders, newest first.
     async fn list_orders_by_user(&self, user_id: i64) -> Result<Vec<Order>, DbError>;
+    /// v1.3.0: every user's orders, newest first, for the admin view.
+    ///
+    /// Paginated rather than returning the lot: this table only grows, and the
+    /// per-user list it sits beside is naturally small enough not to need it.
+    async fn list_all_orders(&self, limit: i64, offset: i64) -> Result<Vec<Order>, DbError>;
+    async fn count_all_orders(&self) -> Result<i64, DbError>;
     /// Insert an order row (snapshots plan_name + price). Used inside the
     /// purchase transaction.
     async fn insert_order(

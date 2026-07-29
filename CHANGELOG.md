@@ -92,6 +92,19 @@ boot; nothing to reconfigure.
 
 ### Changed
 
+- **All users' purchases are listed under plan management.** The shop page shows
+  a user their own orders; this is the operator's view of every one, which is
+  what answers "who bought what this week". Paginated — that table only grows.
+
+- **The announcement banner is gone from the dashboard.** It stays on the
+  account page, which is where regular users land; the dashboard is admin-only,
+  and admins have the header bell.
+
+- Announcement severities render as words rather than the wire values
+  `info` / `success` / `warning` / `error`.
+
+
+
 - **The admin menu is grouped into two submenus.** It had reached twelve
   top-level entries. 用户与计费 holds 用户管理 / 套餐管理 / 卡密管理; 系统设置
   holds 基础设置 / 通知设置 / 站点设置 / 操作审计. Top level drops to eight.

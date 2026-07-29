@@ -8,6 +8,7 @@ import type { ApiEnvelope, Announcement, AnnouncementList } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { renderMarkdown } from '../utils/markdown';
 import { invalidateActiveAnnouncement } from '../hooks/useActiveAnnouncement';
+import { kindLabel } from '../utils/announcementKind';
 
 const { Text } = Typography;
 
@@ -143,7 +144,7 @@ export default function AnnouncementAdmin() {
       render: (_: unknown, a: Announcement) => (
         <Space direction="vertical" size={0}>
           <Space size={4} wrap>
-            <Tag color={TAG_COLOR[a.kind] ?? 'blue'}>{a.kind}</Tag>
+            <Tag color={TAG_COLOR[a.kind] ?? 'blue'}>{kindLabel(t, a.kind)}</Tag>
             {a.pinned && <Tag color="gold">{t('pinned')}</Tag>}
             <Text strong>{a.title || '-'}</Text>
           </Space>

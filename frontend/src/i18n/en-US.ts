@@ -602,6 +602,15 @@ export const enUS: Dict = {
   expired: 'Expired',
   actions: 'Actions',
   confirmDelete: 'Delete this?',
+  // Short labels for tags — the Tag's colour already carries the severity, so
+  // repeating "(blue)" there is noise. The form's picker keeps the long names.
+  announcementKindInfo: 'Info',
+  announcementKindSuccess: 'Success',
+  announcementKindWarning: 'Warning',
+  announcementKindError: 'Error',
+  allOrders: 'All Purchases',
+  orderUser: 'User',
+  noOrdersAll: 'No purchases yet',
   // ── v1.3.0: site settings ──
   siteSettings: 'Site Settings',
   siteName: 'Site name',
