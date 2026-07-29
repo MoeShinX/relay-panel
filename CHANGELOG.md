@@ -14,152 +14,79 @@ Panel only — no node release, and no node change is required (the config
 protocol is unchanged at version 4, so existing nodes keep working as-is).
 
 Three tables are created by migrations on first boot: node metric history, the
-audit log, and announcements. Nothing to reconfigure. One thing to know: the
-announcement you have configured today is carried out of the site config into
-the new announcements table by the migration, so it survives the upgrade — it
-appears as the first entry on the new 公告 page.
+audit log, and announcements. Nothing to reconfigure, and nothing to migrate by
+hand.
 
 ### Added
 
-- **Rule search.** The rules page has a search box filtering by name, listen
-  port or target address, composing with the existing group filter. Same shape
-  as the user search.
+- **Announcements.** Post a notice with a title, a severity that sets the
+  banner colour, an optional expiry and a pinned flag. One shows as a banner on
+  the account page — the pinned notice, else the newest unexpired one — and
+  every notice stays readable on an Announcements page open to any signed-in
+  user, reached from a bell in the header that carries a dot when something is
+  unread.
+
+  Expiry is what lets "maintenance tonight" retire itself: past its date the
+  notice leaves the banner but stays in the archive.
+
+  The body accepts a small Markdown subset — bold, italic, code, links and
+  lists — rendered as React elements rather than HTML, so operator-authored
+  text can never become markup on a user's page. Links are restricted to
+  http/https; anything else renders as the literal text typed.
+
+  Announcements are visible to signed-in users only and never appear on the
+  login page.
+
+- **Audit log.** Destructive operations are recorded to the database:
+  creating and deleting users, resetting passwords and traffic, assigning
+  plans, deleting and restarting rules, deleting groups, rotating node tokens,
+  upgrading nodes, generating / voiding / deleting / redeeming codes, and
+  changing notification, site or announcement settings.
+
+  "Who deleted my rule" previously had to be dug out of the process log, which
+  rotates, dies with the container and is invisible from the panel. It is now
+  queryable in the panel, filterable by action, and kept for a year.
+
+  The actor's name is a snapshot taken at write time, so deleting that admin
+  does not erase who did it. Details never contain a secret: rotating a token
+  records how many nodes were disconnected, never the new token.
+
+- **Site branding.** A site name and subtitle replace the hardcoded
+  "RelayPanel" on the login page, in the sidebar and in the browser tab, plus a
+  support contact shown on the account page.
 
 - **Node CPU / memory / connection history.** Node status was a snapshot each
   report overwrote, so "why was it slow last night" had nothing behind it.
-  Hourly rollups are now kept for 7 days and charted below the traffic chart,
-  one line per node. The series plots the hourly average and the tooltip
-  carries the peak beside it — an average alone flattens exactly the spike that
-  caused the stall. Lines are never aggregated across nodes: the mean of three
-  machines hides the one pinned at 100%.
+  Hourly rollups are now kept for 7 days and charted below the traffic chart.
 
-- **Audit log.** Destructive admin actions are recorded to the database and
-  readable from a new 操作审计 page, filterable by action. The process log
-  rotates and dies with the container, so "who deleted my rule" had no answer
-  an operator could look up. Covers user create/delete, password and traffic
-  reset, plan assign/adjust, rule delete/restart, group delete, node token
-  rotation, node upgrade, redeem-code create/void/delete/redeem, and settings
-  changes. Retained one year.
+  Sums and a sample count are stored rather than a running average, so the mean
+  is exact at read time; maxima are kept alongside, because stalls are peaks and
+  an hourly mean flattens exactly the spike being looked for.
 
-  The actor's name is stored at write time, not joined at read time, so
-  deleting the admin who acted does not turn the history into anonymous ids.
-  The detail column never contains a secret: a token rotation records how many
-  nodes were disconnected, never the new token.
+- **Every user's purchases**, under plan management. The shop page shows a user
+  their own orders; this is the operator's view of all of them.
 
-- **Site settings.** A new 站点设置 page makes the panel's identity the
-  operator's: site name and subtitle replace the hardcoded "RelayPanel" on the
-  login page, in the sidebar and in the browser tab title; an announcement
-  shows at the top of the dashboard and account page; a support contact shows
-  on the account page.
+- **Top-up history** on the account page. Codes are shown masked to the last
+  group — that page gets screenshotted into support chats, and matching a
+  receipt only needs those four characters.
 
-  The announcement supports a banner severity (info / success / warning /
-  error) for colour and a small Markdown subset — `**bold**`, `*italic*`,
-  `` `code` ``, `[links](https://…)` and `- lists`. It renders to React
-  elements, never to an HTML string, so operator-authored text cannot become
-  markup on another user's page; links are restricted to http/https.
-
-  Site name and subtitle are served unauthenticated because the login page
-  needs them before anyone has a token. The announcement and contact are NOT:
-  they require sign-in, so declining to show them on the login page is not
-  undone by the API handing them to anyone who can reach the port.
-
-- **Top-up history on the account page.** Users can see the redeem codes they
-  have used, with the code masked to its last group. Purchase history stays on
-  the shop page, where buying and reading the receipt happen together.
-
-### Added
-
-- **Announcements are a table with history.** The old field held exactly one
-  notice and overwrote it on every edit, so the previous text was unrecoverable
-  and users had nowhere to read past notices.
-
-  Each notice now has a title, a severity, an optional expiry and a pinned
-  flag. The banner shows ONE — the pinned notice, else the newest unexpired one
-  — because stacking banners pushes the actual page off the screen and trains
-  people to ignore all of them. Everything else lives on a 公告 page open to
-  every signed-in user.
-
-  Expiry is what makes "tonight's maintenance" disappear on its own: past its
-  date it leaves the banner but stays readable in the archive. `author_name` is
-  a snapshot, like the audit log's — deleting the admin who posted a notice
-  must not erase who posted it.
-
-  Migration 44 / PG revision 27 carry the existing announcement out of the site
-  config into the new table, so upgrading does not blank a notice that is live.
-
-  The entry point is a bell in the header rather than a sidebar row. The banner
-  already carries the current notice, so a menu row would only be a route to
-  the archive — a low-frequency destination sitting beside pages people use
-  daily. A bell also does what a menu row cannot: show a dot when something is
-  new. Unread is "latest id > the id this account last opened", kept in
-  localStorage per account; the server stores no per-user read state, which
-  would be a table and a write on every page view for a dot.
+- **Rule search** by name, listen port or target address, composing with the
+  existing group filter.
 
 ### Changed
 
-- **All users' purchases are listed under plan management.** The shop page shows
-  a user their own orders; this is the operator's view of every one, which is
-  what answers "who bought what this week". Paginated — that table only grows.
+- **The admin menu is grouped into two submenus.** 用户与计费 holds 用户管理 /
+  套餐管理 / 卡密管理; 系统设置 holds 基础设置 / 通知设置 / 站点设置 / 操作审计.
 
-- **The announcement banner is gone from the dashboard.** It stays on the
-  account page, which is where regular users land; the dashboard is admin-only,
-  and admins have the header bell.
+  Plans and redeem codes are deliberately NOT filed as settings: they are
+  records you create and delete as routine work, not configuration you set once,
+  and a daily CRUD page buried in "system settings" costs a click every time.
 
-- Announcement severities render as words rather than the wire values
-  `info` / `success` / `warning` / `error`.
+  Regular users are unaffected — their menu is unchanged.
 
-- **The account page's announcement banner is a summary, not the full notice.**
-  Carrying the whole text made it 299px — a third of the viewport — for a
-  routine maintenance message, pushing the account details the page exists for
-  down the screen. It now shows the title, two clamped lines of plain text and
-  a link through to the archive; a 4000-character notice takes exactly as much
-  room as a short one (measured: 119px either way, down from 273-299px).
-
-  The excerpt is stripped of markup rather than rendered: a two-line cut with
-  half a bold run and a dangling list dash reads worse than the same words
-  plain, and the formatting is intact one click away.
-
-  The header bell is labelled 公告 rather than a bare icon. Every other control
-  in that header is icon + text, so an icon alone read as decoration.
-
-- **The audit log reads as words, not wire values.** The action column showed
-  `create_announcement` and the target column `announcement 3`. Both are stored
-  values, not something to show an operator. The four actions added after that
-  page shipped were also missing from its filter.
-
-- **The admin menu is grouped into two submenus.** It had reached twelve
-  top-level entries. 用户与计费 holds 用户管理 / 套餐管理 / 卡密管理; 系统设置
-  holds 基础设置 / 通知设置 / 站点设置 / 操作审计. Top level drops to eight.
-
-  Plans and redeem codes are deliberately NOT under 系统设置: they are records
-  you create and delete as routine work, not configuration you set once, and a
-  daily CRUD page buried in "system settings" costs a click every time.
-
-  Regular users are unaffected — their menu was already four entries.
-
-  Notification settings, previously a second card on the system-settings page,
-  are now their own entry at `/notify-settings`; the remaining registration
-  card is retitled 基础设置 so the submenu does not read "系统设置 > 系统设置".
-
-### Fixed
-
-- **Node metric percentages were multiplied by 100.** CPU and memory arrive
-  from the node already as 0..100 percentages, but the chart formatted them as
-  fractions, so a node at 20% CPU charted as 2026.7% and the axis topped out
-  above 2000%. It now uses the same `formatPercent` helper as the node tables
-  and detail drawer, so all four surfaces agree by construction.
-
-- **The metric chart legend no longer appends a random id to single-node
-  groups.** The suffix is the first six hex characters of an id the node
-  generates from `/dev/urandom` on first boot — it means nothing to a reader
-  and exists only to keep two nodes in one group from collapsing onto a single
-  legend entry. It is now added only to groups that actually have more than
-  one node reporting.
-
-- **A source file contained raw NUL bytes.** The metric chart used a literal
-  control character as a map-key separator instead of the `\u0000` escape.
-  Behaviour was correct, but grep and ripgrep classified the file as binary and
-  skipped it in searches.
+- **Notification settings are their own page.** They were a second card on the
+  system-settings page; the remaining registration card is retitled 基础设置 so
+  the submenu does not read "系统设置 > 系统设置".
 
 ## [1.2.3] - 2026-07-26
 
