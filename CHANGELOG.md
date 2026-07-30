@@ -8,6 +8,36 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`relay-panel reset-admin-password [USER]`.** Recovering a lost admin
+  password meant editing the database by hand: pasting a bcrypt placeholder
+  full of `$` through a shell, which mangles under quoting, only worked for
+  user id 1, and failed SILENTLY when the pattern did not match. Somebody
+  locked out of their own panel is the last person who should be debugging
+  shell escaping.
+
+      docker exec relay-panel-panel-1 ./relay-panel reset-admin-password
+
+  The password is generated, not taken from the arguments — anything passed on
+  a command line lands in shell history and is visible to `ps` on a shared
+  host. Sixteen characters with at least one of each class, drawn from the OS
+  CSPRNG with rejection sampling so no character is likelier than another.
+  Ambiguous glyphs (`0/O`, `1/l/I`) and shell-hostile ones (quotes, backslash,
+  backtick, `$`) are excluded: this gets read off a terminal, retyped, and
+  pasted through shells.
+
+  Resetting signs out that account's existing sessions, which matters when the
+  reason for the lockout is that somebody else got in. It does NOT force a
+  password change on next login — the generated password is strong enough to
+  keep — and it writes an audit entry so the reset is visible afterwards.
+
+  USER defaults to `admin`; passing a name fixes the old id-1-only limitation.
+
+---
+
 ## [1.2.4] - 2026-07-29
 
 Panel only — no node release, and no node change is required (the config

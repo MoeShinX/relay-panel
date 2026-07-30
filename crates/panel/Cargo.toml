@@ -19,6 +19,9 @@ futures-util = "0.3"
 bcrypt = "0.16"
 jsonwebtoken = "9"
 uuid = { version = "1", features = ["v4"] }
+# Already in the tree transitively; taken as a direct dep so the password
+# generator draws from the OS CSPRNG explicitly rather than through uuid.
+getrandom = "0.2"
 chrono = { version = "0.4", features = ["serde"] }
 once_cell = "1"
 semver = "1"

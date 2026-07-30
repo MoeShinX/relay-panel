@@ -1,4 +1,5 @@
 mod api;
+mod cli;
 mod config;
 mod db;
 mod dto;
@@ -21,33 +22,31 @@ async fn main() {
 
     let config = Config::load();
 
-    // v0.4.3: backend is chosen at startup by the database_url prefix and is
-    // fixed for the process lifetime — NO runtime switching, NO fallback. If
-    // the URL is a PostgreSQL DSN, we init PG; anything else (including the
-    // default SQLite file path) inits SQLite.
-    //
-    // Fail-fast contract: a configured PG backend that can't connect MUST
-    // terminate startup. Falling back to SQLite would silently write data
-    // locally while the user believes it's in PG — strictly worse than a crash.
-    // The `?` in init_db/init_pg propagates errors to `.expect()`, which panics
-    // and exits with a non-zero status. No `unwrap_or_else(fallback)` branch.
-    let db: Arc<dyn Repository> = if is_postgres_url(&config.database_path) {
-        tracing::info!("database backend: PostgreSQL");
-        let pool = init_pg(&config.database_path)
-            .await
-            .expect("Failed to initialize PostgreSQL database");
-        Arc::new(PgRepository::new(pool))
-    } else {
-        if config.database_path == "sqlite::memory:" || config.database_path.is_empty() {
-            tracing::info!("database backend: SQLite (in-memory / default)");
-        } else {
-            tracing::info!("database backend: SQLite ({})", config.database_path);
+    // v1.2.5: CLI subcommands run against the same database and then exit —
+    // they never start the HTTP server. Checked before anything else binds a
+    // port, so a recovery command works on a host where the panel is already
+    // running.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(cmd) = args.first() {
+        match cmd.as_str() {
+            "reset-admin-password" => {
+                let db = open_database(&config).await;
+                let username = args.get(1).map(String::as_str).unwrap_or("admin");
+                std::process::exit(cli::reset_admin_password(db, username).await);
+            }
+            "--help" | "-h" | "help" => {
+                print!("{}", cli::USAGE);
+                std::process::exit(0);
+            }
+            other => {
+                eprintln!("未知命令：{other}\n");
+                print!("{}", cli::USAGE);
+                std::process::exit(2);
+            }
         }
-        let pool = init_db(&config.database_path)
-            .await
-            .expect("Failed to initialize SQLite database");
-        Arc::new(SqliteRepository::new(pool))
-    };
+    }
+
+    let db = open_database(&config).await;
 
     // v0.4.10 PR3: seed the app_settings row from REGISTRATION_ENABLED on the
     // very first boot. insert_settings_if_absent is a no-op once the row
@@ -136,4 +135,37 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+/// Open the configured backend, run migrations, and return the repository.
+/// Shared by the server path and the CLI subcommands so they can never
+/// diverge on which database they touch.
+async fn open_database(config: &Config) -> Arc<dyn Repository> {
+    // v0.4.3: backend is chosen at startup by the database_url prefix and is
+    // fixed for the process lifetime — NO runtime switching, NO fallback. If
+    // the URL is a PostgreSQL DSN, we init PG; anything else (including the
+    // default SQLite file path) inits SQLite.
+    //
+    // Fail-fast contract: a configured PG backend that can't connect MUST
+    // terminate startup. Falling back to SQLite would silently write data
+    // locally while the user believes it's in PG — strictly worse than a crash.
+    // The `?` in init_db/init_pg propagates errors to `.expect()`, which panics
+    // and exits with a non-zero status. No `unwrap_or_else(fallback)` branch.
+    if is_postgres_url(&config.database_path) {
+        tracing::info!("database backend: PostgreSQL");
+        let pool = init_pg(&config.database_path)
+            .await
+            .expect("Failed to initialize PostgreSQL database");
+        Arc::new(PgRepository::new(pool))
+    } else {
+        if config.database_path == "sqlite::memory:" || config.database_path.is_empty() {
+            tracing::info!("database backend: SQLite (in-memory / default)");
+        } else {
+            tracing::info!("database backend: SQLite ({})", config.database_path);
+        }
+        let pool = init_db(&config.database_path)
+            .await
+            .expect("Failed to initialize SQLite database");
+        Arc::new(SqliteRepository::new(pool))
+    }
 }
