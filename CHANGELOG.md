@@ -10,7 +10,30 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Changed
+
+- **An offline node stays listed for 24 hours instead of 2 minutes.** The status
+  row was deleted 120 seconds after a node went quiet, so combined with the 30s
+  offline window a node was painted offline and then vanished a minute and a
+  half later. The panel could not answer "which of my nodes is down right now",
+  because during an outage the row worth looking at is exactly the one that had
+  been removed.
+
+  Past a day the row is still swept, so a decommissioned node disappears on its
+  own; an admin who does not want to wait can now remove it by hand.
+
+- **Text contrast raised across the panel.** `--rp-text-tertiary` sat at 3.02:1
+  against white, below the 4.5:1 WCAG AA asks for body text, and it carried real
+  content on the node table — CPU, memory and disk percentages, transfer rates.
+  antd's own text tokens had never been set either, so table bodies fell back to
+  `rgba(0,0,0,0.45)` at 2.85:1. Both now meet AA.
+
 ### Added
+
+- **Remove an offline node from the list.** Offered only on offline rows —
+  deleting an online node's record achieves nothing, because its next report
+  recreates it within seconds. The confirmation says plainly that this drops a
+  record rather than uninstalling anything. The deletion is audited.
 
 - **`relay-panel reset-admin-password [USER]`.** Recovering a lost admin
   password meant editing the database by hand: pasting a bcrypt placeholder
