@@ -586,6 +586,12 @@ export const enUS: Dict = {
   rechargeAmount: 'Amount',
   rechargeTime: 'Redeemed at',
   noRecharges: 'No top-ups yet',
+  // ── v1.2.5: removing an offline node ──
+  removeNodeTitle: 'Remove this node record?',
+  removeNodeHint: 'This only drops the record from the list — it does not uninstall anything. If the node is still running it reappears on its next report (~10s). Records silent for over 24 hours are swept automatically.',
+  confirmRemoveNode: 'Remove',
+  nodeRemoved: 'Node record removed',
+  nodeRemoveFailed: 'Could not remove the record',
   // ── v1.2.4: announcements ──
   announcements: 'Announcements',
   announcementAdmin: 'Announcements',

@@ -12,11 +12,20 @@ use crate::db::repo::TrafficEntryResult;
 use crate::db::Repository;
 use relay_shared::protocol::TrafficEntry;
 
-/// Stale-status threshold in seconds. The frontend marks a node offline after
-/// 30s of silence (Nodes.tsx); we keep the row for 2 min past last_seen before
-/// deleting — long enough to ride out a brief network blip / restart, short
-/// enough that a permanently-offline node doesn't linger as a ghost row.
-const STALE_STATUS_THRESHOLD_SECS: i64 = 120;
+/// How long a node's status row outlives its last report.
+///
+/// v1.2.5: raised from 2 minutes to 24 hours. Two minutes meant a node that
+/// went down vanished from the list entirely, so the panel could not answer
+/// "which of my nodes is offline right now" — the row an operator needs to see
+/// during an outage is exactly the one that got deleted. It also made the
+/// offline state nearly unobservable: the node is painted offline after 30s of
+/// silence and gone 90s later.
+///
+/// A day is long enough to cover an outage and a night's sleep. Past that the
+/// row is swept, which is what makes a decommissioned node disappear on its own
+/// — and an admin who does not want to wait can remove it by hand from the node
+/// list.
+const STALE_STATUS_THRESHOLD_SECS: i64 = 24 * 60 * 60;
 
 /// Outcome of applying a node traffic report. The handler maps each variant to
 /// the node-compat wire response (business `code` in the JSON body).
@@ -257,7 +266,9 @@ mod tests {
     #[tokio::test]
     async fn stale_status_is_swept_fresh_kept() {
         let pool = kvs_pool().await;
-        let old = (chrono::Utc::now() - chrono::Duration::seconds(900)).to_rfc3339(); // 15 min ago > 2 min threshold
+        // Comfortably past the 24h threshold; 15 minutes used to qualify when
+        // the threshold was 2 minutes.
+        let old = (chrono::Utc::now() - chrono::Duration::hours(30)).to_rfc3339();
         let fresh = chrono::Utc::now().to_rfc3339();
         put_status(&pool, "node_status:1:old", Some("1.1.1.1"), &old).await;
         put_status(&pool, "node_status:1:new", Some("2.2.2.2"), &fresh).await;
@@ -269,6 +280,22 @@ mod tests {
         assert!(
             exists(&pool, "node_status:1:new").await,
             "fresh entry must be kept"
+        );
+    }
+
+    /// A node down for most of a day is still listed. This is the whole point of
+    /// the v1.2.5 change: during an outage the offline row is the one an
+    /// operator needs to see, and the old 2-minute threshold deleted it before
+    /// anyone could look.
+    #[tokio::test]
+    async fn node_offline_for_hours_is_still_listed() {
+        let pool = kvs_pool().await;
+        let hours_ago = (chrono::Utc::now() - chrono::Duration::hours(20)).to_rfc3339();
+        put_status(&pool, "node_status:1:down", Some("1.1.1.1"), &hours_ago).await;
+        sweep_stale_status(&repo(&pool)).await.unwrap();
+        assert!(
+            exists(&pool, "node_status:1:down").await,
+            "a node offline for 20h must still be visible"
         );
     }
 

@@ -14,6 +14,14 @@ export const rpTheme: ThemeConfig = {
     colorLink: '#6366f1',
     borderRadius: 8,
     colorBgLayout: '#fafafa',
+    // v1.2.5: antd's own text tokens were never set, so table bodies and
+    // <Text type="secondary"> fell back to rgba(0,0,0,0.45) — 2.85:1 on white,
+    // below WCAG AA. Overriding here rather than per component keeps one source
+    // of truth; these mirror the --rp-text* variables in theme.css.
+    colorText: '#18181b',
+    colorTextSecondary: '#4b5563',
+    colorTextTertiary: '#6b7280',
+    colorTextDescription: '#4b5563',
     colorBorderSecondary: '#ececef',
     fontWeightStrong: 500,
     fontFamily:

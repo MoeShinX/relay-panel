@@ -181,6 +181,20 @@ export default function NodeStatus() {
     );
   }
 
+  // v1.2.5: drop one node's status record. Admin-only, and the button is only
+  // rendered on offline rows — see NodeDesktopTable for why.
+  const handleDelete = async (row: NodeDisplayRow) => {
+    try {
+      const qs = row.node_id ? `?node_id=${encodeURIComponent(row.node_id)}` : '';
+      const res = await api.delete<unknown, ApiEnvelope<null>>(`/nodes/${row.group_id}${qs}`);
+      if (res.code !== 0) { message.error(res.message || t('nodeRemoveFailed')); return; }
+      message.success(t('nodeRemoved'));
+      refresh();
+    } catch {
+      message.error(t('nodeRemoveFailed'));
+    }
+  };
+
   return (
     <>
       <h2 className="rp-page-title"><LineChartOutlined /> {title}</h2>
@@ -195,6 +209,7 @@ export default function NodeStatus() {
           t={t}
           openDetail={setDetailRow}
           onUpgrade={isAdmin ? handleUpgrade : undefined}
+          onDelete={isAdmin ? handleDelete : undefined}
         />
       ))}
       <NodeDetailDrawer

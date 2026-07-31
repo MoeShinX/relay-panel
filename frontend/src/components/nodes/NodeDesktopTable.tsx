@@ -1,6 +1,6 @@
  
-import { Table, Tag, Typography, Button, Tooltip } from 'antd';
-import { CloudDownloadOutlined, CheckCircleOutlined, CloudServerOutlined } from '@ant-design/icons';
+import { Table, Tag, Typography, Button, Tooltip, Popconfirm } from 'antd';
+import { CloudDownloadOutlined, CheckCircleOutlined, CloudServerOutlined, DeleteOutlined } from '@ant-design/icons';
 import type { Tfn } from './types';
 import type { NodeDisplayRow } from '../../api/types';
 import { NodeResourceBar, NodeDiskBar } from './NodeResourceBar';
@@ -23,12 +23,16 @@ interface Props {
    *  icon (active when the node is behind the latest node release). Absent for
    *  the regular-user view. */
   onUpgrade?: (row: NodeDisplayRow) => void;
+  /** v1.2.5: admin-only. Removes this node's status record. Offered ONLY for
+   *  offline rows — deleting an online node's record achieves nothing, because
+   *  the next report (within ~10s) recreates it. Absent for the user view. */
+  onDelete?: (row: NodeDisplayRow) => void;
 }
 
 /** Desktop table for one group's nodes. Both admin and user share the same
  *  columns — the permission difference is in the data source (admin reads
  *  /nodes, user reads /nodes/shared) and the detail drawer. */
-export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeVersionCheckFailed, t, openDetail, onUpgrade }: Props) {
+export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeVersionCheckFailed, t, openDetail, onUpgrade, onDelete }: Props) {
   const labels = { d: t('uptimeDay'), h: t('uptimeHour'), m: t('uptimeMinute'), s: t('uptimeSecond') };
 
   const columns = [
@@ -142,6 +146,28 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
       ),
     },
   ];
+
+  if (onDelete) {
+    columns.push({
+      title: t('actions'), key: 'remove', width: 72, fixed: 'right' as const,
+      render: (_: unknown, r: NodeDisplayRow) =>
+        // Online rows get nothing rather than a disabled button: there is no
+        // sensible action here, and a greyed-out control invites a hunt for the
+        // condition that would enable it.
+        r.online ? null : (
+          <Popconfirm
+            title={t('removeNodeTitle')}
+            description={t('removeNodeHint')}
+            okText={t('confirmRemoveNode')}
+            cancelText={t('cancel')}
+            okButtonProps={{ danger: true }}
+            onConfirm={() => onDelete(r)}
+          >
+            <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        ),
+    });
+  }
 
   return (
     <Table

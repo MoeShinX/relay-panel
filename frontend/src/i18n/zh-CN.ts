@@ -584,6 +584,12 @@ export const zhCN = {
   rechargeAmount: '充值金额',
   rechargeTime: '充值时间',
   noRecharges: '暂无充值记录',
+  // ── v1.2.5: 移除离线节点 ──
+  removeNodeTitle: '移除这个节点记录？',
+  removeNodeHint: '只是从列表里删掉这条记录，不会卸载节点。如果它其实还在运行，下次上报（约 10 秒）会重新出现。离线超过 24 小时的记录也会自动清理。',
+  confirmRemoveNode: '移除',
+  nodeRemoved: '已移除该节点记录',
+  nodeRemoveFailed: '移除失败',
   // ── v1.2.4: 公告 ──
   announcements: '公告',
   announcementAdmin: '公告管理',

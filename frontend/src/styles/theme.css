@@ -16,8 +16,12 @@
   --rp-card-bg: #ffffff;
   --rp-border: #ececef;
   --rp-text: #18181b;
-  --rp-text-secondary: #646a73;
-  --rp-text-tertiary: #8f959e;
+  /* Darkened in v1.2.5. The old tertiary (#8f959e) sat at 3.02:1 against white
+     — below the 4.5:1 WCAG AA needs for body text — and it was carrying real
+     content on the node table: CPU, memory and disk percentages, transfer
+     rates. Secondary passed at 5.45:1 but read washed out beside it. */
+  --rp-text-secondary: #4b5563;
+  --rp-text-tertiary: #6b7280;
 
   /* Accents — indigo */
   --rp-primary: #6366f1;

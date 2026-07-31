@@ -465,6 +465,19 @@ pub async fn delete_node_status(
         }),
         Ok(_) => {
             tracing::info!("admin deleted node status record {}", key);
+            // v1.2.5: audited like every other destructive admin action. The
+            // record is what the panel knows about a machine — removing it is
+            // how a decommissioned node disappears from the list, and "who
+            // made that node vanish" should have an answer.
+            crate::service::audit::record(
+                &state,
+                Some(_admin.user_id),
+                "delete_node_status",
+                "node",
+                q.node_id.as_deref().unwrap_or("").to_string(),
+                &format!("分组 {group_id}"),
+            )
+            .await;
             Json(ApiResponse::success(()))
         }
         Err(e) => {
