@@ -36,6 +36,15 @@ independent `v*` / `node-v*` tracks since this release).
   look at to work out why the node went, so the row stays above the 4.5:1
   contrast floor. Applies to the mobile card list too.
 
+- **A monitor-only group stops asking for forwarding settings.** It reports node
+  status to admins and nothing else — no rule is bound to it, and
+  `list_shared_groups` filters to `group_type='in'`, so it never reaches a
+  regular user's lines or node status either. Connect host, port range, rate and
+  hidden were still required on the form and shown in the table, which read as
+  configuration when nothing consumed them. They are now dropped from the form
+  and shown as `-` in the table. Converting an existing group to monitor leaves
+  the stored values untouched, so switching back restores it intact.
+
 ### Added
 
 - **Remove an offline node from the list.** Offered only on offline rows —

@@ -11,6 +11,15 @@ const { Text } = Typography;
 
 const INSTALL_SCRIPT_URL = 'https://raw.githubusercontent.com/MoeShinX/relay-panel/main/scripts/relay-node-install.sh';
 
+/** v1.2.5: the forwarding/visibility columns and fields that a monitor-only
+ *  group has no use for. It carries no rules and never reaches a regular user,
+ *  so connect host, port range, rate and hidden are all inert on it. */
+function isMonitorOnly(g: { group_type: string }): boolean {
+  return g.group_type === 'monitor';
+}
+
+const dash = <span style={{ color: 'var(--rp-text-tertiary)' }}>-</span>;
+
 function buildInstallCommand(token: string, panelUrl: string): string {
   return `bash <(curl -fsSL ${INSTALL_SCRIPT_URL}) -t ${token} -u ${panelUrl}`;
 }
@@ -41,6 +50,18 @@ export default function Groups() {
   const [rotateBusy, setRotateBusy] = useState(false);
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
+
+  // v1.2.5: a monitor-only group reports node status to admins and nothing
+  // else — no forwarding rule is ever bound to it, and list_shared_groups
+  // filters to group_type='in', so it never reaches a regular user's lines or
+  // node-status page either. Connect host, port range, rate and hidden are all
+  // dead for it, so the forms stop asking. Hidden rather than disabled: a
+  // greyed-out field still takes up the space and sends you looking for what
+  // would enable it, when the honest answer is that it does not apply at all.
+  const createType = Form.useWatch('group_type', createForm) ?? 'in';
+  const editType = Form.useWatch('group_type', editForm) ?? editing?.group_type;
+  const createIsMonitor = createType === 'monitor';
+  const editIsMonitor = editType === 'monitor';
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -82,6 +103,21 @@ export default function Groups() {
       // v1.0.8: rate defaults to 1.0 on the server when omitted; send it
       // explicitly so the value the admin picked is what gets persisted.
       const payload = { ...values, rate: values.rate ?? 1.0, hidden: values.hidden ?? false, owner_uid: values.owner_uid || undefined };
+      // v1.2.5: a monitor-only group forwards nothing, so the forwarding fields
+      // are neutralised explicitly.
+      //
+      // Not merely cosmetic: hiding the Form.Items unregisters them, so `values`
+      // arrives with no connect_host/port_range at all — and CreateGroupRequest
+      // declares both as plain `String` with no serde default, which makes an
+      // omission a 422 rather than an empty string. Empty IS a first-class value
+      // for both columns (`NOT NULL DEFAULT ''`, and resolve_auto_port_range
+      // reads empty as the default pool), so send it.
+      if (values.group_type === 'monitor') {
+        payload.connect_host = '';
+        payload.port_range = '';
+        payload.rate = 1.0;
+        payload.hidden = false;
+      }
       const res = await api.post<unknown, ApiEnvelope<DeviceGroup>>('/groups', payload);
       if (res.code !== 0) { message.error(res.message); return; }
       message.success(t('groupCreated'));
@@ -102,6 +138,13 @@ export default function Groups() {
     const payload: Record<string, unknown> = {};
     if (values.name !== undefined && values.name !== editing.name) payload.name = values.name;
     if (values.group_type !== undefined && values.group_type !== editing.group_type) payload.group_type = values.group_type;
+    // v1.2.5: converting a group to monitor-only must leave its stored
+    // forwarding fields ALONE. They do nothing while the group is a monitor,
+    // but wiping them would destroy what you need to convert it back, and
+    // "switch the type to look at something, switch it back" has to be a safe
+    // round trip. No special case is needed here: hiding those Form.Items
+    // unregisters them, so they arrive undefined and the `!== undefined` guards
+    // below already skip them. Groups.test.tsx pins that round trip.
     if (values.connect_host !== undefined && values.connect_host !== editing.connect_host) payload.connect_host = values.connect_host;
     if (values.port_range !== undefined && values.port_range !== editing.port_range) payload.port_range = values.port_range;
     // v1.0.8: only send rate when it actually changed (avoid no-op 400s and
@@ -266,14 +309,19 @@ export default function Groups() {
         </Space>
       ),
     },
-    { title: t('connectHost'), dataIndex: 'connect_host', key: 'connect_host', render: (v: string) => <span className="rp-mono">{v}</span> },
-    { title: t('portRange'), dataIndex: 'port_range', key: 'port_range', render: (v: string) => <span className="rp-mono">{v}</span> },
+    // v1.2.5: these four say nothing about a monitor-only group — it forwards
+    // nothing and is never shown to a user — so it reads "-" rather than a
+    // stored value that looks like configuration but is inert. The value itself
+    // is kept in the DB; see handleUpdate.
+    { title: t('connectHost'), dataIndex: 'connect_host', key: 'connect_host', render: (v: string, g: DeviceGroup) => isMonitorOnly(g) ? dash : <span className="rp-mono">{v}</span> },
+    { title: t('portRange'), dataIndex: 'port_range', key: 'port_range', render: (v: string, g: DeviceGroup) => isMonitorOnly(g) ? dash : <span className="rp-mono">{v}</span> },
     {
       // v1.0.8: billing rate. Only show a tag when it differs from 1.0 — a 1x
       // column on every row is noise. The tag color reflects the multiplier
       // direction (gold = premium line, no tag = bill-as-used).
       title: t('rate'), dataIndex: 'rate', key: 'rate', width: 80,
-      render: (rate: number) => {
+      render: (rate: number, g: DeviceGroup) => {
+        if (isMonitorOnly(g)) return dash;
         const r = typeof rate === 'number' ? rate : 1.0;
         if (Math.abs(r - 1.0) < 1e-9) return <span style={{ color: 'var(--rp-text-tertiary)' }}>1x</span>;
         // Trim trailing zeros: 2.0 → "2x", 1.5 → "1.5x".
@@ -284,8 +332,8 @@ export default function Groups() {
     {
       // v1.0.7: hidden flag — only tag when hidden, to keep the column quiet.
       title: t('groupHidden'), dataIndex: 'hidden', key: 'hidden', width: 80,
-      render: (hidden: boolean) =>
-        hidden ? <Tag>{t('yes')}</Tag> : <span style={{ color: 'var(--rp-text-tertiary)' }}>-</span>,
+      render: (hidden: boolean, g: DeviceGroup) =>
+        hidden && !isMonitorOnly(g) ? <Tag>{t('yes')}</Tag> : dash,
     },
     {
       title: t('action'), key: 'action', width: 190,
@@ -377,18 +425,29 @@ export default function Groups() {
           <Form.Item name="group_type" label={t('type')} rules={[{ required: true }]} initialValue="in">
             <Select options={groupTypeOptions} />
           </Form.Item>
-          <Form.Item name="connect_host" label={t('connectHost')} rules={[{ required: true }]}><Input placeholder="1.2.3.4 or node.example.com" /></Form.Item>
-          <Form.Item name="port_range" label={t('portRange')} rules={[{ required: true }]} initialValue="10000-65535"><Input placeholder="10000-65535" /></Form.Item>
-          {/* v1.0.8: billing rate. Users are charged real bytes × rate; the
-              rule/user byte counters keep real bytes. 1.0 = bill as used. */}
-          <Form.Item name="rate" label={t('rate')} initialValue={1.0} extra={t('rateHint')} rules={[{ required: true }]}>
-            <InputNumber min={0.1} max={100} step={0.1} style={{ width: '100%' }} />
-          </Form.Item>
-          {/* v1.0.7: hide this group from regular users' node-status / available
-              lines. Admins always see it. */}
-          <Form.Item name="hidden" label={t('groupHidden')} valuePropName="checked" initialValue={false} extra={t('groupHiddenHint')}>
-            <Switch />
-          </Form.Item>
+          {createIsMonitor ? (
+            <Alert
+              type="info"
+              showIcon
+              title={t('monitorOnlyNoForwardTitle')}
+              description={t('monitorOnlyNoForwardDesc')}
+            />
+          ) : (
+            <>
+              <Form.Item name="connect_host" label={t('connectHost')} rules={[{ required: true }]}><Input placeholder="1.2.3.4 or node.example.com" /></Form.Item>
+              <Form.Item name="port_range" label={t('portRange')} rules={[{ required: true }]} initialValue="10000-65535"><Input placeholder="10000-65535" /></Form.Item>
+              {/* v1.0.8: billing rate. Users are charged real bytes × rate; the
+                  rule/user byte counters keep real bytes. 1.0 = bill as used. */}
+              <Form.Item name="rate" label={t('rate')} initialValue={1.0} extra={t('rateHint')} rules={[{ required: true }]}>
+                <InputNumber min={0.1} max={100} step={0.1} style={{ width: '100%' }} />
+              </Form.Item>
+              {/* v1.0.7: hide this group from regular users' node-status / available
+                  lines. Admins always see it. */}
+              <Form.Item name="hidden" label={t('groupHidden')} valuePropName="checked" initialValue={false} extra={t('groupHiddenHint')}>
+                <Switch />
+              </Form.Item>
+            </>
+          )}
         </Form>
       </Modal>
 
@@ -396,14 +455,25 @@ export default function Groups() {
         <Form form={editForm} onFinish={handleUpdate} layout="vertical">
           <Form.Item name="name" label={t('name')}><Input /></Form.Item>
           <Form.Item name="group_type" label={t('type')}><Select options={groupTypeOptions} /></Form.Item>
-          <Form.Item name="connect_host" label={t('connectHost')}><Input /></Form.Item>
-          <Form.Item name="port_range" label={t('portRange')}><Input /></Form.Item>
-          <Form.Item name="rate" label={t('rate')} extra={t('rateHint')}>
-            <InputNumber min={0.1} max={100} step={0.1} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item name="hidden" label={t('groupHidden')} valuePropName="checked" extra={t('groupHiddenHint')}>
-            <Switch />
-          </Form.Item>
+          {editIsMonitor ? (
+            <Alert
+              type="info"
+              showIcon
+              title={t('monitorOnlyNoForwardTitle')}
+              description={`${t('monitorOnlyNoForwardDesc')} ${t('monitorOnlyEditKeepsFields')}`}
+            />
+          ) : (
+            <>
+              <Form.Item name="connect_host" label={t('connectHost')}><Input /></Form.Item>
+              <Form.Item name="port_range" label={t('portRange')}><Input /></Form.Item>
+              <Form.Item name="rate" label={t('rate')} extra={t('rateHint')}>
+                <InputNumber min={0.1} max={100} step={0.1} style={{ width: '100%' }} />
+              </Form.Item>
+              <Form.Item name="hidden" label={t('groupHidden')} valuePropName="checked" extra={t('groupHiddenHint')}>
+                <Switch />
+              </Form.Item>
+            </>
+          )}
         </Form>
       </Modal>
 
