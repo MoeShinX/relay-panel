@@ -454,6 +454,21 @@ if [ ! -f "$ENV_FILE" ]; then
 #   OUTBOUND_INTERFACE=ens18         # node resolves this NIC's IPv4 to bind
 #   OUTBOUND_BIND_IPV4=10.0.2.61     # or pin the exact source IPv4 (overrides above)
 
+# ── v1.2.1: public-IP detection endpoints ──
+# The node does NOT read its own NIC: it asks an external service what source
+# address the outside sees, which is what makes a NAT'd host (private NIC IP,
+# mapped elastic IP) report the right address. The answer becomes the IP and
+# country flag shown on the panel; failure shows "-" and never affects
+# forwarding. Re-checked every 30 minutes, so restart to apply a change.
+#
+# Override only if the defaults are unreachable from this server. Whatever you
+# point these at MUST return a BARE IP and MUST be family-pinned — the node
+# discards an answer from the wrong family, so a dual-stack endpoint (one that
+# replies with whichever family you connected over) leaves the address blank on
+# dual-stack hosts. Test with: curl -s --max-time 5 <url>
+#   PUBLIC_IPV4_CHECK_URL=https://ipv4.icanhazip.com
+#   PUBLIC_IPV6_CHECK_URL=https://ipv6.icanhazip.com
+
 # ── TLS Simple certificate configuration (v0.4.1) ──
 # Uncomment and set these to enable TLS Simple ingress on this node.
 # The cert must be PEM format (fullchain recommended); the key must be PEM

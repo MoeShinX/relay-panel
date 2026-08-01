@@ -1014,18 +1014,35 @@ enum IpFamily {
     V6,
 }
 
+/// v1.2.1: the default endpoints, one per family.
+///
+/// These MUST be family-pinned hostnames. Both probes validate the family and
+/// DISCARD a mismatch (see `parse_ip_for_family`), so a dual-stack endpoint —
+/// one that answers over whichever family the connection used and returns that
+/// address — makes the IPv4 probe intermittently receive an IPv6 and throw it
+/// away, leaving the panel showing no address at all. It fails only on
+/// dual-stack hosts and only sometimes, which is the worst way for it to fail.
+/// `api.ip.sb/ip` is exactly such an endpoint; `api-ipv4` / `api-ipv6` are its
+/// pinned variants. A test below pins this.
+///
+/// Changed from ipify in v1.2.1: `api.ipify.org` is unreachable from mainland
+/// China, where the probe simply timed out every 30 minutes forever and the
+/// node's IP (and therefore its flag and region) stayed blank on the panel.
+const DEFAULT_IPV4_CHECK_URL: &str = "https://api-ipv4.ip.sb/ip";
+const DEFAULT_IPV6_CHECK_URL: &str = "https://api-ipv6.ip.sb/ip";
+
 /// v0.4.15: spawn TWO independent background tasks — one for IPv4, one for
 /// IPv6. Each checks once at start then every 30 min. A failure in one family
 /// never clears the other. Env overrides (later wins):
-///   IPv4: PUBLIC_IPV4_CHECK_URL → PUBLIC_IP_CHECK_URL → default ipify.org
-///   IPv6: PUBLIC_IPV6_CHECK_URL → default api6.ipify.org
+///   IPv4: PUBLIC_IPV4_CHECK_URL → PUBLIC_IP_CHECK_URL → DEFAULT_IPV4_CHECK_URL
+///   IPv6: PUBLIC_IPV6_CHECK_URL → DEFAULT_IPV6_CHECK_URL
 /// IPv6 failures are quiet (no IPv6 is normal on many hosts).
 pub fn spawn_public_ip_refresher(metrics: Arc<NodeMetrics>) {
     let v4_url = std::env::var("PUBLIC_IPV4_CHECK_URL")
         .or_else(|_| std::env::var("PUBLIC_IP_CHECK_URL"))
-        .unwrap_or_else(|_| "https://api.ipify.org".to_string());
+        .unwrap_or_else(|_| DEFAULT_IPV4_CHECK_URL.to_string());
     let v6_url = std::env::var("PUBLIC_IPV6_CHECK_URL")
-        .unwrap_or_else(|_| "https://api6.ipify.org".to_string());
+        .unwrap_or_else(|_| DEFAULT_IPV6_CHECK_URL.to_string());
 
     let m4 = metrics.clone();
     tokio::spawn(async move { run_family_refresher(m4, v4_url, IpFamily::V4, false).await });
@@ -1297,5 +1314,47 @@ mod tests {
         // An HTML error page or rate-limit text must not parse as an IP.
         assert_eq!(parse_ip_for_family("<html>429</html>", &IpFamily::V4), None);
         assert_eq!(parse_ip_for_family("not-an-ip", &IpFamily::V6), None);
+    }
+
+    /// v1.2.1: the defaults must be FAMILY-PINNED hostnames, and the two must
+    /// differ.
+    ///
+    /// This is the invariant that pairs with `parse_ip_for_family`: a probe
+    /// discards an answer from the wrong family, so pointing both probes at a
+    /// dual-stack endpoint (`api.ip.sb/ip`, `api.ipify.org` reached over v6)
+    /// makes the v4 probe intermittently throw its answer away and the panel
+    /// show no address. It breaks only on dual-stack hosts and only sometimes,
+    /// so a unit test is the only place it gets caught cheaply.
+    ///
+    /// Asserting on the shape rather than the exact URL keeps the endpoint
+    /// swappable — what must not change is that each one names its family.
+    #[test]
+    fn default_check_urls_are_family_pinned() {
+        assert_ne!(
+            DEFAULT_IPV4_CHECK_URL, DEFAULT_IPV6_CHECK_URL,
+            "one endpoint for both families cannot be family-pinned"
+        );
+        let host4 = DEFAULT_IPV4_CHECK_URL
+            .trim_start_matches("https://")
+            .split('/')
+            .next()
+            .unwrap();
+        let host6 = DEFAULT_IPV6_CHECK_URL
+            .trim_start_matches("https://")
+            .split('/')
+            .next()
+            .unwrap();
+        assert!(
+            host4.contains("ipv4") || host4.contains("-v4") || host4.contains("4."),
+            "IPv4 default must name its family, got {host4}"
+        );
+        assert!(
+            host6.contains("ipv6") || host6.contains("-v6") || host6.contains("6."),
+            "IPv6 default must name its family, got {host6}"
+        );
+        // Both must be HTTPS: the response decides what the panel displays as
+        // this node's identity, and plain HTTP lets any on-path party set it.
+        assert!(DEFAULT_IPV4_CHECK_URL.starts_with("https://"));
+        assert!(DEFAULT_IPV6_CHECK_URL.starts_with("https://"));
     }
 }

@@ -11,6 +11,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **Public-IP detection no longer uses ipify.** `api.ipify.org` is unreachable
+  from mainland China, so on a node there the probe timed out every 30 minutes
+  forever and the panel showed no address for it — and therefore no country
+  flag and no region — while the node was otherwise perfectly online. The
+  defaults are now `api-ipv4.ip.sb` / `api-ipv6.ip.sb`, which answer from both
+  sides.
+
+  Both defaults must stay **family-pinned**, and a test now enforces it. The two
+  probes validate the address family and discard a mismatch, so a dual-stack
+  endpoint — one that replies with whichever family the connection happened to
+  use — makes the IPv4 probe intermittently throw its answer away. That failure
+  appears only on dual-stack hosts and only sometimes, which is why it is worth
+  a test rather than a comment.
+
+  Existing nodes keep working unchanged and can be fixed without upgrading, by
+  setting `PUBLIC_IPV4_CHECK_URL` in `/opt/relay-node/relay-node.env` and
+  restarting. The installer now writes both variables as commented examples.
+
 ## [1.2.0] - 2026-07-21
 
 ### Added
