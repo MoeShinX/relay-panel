@@ -60,6 +60,38 @@ describe('NodeGroupSection mobile vs desktop', () => {
   });
 });
 
+// ── v1.2.5: offline nodes are greyed so a stale row is distinguishable from a
+// live one. The colours live in theme.css; what the component owes is putting
+// the hook on the right rows and only those.
+describe('NodeGroupSection offline styling', () => {
+  it('greys an offline row and leaves an online one alone', () => {
+    const rows = [
+      row({ node_id: 'up', online: true, cpu: 10 }),
+      row({ node_id: 'down', online: false, cpu: 90 }),
+    ];
+    const { container } = render(
+      <NodeGroupSection rows={rows} panelProtocol={0} latestNodeVersion="1.1.0" nodeVersionCheckFailed={false} isMobile={false} t={t} openDetail={vi.fn()} />,
+    );
+    // .ant-table-row, not every tr: a horizontally-scrolling table also emits
+    // a hidden measure row.
+    const bodyRows = container.querySelectorAll('.ant-table-tbody > tr.ant-table-row');
+    expect(bodyRows.length).toBe(2);
+    expect(bodyRows[0].classList.contains('rp-node-offline')).toBe(false);
+    expect(bodyRows[1].classList.contains('rp-node-offline')).toBe(true);
+  });
+
+  it('greys an offline card in the mobile list too', () => {
+    const rows = [
+      row({ node_id: 'up', online: true }),
+      row({ node_id: 'down', online: false }),
+    ];
+    const { container } = render(
+      <NodeGroupSection rows={rows} panelProtocol={0} latestNodeVersion="1.1.0" nodeVersionCheckFailed={false} isMobile={true} t={t} openDetail={vi.fn()} />,
+    );
+    expect(container.querySelectorAll('.rp-node-offline-card').length).toBe(1);
+  });
+});
+
 // ── v1.2: node version is compared against the latest NODE release, not the
 // panel version; protocol-incompatible takes priority; a failed node-version
 // check shows a neutral state. These exercise the desktop upgrade column.

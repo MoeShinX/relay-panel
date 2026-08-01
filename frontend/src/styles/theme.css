@@ -23,6 +23,13 @@
   --rp-text-secondary: #4b5563;
   --rp-text-tertiary: #6b7280;
 
+  /* v1.2.5: the offline-node palette. Grey enough to read as "not live" beside
+     a row of #18181b text, dark enough (4.83:1 on the tint) to stay legible —
+     these are the last readings before the node went, not decoration. */
+  --rp-node-offline-text: #6b7280;
+  --rp-node-offline-bg: #f7f7f8;
+  --rp-node-offline-bar: #c7c9cf;
+
   /* Accents — indigo */
   --rp-primary: #6366f1;
   --rp-primary-bg: #eef2ff;
@@ -84,6 +91,45 @@ html, body, #root {
 }
 .ant-table-tbody > tr:hover > td {
   background: var(--rp-table-row-hover) !important;
+}
+
+/* v1.2.5: an offline node's row, greyed.
+ *
+ * Every figure in it — CPU, speed, uptime, connections — is the LAST report,
+ * not a live reading. Rendered identically to an online row, a wall of
+ * healthy-looking numbers says the opposite of what is true, and since v1.2.5
+ * these rows stay listed for 24h, so there are more of them to tell apart.
+ *
+ * Grey, deliberately not faded: these are the readings from the moment the
+ * node stopped, which is exactly what you look at when working out why. The
+ * colour stays above the 4.5:1 contrast floor. Tags and buttons keep their own
+ * colours — status and the remove action are how you act on the row. */
+.ant-table-tbody > tr.rp-node-offline > td {
+  background: var(--rp-node-offline-bg);
+  color: var(--rp-node-offline-text);
+}
+/* The progress fill is the loudest "live" signal on the row: a green CPU bar
+ * reads as healthy right now. Neutralise the threshold colour — the exact
+ * percentage is still in the tooltip.
+ *
+ * .ant-progress-track is antd v6's name for the filled part (v5 called it
+ * .ant-progress-bg). !important is required, not defensive: strokeColor lands
+ * as an inline `background` on that element. */
+.rp-node-offline .ant-progress-track,
+.rp-node-offline-card .ant-progress-track {
+  background: var(--rp-node-offline-bar) !important;
+}
+
+/* Same treatment for the mobile card list, which has no table rows. */
+.rp-node-offline-card {
+  background: var(--rp-node-offline-bg);
+  color: var(--rp-node-offline-text);
+}
+.rp-node-meta {
+  color: var(--rp-text-secondary);
+}
+.rp-node-offline-card .rp-node-meta {
+  color: var(--rp-node-offline-text);
 }
 
 /* Cards: clean, minimal shadow */

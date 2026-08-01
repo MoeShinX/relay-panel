@@ -174,6 +174,11 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
       dataSource={rows}
       columns={columns}
       rowKey={(r) => `${r.group_id}:${r.node_id || 'legacy'}`}
+      // v1.2.5: offline rows are greyed (see .rp-node-offline in theme.css).
+      // Their numbers are the last report, not a live reading — and since these
+      // rows now stay listed for 24h instead of 2 minutes, telling them apart
+      // at a glance is what makes the longer retention useful rather than noisy.
+      rowClassName={(r) => (r.online ? '' : 'rp-node-offline')}
       pagination={false}
       size="small"
       scroll={{ x: 'max-content' }}

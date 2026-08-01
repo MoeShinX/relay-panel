@@ -28,6 +28,14 @@ independent `v*` / `node-v*` tracks since this release).
   antd's own text tokens had never been set either, so table bodies fell back to
   `rgba(0,0,0,0.45)` at 2.85:1. Both now meet AA.
 
+- **Offline nodes are greyed.** Every figure on an offline row — CPU, speed,
+  uptime, connections — is the node's last report rather than a live reading,
+  and rendered like an online row a wall of healthy-looking numbers said the
+  opposite of what was true. The threshold colouring on its usage bars is
+  neutralised for the same reason. Grey, not faded: those readings are what you
+  look at to work out why the node went, so the row stays above the 4.5:1
+  contrast floor. Applies to the mobile card list too.
+
 ### Added
 
 - **Remove an offline node from the list.** Offered only on offline rows —

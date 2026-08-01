@@ -46,6 +46,10 @@ export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', no
         return (
           <div
             key={`${r.group_id}:${r.node_id || 'none'}`}
+            // v1.2.5: offline cards are greyed, same signal as the desktop
+            // table's offline rows — every figure on the card is the node's
+            // last report rather than a live reading.
+            className={r.online ? undefined : 'rp-node-offline-card'}
             style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 10 }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, flexWrap: 'wrap', gap: 4 }}>
@@ -80,7 +84,10 @@ export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', no
               </span>
             </div>
             <NetworkCell row={r} t={t} />
-            <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
+            {/* The rate/uptime line used a hardcoded #888 (3.5:1 on white,
+                under AA) and could not be greyed further on an offline card.
+                Both now come from the theme. */}
+            <div className="rp-node-meta" style={{ fontSize: 12, marginTop: 4 }}>
               ↑ {formatBps(r.upload_bps)} ↓ {formatBps(r.download_bps)}
               {' · '}{t('systemUptime')}: {formatUptime(r.uptime, labels)}
             </div>
