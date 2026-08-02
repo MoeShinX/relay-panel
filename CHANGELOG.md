@@ -45,6 +45,26 @@ independent `v*` / `node-v*` tracks since this release).
   and shown as `-` in the table. Converting an existing group to monitor leaves
   the stored values untouched, so switching back restores it intact.
 
+- **A group's type reads as words, and the listener type is renamed.** The type
+  column rendered the raw wire value, so an otherwise Chinese page showed "IN"
+  and "MONITOR".
+
+  It now shows the same label the form's picker offers — and that label changed:
+  what was 入口（监听节点） is now 出口（监听节点）, because listening is a
+  capability of that machine rather than a type of its own. Every 入口分组 in the
+  UI follows. The legacy `out` type had to be renamed too: it was already called
+  出口, and leaving it would have made one word mean two different things on the
+  same page. It is now 落地（旧版，已废弃） — still labelled, because a database
+  from an older version can still contain one, even though the type has not been
+  offered when creating a group for several releases.
+
+  English is named by ROLE rather than direction (Listener node / Listener
+  Group), so the two languages do not assert opposite directions for one field.
+
+  **Display only** — the stored values stay `in` / `out` / `monitor`. Renaming
+  them would mean a migration, a protocol change and both repository
+  implementations, to fix what was a wording problem.
+
 ### Added
 
 - **Remove an offline node from the list.** Offered only on offline rows —

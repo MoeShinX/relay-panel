@@ -99,7 +99,7 @@ export const zhCN = {
   listenIp: '监听 IP',
   listenPort: '监听端口',
   notConfigured: '未配置',
-  currentInboundHost: '当前入口分组连接地址：{host}',
+  currentInboundHost: '当前出口分组连接地址：{host}',
   // v0.4.11 PR1: renamed from entryTransport to transportMethod
   transportMethod: '传输方式',
   entryTransportRaw: '原始连接',
@@ -133,7 +133,7 @@ export const zhCN = {
   importHint: '粘贴极简规则 JSON。格式：[{"dest":["ip:端口"],"listen_port":端口,"name":"名称"}]',
   importInvalidJson: 'JSON 解析失败，请检查格式。',
   importInvalidFormat: '格式不正确。需要对象或对象数组。',
-  selectInboundGroup: '选择入口分组',
+  selectInboundGroup: '选择出口分组',
   importResult: '导入完成：成功 {ok} 条，失败 {fail} 条。',
   owner: '归属用户',
   ownerHint: '留空则归属自己。（仅管理员有效，非管理员的值会被忽略。）',
@@ -181,7 +181,7 @@ export const zhCN = {
   profileClearedByProtocol: '已清除传输模板 — WS/TLS Simple 仅支持 TCP',
   tabBasic: '基础',
   tabForward: '转发',
-  inboundGroup: '入口分组',
+  inboundGroup: '出口分组',
   outboundGroup: '出口分组',
   createGroupFirst: '请先创建分组',
   ruleCreated: '规则已创建',
@@ -215,9 +215,17 @@ export const zhCN = {
   groupHiddenHint: '开启后该分组仅在普通用户的「节点状态」页隐藏，管理员不受影响；规则照常使用（新建规则仍可选、已有规则正常转发与显示）。',
   monitorOnlyNoForwardTitle: '仅监控分组不承载转发',
   monitorOnlyNoForwardDesc: '这类分组只上报节点状态给管理员，不绑定转发规则，也不会出现在普通用户的线路和节点状态里。连接地址、端口范围、倍率、隐藏对它都不生效，所以这里不再要求填写。',
-  monitorOnlyEditKeepsFields: '已保存的连接地址、端口范围、倍率、隐藏会原样保留，改回「入口」后立即恢复。',
-  inboundListener: '入口（监听节点）',
-  outboundEgress: '出口（出口节点）',
+  monitorOnlyEditKeepsFields: '已保存的连接地址、端口范围、倍率、隐藏会原样保留，改回「出口」后立即恢复。',
+  // v1.2.5: 这个类型指的是「节点监听、并把流量转发出去」的那台机器 —— 监听是它
+  // 的一个能力，而不是一个独立的类型，所以叫「出口（监听节点）」。
+  //
+  // 线上的机器值仍然是 `in`，只改显示名：改机器值要动数据库、协议和两套仓储实现，
+  // 而这里要解决的只是「界面上叫什么」。
+  inboundListener: '出口（监听节点）',
+  // 遗留类型 `out`：老版本用来把规则的目标指向另一个分组的 connect_host。新建时
+  // 早已不提供，但老库里可能还留着这种分组，所以标签得保留 —— 只是不能再叫「出口」，
+  // 否则和上面那个撞名，同一个词指两种东西。
+  outboundEgress: '落地（旧版，已废弃）',
   groupCreated: '分组已创建，请复制下方节点令牌',
   groupDeleted: '分组已删除',
   deleteGroupConfirm: '确定删除此分组？',
@@ -405,7 +413,7 @@ export const zhCN = {
   // Forward mode
   forwardMode: '转发方式',
   modeGroup: '出口分组转发',
-  modeDirect: '入口直连目标',
+  modeDirect: '出口直连目标',
 
   // Protocol TCP+UDP
   tcpUdp: 'TCP + UDP',
@@ -522,9 +530,9 @@ export const zhCN = {
   accessAll: '全部',
   accessLimited: '受限',
   allDeviceGroups: '允许所有设备分组',
-  allDeviceGroupsHint: '开启后该用户可使用全部入口分组（含日后新建的）；关闭后只能使用下方指定的分组。',
-  deviceGroupsHint: '该用户可用于创建转发规则的入口分组。留空 = 不能转发。',
-  // v1.0.8: 用户挂了套餐时，设备分组改由套餐自动管理，手动入口禁用。
+  allDeviceGroupsHint: '开启后该用户可使用全部出口分组（含日后新建的）；关闭后只能使用下方指定的分组。',
+  deviceGroupsHint: '该用户可用于创建转发规则的出口分组。留空 = 不能转发。',
+  // v1.0.8: 用户挂了套餐时，设备分组改由套餐自动管理，手动分配禁用。
   deviceGroupsManagedByPlan: '该用户已开通套餐，可用分组由套餐自动管理。如需手动指定，请先移除套餐。',
   batchDelete: '批量删除',
   batchExport: '批量导出',
@@ -741,7 +749,7 @@ export const zhCN = {
   restartOfflineSuffix: '（{count} 个节点离线）',
   restartAllOutdated: '重启未生效：{count} 个节点版本过低，请先在「节点状态」升级节点',
   restartAllOffline: '重启未生效：{count} 个节点当前离线',
-  restartNoNodes: '重启未生效：该规则的入口分组下没有节点',
+  restartNoNodes: '重启未生效：该规则的出口分组下没有节点',
   maxConnections: '最大连接数',
   maxConnectionsHint: '0 = 不限。仅对 TCP 生效，且按「每个节点」独立计数——规则跑在 3 个节点上时总量是这里的 3 倍。超出后新连接会被直接拒绝。修改上限不会断开已有连接，新上限从此刻起对新连接生效。',
   maxConnectionsUdpUnsupported: 'UDP 规则不适用：上限在 accept 时判断，而 UDP 没有「连接」这个东西（会话按 60 秒空闲自动回收，不会无限堆积）。TCP+UDP 规则可以设，只管其中的 TCP 部分。',
@@ -778,10 +786,10 @@ export const zhCN = {
   planDescription: '说明',
   planGrantAll: '授权全部设备组',
   planGrantNone: '无',
-  planGrantAllHint: '开启后购买此套餐将授权用户使用全部入口分组（含日后新建的）。',
+  planGrantAllHint: '开启后购买此套餐将授权用户使用全部出口分组（含日后新建的）。',
   planGrantGroups: '授权线路',
-  planGrantGroupsHint: '购买/开通此套餐将用这些分组替换用户当前的授权（不是追加）；到期不自动撤销。设备分组授权完全由套餐管理（编辑用户里已无手动分配入口）。',
-  planGrantGroupsPlaceholder: '选择授权的入口分组',
+  planGrantGroupsHint: '购买/开通此套餐将用这些分组替换用户当前的授权（不是追加）；到期不自动撤销。设备分组授权完全由套餐管理（编辑用户里已无手动分配的入口）。',
+  planGrantGroupsPlaceholder: '选择授权的出口分组',
   days: '天',
   buyNow: '立即购买',
   confirmPurchase: '确认购买',

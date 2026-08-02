@@ -100,7 +100,7 @@ export const enUS: Dict = {
   listenIp: 'Listen IP',
   listenPort: 'Listen Port',
   notConfigured: 'Not configured',
-  currentInboundHost: 'Current inbound group host: {host}',
+  currentInboundHost: 'Current listener group host: {host}',
   // v0.4.11 PR1: renamed from entryTransport to transportMethod
   transportMethod: 'Transport Method',
   entryTransportRaw: 'Raw / Original Connection',
@@ -134,7 +134,7 @@ export const enUS: Dict = {
   importHint: 'Paste simplified rule JSON. Format: [{"dest":["ip:port"],"listen_port":port,"name":"name"}]',
   importInvalidJson: 'Invalid JSON. Please check and retry.',
   importInvalidFormat: 'Invalid format. Expected an object or array of objects.',
-  selectInboundGroup: 'Select inbound group',
+  selectInboundGroup: 'Select listener group',
   importResult: 'Import done: {ok} succeeded, {fail} failed.',
   owner: 'Owner',
   ownerHint: 'Leave empty to create for yourself. (Admin only — a non-admin value is ignored.)',
@@ -182,7 +182,7 @@ export const enUS: Dict = {
   profileClearedByProtocol: 'Cleared the transport profile — WS/TLS Simple only supports TCP.',
   tabBasic: 'Basic',
   tabForward: 'Forwarding',
-  inboundGroup: 'Inbound Group',
+  inboundGroup: 'Listener Group',
   outboundGroup: 'Outbound Group',
   createGroupFirst: 'Create a group first',
   ruleCreated: 'Rule created',
@@ -216,9 +216,19 @@ export const enUS: Dict = {
   groupHiddenHint: "When on, this group is hidden only from regular users' Node Status page; admins are unaffected. Rules keep working (still selectable for new rules; existing rules forward and display normally).",
   monitorOnlyNoForwardTitle: 'A monitor-only group does not forward',
   monitorOnlyNoForwardDesc: 'It reports node status to admins and nothing else: no forwarding rule is bound to it, and it never shows up in a regular user’s lines or node status. Connect host, port range, rate and hidden have no effect on it, so they are not asked for here.',
-  monitorOnlyEditKeepsFields: 'The stored connect host, port range, rate and hidden flag are left untouched, and come back as soon as the type is set to inbound again.',
-  inboundListener: 'Inbound (listener node)',
-  outboundEgress: 'Outbound (egress node)',
+  monitorOnlyEditKeepsFields: 'The stored connect host, port range, rate and hidden flag are left untouched, and come back as soon as the type is set back to a listener group.',
+  // v1.2.5: named by ROLE, not by direction. The Chinese label for this type is
+  // now 出口, and "Inbound" would have said the opposite in the other language
+  // for the same field. "Listener" is what the machine actually does and is
+  // true regardless of which end of the relay you count from. The wire value
+  // stays `in`; only the label moved.
+  inboundListener: 'Listener node',
+  // Legacy `out`: older versions pointed a rule's target at another group's
+  // connect_host. Not offered when creating a group for several releases, but
+  // an old database can still hold one, so the label has to stay — just not as
+  // "Outbound", which read as the counterpart of an "Inbound" that no longer
+  // exists by that name.
+  outboundEgress: 'Target group (legacy)',
   groupCreated: 'Group created. Copy the node token below.',
   groupDeleted: 'Group deleted',
   deleteGroupConfirm: 'Delete this group?',
@@ -523,8 +533,8 @@ export const enUS: Dict = {
   accessAll: 'All',
   accessLimited: 'Limited',
   allDeviceGroups: 'Allow all device groups',
-  allDeviceGroupsHint: 'When on, the user may use every inbound group (including ones created later). When off, only the groups selected below.',
-  deviceGroupsHint: 'Inbound groups this user can use to create forwarding rules. Empty = cannot forward.',
+  allDeviceGroupsHint: 'When on, the user may use every listener group (including ones created later). When off, only the groups selected below.',
+  deviceGroupsHint: 'Listener groups this user can use to create forwarding rules. Empty = cannot forward.',
   // v1.0.8: when the user has a plan, device groups are managed by the plan and the manual selector is disabled.
   deviceGroupsManagedByPlan: 'This user has a plan — available groups are managed by the plan automatically. To set them manually, remove the plan first.',
   batchDelete: 'Batch Delete',
@@ -743,7 +753,7 @@ export const enUS: Dict = {
   restartOfflineSuffix: '({count} node(s) offline)',
   restartAllOutdated: 'Nothing restarted: {count} node(s) are too old. Upgrade them from Node Status first.',
   restartAllOffline: 'Nothing restarted: {count} node(s) are offline',
-  restartNoNodes: 'Nothing restarted: this rule\'s inbound group has no nodes',
+  restartNoNodes: 'Nothing restarted: this rule\'s listener group has no nodes',
   maxConnections: 'Max connections',
   maxConnectionsHint: '0 = unlimited. TCP only, and counted PER NODE — a rule running on 3 nodes allows 3x this number in total. Connections past the cap are refused immediately. Changing the cap does not drop existing connections; it applies to new ones from now on.',
   maxConnectionsUdpUnsupported: 'Not applicable to UDP rules: the cap is checked at accept(), and UDP has no connections to accept (sessions self-expire after 60s idle, so they cannot pile up the same way). A TCP+UDP rule can set it — it governs the TCP half.',
@@ -780,10 +790,10 @@ export const enUS: Dict = {
   planDescription: 'Description',
   planGrantAll: 'Grant All Groups',
   planGrantNone: 'None',
-  planGrantAllHint: 'When on, buying this plan grants access to ALL inbound groups (including ones created later).',
+  planGrantAllHint: 'When on, buying this plan grants access to ALL listener groups (including ones created later).',
   planGrantGroups: 'Granted Lines',
   planGrantGroupsHint: "Buying/assigning this plan REPLACES the user's current authorization with these groups (not appended); not revoked on expiry. Device-group authorization is managed entirely by the plan (there is no manual assignment in the edit-user modal).",
-  planGrantGroupsPlaceholder: 'Select inbound groups to grant',
+  planGrantGroupsPlaceholder: 'Select listener groups to grant',
   days: 'days',
   buyNow: 'Buy Now',
   confirmPurchase: 'Confirm Purchase',

@@ -103,6 +103,33 @@ describe('monitor-only groups hide the forwarding fields', () => {
     expect(body).not.toHaveProperty('port_range');
   });
 
+  it('shows the type as a readable label, not the wire value', async () => {
+    // The column rendered `group_type.toUpperCase()`, so an otherwise Chinese
+    // page showed "IN" / "MONITOR". It now reuses the picker's own strings.
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/groups') {
+        return Promise.resolve(ok([group({ id: 1 }), group({ id: 4, name: 'm', group_type: 'monitor' })]));
+      }
+      return Promise.resolve(ok([]));
+    });
+    render(<Groups />);
+    await waitFor(() => expect(screen.getByText('inboundListener')).toBeInTheDocument());
+    expect(screen.getByText('typeMonitor')).toBeInTheDocument();
+    expect(screen.queryByText('IN')).toBeNull();
+    expect(screen.queryByText('MONITOR')).toBeNull();
+  });
+
+  it('falls back to the raw type when no label exists for it', async () => {
+    // A legacy or newly added type must still read, rather than rendering an
+    // empty tag.
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/groups') return Promise.resolve(ok([group({ group_type: 'chained_outbound' })]));
+      return Promise.resolve(ok([]));
+    });
+    render(<Groups />);
+    await waitFor(() => expect(screen.getByText('chained_outbound')).toBeInTheDocument());
+  });
+
   it('shows a dash instead of an inert port range on a monitor row', async () => {
     mockGet.mockImplementation((url: string) => {
       if (url === '/groups') {

@@ -275,6 +275,26 @@ export default function Groups() {
     }
   };
 
+  /**
+   * v1.2.5: the type column's label.
+   *
+   * `in` / `out` / `monitor` are wire values, not something to show an operator
+   * — the column rendered `gt.toUpperCase()`, so it read "IN" / "MONITOR" on an
+   * otherwise Chinese page. Reuses the same strings as the form's picker, so
+   * the label an admin picked is the label the row shows back.
+   *
+   * An unrecognised value falls back to the raw string rather than an empty
+   * tag, so a type added on the backend before its label lands still reads.
+   */
+  const typeLabel = (gt: string) => {
+    switch (gt) {
+      case 'in': return t('inboundListener');
+      case 'out': return t('outboundEgress');
+      case 'monitor': return t('typeMonitor');
+      default: return gt;
+    }
+  };
+
   // v1.0.4: create form only shows in/monitor (no out/egress).
   // v1.0.9: the edit form uses the same set — outbound/egress groups are no
   // longer offered anywhere in the UI.
@@ -288,7 +308,7 @@ export default function Groups() {
     { title: t('name'), dataIndex: 'name', key: 'name' },
     {
       title: t('type'), dataIndex: 'group_type', key: 'group_type',
-      render: (gt: string) => <Tag color={typeColor(gt)}>{gt.toUpperCase()}</Tag>,
+      render: (gt: string) => <Tag color={typeColor(gt)}>{typeLabel(gt)}</Tag>,
     },
     {
       title: t('nodes'), key: 'nodes', width: 100,
