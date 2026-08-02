@@ -37,7 +37,7 @@ pub struct Config {
     pub jwt_secret: String,
     pub public_dir: String,
     /// The public-facing panel URL that nodes should connect to.
-    /// e.g. "http://45.149.92.10:18888" or "https://panel.example.com".
+    /// e.g. "http://203.0.113.10:18888" or "https://panel.example.com".
     /// If empty, the frontend falls back to window.location.origin.
     pub public_panel_url: String,
     /// Whether public self-registration (/auth/register) is allowed.

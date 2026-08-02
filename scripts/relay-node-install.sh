@@ -90,7 +90,7 @@ if [ -z "$NODE_TOKEN" ]; then
     fail "Missing required option: -t/--token. Get it from the panel's Device Groups page."
 fi
 if [ -z "$PANEL_URL" ]; then
-    fail "Missing required option: -u/--url. Example: http://45.149.92.10:18888"
+    fail "Missing required option: -u/--url. Example: http://203.0.113.10:18888"
 fi
 
 # ---------- Platform check ----------
