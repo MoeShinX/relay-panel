@@ -11,7 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
-## [Unreleased]
+## [1.2.1] - 2026-08-02
+
+Node only. Nothing on the wire changed — the config protocol stays at version
+4, so this node runs against any current panel, and upgrading is optional
+unless the node sits somewhere `api.ipify.org` cannot be reached.
 
 ### Changed
 

@@ -8,7 +8,13 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
-## [Unreleased]
+## [1.2.5] - 2026-08-02
+
+Panel only. The node ships separately as `node-v1.2.1` and neither release
+requires the other — the config protocol is unchanged at version 4, so any
+current node works with this panel and vice versa.
+
+No schema change and nothing to reconfigure: pull the image and restart.
 
 ### Changed
 
