@@ -29,6 +29,21 @@ interface Props {
   onDelete?: (row: NodeDisplayRow) => void;
 }
 
+// Keep high-variance transfer figures readable before spending horizontal room
+// on the short status columns. The table already scrolls horizontally, so a
+// little extra width is preferable to splitting a rate such as "994.56 KB/s"
+// across two lines.
+export const nodeDesktopColumnWidths = {
+  status: 78,
+  nodeVersion: 90,
+  nodeUpgrade: 68,
+  cpu: 80,
+  mem: 96,
+  disk: 96,
+  rate: 192,
+  traffic: 172,
+} as const;
+
 /** Desktop table for one group's nodes. Both admin and user share the same
  *  columns — the permission difference is in the data source (admin reads
  *  /nodes, user reads /nodes/shared) and the detail drawer. */
@@ -37,7 +52,7 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
 
   const columns = [
     {
-      title: t('status'), key: 'status', width: 84, fixed: 'left' as const,
+      title: t('status'), key: 'status', width: nodeDesktopColumnWidths.status, fixed: 'left' as const,
       render: (_: unknown, r: NodeDisplayRow) => {
         const v = r.config_protocol_version;
         if (v != null && panelProtocol > 0 && v !== panelProtocol) {
@@ -50,7 +65,7 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
     // v1.2: compared against the latest NODE release (latestNodeVersion), not
     // the panel version.
     {
-      title: t('nodeVersion'), dataIndex: 'node_version', key: 'node_version', width: 100,
+      title: t('nodeVersion'), dataIndex: 'node_version', key: 'node_version', width: nodeDesktopColumnWidths.nodeVersion,
       render: (v: string | null) => {
         if (!v) return <Typography.Text type="secondary">-</Typography.Text>;
         // v1.2: if the node-version check failed, we can't vouch for any
@@ -67,7 +82,7 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
     // neutral state (PR5). Protocol-incompatible and a failed lookup both take
     // priority over version status.
     ...(onUpgrade ? [{
-      title: t('nodeUpgrade'), key: 'upgrade', width: 72,
+      title: t('nodeUpgrade'), key: 'upgrade', width: nodeDesktopColumnWidths.nodeUpgrade,
       render: (_: unknown, r: NodeDisplayRow) => {
         const { state } = resolveNodeUpgrade(r, latestNodeVersion, panelProtocol, nodeVersionCheckFailed);
         switch (state) {
@@ -112,27 +127,27 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
       render: (v: number) => <span className="rp-mono">{v || 0}</span>,
     },
     {
-      title: 'CPU', key: 'cpu', width: 84,
+      title: 'CPU', key: 'cpu', width: nodeDesktopColumnWidths.cpu,
       render: (_: unknown, r: NodeDisplayRow) => <NodeResourceBar value={r.cpu} tooltip={`CPU: ${formatPercent(r.cpu)}`} />,
     },
     {
-      title: t('mem'), key: 'mem', width: 100,
+      title: t('mem'), key: 'mem', width: nodeDesktopColumnWidths.mem,
       render: (_: unknown, r: NodeDisplayRow) => <NodeResourceBar value={r.mem} tooltip={`${t('mem')}: ${formatPercent(r.mem)}`} />,
     },
     {
-      title: t('disk'), key: 'disk', width: 100,
+      title: t('disk'), key: 'disk', width: nodeDesktopColumnWidths.disk,
       render: (_: unknown, r: NodeDisplayRow) => <NodeDiskBar usagePercent={r.disk_usage_percent} used={r.disk_used} total={r.disk_total} mount={r.disk_mount} t={t} />,
     },
     {
-      title: `${t('uploadRate')}/${t('downloadRate')}`, key: 'rate', width: 140,
+      title: `${t('uploadRate')}/${t('downloadRate')}`, key: 'rate', width: nodeDesktopColumnWidths.rate,
       render: (_: unknown, r: NodeDisplayRow) => (
-        <span className="rp-mono">{formatBps(r.upload_bps)} / {formatBps(r.download_bps)}</span>
+        <span className="rp-mono rp-node-throughput">{formatBps(r.upload_bps)} / {formatBps(r.download_bps)}</span>
       ),
     },
     {
-      title: `${t('totalUpload')}/${t('totalDownload')}`, key: 'traffic', width: 150,
+      title: `${t('totalUpload')}/${t('totalDownload')}`, key: 'traffic', width: nodeDesktopColumnWidths.traffic,
       render: (_: unknown, r: NodeDisplayRow) => (
-        <span className="rp-mono">{formatBytes(r.boot_upload_bytes)} / {formatBytes(r.boot_download_bytes)}</span>
+        <span className="rp-mono rp-node-throughput">{formatBytes(r.boot_upload_bytes)} / {formatBytes(r.boot_download_bytes)}</span>
       ),
     },
     {

@@ -4,6 +4,7 @@ import type { Tfn } from './types';
 import type { NodeDisplayRow } from '../../api/types';
 import { statusTag } from './shared';
 import { NodeGroupSection } from './NodeGroupSection';
+import { nodeDesktopColumnWidths } from './NodeDesktopTable';
 
 // A fake t() that echoes the key — assertions match on the i18n KEY, not on a
 // translated string, so the tests don't break when wording changes.
@@ -57,6 +58,31 @@ describe('NodeGroupSection mobile vs desktop', () => {
       <NodeGroupSection rows={placeholder} panelProtocol={0} latestNodeVersion="1.1.0" nodeVersionCheckFailed={false} isMobile={false} t={t} openDetail={vi.fn()} />,
     );
     expect(screen.getByText('noNodeReportingInGroup')).toBeInTheDocument();
+  });
+});
+
+describe('Node desktop table throughput layout', () => {
+  it('prioritizes the upload/download rate column without widening the short status columns', () => {
+    expect(nodeDesktopColumnWidths.rate).toBeGreaterThanOrEqual(192);
+    expect(nodeDesktopColumnWidths.status).toBeLessThan(84);
+    expect(nodeDesktopColumnWidths.nodeVersion).toBeLessThan(100);
+    expect(nodeDesktopColumnWidths.nodeUpgrade).toBeLessThan(72);
+  });
+
+  it('keeps transfer values on one line', () => {
+    const { container } = render(
+      <NodeGroupSection
+        rows={[row({ online: true, upload_bps: 1018430, download_bps: 60110, boot_upload_bytes: 123456789, boot_download_bytes: 987654321 })]}
+        panelProtocol={0}
+        latestNodeVersion="1.1.0"
+        nodeVersionCheckFailed={false}
+        isMobile={false}
+        t={t}
+        openDetail={vi.fn()}
+      />,
+    );
+
+    expect(container.querySelectorAll('.rp-node-throughput')).toHaveLength(2);
   });
 });
 

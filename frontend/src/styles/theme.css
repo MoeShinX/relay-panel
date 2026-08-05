@@ -213,6 +213,13 @@ html, body, #root {
   font-size: 12px;
 }
 
+/* Transfer values are a single measurement. Breaking between a number and its
+   unit (for example, "60.11" / "KB/s") makes the node table harder to scan.
+   The desktop table already supplies horizontal scrolling for narrower views. */
+.rp-node-throughput {
+  white-space: nowrap;
+}
+
 /* v0.4.17: country-flag pill wrapper. Outer layer sizes & rounds the slot;
  *  the inner .fi (from flag-icons) is pinned to a fixed flag size so the
  *  library's own .fi rules never disturb the surrounding table layout. */
