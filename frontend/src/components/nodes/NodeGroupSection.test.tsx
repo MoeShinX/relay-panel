@@ -4,7 +4,7 @@ import type { Tfn } from './types';
 import type { NodeDisplayRow } from '../../api/types';
 import { statusTag } from './shared';
 import { NodeGroupSection } from './NodeGroupSection';
-import { nodeDesktopColumnWidths } from './NodeDesktopTable';
+import { nodeDesktopColumnWidths } from './tableLayout';
 
 // A fake t() that echoes the key — assertions match on the i18n KEY, not on a
 // translated string, so the tests don't break when wording changes.

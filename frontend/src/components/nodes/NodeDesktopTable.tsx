@@ -8,6 +8,7 @@ import { formatBps, formatBytes, formatUptime, formatPercent } from '../../utils
 import { versionRelation, versionTagColor } from '../../utils/version';
 import { NetworkCell } from './shared';
 import { resolveNodeUpgrade } from './upgrade';
+import { nodeDesktopColumnWidths } from './tableLayout';
 
 interface Props {
   rows: NodeDisplayRow[];
@@ -28,21 +29,6 @@ interface Props {
    *  the next report (within ~10s) recreates it. Absent for the user view. */
   onDelete?: (row: NodeDisplayRow) => void;
 }
-
-// Keep high-variance transfer figures readable before spending horizontal room
-// on the short status columns. The table already scrolls horizontally, so a
-// little extra width is preferable to splitting a rate such as "994.56 KB/s"
-// across two lines.
-export const nodeDesktopColumnWidths = {
-  status: 78,
-  nodeVersion: 90,
-  nodeUpgrade: 68,
-  cpu: 80,
-  mem: 96,
-  disk: 96,
-  rate: 192,
-  traffic: 172,
-} as const;
 
 /** Desktop table for one group's nodes. Both admin and user share the same
  *  columns — the permission difference is in the data source (admin reads
