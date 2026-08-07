@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::middleware::AdminOnly;
 use crate::api::AppState;
-use crate::service::notify::{self, NotifyConfig, NotifyConfigPublic, MIN_OFFLINE_ALERT_SECS};
+use crate::service::notify::{
+    self, DeliveryLogEntry, NotifyConfig, NotifyConfigPublic, MIN_OFFLINE_ALERT_SECS,
+};
 
 fn err<T: Serialize>(code: i32, msg: &str) -> ApiResponse<T> {
     ApiResponse {
@@ -36,11 +38,28 @@ pub async fn get_notify_settings(
     Json(ApiResponse::success(NotifyConfigPublic::from(&cfg)))
 }
 
+/// GET /api/v1/admin/settings/notify/history
+///
+/// Recent per-channel outcomes are deliberately separate from the audit log:
+/// audit proves an admin changed configuration, while this answers whether an
+/// actual outage notification made it to each configured destination.
+pub async fn get_notify_history(
+    _admin: AdminOnly,
+    State(state): State<AppState>,
+) -> Json<ApiResponse<Vec<DeliveryLogEntry>>> {
+    Json(ApiResponse::success(
+        notify::list_history(state.db.as_ref()).await,
+    ))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct UpdateNotifyRequest {
     pub enabled: bool,
+    pub notify_offline: bool,
     pub offline_alert_secs: i64,
     pub notify_recovery: bool,
+    pub notify_version_outdated: bool,
+    pub repeat_alert_minutes: i64,
     pub telegram_enabled: bool,
     pub telegram_chat_id: String,
     /// Empty / omitted = keep the stored token. The UI shows a masked field and
@@ -71,6 +90,9 @@ pub async fn update_notify_settings(
             &format!("离线告警阈值最小 {MIN_OFFLINE_ALERT_SECS} 秒"),
         ));
     }
+    if req.repeat_alert_minutes < 0 {
+        return Json(err(400, "持续离线提醒间隔不能小于 0"));
+    }
     let existing = load(&state).await;
 
     // Keep-if-empty: the browser was never given these values, so an empty
@@ -97,8 +119,11 @@ pub async fn update_notify_settings(
 
     let cfg = NotifyConfig {
         enabled: req.enabled,
+        notify_offline: req.notify_offline,
         offline_alert_secs: req.offline_alert_secs,
         notify_recovery: req.notify_recovery,
+        notify_version_outdated: req.notify_version_outdated,
+        repeat_alert_minutes: req.repeat_alert_minutes,
         telegram_enabled: req.telegram_enabled,
         telegram_bot_token,
         telegram_chat_id: req.telegram_chat_id.trim().to_string(),
@@ -179,13 +204,28 @@ pub async fn test_notify(
     let cfg = load(&state).await;
     let text = "✅ RelayPanel 测试消息\n\n如果你收到这条消息，说明通知配置正确。";
 
-    let result = match req.channel.as_str() {
-        "telegram" => notify::send_telegram(&cfg, text).await,
-        "email" => notify::send_email(&cfg, "RelayPanel 测试消息", text).await,
+    let (result, report) = match req.channel.as_str() {
+        "telegram" => {
+            let result = notify::send_telegram(&cfg, text).await;
+            let report = notify::SendReport {
+                telegram: Some(result.clone()),
+                email: None,
+            };
+            (result, report)
+        }
+        "email" => {
+            let result = notify::send_email(&cfg, "RelayPanel 测试消息", text).await;
+            let report = notify::SendReport {
+                telegram: None,
+                email: Some(result.clone()),
+            };
+            (result, report)
+        }
         other => {
             return Json(err(400, &format!("未知的通知渠道: {other}")));
         }
     };
+    notify::record_report(state.db.as_ref(), "test", None, &report).await;
 
     match result {
         Ok(()) => {

@@ -147,8 +147,11 @@ export interface TrafficHistoryResponse {
  *  form can round-trip without ever holding the secret. */
 export interface NotifyConfigPublic {
   enabled: boolean;
+  notify_offline: boolean;
   offline_alert_secs: number;
   notify_recovery: boolean;
+  notify_version_outdated: boolean;
+  repeat_alert_minutes: number;
   telegram_enabled: boolean;
   telegram_chat_id: string;
   telegram_bot_token_set: boolean;
@@ -160,6 +163,16 @@ export interface NotifyConfigPublic {
   smtp_from: string;
   smtp_to: string;
   smtp_tls: boolean;
+}
+
+export interface NotifyHistoryEntry {
+  id: string;
+  created_at: string;
+  event: 'offline' | 'offline_reminder' | 'recovery' | 'version_outdated' | 'test' | string;
+  channel: 'telegram' | 'email' | string;
+  status: 'sent' | 'failed' | string;
+  node_key?: string | null;
+  detail: string;
 }
 
 /** v1.2.0: result of a test send. `ok: false` still arrives as HTTP 200 — the

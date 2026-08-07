@@ -18,8 +18,14 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::db::repo::KvsRepository;
+
 /// kvs key holding the JSON config.
 pub const NOTIFY_CONFIG_KEY: &str = "notify:config";
+/// Prefix for the newest per-channel notification delivery outcomes.
+pub const NOTIFY_HISTORY_PREFIX: &str = "notify:history:";
+/// Keep the history useful without allowing a noisy channel to grow KVS forever.
+pub const NOTIFY_HISTORY_LIMIT: usize = 100;
 
 /// How long a node must be continuously offline before an alert fires.
 ///
@@ -43,16 +49,27 @@ pub const MIN_OFFLINE_ALERT_SECS: i64 = 60;
 /// fails the build rather than a test run.
 const _: () = assert!(MIN_OFFLINE_ALERT_SECS > crate::api::stats::NODE_ONLINE_WINDOW_SECS);
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NotifyConfig {
     /// Master switch. Off = the scheduler still tracks state but sends nothing.
     pub enabled: bool,
+    /// The old notification page always sent the first offline alert. This is
+    /// explicitly defaulted to true so adding selectable events does not stop
+    /// alerts for installations with a pre-v1.2.6 JSON blob.
+    #[serde(default = "default_notify_offline")]
+    pub notify_offline: bool,
     /// Seconds a node must stay offline before alerting.
     pub offline_alert_secs: i64,
     /// Also send when a node comes back. On by default — an alert you can't
     /// clear is an alert you learn to ignore.
     pub notify_recovery: bool,
+    /// Notify once when a node's parseable binary version is behind the latest
+    /// node release. Off by default: release cadence is a policy decision.
+    pub notify_version_outdated: bool,
+    /// Minutes between reminders for a continuing outage. Zero preserves the
+    /// prior behaviour: one offline alert, then silence until recovery.
+    pub repeat_alert_minutes: i64,
 
     // ── Telegram ──
     pub telegram_enabled: bool,
@@ -71,6 +88,34 @@ pub struct NotifyConfig {
     pub smtp_to: String,
     /// Implicit TLS (port 465). False = STARTTLS (587).
     pub smtp_tls: bool,
+}
+
+fn default_notify_offline() -> bool {
+    true
+}
+
+impl Default for NotifyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            notify_offline: true,
+            offline_alert_secs: DEFAULT_OFFLINE_ALERT_SECS,
+            notify_recovery: false,
+            notify_version_outdated: false,
+            repeat_alert_minutes: 0,
+            telegram_enabled: false,
+            telegram_bot_token: String::new(),
+            telegram_chat_id: String::new(),
+            email_enabled: false,
+            smtp_host: String::new(),
+            smtp_port: 0,
+            smtp_username: String::new(),
+            smtp_password: String::new(),
+            smtp_from: String::new(),
+            smtp_to: String::new(),
+            smtp_tls: false,
+        }
+    }
 }
 
 impl NotifyConfig {
@@ -103,8 +148,11 @@ impl NotifyConfig {
 #[derive(Debug, Clone, Serialize)]
 pub struct NotifyConfigPublic {
     pub enabled: bool,
+    pub notify_offline: bool,
     pub offline_alert_secs: i64,
     pub notify_recovery: bool,
+    pub notify_version_outdated: bool,
+    pub repeat_alert_minutes: i64,
     pub telegram_enabled: bool,
     pub telegram_chat_id: String,
     /// True when a token is stored. The token itself is never sent.
@@ -124,8 +172,11 @@ impl From<&NotifyConfig> for NotifyConfigPublic {
     fn from(c: &NotifyConfig) -> Self {
         Self {
             enabled: c.enabled,
+            notify_offline: c.notify_offline,
             offline_alert_secs: c.alert_after(),
             notify_recovery: c.notify_recovery,
+            notify_version_outdated: c.notify_version_outdated,
+            repeat_alert_minutes: c.repeat_alert_minutes.max(0),
             telegram_enabled: c.telegram_enabled,
             telegram_chat_id: c.telegram_chat_id.clone(),
             telegram_bot_token_set: !c.telegram_bot_token.is_empty(),
@@ -138,6 +189,135 @@ impl From<&NotifyConfig> for NotifyConfigPublic {
             smtp_to: c.smtp_to.clone(),
             smtp_tls: c.smtp_tls,
         }
+    }
+}
+
+/// A single channel outcome. One offline event sent to Telegram and SMTP
+/// becomes two rows: operators can see which destination needs attention.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryLogEntry {
+    pub id: String,
+    pub created_at: String,
+    pub event: String,
+    pub channel: String,
+    pub status: String,
+    pub node_key: Option<String>,
+    pub detail: String,
+}
+
+impl DeliveryLogEntry {
+    #[cfg(test)]
+    fn sent(created_at: &str, event: &str, channel: &str, node_key: Option<&str>) -> Self {
+        Self {
+            id: format!("{created_at}-{channel}"),
+            created_at: created_at.to_string(),
+            event: event.to_string(),
+            channel: channel.to_string(),
+            status: "sent".to_string(),
+            node_key: node_key.map(str::to_string),
+            detail: String::new(),
+        }
+    }
+}
+
+/// Sort newest first and cap a history collection. Kept pure for regression
+/// testing and shared by list/prune paths.
+fn newest_history(mut entries: Vec<DeliveryLogEntry>, cap: usize) -> Vec<DeliveryLogEntry> {
+    entries.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| b.id.cmp(&a.id))
+    });
+    entries.truncate(cap);
+    entries
+}
+
+async fn load_history_with_keys<R: KvsRepository + ?Sized>(
+    db: &R,
+) -> Vec<(String, DeliveryLogEntry)> {
+    let Ok(rows) = db.scan_prefix(NOTIFY_HISTORY_PREFIX).await else {
+        return Vec::new();
+    };
+    let mut entries = rows
+        .into_iter()
+        .filter_map(|(key, raw)| {
+            serde_json::from_str::<DeliveryLogEntry>(&raw)
+                .ok()
+                .map(|v| (key, v))
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|(_, a), (_, b)| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| b.id.cmp(&a.id))
+    });
+    entries
+}
+
+/// Return newest delivery results for the notification settings page.
+pub async fn list_history<R: KvsRepository + ?Sized>(db: &R) -> Vec<DeliveryLogEntry> {
+    newest_history(
+        load_history_with_keys(db)
+            .await
+            .into_iter()
+            .map(|(_, entry)| entry)
+            .collect(),
+        NOTIFY_HISTORY_LIMIT,
+    )
+}
+
+async fn record_one<R: KvsRepository + ?Sized>(
+    db: &R,
+    event: &str,
+    node_key: Option<&str>,
+    channel: &str,
+    result: &Result<(), String>,
+) {
+    let now = chrono::Utc::now();
+    let entry = DeliveryLogEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        created_at: now.to_rfc3339(),
+        event: event.to_string(),
+        channel: channel.to_string(),
+        status: if result.is_ok() { "sent" } else { "failed" }.to_string(),
+        node_key: node_key.map(str::to_string),
+        detail: result.as_ref().err().cloned().unwrap_or_default(),
+    };
+    let key = format!(
+        "{}{}:{}",
+        NOTIFY_HISTORY_PREFIX,
+        now.timestamp_nanos_opt().unwrap_or_default(),
+        entry.id
+    );
+    let Ok(raw) = serde_json::to_string(&entry) else {
+        return;
+    };
+    if let Err(e) = db.set(&key, &raw).await {
+        tracing::error!("notify history: failed to store entry: {e}");
+        return;
+    }
+
+    let entries = load_history_with_keys(db).await;
+    for (stale_key, _) in entries.into_iter().skip(NOTIFY_HISTORY_LIMIT) {
+        if let Err(e) = db.delete(&stale_key).await {
+            tracing::error!("notify history: failed to prune entry: {e}");
+        }
+    }
+}
+
+/// Persist every enabled channel result. Logging must be best-effort: a KVS
+/// write problem must never prevent a watchdog scan from continuing.
+pub async fn record_report<R: KvsRepository + ?Sized>(
+    db: &R,
+    event: &str,
+    node_key: Option<&str>,
+    report: &SendReport,
+) {
+    if let Some(result) = &report.telegram {
+        record_one(db, event, node_key, "telegram", result).await;
+    }
+    if let Some(result) = &report.email {
+        record_one(db, event, node_key, "email", result).await;
     }
 }
 
@@ -276,6 +456,29 @@ pub async fn send_email(cfg: &NotifyConfig, subject: &str, text: &str) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_config_keeps_offline_alerts_enabled() {
+        // Existing installations have no `notify_offline` key in their JSON.
+        // Adding event selection must not silently stop their current outage
+        // alerts after upgrade.
+        let cfg = NotifyConfig::from_json(Some(r#"{"enabled":true}"#));
+        assert!(cfg.notify_offline);
+    }
+
+    #[test]
+    fn history_keeps_the_newest_entries_within_the_cap() {
+        let entries = vec![
+            DeliveryLogEntry::sent("2026-08-07T10:00:00Z", "offline", "telegram", None),
+            DeliveryLogEntry::sent("2026-08-07T10:01:00Z", "recovery", "email", None),
+            DeliveryLogEntry::sent("2026-08-07T10:02:00Z", "test", "telegram", None),
+        ];
+
+        let kept = newest_history(entries, 2);
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0].event, "test");
+        assert_eq!(kept[1].event, "recovery");
+    }
 
     /// Absent or corrupt config must yield a safe default (disabled), never a
     /// panic — a hand-edited kvs row shouldn't be able to take the panel down.

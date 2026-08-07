@@ -256,6 +256,10 @@ pub fn routes() -> Router<AppState> {
             "/admin/settings/notify",
             axum::routing::get(notify::get_notify_settings).put(notify::update_notify_settings),
         )
+        .route(
+            "/admin/settings/notify/history",
+            axum::routing::get(notify::get_notify_history),
+        )
         // Sends a REAL message on one channel using the stored config, ignoring
         // the master switch — you test before turning it on. Notification
         // config is the classic write-and-forget setting: a typo is otherwise

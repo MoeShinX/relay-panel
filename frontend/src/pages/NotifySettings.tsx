@@ -1,43 +1,42 @@
-import { Card, Form, Switch, Input, InputNumber, Button, message, Spin, Alert, Typography, Row, Col } from 'antd';
+import { Alert, Button, Card, Col, Empty, Form, Input, InputNumber, message, Row, Space, Spin, Switch, Table, Tag, Typography } from 'antd';
 import { SendOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState } from 'react';
 import api from '../api/client';
-import type { ApiEnvelope, NotifyConfigPublic, TestNotifyResult } from '../api/types';
+import type { ApiEnvelope, NotifyConfigPublic, NotifyHistoryEntry, TestNotifyResult } from '../api/types';
 import { MIN_OFFLINE_ALERT_SECS } from '../api/types';
 import { useI18n } from '../i18n/context';
+import type { I18nContextValue } from '../i18n/context';
 
 const { Text } = Typography;
 
-/**
- * A boolean row: label + hint on the left, switch on the right.
- *
- * The default vertical Form.Item puts the label above the control, so every
- * toggle cost three stacked lines for one bit of state. Pairing them on one
- * line is both shorter and easier to scan — the switches line up in a column
- * you can read down.
- */
 function SwitchRow({ name, label, hint }: { name: string; label: string; hint?: string }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '6px 0' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '8px 0' }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div>{label}</div>
-        {hint && (
-          <div style={{ color: 'var(--rp-text-tertiary)', fontSize: 12, marginTop: 2 }}>{hint}</div>
-        )}
+        {hint && <div style={{ color: 'var(--rp-text-tertiary)', fontSize: 12, marginTop: 2 }}>{hint}</div>}
       </div>
       <Form.Item name={name} valuePropName="checked" noStyle>
-        <Switch />
+        <Switch aria-label={label} />
       </Form.Item>
     </div>
   );
 }
 
-/**
- * v1.2.0: node-offline notification settings.
- *
- * Its own card + form, separate from the registration settings above it, so
- * saving one section can never submit the other.
- */
+function ChannelStatus({ enabled, configured, t }: { enabled: boolean; configured: boolean; t: I18nContextValue['t'] }) {
+  if (!configured) return <Tag>{t('channelNotConfigured')}</Tag>;
+  if (enabled) return <Tag color="success">{t('channelConfiguredEnabled')}</Tag>;
+  return <Tag color="default">{t('channelConfiguredDisabled')}</Tag>;
+}
+
+const eventKey = {
+  offline: 'notifyEventOffline',
+  offline_reminder: 'notifyEventOfflineReminder',
+  recovery: 'notifyEventRecovery',
+  version_outdated: 'notifyEventVersionOutdated',
+  test: 'notifyEventTest',
+} as const;
+
 export default function NotifySettings() {
   const { t } = useI18n();
   const [form] = Form.useForm();
@@ -45,6 +44,28 @@ export default function NotifySettings() {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState<string | null>(null);
   const [cfg, setCfg] = useState<NotifyConfigPublic | null>(null);
+  const [history, setHistory] = useState<NotifyHistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
+
+  const telegramEnabled = Form.useWatch('telegram_enabled', form) ?? false;
+  const emailEnabled = Form.useWatch('email_enabled', form) ?? false;
+  const globallyEnabled = Form.useWatch('enabled', form) ?? false;
+
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const res = await api.get<unknown, ApiEnvelope<NotifyHistoryEntry[]>>('/admin/settings/notify/history');
+      if (res.code !== 0 || !res.data) {
+        message.error(res.message || t('notifyHistoryLoadFailed'));
+        return;
+      }
+      setHistory(res.data);
+    } catch {
+      message.error(t('notifyHistoryLoadFailed'));
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [t]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -55,9 +76,6 @@ export default function NotifySettings() {
         return;
       }
       setCfg(res.data);
-      // Credential fields stay EMPTY: the API never sends them, and an empty
-      // submit means "keep the stored one". The placeholder tells the user one
-      // is already configured.
       form.setFieldsValue({ ...res.data, telegram_bot_token: '', smtp_password: '' });
     } catch {
       message.error(t('settingsLoadFailed'));
@@ -66,32 +84,24 @@ export default function NotifySettings() {
     }
   }, [form, t]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { void load(); void loadHistory(); }, [load, loadHistory]);
 
-  /** Persist the form. Returns true on success so `onTest` can chain off it. */
   const save = async (silent = false): Promise<boolean> => {
     let values;
     try {
       values = await form.validateFields();
     } catch {
-      return false; // antd already highlighted the offending field
+      return false;
     }
     setSaving(true);
     try {
-      const res = await api.put<unknown, ApiEnvelope<NotifyConfigPublic>>(
-        '/admin/settings/notify',
-        {
-          ...values,
-          // Empty string = "unchanged" on the backend. Sending undefined would
-          // be equivalent, but an explicit empty keeps the payload shape fixed.
-          telegram_bot_token: values.telegram_bot_token || '',
-          smtp_password: values.smtp_password || '',
-        },
-      );
+      const res = await api.put<unknown, ApiEnvelope<NotifyConfigPublic>>('/admin/settings/notify', {
+        ...values,
+        telegram_bot_token: values.telegram_bot_token || '',
+        smtp_password: values.smtp_password || '',
+      });
       if (res.code !== 0) { message.error(res.message); return false; }
       setCfg(res.data ?? null);
-      // Re-blank the credential inputs so a second save doesn't resend what the
-      // user typed once (and so the placeholder flips to "configured").
       form.setFieldsValue({ telegram_bot_token: '', smtp_password: '' });
       if (!silent) message.success(t('settingsSaved'));
       return true;
@@ -103,29 +113,15 @@ export default function NotifySettings() {
     }
   };
 
-  /**
-   * Send a real test message.
-   *
-   * The backend tests the STORED config, so this saves first — otherwise
-   * someone types a token, clicks "test", and unknowingly exercises the OLD
-   * config. Saving first makes the button do what it visibly promises.
-   */
   const onTest = async (channel: 'telegram' | 'email') => {
     if (!(await save(true))) return;
     setTesting(channel);
     try {
-      const res = await api.post<unknown, ApiEnvelope<TestNotifyResult>>(
-        '/admin/settings/notify/test',
-        { channel },
-      );
+      const res = await api.post<unknown, ApiEnvelope<TestNotifyResult>>('/admin/settings/notify/test', { channel });
       if (res.code !== 0) { message.error(res.message); return; }
-      if (res.data?.ok) {
-        message.success(t('notifyTestSent'));
-      } else {
-        // Show the provider's own words ("chat not found", auth failure) — a
-        // generic "failed" would leave the operator with nothing to act on.
-        message.error(`${t('notifyTestFailed')}: ${res.data?.detail ?? ''}`, 8);
-      }
+      if (res.data?.ok) message.success(t('notifyTestSent'));
+      else message.error(`${t('notifyTestFailed')}: ${res.data?.detail ?? ''}`, 8);
+      await loadHistory();
     } catch {
       message.error(t('notifyTestFailed'));
     } finally {
@@ -133,166 +129,86 @@ export default function NotifySettings() {
     }
   };
 
-  // The Form is rendered even while loading rather than returning early: an
-  // unattached `useForm` instance is both an antd warning AND a real bug —
-  // `load()` calls setFieldsValue, and on a form that isn't mounted yet those
-  // values silently don't stick.
+  const telegramConfigured = Boolean(cfg?.telegram_bot_token_set && cfg.telegram_chat_id);
+  const emailConfigured = Boolean(cfg?.smtp_host && cfg.smtp_to);
+
+  const columns = [
+    { title: t('notifyHistoryTime'), dataIndex: 'created_at', key: 'created_at', width: 180, render: (v: string) => new Date(v).toLocaleString() },
+    { title: t('notifyHistoryEvent'), dataIndex: 'event', key: 'event', width: 140, render: (v: string) => {
+      const key = eventKey[v as keyof typeof eventKey];
+      return key ? t(key) : v;
+    } },
+    { title: t('notifyHistoryNode'), dataIndex: 'node_key', key: 'node_key', width: 150, render: (v?: string | null) => v || '-' },
+    { title: t('notifyHistoryChannel'), dataIndex: 'channel', key: 'channel', width: 110 },
+    { title: t('notifyHistoryResult'), dataIndex: 'status', key: 'status', width: 110, render: (v: string) => <Tag color={v === 'sent' ? 'success' : 'error'}>{v === 'sent' ? t('notifyHistorySent') : t('notifyHistoryFailed')}</Tag> },
+    { title: t('notifyHistoryDetail'), dataIndex: 'detail', key: 'detail', render: (v: string) => v || '-' },
+  ];
+
   return (
-    <Card
-      title={t('notifySettings')}
-      style={{ marginTop: 16 }}
-      extra={
-        <Button type="primary" loading={saving} disabled={loading} onClick={() => save()}>
-          {t('save')}
-        </Button>
-      }
-    >
-      <Alert
-        type="info"
-        showIcon
-        style={{ marginBottom: 16 }}
-        title={t('notifyIntro')}
-        description={t('notifyIntroDesc')}
-      />
-
+    <Card title={t('notifySettings')} style={{ marginTop: 16 }} extra={<Button type="primary" loading={saving} disabled={loading} onClick={() => void save()}>{t('save')}</Button>}>
+      <Alert type="info" showIcon style={{ marginBottom: 16 }} title={t('notifyIntro')} description={t('notifyIntroDesc')} />
       <Spin spinning={loading}>
-      {/* Laid out in columns rather than one long stack of full-width inputs.
-          A chat id or a port is a short value; giving each its own full-width
-          row made the page scroll for no reason. Everything collapses to a
-          single column below `lg`. */}
-      <Form form={form} layout="vertical">
-        <Row gutter={16}>
-        <Col xs={24} lg={12}>
-        <Card size="small" style={{ marginBottom: 16 }} styles={{ body: { minHeight: 168 } }}>
-          <SwitchRow name="enabled" label={t('notifyEnabled')} />
-          <Form.Item
-            name="offline_alert_secs"
-            label={t('offlineAlertSecs')}
-            extra={t('offlineAlertSecsHint').replace('{min}', String(MIN_OFFLINE_ALERT_SECS))}
-            style={{ marginTop: 12, marginBottom: 12 }}
-            rules={[{
-              validator: (_, v) => (Number(v) >= MIN_OFFLINE_ALERT_SECS
-                ? Promise.resolve()
-                : Promise.reject(new Error(
-                  t('offlineAlertSecsTooSmall').replace('{min}', String(MIN_OFFLINE_ALERT_SECS)),
-                ))),
-            }]}
-          >
-            <InputNumber min={MIN_OFFLINE_ALERT_SECS} style={{ width: 180 }} addonAfter={t('seconds')} />
-          </Form.Item>
-          <SwitchRow name="notify_recovery" label={t('notifyRecovery')} hint={t('notifyRecoveryHint')} />
-        </Card>
-        </Col>
+        <Form form={form} layout="vertical">
+          <Card size="small" title={t('notifyRules')} style={{ marginBottom: 16 }}>
+            <Row gutter={24}>
+              <Col xs={24} lg={12}>
+                <SwitchRow name="enabled" label={t('notifyEnabled')} />
+                <SwitchRow name="notify_offline" label={t('notifyOffline')} hint={t('notifyOfflineHint')} />
+                <SwitchRow name="notify_recovery" label={t('notifyRecovery')} hint={t('notifyRecoveryHint')} />
+              </Col>
+              <Col xs={24} lg={12}>
+                <Form.Item name="offline_alert_secs" label={t('offlineAlertSecs')} extra={t('offlineAlertSecsHint').replace('{min}', String(MIN_OFFLINE_ALERT_SECS))} rules={[{ validator: (_, v) => Number(v) >= MIN_OFFLINE_ALERT_SECS ? Promise.resolve() : Promise.reject(new Error(t('offlineAlertSecsTooSmall').replace('{min}', String(MIN_OFFLINE_ALERT_SECS)))) }]}>
+                  <InputNumber min={MIN_OFFLINE_ALERT_SECS} style={{ width: 180 }} addonAfter={t('seconds')} />
+                </Form.Item>
+                <Form.Item name="repeat_alert_minutes" label={t('repeatAlertMinutes')} extra={t('repeatAlertMinutesHint')}>
+                  <InputNumber min={0} style={{ width: 180 }} addonAfter={t('minutes')} />
+                </Form.Item>
+                <SwitchRow name="notify_version_outdated" label={t('notifyVersionOutdated')} hint={t('notifyVersionOutdatedHint')} />
+              </Col>
+            </Row>
+            {globallyEnabled && !telegramEnabled && !emailEnabled && <Alert type="warning" showIcon message={t('notifyNoChannelsHint')} style={{ marginTop: 8 }} />}
+          </Card>
 
-        {/* Telegram sits beside the global block, top-aligned with it: it only
-            has two fields, so on its own row it wasted most of the width. */}
-        <Col xs={24} lg={12}>
+          <Card size="small" title={t('notificationChannels')} style={{ marginBottom: 16 }}>
+            <Row gutter={16}>
+              <Col xs={24} lg={12}>
+                <Card size="small" title={<Space>Telegram <ChannelStatus enabled={telegramEnabled} configured={telegramConfigured} t={t} /></Space>} style={{ height: '100%' }}>
+                  <SwitchRow name="telegram_enabled" label={t('channelEnableLabel')} />
+                  <Form.Item name="telegram_bot_token" label="Bot Token" extra={t('credentialKeepHint')}>
+                    <Input.Password autoComplete="off" placeholder={cfg?.telegram_bot_token_set ? t('credentialConfigured') : t('credentialEmpty')} />
+                  </Form.Item>
+                  <Form.Item name="telegram_chat_id" label="Chat ID" extra={t('telegramChatIdHint')}>
+                    <Input autoComplete="off" placeholder="-1001234567890" />
+                  </Form.Item>
+                  <Button icon={<SendOutlined />} loading={testing === 'telegram'} onClick={() => void onTest('telegram')}>{t('saveAndTest')}</Button>
+                </Card>
+              </Col>
+              <Col xs={24} lg={12}>
+                <Card size="small" title={<Space>{t('email')} <ChannelStatus enabled={emailEnabled} configured={emailConfigured} t={t} /></Space>} style={{ height: '100%' }}>
+                  <SwitchRow name="email_enabled" label={t('channelEnableLabel')} />
+                  <Row gutter={16}>
+                    <Col xs={24} md={12}><Form.Item name="smtp_host" label={t('smtpHost')}><Input autoComplete="off" placeholder="smtp.example.com" /></Form.Item></Col>
+                    <Col xs={12} md={6}><Form.Item name="smtp_port" label={t('smtpPort')} extra={t('smtpPortHint')}><InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="465" /></Form.Item></Col>
+                    <Col xs={12} md={6}><Form.Item name="smtp_tls" label={t('smtpTls')} extra={t('smtpTlsHint')} valuePropName="checked"><Switch aria-label={t('smtpTls')} /></Form.Item></Col>
+                    <Col xs={24} md={12}><Form.Item name="smtp_username" label={t('smtpUsername')}><Input autoComplete="off" placeholder="ops@example.com" /></Form.Item></Col>
+                    <Col xs={24} md={12}><Form.Item name="smtp_password" label={t('smtpPassword')} extra={t('credentialKeepHint')}><Input.Password autoComplete="new-password" placeholder={cfg?.smtp_password_set ? t('credentialConfigured') : t('credentialEmpty')} /></Form.Item></Col>
+                    <Col xs={24} md={12}><Form.Item name="smtp_from" label={t('smtpFrom')} extra={t('smtpFromHint')}><Input autoComplete="off" placeholder="ops@example.com" /></Form.Item></Col>
+                    <Col xs={24}><Form.Item name="smtp_to" label={t('smtpTo')} extra={t('smtpToHint')}><Input autoComplete="off" placeholder="admin@example.com" /></Form.Item></Col>
+                  </Row>
+                  <Button icon={<SendOutlined />} loading={testing === 'email'} onClick={() => void onTest('email')}>{t('saveAndTest')}</Button>
+                </Card>
+              </Col>
+            </Row>
+          </Card>
 
-        <Card
-          size="small"
-          title="Telegram"
-          /* The channel's on/off lives in the header rather than as a labelled
-             row inside: it governs the whole card, and putting it there removes
-             a full field from each channel. */
-          extra={
-            <Form.Item name="telegram_enabled" valuePropName="checked" noStyle>
-              <Switch size="small" />
-            </Form.Item>
-          }
-          style={{ marginBottom: 16 }}
-        >
-          <Row gutter={16}>
-            <Col xs={24} md={12}>
-              <Form.Item name="telegram_bot_token" label="Bot Token" extra={t('credentialKeepHint')}>
-                <Input.Password
-                  autoComplete="off"
-                  placeholder={cfg?.telegram_bot_token_set ? t('credentialConfigured') : t('credentialEmpty')}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={12}>
-              <Form.Item name="telegram_chat_id" label="Chat ID" extra={t('telegramChatIdHint')}>
-                <Input autoComplete="off" placeholder="-1001234567890" />
-              </Form.Item>
-            </Col>
-          </Row>
-          <Button
-            icon={<SendOutlined />}
-            loading={testing === 'telegram'}
-            onClick={() => onTest('telegram')}
-          >
-            {t('saveAndTest')}
-          </Button>
-        </Card>
-        </Col>
-        </Row>
+          <Card size="small" title={t('deliveryHistory')}>
+            <Spin spinning={historyLoading}>
+              {history.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('notifyHistoryEmpty')} /> : <Table<NotifyHistoryEntry> dataSource={history} columns={columns} rowKey="id" pagination={false} scroll={{ x: 860 }} size="small" />}
+            </Spin>
+          </Card>
 
-        <Card
-          size="small"
-          title={t('email')}
-          extra={
-            <Form.Item name="email_enabled" valuePropName="checked" noStyle>
-              <Switch size="small" />
-            </Form.Item>
-          }
-          style={{ marginBottom: 16 }}
-        >
-          {/* Full width, so the seven fields fit in two dense rows instead of
-              seven stacked ones. Grouped by what you set together: the server
-              (host/port/TLS) on one line, then credentials and addresses. */}
-          <Row gutter={16}>
-            <Col xs={24} md={12} lg={8}>
-              <Form.Item name="smtp_host" label={t('smtpHost')}>
-                <Input autoComplete="off" placeholder="smtp.example.com" />
-              </Form.Item>
-            </Col>
-            <Col xs={12} md={6} lg={4}>
-              <Form.Item name="smtp_port" label={t('smtpPort')} extra={t('smtpPortHint')}>
-                <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="465" />
-              </Form.Item>
-            </Col>
-            <Col xs={12} md={6} lg={4}>
-              <Form.Item name="smtp_tls" label={t('smtpTls')} extra={t('smtpTlsHint')} valuePropName="checked">
-                <Switch />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={12} lg={8}>
-              <Form.Item name="smtp_username" label={t('smtpUsername')}>
-                <Input autoComplete="off" placeholder="ops@example.com" />
-              </Form.Item>
-            </Col>
-          </Row>
-          <Row gutter={16}>
-            <Col xs={24} md={8}>
-              <Form.Item name="smtp_password" label={t('smtpPassword')} extra={t('credentialKeepHint')}>
-                <Input.Password
-                  autoComplete="new-password"
-                  placeholder={cfg?.smtp_password_set ? t('credentialConfigured') : t('credentialEmpty')}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={8}>
-              <Form.Item name="smtp_from" label={t('smtpFrom')} extra={t('smtpFromHint')}>
-                <Input autoComplete="off" placeholder="ops@example.com" />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={8}>
-              <Form.Item name="smtp_to" label={t('smtpTo')} extra={t('smtpToHint')}>
-                <Input autoComplete="off" placeholder="admin@example.com" />
-              </Form.Item>
-            </Col>
-          </Row>
-          <Button
-            icon={<SendOutlined />}
-            loading={testing === 'email'}
-            onClick={() => onTest('email')}
-          >
-            {t('saveAndTest')}
-          </Button>
-        </Card>
-
-        <Text type="secondary" style={{ fontSize: 12 }}>{t('notifyCredentialNote')}</Text>
-      </Form>
+          <Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: 12 }}>{t('notifyCredentialNote')}</Text>
+        </Form>
       </Spin>
     </Card>
   );
