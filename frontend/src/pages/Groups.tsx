@@ -48,6 +48,8 @@ export default function Groups() {
   const [rotating, setRotating] = useState<DeviceGroup | null>(null);
   const [confirmName, setConfirmName] = useState('');
   const [rotateBusy, setRotateBusy] = useState(false);
+  // See load(): a failed read must not be shown as an empty group list.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
 
@@ -67,7 +69,15 @@ export default function Groups() {
     setLoading(true);
     try {
       const g = await api.get<unknown, ApiEnvelope<DeviceGroup[]>>('/groups');
-      setGroups(g.data || []);
+      // `code: 500` arrives inside a 200 response with `data: null`, so without
+      // this check a database outage renders as "no groups" — and from here an
+      // operator would go create duplicates of groups that still exist.
+      if (g.code !== 0) {
+        setLoadFailed(true);
+      } else {
+        setLoadFailed(false);
+        setGroups(g.data || []);
+      }
       if (isAdmin) {
         try {
           const u = await api.get<unknown, ApiEnvelope<User[]>>('/admin/users');
@@ -85,6 +95,8 @@ export default function Groups() {
           setNodes(n.data || []);
         } catch { setNodes([]); }
       }
+    } catch {
+      setLoadFailed(true);
     } finally { setLoading(false); }
   }, [isAdmin]);
 
@@ -421,6 +433,15 @@ export default function Groups() {
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>{t('addGroup')}</Button>
         </Space>
       </div>
+      {loadFailed && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 12 }}
+          title={t('loadFailed')}
+          description={t('loadFailedRetry')}
+        />
+      )}
       <Table
         dataSource={groups}
         columns={columns}

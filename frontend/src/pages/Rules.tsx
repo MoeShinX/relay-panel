@@ -68,6 +68,11 @@ export default function Rules() {
   // user then sees a load-failure notice and rule creation is blocked, instead
   // of a misleading empty inbound dropdown.
   const [sharedLoadFailed, setSharedLoadFailed] = useState(false);
+  // The backend reports a failed read as `code: 500` inside a 200 response, so
+  // the axios success path runs and `res.data` is null. Without this flag
+  // `setRules(res.data || [])` renders a database outage as "you have no
+  // rules" — the one thing the list must never claim.
+  const [listLoadFailed, setListLoadFailed] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
   // v1.0.7: a regular user's own traffic quota (admins read each owner's quota
   // from `users` instead). Used to flag rules whose owner is out of traffic —
@@ -108,12 +113,26 @@ export default function Rules() {
       // user → use filterOwnerUid; regular user → backend filters automatically.
       const ownerUid = filterOwnerUid ?? (isAdmin ? (user?.id ?? null) : null);
       const rulesUrl = ownerUid ? `/rules?owner_uid=${ownerUid}` : '/rules';
+      // The rejection is caught here rather than in a `catch` block: this body
+      // is inside a useCallback, and adding try/catch/finally around it trips
+      // react-hooks/preserve-manual-memoization (the React Compiler cannot
+      // preserve the memoization through that shape).
       const [r, g] = await Promise.all([
         api.get<unknown, ApiEnvelope<ForwardRule[]>>(rulesUrl),
         api.get<unknown, ApiEnvelope<DeviceGroup[]>>('/groups'),
-      ]);
-      setRules(r.data || []);
-      setGroups(g.data || []);
+      ]).catch(() => [null, null] as [null, null]);
+      // A failed read keeps whatever is already on screen rather than blanking
+      // it: the rows are still the last known truth, and replacing them with an
+      // empty table is exactly the false statement this guard exists to stop.
+      // Not an early return — the reads below are independent, and a rules
+      // failure should not also cost the user their inbound-group list.
+      if (!r || !g || r.code !== 0 || g.code !== 0) {
+        setListLoadFailed(true);
+      } else {
+        setListLoadFailed(false);
+        setRules(r.data || []);
+        setGroups(g.data || []);
+      }
       if (isAdmin) {
         try {
           const u = await api.get<unknown, ApiEnvelope<User[]>>('/admin/users');
@@ -958,6 +977,15 @@ const IMPORT_DEFAULTS = {
       {/* v0.4.12 PR1: a regular user whose shared-lines fetch failed sees a
           load-failure notice; rule creation is disabled above so they can't
           submit against an empty/unknown inbound list. */}
+      {listLoadFailed && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 12 }}
+          title={t('loadFailed')}
+          description={t('loadFailedRetry')}
+        />
+      )}
       {!isAdmin && sharedLoadFailed && (
         <Alert
           type="error"
