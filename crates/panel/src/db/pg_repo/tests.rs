@@ -2957,6 +2957,84 @@ async fn pg_rule_resume_respects_max_rules() {
     cleanup(&db).await;
 }
 
+/// PostgreSQL parity for "a failed resume leaves no open transaction".
+///
+/// PG gets this for free — the resume path uses `pool.begin()`, whose
+/// `Transaction` rolls back on drop — whereas SQLite hand-rolls BEGIN IMMEDIATE
+/// on a pooled connection and needs an explicit ROLLBACK on every error path.
+/// The contract is pinned on both backends anyway, so it does not rest on which
+/// transaction API each side happens to use today.
+#[tokio::test]
+async fn pg_rule_resume_rolls_back_when_the_update_fails() {
+    let Some(db) = repo("rule_resume_rollback").await else {
+        return;
+    };
+    sqlx::query("INSERT INTO device_groups (id, name, group_type, token, uid) VALUES (1, 'gin', 'in', 'tok-1', 1)")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    // Unlimited, so the quota check passes and we reach the UPDATE — this test
+    // is about the failure path, not the quota.
+    sqlx::query("UPDATE users SET max_rules = 0 WHERE id = 1")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    for (id, port, paused) in [(100, 20_000, false), (101, 20_001, true)] {
+        sqlx::query(
+            "INSERT INTO forward_rules \
+             (id, name, uid, listen_port, device_group_in, target_addr, target_port, paused) \
+             VALUES ($1, $2, 1, $3, 1, '127.0.0.1', 80, $4)",
+        )
+        .bind(id)
+        .bind(format!("rule-{id}"))
+        .bind(port)
+        .bind(paused)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    // Resume rule 101 AND move it onto rule 100's port: the partial unique
+    // index rejects the UPDATE from inside the open transaction.
+    let result = db
+        .update_rule_fields(
+            101,
+            &ResourceScope::All,
+            None,
+            Some(20_000),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+        )
+        .await;
+    assert!(
+        result.is_err(),
+        "moving a rule onto a taken port must fail, got {result:?}"
+    );
+
+    // The pool must still be usable: a leaked transaction would hold the row
+    // locks its FOR UPDATE reads took until the connection is recycled.
+    sqlx::query("UPDATE forward_rules SET name = 'after' WHERE id = 100")
+        .execute(&db.pool)
+        .await
+        .expect("a failed resume must not leave its transaction open");
+    let paused: bool = sqlx::query_scalar("SELECT paused FROM forward_rules WHERE id = 101")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert!(paused, "the rejected resume must not have been applied");
+    cleanup(&db).await;
+}
+
 /// overflow entry rejects and rolls back (no data written).
 #[tokio::test]
 async fn pg_traffic_batch_single_entry_overflow_rejects_and_rolls_back() {
