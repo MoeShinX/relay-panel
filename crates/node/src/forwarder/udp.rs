@@ -18,6 +18,7 @@
 
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
+use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
@@ -146,34 +147,33 @@ pub async fn serve_udp_listener(
         } else {
             // New session: bind an ephemeral outbound socket + pick/connect the
             // target, all WITHOUT holding any map guard.
-            let outbound = match super::outbound::udp_outbound_socket(source_ipv4).await {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!("UDP port {}: failed to bind outbound: {}", port, e);
-                    continue;
-                }
-            };
-            // Pick a target per the rule's load-balance strategy AND resolve it
-            // now, through the 30s DNS cache, so a DDNS target follows IP
-            // changes (see select_udp_target). UDP affinity: this happens once
-            // per NEW session, so all datagrams from the same client stay pinned
-            // to the IP chosen here until the session idles out.
-            let target = match select_udp_target(&targets, &selector, port).await {
-                Some(t) => t,
-                None => {
-                    tracing::warn!("UDP port {}: no resolvable target for session", port);
-                    continue;
-                }
-            };
-            if let Err(e) = outbound.connect(target).await {
-                tracing::warn!(
-                    "UDP port {}: failed to connect to target {}: {}",
-                    port,
-                    target,
-                    e
-                );
+            // Resolve every candidate in the selector's order. UDP affinity is
+            // still per NEW session, but unlike the former first-result path a
+            // local connect failure can fall through to a healthy standby.
+            let candidates = resolve_udp_targets(&targets, &selector, port).await;
+            if candidates.is_empty() {
+                tracing::warn!("UDP port {}: no resolvable target for session", port);
                 continue;
             }
+            let (outbound, target) =
+                match connect_udp_target(&candidates, &selector, |target| async move {
+                    let outbound = super::outbound::udp_outbound_socket(source_ipv4)
+                        .await
+                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+                    outbound
+                        .connect(target)
+                        .await
+                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+                    Ok(outbound)
+                })
+                .await
+                {
+                    Some(connected) => connected,
+                    None => {
+                        tracing::warn!("UDP port {}: all resolved targets failed to connect", port);
+                        continue;
+                    }
+                };
             let outbound = Arc::new(outbound);
 
             // Publish via the entry API (per-shard lock, sync — no .await while
@@ -274,24 +274,54 @@ pub async fn serve_udp_listener(
 /// the 60s idle timeout, after which new datagrams open a fresh session against
 /// the current IP.)
 ///
-/// Returns the first target, in selector order, that resolves to at least one
-/// address; None when none resolve.
-async fn select_udp_target(
+/// Resolve targets in selector order. A candidate is retained only when it has
+/// at least one current address; connection setup decides whether to use the
+/// next candidate after an OS-level failure.
+async fn resolve_udp_targets(
     targets: &[String],
     selector: &TargetSelector,
     port: u16,
-) -> Option<SocketAddr> {
+) -> Vec<(usize, SocketAddr)> {
+    let mut resolved = Vec::new();
     for idx in selector.order() {
         let Some(t) = targets.get(idx) else { continue };
         match super::outbound::resolve_cached(t).await {
             Ok(addrs) => {
                 if let Some(addr) = addrs.into_iter().next() {
-                    return Some(addr);
+                    resolved.push((idx, addr));
+                } else {
+                    tracing::debug!("UDP port {}: target {} resolved to no address", port, t);
                 }
-                tracing::debug!("UDP port {}: target {} resolved to no address", port, t);
             }
             Err(e) => {
                 tracing::debug!("UDP port {}: failed to resolve target {}: {}", port, t, e);
+            }
+        }
+    }
+    resolved
+}
+
+/// Establish an outbound UDP socket against candidates in selector order.
+/// Failed attempts are reported to the shared circuit breaker; a successful
+/// attempt clears that target's failure state and pins this new UDP session.
+async fn connect_udp_target<F, Fut>(
+    candidates: &[(usize, SocketAddr)],
+    selector: &TargetSelector,
+    mut connect: F,
+) -> Option<(UdpSocket, SocketAddr)>
+where
+    F: FnMut(SocketAddr) -> Fut,
+    Fut: Future<Output = Result<UdpSocket, Box<dyn std::error::Error + Send + Sync>>>,
+{
+    for &(idx, target) in candidates {
+        match connect(target).await {
+            Ok(socket) => {
+                selector.report(idx, true);
+                return Some((socket, target));
+            }
+            Err(e) => {
+                selector.report(idx, false);
+                tracing::debug!("UDP target {} connect failed: {}", target, e);
             }
         }
     }
@@ -326,21 +356,35 @@ mod tests {
 
     /// Failover order picks the first (primary) target and resolves it.
     #[tokio::test]
-    async fn select_udp_target_picks_first_in_order() {
+    async fn resolve_udp_targets_keeps_first_in_order() {
         let targets = vec!["127.0.0.1:9".to_string(), "127.0.0.2:9".to_string()];
         let selector = TargetSelector::new(LoadBalanceStrategy::Failover, 2);
-        let got = select_udp_target(&targets, &selector, 5000).await;
+        let got = resolve_udp_targets(&targets, &selector, 5000)
+            .await
+            .into_iter()
+            .next()
+            .map(|(_, addr)| addr);
         assert_eq!(got, Some("127.0.0.1:9".parse().unwrap()));
     }
 
     /// Round-robin advances the shared cursor across successive new sessions,
     /// so consecutive sessions pin to different targets.
     #[tokio::test]
-    async fn select_udp_target_follows_round_robin() {
+    async fn resolve_udp_targets_follows_round_robin() {
         let targets = vec!["127.0.0.1:9".to_string(), "127.0.0.2:9".to_string()];
         let selector = TargetSelector::new(LoadBalanceStrategy::RoundRobin, 2);
-        let a = select_udp_target(&targets, &selector, 5000).await.unwrap();
-        let b = select_udp_target(&targets, &selector, 5000).await.unwrap();
+        let a = resolve_udp_targets(&targets, &selector, 5000)
+            .await
+            .into_iter()
+            .next()
+            .unwrap()
+            .1;
+        let b = resolve_udp_targets(&targets, &selector, 5000)
+            .await
+            .into_iter()
+            .next()
+            .unwrap()
+            .1;
         assert_eq!(a, "127.0.0.1:9".parse().unwrap());
         assert_eq!(b, "127.0.0.2:9".parse().unwrap());
     }
@@ -348,18 +392,49 @@ mod tests {
     /// A target that can't be resolved (no port → immediate parse error, no DNS)
     /// is skipped, falling through to the next resolvable target in order.
     #[tokio::test]
-    async fn select_udp_target_skips_unresolvable() {
+    async fn resolve_udp_targets_skips_unresolvable() {
         let targets = vec!["nocolon-no-port".to_string(), "127.0.0.1:9".to_string()];
         let selector = TargetSelector::new(LoadBalanceStrategy::Failover, 2);
-        let got = select_udp_target(&targets, &selector, 5000).await;
+        let got = resolve_udp_targets(&targets, &selector, 5000)
+            .await
+            .into_iter()
+            .next()
+            .map(|(_, addr)| addr);
         assert_eq!(got, Some("127.0.0.1:9".parse().unwrap()));
+    }
+
+    /// A failed UDP connect must fall through to the next resolved target in
+    /// selector order instead of dropping the first datagram for the session.
+    #[tokio::test]
+    async fn connect_udp_target_falls_back_after_connect_failure() {
+        let primary: SocketAddr = "127.0.0.1:9".parse().unwrap();
+        let standby: SocketAddr = "127.0.0.2:9".parse().unwrap();
+        let selector = TargetSelector::new(LoadBalanceStrategy::Failover, 2);
+
+        let chosen = connect_udp_target(
+            &[(0, primary), (1, standby)],
+            &selector,
+            |target| async move {
+                if target == primary {
+                    Err(Box::new(std::io::Error::other("primary connect failed"))
+                        as Box<dyn std::error::Error + Send + Sync>)
+                } else {
+                    Ok(UdpSocket::bind("127.0.0.1:0").await.unwrap())
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(chosen.map(|(_, target)| target), Some(standby));
     }
 
     /// No targets → None (the caller drops the datagram and warns).
     #[tokio::test]
-    async fn select_udp_target_none_when_empty() {
+    async fn resolve_udp_targets_is_empty_when_no_target_exists() {
         let targets: Vec<String> = vec![];
         let selector = TargetSelector::new(LoadBalanceStrategy::RoundRobin, 0);
-        assert!(select_udp_target(&targets, &selector, 5000).await.is_none());
+        assert!(resolve_udp_targets(&targets, &selector, 5000)
+            .await
+            .is_empty());
     }
 }
