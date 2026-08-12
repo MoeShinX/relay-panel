@@ -113,26 +113,33 @@ export default function Rules() {
       // user → use filterOwnerUid; regular user → backend filters automatically.
       const ownerUid = filterOwnerUid ?? (isAdmin ? (user?.id ?? null) : null);
       const rulesUrl = ownerUid ? `/rules?owner_uid=${ownerUid}` : '/rules';
-      // The rejection is caught here rather than in a `catch` block: this body
-      // is inside a useCallback, and adding try/catch/finally around it trips
-      // react-hooks/preserve-manual-memoization (the React Compiler cannot
-      // preserve the memoization through that shape).
-      const [r, g] = await Promise.all([
+      // allSettled, not all: these are two independent reads and each one's
+      // result must survive the other failing. `Promise.all` rejects on the
+      // first rejection and discards the sibling's value, so a failed /rules
+      // also threw away a perfectly good group list — which is the list the
+      // create-rule form needs, leaving an admin with an empty inbound picker
+      // on a page whose only problem was the rules query.
+      //
+      // The rejection is handled here rather than in a `catch` block because
+      // this body is inside a useCallback, and wrapping it in try/catch/finally
+      // trips react-hooks/preserve-manual-memoization.
+      const [rulesRes, groupsRes] = await Promise.allSettled([
         api.get<unknown, ApiEnvelope<ForwardRule[]>>(rulesUrl),
         api.get<unknown, ApiEnvelope<DeviceGroup[]>>('/groups'),
-      ]).catch(() => [null, null] as [null, null]);
-      // A failed read keeps whatever is already on screen rather than blanking
-      // it: the rows are still the last known truth, and replacing them with an
-      // empty table is exactly the false statement this guard exists to stop.
-      // Not an early return — the reads below are independent, and a rules
-      // failure should not also cost the user their inbound-group list.
-      if (!r || !g || r.code !== 0 || g.code !== 0) {
-        setListLoadFailed(true);
-      } else {
-        setListLoadFailed(false);
-        setRules(r.data || []);
-        setGroups(g.data || []);
-      }
+      ]);
+      // A read that failed keeps whatever is already on screen rather than
+      // blanking it: the rows are still the last known truth, and replacing
+      // them with an empty table is the false statement this guard exists to
+      // stop. Each list is applied on its own.
+      const rules = rulesRes.status === 'fulfilled' && rulesRes.value.code === 0
+        ? rulesRes.value
+        : null;
+      const groups = groupsRes.status === 'fulfilled' && groupsRes.value.code === 0
+        ? groupsRes.value
+        : null;
+      if (rules) setRules(rules.data || []);
+      if (groups) setGroups(groups.data || []);
+      setListLoadFailed(!rules || !groups);
       if (isAdmin) {
         try {
           const u = await api.get<unknown, ApiEnvelope<User[]>>('/admin/users');
