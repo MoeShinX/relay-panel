@@ -96,22 +96,50 @@ impl UserRepository for PgRepository {
         password_hash: &str,
         plan_id: i64,
     ) -> Result<u64, DbError> {
-        // Atomic INSERT...SELECT: copies the plan's quota fields into the new
-        // user row in one statement. PG positional params can be reused, so
-        // $3 serves both the plan_id column value AND the WHERE filter (unlike
-        // SQLite's positional ? which must be bound once per occurrence).
-        // 0 rows_affected = plan missing → caller fails the registration.
-        let result = sqlx::query(
-            "INSERT INTO users (username, password, plan_id, max_rules, traffic_limit, speed_limit, ip_limit) \
-             SELECT $1, $2, $3, max_rules, traffic, speed_limit, ip_limit \
-             FROM plans WHERE id = $3",
+        // Keep quota and plan authorization in one transaction. PostgreSQL's
+        // default READ COMMITTED isolation would give the INSERT and grant
+        // SELECT independent snapshots, allowing a concurrent plan edit to
+        // create a user with the old grant_all_groups flag but the new group
+        // list (or vice versa). A repeatable-read transaction makes both
+        // statements consume one coherent plan snapshot.
+        //
+        // `RETURNING` preserves the existing missing-plan contract (None → 0
+        // rows) while supplying the new user id for its explicit line grants.
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            .execute(&mut *tx)
+            .await?;
+        let inserted: Option<(i64,)> = sqlx::query_as(
+            "INSERT INTO users \
+             (username, password, plan_id, max_rules, traffic_limit, speed_limit, ip_limit, all_device_groups) \
+             SELECT $1, $2, $3, max_rules, traffic, speed_limit, ip_limit, grant_all_groups \
+             FROM plans WHERE id = $3 \
+             RETURNING id",
         )
         .bind(username)
         .bind(password_hash)
         .bind(plan_id)
-        .execute(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?;
-        Ok(result.rows_affected())
+        let Some((user_id,)) = inserted else {
+            tx.commit().await?;
+            return Ok(0);
+        };
+
+        sqlx::query(
+            "INSERT INTO user_device_groups (user_id, device_group_id) \
+             SELECT $1, pdg.device_group_id \
+             FROM plan_device_groups pdg \
+             JOIN plans p ON p.id = pdg.plan_id \
+             WHERE pdg.plan_id = $2 AND p.grant_all_groups = FALSE",
+        )
+        .bind(user_id)
+        .bind(plan_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(1)
     }
 
     async fn update_password(&self, id: i64, new_hash: &str) -> Result<u64, DbError> {

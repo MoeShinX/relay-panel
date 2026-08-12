@@ -2177,6 +2177,62 @@ async fn pg_new_user_has_no_device_groups_by_default() {
     cleanup(&db).await;
 }
 
+/// PostgreSQL parity: registration must inherit the selected plan's line
+/// authorization together with its quotas.
+#[tokio::test]
+async fn pg_insert_user_from_plan_inherits_plan_group_authorization() {
+    let Some(db) = repo("registration_plan_groups").await else {
+        return;
+    };
+    seed_device_group(&db, 60, 1).await;
+
+    let restricted_plan = db
+        .create_plan_with_groups(
+            "restricted",
+            5,
+            1_000,
+            "0",
+            "data",
+            0,
+            false,
+            false,
+            "",
+            false,
+            &[60],
+        )
+        .await
+        .unwrap();
+    db.insert_user_from_plan("restricted-user", "hash", restricted_plan)
+        .await
+        .unwrap();
+    let restricted = db
+        .find_by_username("restricted-user")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!restricted.all_device_groups);
+    assert_eq!(
+        db.list_user_device_groups(restricted.id).await.unwrap(),
+        vec![60],
+        "a restricted plan grants exactly its configured lines at registration (PG)"
+    );
+
+    let all_plan = db
+        .create_plan_with_groups("all", 5, 1_000, "0", "data", 0, false, false, "", true, &[])
+        .await
+        .unwrap();
+    db.insert_user_from_plan("all-user", "hash", all_plan)
+        .await
+        .unwrap();
+    let all = db.find_by_username("all-user").await.unwrap().unwrap();
+    assert!(
+        all.all_device_groups,
+        "an all-lines plan grants all lines immediately (PG)"
+    );
+    assert!(db.list_user_device_groups(all.id).await.unwrap().is_empty());
+    cleanup(&db).await;
+}
+
 // ── v0.4.10 PR4: token_version + must_change_password (PG parity) ──
 
 #[tokio::test]
@@ -2835,6 +2891,69 @@ async fn pg_rule_update_rule_fields_partial_update() {
             .await
             .unwrap();
     assert!(dgo.0.is_none(), "device_group_out must be cleared (PG)");
+    cleanup(&db).await;
+}
+
+/// PostgreSQL must enforce the resume quota under the same user-row lock used
+/// by rule creation. CI supplies TEST_PG_URL, so this contract runs there even
+/// though local developer machines may skip it.
+#[tokio::test]
+async fn pg_rule_resume_respects_max_rules() {
+    let Some(db) = repo("rule_resume_quota").await else {
+        return;
+    };
+    sqlx::query("INSERT INTO device_groups (id, name, group_type, token, uid) VALUES (1, 'gin', 'in', 'tok-1', 1)")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE users SET max_rules = 1 WHERE id = 1")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    for (id, port, paused) in [(100, 20_000, false), (101, 20_001, true)] {
+        sqlx::query(
+            "INSERT INTO forward_rules \
+             (id, name, uid, listen_port, device_group_in, target_addr, target_port, paused) \
+             VALUES ($1, $2, 1, $3, 1, '127.0.0.1', 80, $4)",
+        )
+        .bind(id)
+        .bind(format!("rule-{id}"))
+        .bind(port)
+        .bind(paused)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    let result = db
+        .update_rule_fields(
+            101,
+            &ResourceScope::All,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+        )
+        .await;
+    assert!(
+        matches!(result, Err(DbError::QuotaExceeded)),
+        "a full plan must reject manual resume, got {result:?}"
+    );
+    let paused: bool = sqlx::query_scalar("SELECT paused FROM forward_rules WHERE id = 101")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert!(paused, "quota-rejected resume must not modify the rule");
     cleanup(&db).await;
 }
 
@@ -4243,6 +4362,59 @@ async fn pg_migration_does_not_pause_cross_owner_shared_inbound_rules() {
         !paused.0,
         "cross-owner shared inbound rule must NOT be paused (PG)"
     );
+    cleanup(&db).await;
+}
+
+/// PostgreSQL parity for max-rule downgrade reconciliation. The paused rules
+/// must remain paused after a later upgrade until the user resumes them.
+#[tokio::test]
+async fn pg_buy_plan_pauses_newest_rules_above_new_max_without_auto_resume() {
+    let Some(db) = repo("buy_plan_limit_reconcile").await else {
+        return;
+    };
+    let (alice, pid) = seed_buyer_and_plan(&db, "100.00", 0, "0", 0, false).await;
+    seed_device_group(&db, 50, alice).await;
+    for (id, port) in [(100, 20_000), (101, 20_001), (102, 20_002)] {
+        sqlx::query(
+            "INSERT INTO forward_rules \
+             (id, name, uid, listen_port, device_group_in, target_addr, target_port, paused) \
+             VALUES ($1, $2, $3, $4, 50, '127.0.0.1', 80, FALSE)",
+        )
+        .bind(id)
+        .bind(format!("rule-{id}"))
+        .bind(alice)
+        .bind(port)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    db.buy_plan(alice, pid, "lower", 0, 0, 1, 0, false, false, &[50], &[50])
+        .await
+        .unwrap();
+    let after_downgrade: Vec<(i64, bool, bool)> = sqlx::query_as(
+        "SELECT id, paused, auto_paused FROM forward_rules WHERE uid = $1 ORDER BY id",
+    )
+    .bind(alice)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        after_downgrade,
+        vec![(100, false, false), (101, true, false), (102, true, false)]
+    );
+
+    db.buy_plan(alice, pid, "higher", 0, 0, 3, 0, false, false, &[50], &[50])
+        .await
+        .unwrap();
+    let after_upgrade: Vec<(i64, bool, bool)> = sqlx::query_as(
+        "SELECT id, paused, auto_paused FROM forward_rules WHERE uid = $1 ORDER BY id",
+    )
+    .bind(alice)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(after_upgrade, after_downgrade);
     cleanup(&db).await;
 }
 
