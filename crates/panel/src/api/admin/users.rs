@@ -18,11 +18,13 @@ pub async fn list_users(
 ) -> Json<ApiResponse<Vec<UserPublic>>> {
     // SELECT * is safe here — UserPublic has no `password` field, so sqlx
     // simply ignores that column. The hash never reaches the API response.
-    let users: Vec<UserPublic> = state.db.list_users_public().await.unwrap_or_else(|e| {
-        tracing::error!("list_users: db error: {}", e);
-        Vec::new()
-    });
-    Json(ApiResponse::success(users))
+    match state.db.list_users_public().await {
+        Ok(users) => Json(ApiResponse::success(users)),
+        Err(e) => {
+            tracing::error!("list_users: db error: {}", e);
+            Json(err(500, "数据库错误"))
+        }
+    }
 }
 
 /// Admin creates a NON-ADMIN user. Per the v0.4.4 two-tier model, admins can

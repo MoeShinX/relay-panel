@@ -14,11 +14,13 @@ pub async fn list_groups(
     State(state): State<AppState>,
 ) -> Json<ApiResponse<Vec<DeviceGroup>>> {
     let scope = user.resource_scope();
-    let groups: Vec<DeviceGroup> = state.db.list_groups(&scope).await.unwrap_or_else(|e| {
-        tracing::error!("list_groups: db error: {}", e);
-        Vec::new()
-    });
-    Json(ApiResponse::success(groups))
+    match state.db.list_groups(&scope).await {
+        Ok(groups) => Json(ApiResponse::success(groups)),
+        Err(e) => {
+            tracing::error!("list_groups: db error: {}", e);
+            Json(err(500, "数据库错误"))
+        }
+    }
 }
 
 pub async fn create_group(

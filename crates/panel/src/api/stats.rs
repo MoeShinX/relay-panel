@@ -92,7 +92,7 @@ pub async fn get_stats(
     State(state): State<AppState>,
     Query(q): Query<StatsQuery>,
 ) -> Json<ApiResponse<Vec<Statistic>>> {
-    let stats: Vec<Statistic> = state
+    let stats: Vec<Statistic> = match state
         .db
         .query_stats(
             q.stat_type.as_deref(),
@@ -101,10 +101,17 @@ pub async fn get_stats(
             q.to.as_deref(),
         )
         .await
-        .unwrap_or_else(|e| {
+    {
+        Ok(stats) => stats,
+        Err(e) => {
             tracing::error!("get_stats: db error: {}", e);
-            Vec::new()
-        });
+            return Json(ApiResponse {
+                code: 500,
+                message: "数据库错误".into(),
+                data: None,
+            });
+        }
+    };
 
     Json(ApiResponse::success(stats))
 }
@@ -263,15 +270,17 @@ pub async fn get_node_status(
     // drops the row, while an admin keeps it with a fallback name.
     let scope = user.resource_scope();
 
-    let rows: Vec<(String, String)> =
-        state
-            .db
-            .scan_prefix("node_status:")
-            .await
-            .unwrap_or_else(|e| {
-                tracing::error!("get_node_status: scan_prefix failed: {}", e);
-                Vec::new()
+    let rows: Vec<(String, String)> = match state.db.scan_prefix("node_status:").await {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!("get_node_status: scan_prefix failed: {}", e);
+            return Json(ApiResponse {
+                code: 500,
+                message: "数据库错误".into(),
+                data: None,
             });
+        }
+    };
 
     let mut statuses: Vec<serde_json::Value> = Vec::new();
     // v0.4.15 PR3: stamp `online` on every admin row using the SAME source of
