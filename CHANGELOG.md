@@ -8,6 +8,29 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [1.2.6] - 2026-08-12
+
+Panel only. The node remains `node-v1.2.1`; this release does not change the
+node protocol, forwarding runtime, installer, or node image.
+
+No database migration is required. Pull the panel image and restart.
+
+### Added
+
+- **Notification settings now have explicit alert rules and delivery history.**
+  Administrators can independently enable offline, recovery, node-version, and
+  repeat-offline alerts. Recent per-channel delivery outcomes are retained and
+  shown in the notification settings page, so a failed test or real alert has a
+  visible reason instead of disappearing into logs.
+
+### Changed
+
+- **Node-table transfer rates stay on one line.** The upload/download column is
+  given enough space on desktop layouts while less important columns contract
+  first, keeping live throughput values readable without disruptive wrapping.
+
+---
+
 ## [1.2.5] - 2026-08-02
 
 Panel only. The node ships separately as `node-v1.2.1` and neither release
