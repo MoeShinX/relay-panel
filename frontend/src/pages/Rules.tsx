@@ -55,7 +55,7 @@ function downloadText(filename: string, text: string) {
 export default function Rules() {
   const { t } = useI18n();
   const { isAdmin, user } = useAuth();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   // v0.4.20: admin can manage another user's rules via /rules?owner_uid=X.
   const filterOwnerUid: number | null = isAdmin
     ? (parseInt(searchParams.get('owner_uid') || '') || null)
@@ -92,12 +92,38 @@ export default function Rules() {
   const [diagnosing, setDiagnosing] = useState<ForwardRule | null>(null);
   const [diagnoseLoading, setDiagnoseLoading] = useState(false);
   const [diagnoseResult, setDiagnoseResult] = useState<DiagnoseResponse | null>(null);
-  // v0.4.9: group-name column + filter. selectedGroup === null means "all".
-  // (Explicit null, not !selectedGroup, so a future id of 0 wouldn't be falsy.)
-  const [selectedGroup, setSelectedGroup] = useState<number | null>(null);
+  // v1.2.7: the filters live in the URL, not in component state.
+  //
+  // They used to be plain useState, so a refresh dropped them and a link to
+  // "the rules on the HK line matching 8443" could not be sent to anyone —
+  // which is exactly the thing an operator wants to paste into a ticket. The
+  // page already read owner_uid from the query string; group and search now
+  // join it so the whole filter set is one shareable address.
+  //
+  // v0.4.9: selectedGroup === null means "all". Explicit null, not
+  // !selectedGroup, so a future group id of 0 would not read as falsy.
+  const selectedGroup: number | null = parseInt(searchParams.get('group') || '') || null;
   // Client-side filter over the already-loaded rules — /rules returns the whole
   // (owner-scoped) set, so searching needs no round-trip.
-  const [ruleSearch, setRuleSearch] = useState('');
+  const ruleSearch = searchParams.get('q') || '';
+
+  /**
+   * Write one filter into the query string, preserving the others.
+   *
+   * `replace` so typing in the search box does not push a history entry per
+   * keystroke — Back should leave the page, not walk the search term backwards
+   * one character at a time. An empty value drops the key entirely rather than
+   * leaving `?q=` behind.
+   */
+  const setFilter = useCallback((key: 'group' | 'q', value: string | null) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (value) next.set(key, value);
+      else next.delete(key);
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
 
   const load = useCallback(async () => {
@@ -675,19 +701,26 @@ const IMPORT_DEFAULTS = {
     { title: t('traffic'), dataIndex: 'traffic_used', key: 'traffic_used', render: (v: number) => formatBytes(v) },
     {
       title: t('action'), key: 'action', width: 260,
+      // v1.2.7: every action carries an accessible name that names its RULE.
+      // The visible text alone ("编辑") is identical on every row, so tabbing
+      // this table with a screen reader announced the same word once per rule
+      // with nothing to distinguish them — and "delete" is not a button you
+      // want to press on faith. The visible label stays short; only the
+      // accessible name is qualified.
       render: (_: unknown, r: ForwardRule) => (
         <Space>
           <Button
             size="small" type="text"
             icon={r.paused ? <PlayCircleOutlined /> : <PauseCircleOutlined />}
+            aria-label={`${r.paused ? t('resume') : t('pause')} ${r.name}`}
             onClick={() => handleTogglePause(r)}
           >
             {r.paused ? t('resume') : t('pause')}
           </Button>
-          <Button size="small" type="text" icon={<EditOutlined />} onClick={() => handleEdit(r)}>{t('edit')}</Button>
-          <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => handleCopy(r)}>{t('copy')}</Button>
+          <Button size="small" type="text" icon={<EditOutlined />} aria-label={`${t('edit')} ${r.name}`} onClick={() => handleEdit(r)}>{t('edit')}</Button>
+          <Button size="small" type="text" icon={<CopyOutlined />} aria-label={`${t('copy')} ${r.name}`} onClick={() => handleCopy(r)}>{t('copy')}</Button>
           {/* v0.4.9: diagnosis is TCP-only — disable for pure-UDP rules. */}
-          <Button size="small" type="text" icon={<MedicineBoxOutlined />} disabled={r.protocol === 'udp'} onClick={() => handleDiagnose(r)} title={r.protocol === 'udp' ? t('diagnoseUdpUnsupported') : t('diagnose')}>{t('diagnose')}</Button>
+          <Button size="small" type="text" icon={<MedicineBoxOutlined />} disabled={r.protocol === 'udp'} aria-label={`${t('diagnose')} ${r.name}`} onClick={() => handleDiagnose(r)} title={r.protocol === 'udp' ? t('diagnoseUdpUnsupported') : t('diagnose')}>{t('diagnose')}</Button>
           {/* v1.2.0: restart drops every live connection on this rule, so it is
               behind a confirm (diagnose is read-only and isn't). Disabled while
               paused — there are no listeners to restart. */}
@@ -703,13 +736,14 @@ const IMPORT_DEFAULTS = {
               type="text"
               icon={<ThunderboltOutlined />}
               disabled={r.paused}
+              aria-label={`${t('restart')} ${r.name}`}
               title={r.paused ? t('restartPausedHint') : t('restart')}
             >
               {t('restart')}
             </Button>
           </Popconfirm>
           <Popconfirm title={t('deleteRuleConfirm')} onConfirm={() => handleDelete(r.id)}>
-            <Button danger size="small" type="text">{t('delete')}</Button>
+            <Button danger size="small" type="text" aria-label={`${t('delete')} ${r.name}`}>{t('delete')}</Button>
           </Popconfirm>
         </Space>
       ),
@@ -912,8 +946,9 @@ const IMPORT_DEFAULTS = {
             allowClear
             prefix={<SearchOutlined />}
             placeholder={t('searchRulePlaceholder')}
+            aria-label={t('searchRulePlaceholder')}
             value={ruleSearch}
-            onChange={(e) => { setRuleSearch(e.target.value); setSelectedRowKeys([]); }}
+            onChange={(e) => { setFilter('q', e.target.value); setSelectedRowKeys([]); }}
             style={{ width: 220 }}
           />
           {/* v0.4.9: filter by inbound group. Only groups that actually have
@@ -922,8 +957,9 @@ const IMPORT_DEFAULTS = {
             style={{ minWidth: 180 }}
             allowClear
             placeholder={t('filterByGroup')}
+            aria-label={t('filterByGroup')}
             value={selectedGroup ?? undefined}
-            onChange={(v: number | undefined) => { setSelectedGroup(v ?? null); setSelectedRowKeys([]); }}
+            onChange={(v: number | undefined) => { setFilter('group', v == null ? null : String(v)); setSelectedRowKeys([]); }}
             options={Array.from(new Set(rules.map(r => r.device_group_in)))
               .map(gid => {
                 const g = groupMap.get(gid);
