@@ -743,6 +743,88 @@ impl RuleRepository for SqliteRepository {
             q = q.bind(uid);
         }
 
+        if paused == Some(false) {
+            // A manual resume is a state transition into the same active-rule
+            // pool guarded by insert_quota_guarded. SQLite needs BEGIN
+            // IMMEDIATE here: a deferred read/count followed by UPDATE would
+            // let two resume requests both pass the count before either writes.
+            let mut conn = self.pool.acquire().await?;
+            sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+
+            // Every statement below MUST go through try_! rather than `?`.
+            // BEGIN IMMEDIATE takes SQLite's write lock, and a bare `?` would
+            // return the connection to the pool with that transaction still
+            // open — sqlx only auto-rollbacks a `Transaction`, not a hand-rolled
+            // BEGIN on a PoolConnection. Every later write in the process would
+            // then block for busy_timeout and fail SQLITE_BUSY, and the next
+            // BEGIN IMMEDIATE on that pooled connection would error with
+            // "cannot start a transaction within a transaction". The UPDATE at
+            // the end makes this reachable in normal use: it can fail on the
+            // partial unique index when a resume also moves listen_port onto a
+            // port that is already taken. Same macro shape as
+            // insert_quota_guarded / create_rule_atomic above.
+            macro_rules! try_ {
+                ($conn:expr, $expr:expr) => {
+                    match $expr {
+                        Ok(v) => v,
+                        Err(e) => {
+                            let _ = sqlx::query("ROLLBACK").execute(&mut *$conn).await;
+                            return Err(DbError::from(e));
+                        }
+                    }
+                };
+            }
+
+            let target: Option<(i64, bool)> = match scope.owner_id() {
+                None => try_!(
+                    conn,
+                    sqlx::query_as("SELECT uid, paused FROM forward_rules WHERE id = ?")
+                        .bind(id)
+                        .fetch_optional(&mut *conn)
+                        .await
+                ),
+                Some(uid) => try_!(
+                    conn,
+                    sqlx::query_as(
+                        "SELECT uid, paused FROM forward_rules WHERE id = ? AND uid = ?"
+                    )
+                    .bind(id)
+                    .bind(uid)
+                    .fetch_optional(&mut *conn)
+                    .await
+                ),
+            };
+            let Some((uid, is_paused)) = target else {
+                try_!(conn, sqlx::query("COMMIT").execute(&mut *conn).await);
+                return Ok(0);
+            };
+            if is_paused {
+                let max_rules: i32 = try_!(
+                    conn,
+                    sqlx::query_scalar("SELECT COALESCE(max_rules, 0) FROM users WHERE id = ?")
+                        .bind(uid)
+                        .fetch_one(&mut *conn)
+                        .await
+                );
+                let active_rules: i64 = try_!(
+                    conn,
+                    sqlx::query_scalar(
+                        "SELECT COUNT(*) FROM forward_rules WHERE uid = ? AND paused = 0",
+                    )
+                    .bind(uid)
+                    .fetch_one(&mut *conn)
+                    .await
+                );
+                if max_rules > 0 && active_rules >= i64::from(max_rules) {
+                    let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                    return Err(DbError::QuotaExceeded);
+                }
+            }
+            let result = try_!(conn, q.execute(&mut *conn).await);
+            try_!(conn, sqlx::query("COMMIT").execute(&mut *conn).await);
+            return Ok(result.rows_affected());
+        }
+
         let result = q.execute(&self.pool).await?;
         Ok(result.rows_affected())
     }

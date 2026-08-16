@@ -786,6 +786,65 @@ impl RuleRepository for PgRepository {
             q = q.bind(uid);
         }
 
+        if paused == Some(false) {
+            // PostgreSQL has concurrent writers, so lock the owner row before
+            // the target rule and count. This matches buy_plan's lock order
+            // (user → rules) and serializes resume with quota-guarded creation
+            // for that user; no pair of requests can pass a stale active count.
+            let mut tx = self.pool.begin().await?;
+            let owner: Option<(i64,)> = match scope.owner_id() {
+                None => {
+                    sqlx::query_as("SELECT uid FROM forward_rules WHERE id = $1")
+                        .bind(id)
+                        .fetch_optional(&mut *tx)
+                        .await?
+                }
+                Some(uid) => {
+                    sqlx::query_as("SELECT uid FROM forward_rules WHERE id = $1 AND uid = $2")
+                        .bind(id)
+                        .bind(uid)
+                        .fetch_optional(&mut *tx)
+                        .await?
+                }
+            };
+            let Some((uid,)) = owner else {
+                tx.commit().await?;
+                return Ok(0);
+            };
+            let max_rules: i32 = sqlx::query_scalar(
+                "SELECT COALESCE(max_rules, 0) FROM users WHERE id = $1 FOR UPDATE",
+            )
+            .bind(uid)
+            .fetch_one(&mut *tx)
+            .await?;
+            let is_paused: Option<(bool,)> = sqlx::query_as(
+                "SELECT paused FROM forward_rules WHERE id = $1 AND uid = $2 FOR UPDATE",
+            )
+            .bind(id)
+            .bind(uid)
+            .fetch_optional(&mut *tx)
+            .await?;
+            let Some((is_paused,)) = is_paused else {
+                tx.commit().await?;
+                return Ok(0);
+            };
+            if is_paused {
+                let active_rules: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM forward_rules WHERE uid = $1 AND paused = FALSE",
+                )
+                .bind(uid)
+                .fetch_one(&mut *tx)
+                .await?;
+                if max_rules > 0 && active_rules >= i64::from(max_rules) {
+                    tx.rollback().await?;
+                    return Err(DbError::QuotaExceeded);
+                }
+            }
+            let result = q.execute(&mut *tx).await?;
+            tx.commit().await?;
+            return Ok(result.rows_affected());
+        }
+
         let result = q.execute(&self.pool).await?;
         Ok(result.rows_affected())
     }
