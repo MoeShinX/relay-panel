@@ -11,6 +11,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [1.2.2] - 2026-08-13
+
+Node only. Nothing on the wire changed — the config protocol stays at version
+4, so this node runs against any current panel.
+
+Worth taking if you run UDP rules with more than one target.
+
+### Fixed
+
+- **A UDP session now falls through to a standby when the primary target fails.**
+  Only the first resolved target was ever attempted, so a target that refused
+  the connection dropped the session's first datagram instead of trying the
+  backups the rule configures.
+
+- **A local bind failure is no longer blamed on the targets.** Binding the
+  outbound socket happens once per session, before target selection. It fails
+  when `OUTBOUND_BIND_IPV4` names an address the host no longer has — a NIC
+  rename or a changed DHCP lease — which says nothing about any target's health.
+  Attempting it per candidate reported that one local fault to the circuit
+  breaker once per target and tripped all of them, and replaced the precise
+  "failed to bind outbound" diagnostic with a message accusing the targets.
+
+### Changed
+
+- **Targets are resolved lazily**, one at a time as their turn comes, instead of
+  all up front. This runs on the listener's receive loop for every new session,
+  so a rule with three DNS targets and a healthy primary was paying three
+  lookups where one would do — and stalling the whole port on a cold cache for
+  two standbys it never used.
+
 ## [1.2.1] - 2026-08-02
 
 Node only. Nothing on the wire changed — the config protocol stays at version
