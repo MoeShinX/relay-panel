@@ -8,6 +8,71 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [1.2.7] - 2026-08-13
+
+Panel only. The node ships separately as `node-v1.2.2`; neither release
+requires the other and the config protocol is unchanged at version 4.
+
+No database migration. Pull the panel image and restart.
+
+**Read this one before upgrading if you sell plans**: a plan purchase now
+enforces its rule limit against rules that ALREADY exist, so buying a smaller
+plan pauses the buyer's newest excess rules immediately. See below.
+
+### Changed
+
+- **A plan's rule limit now applies to rules that already exist.** It was
+  enforced only when creating a rule, so a user who downgraded kept every rule
+  they had already made and the smaller plan bought them nothing. Buying a plan
+  now keeps the oldest active rules and pauses the newest excess ones.
+
+  The paused rules are marked like a manual pause on purpose: a later upgrade
+  does **not** silently reopen those ports. The user resumes them when they want
+  them back.
+
+  Manual resume is held to the same limit — otherwise a downgrade could be
+  undone one on/off switch at a time. Resuming past the limit now fails with a
+  clear message instead of quietly succeeding.
+
+  An admin editing `max_rules` directly on the user page is deliberately NOT
+  reconciled: that path stays "applies to new rules only".
+
+- **Registration copies the selected plan's line authorization**, not just its
+  quotas. A user could previously register onto a plan and then find they were
+  not authorized for any of the lines that plan advertises.
+
+- **A failed database read is no longer reported as an empty list.** Admin list
+  endpoints (rules, groups, users, plans, profiles, stats, node status) returned
+  an empty success on a database error, so an outage looked exactly like "you
+  have no rules" — and an operator acting on that would go and recreate things
+  that still existed. They now return an explicit error, and the pages show a
+  load-failure notice while keeping whatever was already on screen.
+
+- **Rule filters live in the URL.** The group filter and the search box were
+  component state, so a refresh dropped them and a filtered view could not be
+  linked to anyone. `group` and `q` now join the existing `owner_uid`, so the
+  whole filter set is one shareable address. Typing does not push a history
+  entry per keystroke.
+
+- **Row actions on the rules table name their rule.** Every row's buttons
+  carried the same visible word, so a screen reader announced an
+  undifferentiated list of them — including "delete". The visible labels are
+  unchanged; only the accessible name is now qualified.
+
+### Fixed
+
+- **A rejected rule resume no longer wedges the SQLite writer.** The resume path
+  opens a write transaction and returned early on error without rolling back,
+  handing the pooled connection back while it still held SQLite's write lock.
+  Every later write in the process then blocked and failed until the process
+  restarted. Reachable from an ordinary edit: resuming a rule while also moving
+  its port onto one already in use.
+
+- **A failed rules read no longer empties the inbound-group picker.** The two
+  lists were fetched together, so one failing discarded the other's result —
+  leaving an admin unable to create a rule for a problem that had nothing to do
+  with groups.
+
 ## [1.2.6] - 2026-08-12
 
 Panel only. The node remains `node-v1.2.1`; this release does not change the
