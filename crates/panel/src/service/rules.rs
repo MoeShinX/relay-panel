@@ -948,6 +948,9 @@ pub async fn update_rule(
             Ok(())
         }
         Err(DbError::UniqueViolation | DbError::PortConflict) => Err(UpdateRuleError::PortConflict),
+        Err(DbError::QuotaExceeded) => Err(UpdateRuleError::BadRequest(
+            "当前套餐的启用规则数量已达上限".to_string(),
+        )),
         Err(e) => {
             tracing::error!("update_rule {}: update_rule_fields failed: {}", id, e);
             Err(UpdateRuleError::Database(e))
