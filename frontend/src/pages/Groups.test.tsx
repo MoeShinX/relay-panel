@@ -35,6 +35,39 @@ beforeEach(() => {
   });
 });
 
+// ── A failed read reports `code: 500` with `data: null` inside a 200 response,
+// so the axios success path runs. Rendering that as an empty table would tell
+// an operator their groups are gone, and invite them to recreate groups that
+// still exist.
+describe('a database error is not an empty group list', () => {
+  it('shows a load failure instead of an empty table', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/groups') {
+        return Promise.resolve({ code: 500, message: '数据库错误', data: null });
+      }
+      return Promise.resolve(ok([]));
+    });
+    render(<Groups />);
+    await waitFor(() => expect(screen.getByText('loadFailed')).toBeInTheDocument());
+    expect(screen.getByText('loadFailedRetry')).toBeInTheDocument();
+  });
+
+  it('shows a load failure when the request itself rejects', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/groups') return Promise.reject(new Error('network down'));
+      return Promise.resolve(ok([]));
+    });
+    render(<Groups />);
+    await waitFor(() => expect(screen.getByText('loadFailed')).toBeInTheDocument());
+  });
+
+  it('shows no failure banner on a healthy read', async () => {
+    render(<Groups />);
+    await waitFor(() => expect(screen.getByText('g1')).toBeInTheDocument());
+    expect(screen.queryByText('loadFailed')).toBeNull();
+  });
+});
+
 // ── v1.2.5: a monitor-only group forwards nothing and never reaches a regular
 // user, so connect host / port range / rate / hidden are inert on it. The forms
 // stop asking for them, and nothing inert gets written to the DB.

@@ -36,24 +36,29 @@ pub async fn list_public_plans(
         let device_group_ids = if plan.grant_all_groups {
             Vec::new()
         } else {
-            state
-                .db
-                .list_plan_device_groups(plan.id)
-                .await
-                .unwrap_or_else(|e| {
+            match state.db.list_plan_device_groups(plan.id).await {
+                Ok(ids) => ids,
+                Err(e) => {
                     tracing::error!(
                         "list_public_plans: list_plan_device_groups({}) failed: {}",
                         plan.id,
                         e
                     );
-                    Vec::new()
-                })
+                    return Json(err(500, "数据库错误"));
+                }
+            }
         };
-        let device_group_names = state
-            .db
-            .list_group_names_by_ids(&device_group_ids)
-            .await
-            .unwrap_or_default();
+        let device_group_names = match state.db.list_group_names_by_ids(&device_group_ids).await {
+            Ok(names) => names,
+            Err(e) => {
+                tracing::error!(
+                    "list_public_plans: list_group_names_by_ids({}) failed: {}",
+                    plan.id,
+                    e
+                );
+                return Json(err(500, "数据库错误"));
+            }
+        };
         out.push(PlanWithGroups {
             plan,
             device_group_ids,

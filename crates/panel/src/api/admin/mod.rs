@@ -1267,6 +1267,23 @@ mod tests {
         assert_eq!(resp.data.unwrap().len(), 2);
     }
 
+    /// A failed repository read must never be rendered as an empty successful
+    /// rules list: the UI would tell an operator that every rule disappeared.
+    #[tokio::test]
+    async fn list_rules_database_error_is_not_an_empty_success() {
+        let (state, pool) = test_state().await;
+        pool.close().await;
+
+        let Json(resp) = list_rules(
+            auth(1, true),
+            Query(ListRulesQuery::default()),
+            State(state),
+        )
+        .await;
+        assert_eq!(resp.code, 500);
+        assert!(resp.data.is_none());
+    }
+
     /// v0.4.20: admin can filter rules by owner_uid query param.
     #[tokio::test]
     async fn list_rules_owner_uid_admin_only() {

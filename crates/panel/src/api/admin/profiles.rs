@@ -21,15 +21,17 @@ pub async fn list_tunnel_profiles(
     // v0.4.11 PR1: any logged-in user can see available templates (ws/tls_simple,
     // builtin + admin-created custom) for rule selection. No longer restricted
     // to builtin only.
-    let profiles: Vec<TunnelProfile> = state
+    match state
         .db
         .list_profiles(&ProfileScope::AvailableTemplates)
         .await
-        .unwrap_or_else(|e| {
+    {
+        Ok(profiles) => Json(ApiResponse::success(profiles)),
+        Err(e) => {
             tracing::error!("list_tunnel_profiles: db error: {}", e);
-            Vec::new()
-        });
-    Json(ApiResponse::success(profiles))
+            Json(err(500, "数据库错误"))
+        }
+    }
 }
 
 /// v0.4.11 PR1: admin-only endpoint for the tunnel profile management page.
@@ -39,15 +41,17 @@ pub async fn list_admin_tunnel_profiles(
     _admin: AdminOnly,
     State(state): State<AppState>,
 ) -> Json<ApiResponse<Vec<TunnelProfile>>> {
-    let profiles: Vec<TunnelProfile> = state
+    match state
         .db
         .list_profiles(&ProfileScope::ManageableCustomTemplates)
         .await
-        .unwrap_or_else(|e| {
+    {
+        Ok(profiles) => Json(ApiResponse::success(profiles)),
+        Err(e) => {
             tracing::error!("list_admin_tunnel_profiles: db error: {}", e);
-            Vec::new()
-        });
-    Json(ApiResponse::success(profiles))
+            Json(err(500, "数据库错误"))
+        }
+    }
 }
 
 pub async fn create_tunnel_profile(

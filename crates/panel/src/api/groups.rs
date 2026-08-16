@@ -57,11 +57,13 @@ pub async fn list_shared_groups(
     // v1.0.7: filter to the groups the user is authorized for. The authorized
     // set already expands all_device_groups (→ every inbound group); an
     // unassigned non-admin gets an empty set and sees nothing.
-    let authorized = state
-        .db
-        .authorized_device_group_ids(user.user_id)
-        .await
-        .unwrap_or_default();
+    let authorized = match state.db.authorized_device_group_ids(user.user_id).await {
+        Ok(ids) => ids,
+        Err(e) => {
+            tracing::error!("list_shared_groups: authorization lookup failed: {}", e);
+            return db_error();
+        }
+    };
     let filtered: Vec<_> = all_groups
         .into_iter()
         .filter(|g| authorized.contains(&g.id))
@@ -105,11 +107,16 @@ pub async fn list_shared_node_summary(
     let groups = if user.admin {
         groups
     } else {
-        let authorized = state
-            .db
-            .authorized_device_group_ids(user.user_id)
-            .await
-            .unwrap_or_default();
+        let authorized = match state.db.authorized_device_group_ids(user.user_id).await {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::error!(
+                    "list_shared_node_summary: authorization lookup failed: {}",
+                    e
+                );
+                return db_error();
+            }
+        };
         groups
             .into_iter()
             .filter(|g| !g.hidden && authorized.contains(&g.id))

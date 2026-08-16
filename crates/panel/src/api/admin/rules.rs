@@ -27,11 +27,13 @@ pub async fn list_rules(
         (true, Some(owner_uid)) => crate::db::repo::ResourceScope::Owner(owner_uid),
         _ => user.resource_scope(),
     };
-    let rules: Vec<ForwardRule> = state.db.list_rules(&scope).await.unwrap_or_else(|e| {
-        tracing::error!("list_rules: db error: {}", e);
-        Vec::new()
-    });
-    Json(ApiResponse::success(rules))
+    match state.db.list_rules(&scope).await {
+        Ok(rules) => Json(ApiResponse::success(rules)),
+        Err(e) => {
+            tracing::error!("list_rules: db error: {}", e);
+            Json(err(500, "数据库错误"))
+        }
+    }
 }
 
 pub async fn create_rule(

@@ -47,6 +47,8 @@ export default function Dashboard() {
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [showChangelog, setShowChangelog] = useState(false);
   const [versionRefreshing, setVersionRefreshing] = useState(false);
+  // See load(): a failed read must not be counted as zero.
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const load = async () => {
     try {
@@ -55,13 +57,25 @@ export default function Dashboard() {
         api.get<unknown, ApiEnvelope<ForwardRule[]>>('/rules'),
         api.get<unknown, ApiEnvelope<DeviceGroup[]>>('/groups'),
       ]);
-      setStats({
-        users: users.data?.length || 0,
-        rules: rules.data?.length || 0,
-        groups: groups.data?.length || 0,
-      });
-      setRuleList(rules.data || []);
-    } catch { /* ignore */ }
+      // These reads report a database failure as `code: 500` with `data: null`
+      // inside a 200 response. Counting a null payload would put "0 users,
+      // 0 rules, 0 groups" on the dashboard — the most alarming possible way
+      // to render an outage, and wrong. Keep the last known numbers and say
+      // that the refresh failed instead.
+      if (users.code !== 0 || rules.code !== 0 || groups.code !== 0) {
+        setLoadFailed(true);
+      } else {
+        setLoadFailed(false);
+        setStats({
+          users: users.data?.length || 0,
+          rules: rules.data?.length || 0,
+          groups: groups.data?.length || 0,
+        });
+        setRuleList(rules.data || []);
+      }
+    } catch {
+      setLoadFailed(true);
+    }
 
     try {
       const nodeStatus = await api.get<unknown, ApiEnvelope<NodeStatus[]>>('/nodes');
@@ -203,6 +217,15 @@ export default function Dashboard() {
 
   return (
     <>
+      {loadFailed && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 16 }}
+          title={t('loadFailed')}
+          description={t('loadFailedRetry')}
+        />
+      )}
       {versionInfo?.check_failed && (
         <Alert
           type="warning"

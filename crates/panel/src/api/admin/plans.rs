@@ -107,23 +107,28 @@ pub async fn list_plans(
     // admin-only page; a JOIN-aggregate could replace it if plan counts grow.
     let mut out = Vec::with_capacity(plans.len());
     for plan in plans {
-        let device_group_ids = state
-            .db
-            .list_plan_device_groups(plan.id)
-            .await
-            .unwrap_or_else(|e| {
+        let device_group_ids = match state.db.list_plan_device_groups(plan.id).await {
+            Ok(ids) => ids,
+            Err(e) => {
                 tracing::error!(
                     "list_plans: list_plan_device_groups({}) failed: {}",
                     plan.id,
                     e
                 );
-                Vec::new()
-            });
-        let device_group_names = state
-            .db
-            .list_group_names_by_ids(&device_group_ids)
-            .await
-            .unwrap_or_default();
+                return Json(err(500, "数据库错误"));
+            }
+        };
+        let device_group_names = match state.db.list_group_names_by_ids(&device_group_ids).await {
+            Ok(names) => names,
+            Err(e) => {
+                tracing::error!(
+                    "list_plans: list_group_names_by_ids({}) failed: {}",
+                    plan.id,
+                    e
+                );
+                return Json(err(500, "数据库错误"));
+            }
+        };
         out.push(PlanWithGroups {
             plan,
             device_group_ids,
