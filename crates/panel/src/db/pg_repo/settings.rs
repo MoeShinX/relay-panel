@@ -502,6 +502,43 @@ impl PlanRepository for PgRepository {
             }
         }
 
+        // Reconcile existing active rules after group authorization has been
+        // finalized. A positive max_rules keeps the oldest active rules and
+        // pauses the newest excess rules; zero remains the unlimited sentinel.
+        if plan_max_rules > 0 {
+            let active_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM forward_rules WHERE uid = $1 AND paused = FALSE",
+            )
+            .bind(user_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            let excess = active_count.saturating_sub(i64::from(plan_max_rules));
+            if excess > 0 {
+                // Keep auto_paused=FALSE so an upgrade never silently reopens
+                // a port that this limit reconciliation paused.
+                let paused = sqlx::query(
+                    "UPDATE forward_rules SET paused = TRUE, auto_paused = FALSE \
+                     WHERE id IN ( \
+                         SELECT id FROM forward_rules \
+                         WHERE uid = $1 AND paused = FALSE \
+                         ORDER BY id DESC LIMIT $2 \
+                     )",
+                )
+                .bind(user_id)
+                .bind(excess)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+                tracing::warn!(
+                    "buy_plan: user {} purchased plan {}, {} newest rule(s) paused to enforce max_rules={}",
+                    user_id,
+                    plan_id,
+                    paused,
+                    plan_max_rules
+                );
+            }
+        }
+
         tx.commit().await?;
         Ok(())
     }

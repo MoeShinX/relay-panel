@@ -492,6 +492,44 @@ impl PlanRepository for SqliteRepository {
             }
         }
 
+        // A lower rule limit must apply to rules that already exist, not only
+        // future creates. Keep the oldest active rules and pause the newest
+        // excess rules last, after any authorization-driven auto-resume above.
+        // max_rules=0 means unlimited, matching insert_quota_guarded.
+        if plan_max_rules > 0 {
+            let active_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM forward_rules WHERE uid = ? AND paused = 0",
+            )
+            .bind(user_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            let excess = active_count.saturating_sub(i64::from(plan_max_rules));
+            if excess > 0 {
+                // auto_paused stays 0 deliberately: these ports need an
+                // explicit user resume after a later upgrade.
+                let paused = sqlx::query(
+                    "UPDATE forward_rules SET paused = 1, auto_paused = 0 \
+                     WHERE id IN ( \
+                         SELECT id FROM forward_rules \
+                         WHERE uid = ? AND paused = 0 \
+                         ORDER BY id DESC LIMIT ? \
+                     )",
+                )
+                .bind(user_id)
+                .bind(excess)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+                tracing::warn!(
+                    "buy_plan: user {} purchased plan {}, {} newest rule(s) paused to enforce max_rules={}",
+                    user_id,
+                    plan_id,
+                    paused,
+                    plan_max_rules
+                );
+            }
+        }
+
         tx.commit().await?;
         Ok(())
     }

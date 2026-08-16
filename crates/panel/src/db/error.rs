@@ -21,6 +21,10 @@ pub enum DbError {
     /// Detected by the in-transaction conflict pre-check; the partial unique
     /// indexes on forward_rules are the DB-layer backstop.
     PortConflict,
+    /// A state transition would exceed the owner's active-rule allowance.
+    /// This is distinct from creation returning 0 rows: callers need to tell
+    /// an existing paused rule from a missing rule when a resume is rejected.
+    QuotaExceeded,
     /// FOREIGN KEY constraint violation. SQLite code "787", PostgreSQL "23503".
     ForeignKeyViolation,
     /// A required row was not found (for fetch_one-or-None patterns that are
@@ -36,6 +40,7 @@ impl std::fmt::Display for DbError {
         match self {
             DbError::UniqueViolation => write!(f, "unique constraint violation"),
             DbError::PortConflict => write!(f, "listen_port conflict on inbound group"),
+            DbError::QuotaExceeded => write!(f, "active rule quota exceeded"),
             DbError::ForeignKeyViolation => write!(f, "foreign key constraint violation"),
             DbError::NotFound => write!(f, "not found"),
             DbError::Other(e) => write!(f, "database error: {}", e),

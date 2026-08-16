@@ -1238,6 +1238,143 @@ async fn rule_update_rule_fields_partial_update() {
     assert!(dgo.0.is_none(), "device_group_out must be cleared");
 }
 
+/// A paused rule cannot be manually resumed once the owner's active-rule
+/// allowance is already full. This is the same quota invariant as creation:
+/// otherwise a plan downgrade could be bypassed one on/off switch at a time.
+#[tokio::test]
+async fn rule_resume_respects_max_rules() {
+    let db = repo().await;
+    seed_group(&db, 1).await;
+    sqlx::query("UPDATE users SET max_rules = 1 WHERE id = 1")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    for (id, port, paused) in [(100, 20_000, 0), (101, 20_001, 1)] {
+        sqlx::query(
+            "INSERT INTO forward_rules \
+             (id, name, uid, listen_port, device_group_in, target_addr, target_port, paused) \
+             VALUES (?, ?, 1, ?, 1, '127.0.0.1', 80, ?)",
+        )
+        .bind(id)
+        .bind(format!("rule-{id}"))
+        .bind(port)
+        .bind(paused)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    let result = db
+        .update_rule_fields(
+            101,
+            &ResourceScope::All,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+        )
+        .await;
+    assert!(
+        matches!(result, Err(DbError::QuotaExceeded)),
+        "a full plan must reject manual resume, got {result:?}"
+    );
+    let paused: bool = sqlx::query_scalar("SELECT paused FROM forward_rules WHERE id = 101")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert!(paused, "quota-rejected resume must not modify the rule");
+}
+
+/// A resume whose UPDATE fails must leave no open transaction behind.
+///
+/// The resume path runs BEGIN IMMEDIATE on a pooled connection, which holds
+/// SQLite's write lock. sqlx only auto-rollbacks a `Transaction`, not a
+/// hand-rolled BEGIN on a PoolConnection, so an early return without ROLLBACK
+/// would hand the connection back to the pool still inside a write transaction
+/// and wedge every later write in the process. The reachable trigger is a
+/// resume that also moves listen_port onto a port that is already taken.
+#[tokio::test]
+async fn rule_resume_rolls_back_when_the_update_fails() {
+    let db = repo().await;
+    seed_group(&db, 1).await;
+    // max_rules stays unlimited so the quota check passes and we reach the
+    // UPDATE — this test is about the failure path, not the quota.
+    sqlx::query("UPDATE users SET max_rules = 0 WHERE id = 1")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    for (id, port, paused) in [(100, 20_000, 0), (101, 20_001, 1)] {
+        sqlx::query(
+            "INSERT INTO forward_rules \
+             (id, name, uid, listen_port, device_group_in, target_addr, target_port, paused) \
+             VALUES (?, ?, 1, ?, 1, '127.0.0.1', 80, ?)",
+        )
+        .bind(id)
+        .bind(format!("rule-{id}"))
+        .bind(port)
+        .bind(paused)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    // Resume rule 101 AND move it onto rule 100's port: the partial unique
+    // index rejects the UPDATE from inside the open transaction.
+    let result = db
+        .update_rule_fields(
+            101,
+            &ResourceScope::All,
+            None,         // name
+            Some(20_000), // listen_port — collides with rule 100
+            None,         // protocol
+            None,         // public_transport
+            None,         // node_transport
+            None,         // entry_transport
+            None,         // route_mode
+            None,         // ws_path
+            None,         // device_group_in
+            None,         // device_group_out
+            None,         // forward_mode
+            None,         // target_addr
+            None,         // target_port
+            Some(false),  // paused → resume
+        )
+        .await;
+    assert!(
+        result.is_err(),
+        "moving a rule onto a taken port must fail, got {result:?}"
+    );
+
+    // Probe the connection's transaction state directly. A plain write would
+    // prove nothing here: this harness runs max_connections(1), so a leaked
+    // transaction is still on the only connection and the write would silently
+    // join it and succeed. A second BEGIN IMMEDIATE, by contrast, fails with
+    // "cannot start a transaction within a transaction" exactly when the
+    // previous one was never closed — which in production is the state that
+    // holds the write lock against every other pooled connection.
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&db.pool)
+        .await
+        .expect("a failed resume must not leave its transaction open");
+    sqlx::query("ROLLBACK").execute(&db.pool).await.unwrap();
+
+    let paused: bool = sqlx::query_scalar("SELECT paused FROM forward_rules WHERE id = 101")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert!(paused, "the rejected resume must not have been applied");
+}
+
 #[tokio::test]
 async fn rule_list_active_for_config_filters_banned_paused_overquota() {
     let db = repo().await;
@@ -2290,6 +2427,63 @@ async fn new_user_has_no_device_groups_by_default() {
     assert!(
         db.is_user_restricted(carol.id).await.unwrap(),
         "a non-admin without all_device_groups is restricted (cannot forward)"
+    );
+}
+
+/// Registration must inherit the selected plan's authorization in the same
+/// transaction as its quotas. Otherwise a user can own a plan but cannot create
+/// a forwarding rule on any of the lines that plan advertises.
+#[tokio::test]
+async fn insert_user_from_plan_inherits_plan_group_authorization() {
+    let db = repo().await;
+    seed_device_group(&db, 60, 1).await;
+
+    let restricted_plan = db
+        .create_plan_with_groups(
+            "restricted",
+            5,
+            1_000,
+            "0",
+            "data",
+            0,
+            false,
+            false,
+            "",
+            false,
+            &[60],
+        )
+        .await
+        .unwrap();
+    db.insert_user_from_plan("restricted-user", "hash", restricted_plan)
+        .await
+        .unwrap();
+    let restricted = db
+        .find_by_username("restricted-user")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!restricted.all_device_groups);
+    assert_eq!(
+        db.list_user_device_groups(restricted.id).await.unwrap(),
+        vec![60],
+        "a restricted plan grants exactly its configured lines at registration"
+    );
+
+    let all_plan = db
+        .create_plan_with_groups("all", 5, 1_000, "0", "data", 0, false, false, "", true, &[])
+        .await
+        .unwrap();
+    db.insert_user_from_plan("all-user", "hash", all_plan)
+        .await
+        .unwrap();
+    let all = db.find_by_username("all-user").await.unwrap().unwrap();
+    assert!(
+        all.all_device_groups,
+        "an all-lines plan grants all lines immediately"
+    );
+    assert!(
+        db.list_user_device_groups(all.id).await.unwrap().is_empty(),
+        "all-lines access is represented by the flag, not stale explicit grants"
     );
 }
 
@@ -4195,6 +4389,61 @@ async fn expiry_does_not_revoke_granted_groups() {
         db.list_user_device_groups(alice).await.unwrap(),
         vec![50],
         "expiry must not revoke granted device groups"
+    );
+}
+
+/// A lower plan limit must stop the newest active rules immediately. They are
+/// intentionally marked like a manual pause so a later upgrade cannot reopen
+/// ports without an explicit user action.
+#[tokio::test]
+async fn buy_plan_pauses_newest_rules_above_new_max_without_auto_resume() {
+    let db = repo().await;
+    let (alice, pid) = seed_buyer_and_plan(&db, "100.00", 0, "0", 0, false).await;
+    seed_device_group(&db, 50, alice).await;
+    for (id, port) in [(100, 20_000), (101, 20_001), (102, 20_002)] {
+        sqlx::query(
+            "INSERT INTO forward_rules \
+             (id, name, uid, listen_port, device_group_in, target_addr, target_port, paused) \
+             VALUES (?, ?, ?, ?, 50, '127.0.0.1', 80, 0)",
+        )
+        .bind(id)
+        .bind(format!("rule-{id}"))
+        .bind(alice)
+        .bind(port)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    db.buy_plan(alice, pid, "lower", 0, 0, 1, 0, false, false, &[50], &[50])
+        .await
+        .unwrap();
+    let after_downgrade: Vec<(i64, bool, bool)> = sqlx::query_as(
+        "SELECT id, paused, auto_paused FROM forward_rules WHERE uid = ? ORDER BY id",
+    )
+    .bind(alice)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        after_downgrade,
+        vec![(100, false, false), (101, true, false), (102, true, false)],
+        "the earliest active rule stays up; newest excess rules are retained but paused"
+    );
+
+    db.buy_plan(alice, pid, "higher", 0, 0, 3, 0, false, false, &[50], &[50])
+        .await
+        .unwrap();
+    let after_upgrade: Vec<(i64, bool, bool)> = sqlx::query_as(
+        "SELECT id, paused, auto_paused FROM forward_rules WHERE uid = ? ORDER BY id",
+    )
+    .bind(alice)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        after_upgrade, after_downgrade,
+        "an upgrade must not reopen paused ports"
     );
 }
 

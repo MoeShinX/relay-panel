@@ -95,22 +95,48 @@ impl UserRepository for SqliteRepository {
         password_hash: &str,
         plan_id: i64,
     ) -> Result<u64, DbError> {
-        // Atomic INSERT...SELECT: copies the plan's quota fields into the new
-        // user row in one statement. If the plan doesn't exist the SELECT
-        // yields no row → 0 rows_affected (caller fails the registration).
-        // Note the column mapping: plans.traffic → users.traffic_limit.
+        // Registration must not produce a user who has the plan's quota but
+        // none of that plan's line authorization. Keep the user row and its
+        // grants on one transaction: a missing plan still yields 0 rows and a
+        // failed grant insert rolls the user creation back.
+        let mut tx = self.pool.begin().await?;
         let result = sqlx::query(
-            "INSERT INTO users (username, password, plan_id, max_rules, traffic_limit, speed_limit, ip_limit) \
-             SELECT ?, ?, ?, max_rules, traffic, speed_limit, ip_limit \
+            "INSERT INTO users \
+             (username, password, plan_id, max_rules, traffic_limit, speed_limit, ip_limit, all_device_groups) \
+             SELECT ?, ?, ?, max_rules, traffic, speed_limit, ip_limit, grant_all_groups \
              FROM plans WHERE id = ?",
         )
         .bind(username)
         .bind(password_hash)
         .bind(plan_id)
         .bind(plan_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
-        Ok(result.rows_affected())
+        if result.rows_affected() == 0 {
+            tx.commit().await?;
+            return Ok(0);
+        }
+
+        let (user_id,): (i64,) = sqlx::query_as("SELECT id FROM users WHERE username = ?")
+            .bind(username)
+            .fetch_one(&mut *tx)
+            .await?;
+        // An all-lines plan is represented exclusively by all_device_groups;
+        // do not retain explicit rows even if legacy plan data contains them.
+        sqlx::query(
+            "INSERT INTO user_device_groups (user_id, device_group_id) \
+             SELECT ?, pdg.device_group_id \
+             FROM plan_device_groups pdg \
+             JOIN plans p ON p.id = pdg.plan_id \
+             WHERE pdg.plan_id = ? AND p.grant_all_groups = 0",
+        )
+        .bind(user_id)
+        .bind(plan_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(1)
     }
 
     async fn update_password(&self, id: i64, new_hash: &str) -> Result<u64, DbError> {
