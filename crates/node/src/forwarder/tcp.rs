@@ -256,13 +256,28 @@ async fn handle_tcp_connection(
     // userspace copy's CPU cost is negligible. Byte counts still come back from
     // the splice return values, so billing is unaffected. Non-Linux always uses
     // the userspace copy below.
+    // v1.2.8: one handle per connection, taken BEFORE the copy starts. Both
+    // paths below report through it on every chunk, so a connection's bytes are
+    // billable while it is still open. They used to be summed into a local and
+    // submitted once at close, which meant a persistent connection moved
+    // unlimited traffic without ever touching its owner's quota.
+    let bytes = counter.handle(rule_id).await;
+
     #[cfg(target_os = "linux")]
     if matches!(rate_limit, RateLimit::Unlimited) {
-        match super::splice::zero_copy_bidirectional(inbound, outbound).await {
-            // (up = client→target, down = target→client) — same attribution as
-            // the userspace path's counter.add(rule_id, up, down).
-            Ok((up, down)) => counter.add(rule_id, up, down).await,
-            Err(e) => tracing::debug!("TCP splice forward (rule {}): {}", rule_id, e),
+        // (up = client→target, down = target→client) — the same attribution the
+        // userspace path uses below.
+        let up_sink = bytes.clone();
+        let down_sink = bytes.clone();
+        if let Err(e) = super::splice::zero_copy_bidirectional(
+            inbound,
+            outbound,
+            move |n| up_sink.add_upload(n),
+            move |n| down_sink.add_download(n),
+        )
+        .await
+        {
+            tracing::debug!("TCP splice forward (rule {}): {}", rule_id, e);
         }
         return Ok(());
     }
@@ -278,13 +293,12 @@ async fn handle_tcp_connection(
     let (mut ri, mut wi) = inbound.into_split();
     let (mut ro, mut wo) = outbound.into_split();
 
-    let counter_up = counter.clone();
-    let counter_down = counter.clone();
+    let counter_up = bytes.clone();
+    let counter_down = bytes;
     let rl_up = rate_limit.clone();
     let rl_down = rate_limit;
 
     let upload = Box::pin(async move {
-        let mut total = 0u64;
         // v1.0.8: 32 KiB copy buffer (this userspace path is only used by
         // rate-limited rules, which are capped anyway; the unlimited fast path
         // uses splice above). Heap-allocated as part of this Box::pin'd future,
@@ -300,13 +314,11 @@ async fn handle_tcp_connection(
             if wo.write_all(&buf[..n]).await.is_err() {
                 break;
             }
-            total += n as u64;
+            counter_up.add_upload(n as u64);
         }
-        counter_up.add(rule_id, total, 0).await;
         let _ = wo.shutdown().await;
     });
     let download = Box::pin(async move {
-        let mut total = 0u64;
         // v1.0.8: 32 KiB copy buffer (see the upload side above).
         let mut buf = [0u8; 32 * 1024];
         loop {
@@ -319,9 +331,8 @@ async fn handle_tcp_connection(
             if wi.write_all(&buf[..n]).await.is_err() {
                 break;
             }
-            total += n as u64;
+            counter_down.add_download(n as u64);
         }
-        counter_down.add(rule_id, 0, total).await;
         let _ = wi.shutdown().await;
     });
 
@@ -392,6 +403,86 @@ mod tests {
             b"ping-through-relay",
             "relay must echo the target"
         );
+    }
+
+    /// v1.2.8: a connection's bytes must be billable WHILE IT IS STILL OPEN.
+    ///
+    /// Both copy paths used to sum into a local and submit once the connection
+    /// closed, so a persistent connection contributed nothing to its rule's
+    /// usage for as long as it stayed up. A tunnel could move any amount of
+    /// traffic while the owner's quota read zero, and the panel — which stops
+    /// forwarding on reported usage — never had a reason to stop it. The bytes
+    /// landed only at close, potentially long after the user stopped paying.
+    ///
+    /// The target here deliberately stays open after echoing, and the client
+    /// never closes: the counter must already hold the traffic.
+    #[tokio::test]
+    async fn traffic_is_counted_while_the_connection_is_still_open() {
+        let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_addr = target.local_addr().unwrap();
+        // Echo once, then HOLD the connection open (no shutdown, no drop).
+        let target_task = tokio::spawn(async move {
+            if let Ok((mut s, _)) = target.accept().await {
+                let mut b = vec![0u8; 1024];
+                if let Ok(n) = s.read(&mut b).await {
+                    let _ = s.write_all(&b[..n]).await;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                drop(s);
+            }
+        });
+
+        let listener = bind_tcp_listener(IpAddr::V4(Ipv4Addr::LOCALHOST), 0).unwrap();
+        let listen_addr = listener.local_addr().unwrap();
+        let selector = Arc::new(TargetSelector::new(LoadBalanceStrategy::First, 1));
+        let counter = Arc::new(TrafficCounter::new());
+        let connections = Arc::new(ConnectionTracker::new());
+        let runtime = crate::forwarder::gate::RuleRuntime::new();
+        tokio::spawn(serve_tcp_listener(
+            listener,
+            vec![target_addr.to_string()],
+            selector,
+            // Unlimited so Linux takes the splice path and every other platform
+            // takes the userspace copy — this must hold on both.
+            RateLimit::Unlimited,
+            counter.clone(),
+            connections,
+            7,
+            None,
+            runtime.gate(None),
+        ));
+        let _runtime = runtime;
+
+        let mut client = TcpStream::connect(listen_addr).await.unwrap();
+        let payload = b"bytes-that-must-be-billed-before-close";
+        client.write_all(payload).await.unwrap();
+        let mut got = vec![0u8; 64];
+        let n = client.read(&mut got).await.unwrap();
+        assert_eq!(&got[..n], payload, "relay must echo the target");
+
+        // The connection is STILL OPEN here — neither side has closed. Poll the
+        // counter briefly: the copy tasks report from a separate task, so allow
+        // a moment for the scheduler without allowing "eventually at close".
+        let mut seen = None;
+        for _ in 0..50 {
+            let snap = counter.snapshot().await;
+            if let Some(e) = snap.entries.iter().find(|e| e.rule_id == 7) {
+                if e.upload > 0 && e.download > 0 {
+                    seen = Some((e.upload, e.download));
+                    break;
+                }
+            }
+            drop(snap);
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        let (up, down) = seen.expect(
+            "traffic must be counted while the connection is open, not only when it closes",
+        );
+        assert_eq!(up, payload.len() as u64, "upload = client bytes forwarded");
+        assert_eq!(down, payload.len() as u64, "download = echoed bytes back");
+
+        target_task.abort();
     }
 
     /// v1.2.0: the cap is enforced at accept. Connections up to the cap forward

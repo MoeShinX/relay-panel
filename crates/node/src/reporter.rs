@@ -16,6 +16,26 @@ use tokio::sync::{Mutex, RwLock};
 /// per-packet add() path can clone-free `fetch_add` after a shared read lock.
 type RuleCounters = Arc<(AtomicU64, AtomicU64)>;
 
+/// A per-rule counter held for the lifetime of ONE connection.
+///
+/// Handed out by [`TrafficCounter::handle`]. Both methods are plain atomic
+/// adds — no lock, no `await` — so a copy loop can report every chunk the
+/// instant it moves instead of batching until the connection closes.
+#[derive(Clone)]
+pub struct RuleCounterHandle(RuleCounters);
+
+impl RuleCounterHandle {
+    /// client → target.
+    pub fn add_upload(&self, n: u64) {
+        self.0 .0.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// target → client.
+    pub fn add_download(&self, n: u64) {
+        self.0 .1.fetch_add(n, Ordering::Relaxed);
+    }
+}
+
 pub struct TrafficCounter {
     // rule_id -> (upload, download) as lock-free atomic counters. Keyed by rule
     // id (not listen port) so traffic is attributed to the right rule even when
@@ -52,6 +72,42 @@ impl TrafficCounter {
             .or_insert_with(|| Arc::new((AtomicU64::new(0), AtomicU64::new(0))));
         c.0.fetch_add(upload, Ordering::Relaxed);
         c.1.fetch_add(download, Ordering::Relaxed);
+    }
+
+    /// Acquire a long-lived handle to one rule's counters.
+    ///
+    /// v1.2.8: this exists so a TCP connection can report bytes AS THEY MOVE
+    /// rather than accumulating them in a local and submitting once at close.
+    /// Both copy loops used to do the latter, which meant a long-lived
+    /// connection contributed NOTHING to the rule's usage until it ended -- a
+    /// persistent tunnel could move hundreds of gigabytes while the owner's
+    /// quota still read zero, so the panel never stopped it. The bytes landed
+    /// only when the connection finally closed, possibly long after the user
+    /// had stopped paying for them.
+    ///
+    /// Returning the `Arc` (rather than calling `add` per chunk) keeps the hot
+    /// path lock-free AND non-async: the map lock is taken once when the
+    /// connection starts, and every later chunk is a plain `fetch_add`. That is
+    /// strictly cheaper than the old per-chunk `add`, which took a read lock
+    /// every time.
+    ///
+    /// Note on `prune_rule`: a handle taken before a prune keeps writing into
+    /// an Arc the map no longer holds, so those bytes are dropped rather than
+    /// resurrecting a pruned rule_id. That is what we want -- a stale rule_id
+    /// in a traffic batch makes the panel reject the WHOLE batch.
+    pub async fn handle(&self, rule_id: i64) -> RuleCounterHandle {
+        {
+            let map = self.data.read().await;
+            if let Some(c) = map.get(&rule_id) {
+                return RuleCounterHandle(c.clone());
+            }
+        }
+        let mut map = self.data.write().await;
+        let c = map
+            .entry(rule_id)
+            .or_insert_with(|| Arc::new((AtomicU64::new(0), AtomicU64::new(0))))
+            .clone();
+        RuleCounterHandle(c)
     }
 
     /// Take a snapshot and return a guard whose `commit()` subtracts exactly
