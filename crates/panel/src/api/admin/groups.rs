@@ -110,7 +110,10 @@ pub async fn rotate_group_token(
                 "rotate_group_token",
                 "group",
                 id,
-                &format!("断开 {closed} 个节点连接"),
+                &format!(
+                    "{} · 断开 {closed} 个节点连接",
+                    crate::service::audit::group_label(&state, id).await
+                ),
             )
             .await;
             Json(ApiResponse::success(RotatedToken { token: new_token }))
@@ -174,6 +177,10 @@ pub async fn delete_group(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Json<ApiResponse<()>> {
+    // Read the name BEFORE deleting: afterwards the row is gone and the audit
+    // entry could only ever say "#id", which is exactly the record nobody can
+    // interpret six months later.
+    let label = crate::service::audit::group_label(&state, id).await;
     match crate::service::groups::delete_group(state.db.as_ref(), id).await {
         Ok(false) => Json(err(404, "分组不存在")),
         Ok(true) => {
@@ -190,7 +197,7 @@ pub async fn delete_group(
                 "delete_group",
                 "group",
                 id,
-                "",
+                &label,
             )
             .await;
             // v1.0.4: close WS connections for the deleted group so nodes

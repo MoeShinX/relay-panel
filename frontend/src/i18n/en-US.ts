@@ -717,7 +717,10 @@ export const enUS: Dict = {
   audit_restart_rule: 'Restart rule',
   audit_delete_group: 'Delete group',
   audit_rotate_group_token: 'Rotate node token',
-  audit_upgrade_node: 'Upgrade node',
+  // v1.2.8: "dispatched", not "done" — see the zh-CN note. The entry is written
+  // when the command reaches the WS channel; the node can still fail to
+  // download, verify, or swap, and never reports back.
+  audit_upgrade_node: 'Node upgrade dispatched',
   audit_create_redeem_codes: 'Generate codes',
   audit_void_redeem_code: 'Void code',
   audit_delete_redeem_codes: 'Delete codes',

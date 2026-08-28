@@ -712,7 +712,12 @@ export const zhCN = {
   audit_restart_rule: '重启规则',
   audit_delete_group: '删除分组',
   audit_rotate_group_token: '轮换节点密钥',
-  audit_upgrade_node: '升级节点',
+  // v1.2.8: 「下发」不是「已完成」。面板在把升级命令交给 WS 通道的那一刻就写
+  // 审计；之后节点还要下载二进制、校验 sha256、备份、替换、重启，任何一步都可
+  // 能失败，而节点侧只打日志、不回报面板。旧标签「升级节点」读起来像升级成功
+  // 了，实际可能根本没升上去（国内节点下载失败是常态）。结果要去「节点状态」
+  // 页核对版本号。
+  audit_upgrade_node: '下发节点升级',
   audit_create_redeem_codes: '生成卡密',
   audit_void_redeem_code: '作废卡密',
   audit_delete_redeem_codes: '删除卡密',
