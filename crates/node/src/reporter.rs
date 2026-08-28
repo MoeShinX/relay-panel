@@ -387,8 +387,7 @@ pub async fn report_traffic(config: &NodeConfig, counter: &TrafficCounter) {
     // the moment a connection OPENS rather than when it closes, so an idle but
     // still-open connection holds a 0/0 entry — without this filter such a node
     // would POST a batch of zeroes every cycle, forever. Only the UPLOAD is
-    // filtered: the snapshot still commits every entry, and subtracting zero is
-    // a no-op that lets the strong_count cleanup in `commit` run as usual.
+    // filtered; the snapshot still commits every entry.
     let reports: Vec<TrafficEntry> = snap
         .entries
         .iter()
@@ -397,6 +396,14 @@ pub async fn report_traffic(config: &NodeConfig, counter: &TrafficCounter) {
         .collect();
     tracing::debug!("report_traffic: {} entries to report", reports.len());
     if reports.is_empty() {
+        // Commit before returning. There is nothing to send, but the snapshot
+        // still has to be applied: subtracting zero is a no-op that lets the
+        // strong_count cleanup in `commit` drop entries whose connection has
+        // closed. Returning without it would strand a 0/0 entry for every rule
+        // that ever had a connection open and transfer nothing, and nothing
+        // else would ever clear it — a batch of only zeroes is exactly the case
+        // that reaches this branch.
+        snap.commit().await;
         return;
     }
 
@@ -1256,6 +1263,49 @@ mod tests {
         assert!(
             !counter.has_rule(11).await,
             "a fully reported rule with no live connection must not stay in the map"
+        );
+    }
+
+    /// A connection that opens, moves nothing and closes must leave no entry
+    /// behind after one reporting cycle.
+    ///
+    /// Taking the handle at connection START means such a connection creates a
+    /// 0/0 entry. Those are filtered out of the upload — and the filter is what
+    /// makes this reachable: when EVERY entry is zero there is nothing to send,
+    /// and an early return would skip the commit that removes them. Nothing
+    /// else clears a zero entry, so each one would sit in the map until the
+    /// rule left the config.
+    #[tokio::test]
+    async fn an_idle_connection_leaves_no_counter_entry_behind() {
+        let counter = TrafficCounter::new();
+        {
+            // Connection opens, transfers nothing, closes.
+            let _conn = counter.handle(21).await;
+        }
+        assert!(
+            counter.has_rule(21).await,
+            "opening a connection is what creates the entry — otherwise this test proves nothing"
+        );
+
+        // One reporting cycle. panel_url is unreachable on purpose: with only
+        // zero entries the function must return before it ever tries to POST.
+        let config = NodeConfig {
+            panel_url: "http://127.0.0.1:1".into(),
+            token: "t".into(),
+            poll_interval: 10,
+            tls_cert_path: None,
+            tls_key_path: None,
+            network_interface: "auto".into(),
+            listen_ipv4: "0.0.0.0".into(),
+            listen_ipv6: "::".into(),
+            outbound_interface: "auto".into(),
+            outbound_bind_ipv4: None,
+        };
+        report_traffic(&config, &counter).await;
+
+        assert!(
+            !counter.has_rule(21).await,
+            "a zero entry with no live connection must be cleared by the reporting cycle"
         );
     }
 

@@ -418,6 +418,23 @@ mod tests {
     /// never closes: the counter must already hold the traffic.
     #[tokio::test]
     async fn traffic_is_counted_while_the_connection_is_still_open() {
+        // Unlimited: on Linux this is the splice path.
+        assert_counts_before_close(RateLimit::Unlimited, 7).await;
+    }
+
+    /// The same contract on the OTHER forwarding path.
+    ///
+    /// On Linux an unlimited rule takes splice, so the test above never
+    /// exercises the userspace copy there — and Linux is what CI runs. A
+    /// rate-limited rule cannot use splice (bytes must reach userspace to be
+    /// throttled), so this covers the copy loop on every platform.
+    #[tokio::test]
+    async fn traffic_is_counted_while_open_on_the_rate_limited_path() {
+        // A cap high enough not to slow the test, low enough to be Limited.
+        assert_counts_before_close(RateLimit::new(Some(100_000_000), Some(100_000_000)), 8).await;
+    }
+
+    async fn assert_counts_before_close(rate_limit: RateLimit, rule_id: i64) {
         let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let target_addr = target.local_addr().unwrap();
         // Echo once, then HOLD the connection open (no shutdown, no drop).
@@ -442,12 +459,10 @@ mod tests {
             listener,
             vec![target_addr.to_string()],
             selector,
-            // Unlimited so Linux takes the splice path and every other platform
-            // takes the userspace copy — this must hold on both.
-            RateLimit::Unlimited,
+            rate_limit,
             counter.clone(),
             connections,
-            7,
+            rule_id,
             None,
             runtime.gate(None),
         ));
@@ -466,7 +481,7 @@ mod tests {
         let mut seen = None;
         for _ in 0..50 {
             let snap = counter.snapshot().await;
-            if let Some(e) = snap.entries.iter().find(|e| e.rule_id == 7) {
+            if let Some(e) = snap.entries.iter().find(|e| e.rule_id == rule_id) {
                 if e.upload > 0 && e.download > 0 {
                     seen = Some((e.upload, e.download));
                     break;
