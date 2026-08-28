@@ -18,6 +18,36 @@ fn now_utc() -> String {
     chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
+/// Render a device group for an audit `detail`, as `名字 (#id)`.
+///
+/// v1.2.8: these entries used to carry the bare id. An id is only useful to
+/// somebody who already knows which group it is — the same reason redeem codes
+/// stopped showing `#uid` for who redeemed them in v1.2.2. The audit log exists
+/// to be read months later, by which time the group may have been renamed or
+/// deleted, so the NAME is captured at write time exactly like the actor name
+/// is. The id stays alongside it because names are not unique and can change.
+///
+/// Falls back to `#id` when the name cannot be read (deleted group, DB error).
+/// Never fails: audit writing is best-effort, and a lookup problem must not
+/// stop the entry being recorded.
+///
+/// For an operation that DELETES the group, call this before the delete — the
+/// row is gone afterwards and the name is unrecoverable.
+pub async fn group_label(state: &AppState, group_id: i64) -> String {
+    match state
+        .db
+        .find_name_by_id(group_id, &crate::db::repo::ResourceScope::All)
+        .await
+    {
+        Ok(Some(name)) if !name.trim().is_empty() => format!("{name} (#{group_id})"),
+        Ok(_) => format!("#{group_id}"),
+        Err(e) => {
+            tracing::warn!("audit: group name lookup for {} failed: {}", group_id, e);
+            format!("#{group_id}")
+        }
+    }
+}
+
 /// Append one entry.
 ///
 /// **Best-effort on purpose.** This is called AFTER the operation succeeded, so

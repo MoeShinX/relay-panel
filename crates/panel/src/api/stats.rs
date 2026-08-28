@@ -484,7 +484,10 @@ pub async fn delete_node_status(
                 "delete_node_status",
                 "node",
                 q.node_id.as_deref().unwrap_or("").to_string(),
-                &format!("分组 {group_id}"),
+                &format!(
+                    "分组 {}",
+                    crate::service::audit::group_label(&state, group_id).await
+                ),
             )
             .await;
             Json(ApiResponse::success(()))
@@ -591,7 +594,10 @@ pub async fn upgrade_node(
         "upgrade_node",
         "node",
         &node_id,
-        &format!("分组 {group_id} → {target_version}"),
+        &format!(
+            "分组 {} → {target_version}",
+            crate::service::audit::group_label(&state, group_id).await
+        ),
     )
     .await;
     Json(ApiResponse::success(()))

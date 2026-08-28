@@ -908,6 +908,68 @@ mod tests {
         }
     }
 
+    /// v1.2.8: an audit entry about a group must name it, not just its id.
+    ///
+    /// An id only helps somebody who already knows which group it is — and the
+    /// log is meant to be read months later, by which point the group may have
+    /// been renamed or deleted. The name is captured at write time for the same
+    /// reason the actor name is.
+    #[tokio::test]
+    async fn group_audit_entries_record_the_group_name() {
+        let (state, pool) = test_state().await;
+        add_group(&pool, 41, 1, "hk-line").await;
+
+        let Json(resp) =
+            super::rotate_group_token(AdminOnly { user_id: 1 }, State(state.clone()), Path(41))
+                .await;
+        assert_eq!(resp.code, 0, "rotation must succeed: {}", resp.message);
+
+        let rows = state.db.query_audit_log(None, 50, 0).await.unwrap();
+        let entry = rows
+            .iter()
+            .find(|e| e.action == "rotate_group_token")
+            .expect("rotation must be audited");
+        assert!(
+            entry.detail.contains("hk-line"),
+            "the group name must be in the detail, got {:?}",
+            entry.detail
+        );
+        assert!(
+            entry.detail.contains("#41"),
+            "the id must stay alongside the name (names are not unique), got {:?}",
+            entry.detail
+        );
+    }
+
+    /// Deleting a group is the case that MUST capture the name up front: after
+    /// the row is gone the id can never be resolved again, so an entry written
+    /// with only the id is permanently unreadable.
+    #[tokio::test]
+    async fn deleting_a_group_records_the_name_it_had() {
+        let (state, pool) = test_state().await;
+        add_group(&pool, 42, 1, "doomed-line").await;
+
+        let Json(resp) =
+            super::delete_group(AdminOnly { user_id: 1 }, State(state.clone()), Path(42)).await;
+        assert_eq!(resp.code, 0, "delete must succeed: {}", resp.message);
+        let gone: Option<i64> = sqlx::query_scalar("SELECT id FROM device_groups WHERE id = 42")
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+        assert!(gone.is_none(), "the group must really be deleted");
+
+        let rows = state.db.query_audit_log(None, 50, 0).await.unwrap();
+        let entry = rows
+            .iter()
+            .find(|e| e.action == "delete_group")
+            .expect("deletion must be audited");
+        assert!(
+            entry.detail.contains("doomed-line"),
+            "the deleted group's name must survive in the audit entry, got {:?}",
+            entry.detail
+        );
+    }
+
     /// v1.2.4: the public site endpoint is reachable with NO token, so it must
     /// carry branding only. The support contact is for this operator's users,
     /// not for anyone who can reach the port.
