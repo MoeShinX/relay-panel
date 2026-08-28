@@ -8,6 +8,37 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [1.2.8] - 2026-08-27
+
+Panel only. The node ships separately as `node-v1.2.3` — take that one if you
+sell traffic, it closes a billing hole. Neither release requires the other and
+the config protocol is unchanged at version 4.
+
+No database migration. Pull the panel image and restart.
+
+### Changed
+
+- **An audit entry about a device group records the group's NAME, not just its
+  id.** "分组 4 → 1.2.2" only helps somebody who already knows which group 4
+  is, and the log is meant to be read months later — by which point the group
+  may have been renamed, or deleted and its id unresolvable. The name is now
+  captured at write time, exactly as the actor's name already was, with the id
+  kept beside it because names are neither unique nor stable. Applies to
+  upgrading a node, clearing a node's status record, rotating a group token and
+  deleting a group.
+
+  Deleting a group needed the lookup moved ahead of the delete: afterwards the
+  row is gone, and that is the one case where an id-only record can never be
+  interpreted again.
+
+- **A node upgrade is recorded as DISPATCHED, not completed.** The entry is
+  written the moment the command reaches the node's control channel. Everything
+  that can actually fail happens after that, on the node — downloading the
+  binary, verifying its checksum, backing up, swapping — and the node does not
+  report the outcome back, so a failed upgrade and a successful one produced
+  identical rows. The action now reads 下发节点升级 and the detail points at the
+  node's reported version, which is what actually answers "did it work".
+
 ## [1.2.7] - 2026-08-13
 
 Panel only. The node ships separately as `node-v1.2.2`; neither release

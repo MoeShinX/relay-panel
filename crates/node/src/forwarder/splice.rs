@@ -100,7 +100,7 @@ fn shutdown_write(fd: RawFd) {
 /// total bytes moved. On return (EOF or error) the destination's write half is
 /// shut down so the peer sees EOF and the opposite pump can finish too.
 ///
-/// v1.2.8: `on_bytes` fires on every successful splice INTO the destination,
+/// v1.2.3: `on_bytes` fires on every successful splice INTO the destination,
 /// so bytes are reportable as they move. The return value used to be the only
 /// output, which meant a caller could not bill a connection until it ended — a
 /// long-lived tunnel moved unlimited traffic while its owner's quota read zero.
@@ -245,7 +245,7 @@ mod tests {
 
         let relay = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let relay_addr = relay.local_addr().unwrap();
-        // v1.2.8: record every callback so we can prove reporting is
+        // v1.2.3: record every callback so we can prove reporting is
         // INCREMENTAL. A payload this size spans several pipe-fulls, so a
         // correct implementation reports more than once; the old
         // count-once-at-the-end shape would show exactly one call.

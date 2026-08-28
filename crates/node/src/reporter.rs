@@ -76,7 +76,7 @@ impl TrafficCounter {
 
     /// Acquire a long-lived handle to one rule's counters.
     ///
-    /// v1.2.8: this exists so a TCP connection can report bytes AS THEY MOVE
+    /// v1.2.3: this exists so a TCP connection can report bytes AS THEY MOVE
     /// rather than accumulating them in a local and submitting once at close.
     /// Both copy loops used to do the latter, which meant a long-lived
     /// connection contributed NOTHING to the rule's usage until it ended -- a
@@ -187,7 +187,7 @@ impl TrafficSnapshot<'_> {
                 let prev_down = c.1.fetch_sub(e.download, Ordering::Relaxed);
                 // new == 0 iff prev == snapshotted (no adds since the snapshot).
                 //
-                // v1.2.8: draining to zero is NOT enough to remove the entry.
+                // v1.2.3: draining to zero is NOT enough to remove the entry.
                 // A live connection holds a RuleCounterHandle — an Arc to this
                 // very counter — and removing the map's copy would orphan it:
                 // every later byte would land in an Arc nothing reads, and that
@@ -383,7 +383,7 @@ pub async fn report_traffic(config: &NodeConfig, counter: &TrafficCounter) {
     // debug, not info: this runs every poll cycle (default 10s) and would
     // flood the log at info level on a healthy node. Only the per-request
     // HTTP status below is worth keeping visible.
-    // v1.2.8: skip entries with nothing in them. A rule now gets its counter
+    // v1.2.3: skip entries with nothing in them. A rule now gets its counter
     // the moment a connection OPENS rather than when it closes, so an idle but
     // still-open connection holds a 0/0 entry — without this filter such a node
     // would POST a batch of zeroes every cycle, forever. Only the UPLOAD is

@@ -256,7 +256,7 @@ async fn handle_tcp_connection(
     // userspace copy's CPU cost is negligible. Byte counts still come back from
     // the splice return values, so billing is unaffected. Non-Linux always uses
     // the userspace copy below.
-    // v1.2.8: one handle per connection, taken BEFORE the copy starts. Both
+    // v1.2.3: one handle per connection, taken BEFORE the copy starts. Both
     // paths below report through it on every chunk, so a connection's bytes are
     // billable while it is still open. They used to be summed into a local and
     // submitted once at close, which meant a persistent connection moved
@@ -405,7 +405,7 @@ mod tests {
         );
     }
 
-    /// v1.2.8: a connection's bytes must be billable WHILE IT IS STILL OPEN.
+    /// v1.2.3: a connection's bytes must be billable WHILE IT IS STILL OPEN.
     ///
     /// Both copy paths used to sum into a local and submit once the connection
     /// closed, so a persistent connection contributed nothing to its rule's

@@ -11,6 +11,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [1.2.3] - 2026-08-27
+
+Node only. Nothing on the wire changed (still protocol version 4), so this
+node runs against any current panel.
+
+**Take this one if you bill by traffic.** Until now a long-lived connection was
+not counted until it closed, so it could move any amount of traffic for free.
+
+### Fixed
+
+- **TCP traffic is counted while the connection is open.** Both copy paths
+  summed bytes into a local and submitted them only when the copy loop ended —
+  i.e. when the connection closed. A long-lived connection therefore
+  contributed NOTHING to its rule's usage for as long as it stayed up.
+
+  That is a billing hole, not a reporting delay. The panel stops forwarding by
+  comparing reported usage against the plan quota, so a persistent connection —
+  a tunnel, a VPN, a long download — could move any amount of traffic while its
+  owner's quota still read zero, and nothing ever had a reason to stop it. The
+  bytes landed in one lump whenever the connection finally ended, potentially
+  long after the user stopped paying for them.
+
+  Both the userspace copy and the Linux zero-copy (splice) path now report each
+  chunk as it moves, so the unreported amount is never more than one in-flight
+  buffer.
+
+  The previous behaviour was documented as a known limitation; it is closer to
+  a defect, and the documentation is updated with this release.
+
 ## [1.2.2] - 2026-08-13
 
 Node only. Nothing on the wire changed — the config protocol stays at version
