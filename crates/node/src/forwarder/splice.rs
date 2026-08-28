@@ -99,7 +99,14 @@ fn shutdown_write(fd: RawFd) {
 /// Pump one direction, `src → dst`, with splice via a private pipe. Returns the
 /// total bytes moved. On return (EOF or error) the destination's write half is
 /// shut down so the peer sees EOF and the opposite pump can finish too.
-async fn pump(src: &TcpStream, dst: &TcpStream) -> io::Result<u64> {
+///
+/// v1.2.8: `on_bytes` fires on every successful splice INTO the destination,
+/// so bytes are reportable as they move. The return value used to be the only
+/// output, which meant a caller could not bill a connection until it ended — a
+/// long-lived tunnel moved unlimited traffic while its owner's quota read zero.
+/// With the callback the unreported amount is never more than one in-flight
+/// chunk.
+async fn pump(src: &TcpStream, dst: &TcpStream, on_bytes: impl Fn(u64)) -> io::Result<u64> {
     let pipe = Pipe::new()?;
     let src_fd = src.as_raw_fd();
     let dst_fd = dst.as_raw_fd();
@@ -133,6 +140,7 @@ async fn pump(src: &TcpStream, dst: &TcpStream) -> io::Result<u64> {
                     Ok(m) => {
                         left -= m;
                         total += m as u64;
+                        on_bytes(m as u64);
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
                     Err(e) => return Err(e),
@@ -155,12 +163,17 @@ async fn pump(src: &TcpStream, dst: &TcpStream) -> io::Result<u64> {
 /// The streams are wrapped in `Arc` so both pump tasks can drive readiness on
 /// them concurrently (`readable`/`writable`/`try_io` take `&self`); the raw fds
 /// stay valid for the whole operation because the `Arc`s outlive both pumps.
-pub async fn zero_copy_bidirectional(a: TcpStream, b: TcpStream) -> io::Result<(u64, u64)> {
+pub async fn zero_copy_bidirectional(
+    a: TcpStream,
+    b: TcpStream,
+    on_up: impl Fn(u64),
+    on_down: impl Fn(u64),
+) -> io::Result<(u64, u64)> {
     let a = Arc::new(a);
     let b = Arc::new(b);
     let (a_up, b_up) = (a.clone(), b.clone());
-    let ab = pump(&a_up, &b_up); // a → b
-    let ba = pump(&b, &a); // b → a
+    let ab = pump(&a_up, &b_up, on_up); // a → b
+    let ba = pump(&b, &a, on_down); // b → a
     let (r_ab, r_ba) = tokio::join!(ab, ba);
     Ok((r_ab?, r_ba?))
 }
@@ -192,7 +205,9 @@ mod tests {
         let relay_task = tokio::spawn(async move {
             let (client, _) = relay.accept().await.unwrap();
             let upstream = TcpStream::connect(target_addr).await.unwrap();
-            zero_copy_bidirectional(client, upstream).await.unwrap()
+            zero_copy_bidirectional(client, upstream, |_| {}, |_| {})
+                .await
+                .unwrap()
         });
 
         // Client: send, receive the echo, close.
@@ -230,10 +245,23 @@ mod tests {
 
         let relay = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let relay_addr = relay.local_addr().unwrap();
+        // v1.2.8: record every callback so we can prove reporting is
+        // INCREMENTAL. A payload this size spans several pipe-fulls, so a
+        // correct implementation reports more than once; the old
+        // count-once-at-the-end shape would show exactly one call.
+        let ticks = Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+        let ticks_up = ticks.clone();
         let relay_task = tokio::spawn(async move {
             let (client, _) = relay.accept().await.unwrap();
             let upstream = TcpStream::connect(target_addr).await.unwrap();
-            zero_copy_bidirectional(client, upstream).await.unwrap()
+            zero_copy_bidirectional(
+                client,
+                upstream,
+                move |n| ticks_up.lock().unwrap().push(n),
+                |_| {},
+            )
+            .await
+            .unwrap()
         });
 
         let mut client = TcpStream::connect(relay_addr).await.unwrap();
@@ -250,6 +278,17 @@ mod tests {
             received,
             payload.len() as u64,
             "target must receive all bytes"
+        );
+        let reported = ticks.lock().unwrap().clone();
+        assert!(
+            reported.len() > 1,
+            "bytes must be reported as they move, not once at the end (got {} call(s))",
+            reported.len()
+        );
+        assert_eq!(
+            reported.iter().sum::<u64>(),
+            payload.len() as u64,
+            "the reported chunks must add up to exactly what was forwarded"
         );
         assert_eq!(up, payload.len() as u64, "up count must equal payload size");
     }
