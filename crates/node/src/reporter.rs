@@ -186,7 +186,22 @@ impl TrafficSnapshot<'_> {
                 let prev_up = c.0.fetch_sub(e.upload, Ordering::Relaxed);
                 let prev_down = c.1.fetch_sub(e.download, Ordering::Relaxed);
                 // new == 0 iff prev == snapshotted (no adds since the snapshot).
-                prev_up == e.upload && prev_down == e.download
+                //
+                // v1.2.8: draining to zero is NOT enough to remove the entry.
+                // A live connection holds a RuleCounterHandle — an Arc to this
+                // very counter — and removing the map's copy would orphan it:
+                // every later byte would land in an Arc nothing reads, and that
+                // connection would stop being billed for the rest of its life.
+                // That is this release's own long-connection hole, re-created
+                // at a poll boundary, and it would hit exactly the long-lived
+                // connections the change exists to fix.
+                //
+                // strong_count == 1 means the map is the only owner, so no
+                // connection can still be writing. The check is conservative in
+                // the safe direction: a handle dropped concurrently can leave
+                // the count momentarily high, which only keeps a zeroed entry
+                // around until the next cycle.
+                prev_up == e.upload && prev_down == e.download && Arc::strong_count(c) == 1
             } else {
                 false
             };
@@ -368,14 +383,24 @@ pub async fn report_traffic(config: &NodeConfig, counter: &TrafficCounter) {
     // debug, not info: this runs every poll cycle (default 10s) and would
     // flood the log at info level on a healthy node. Only the per-request
     // HTTP status below is worth keeping visible.
-    tracing::debug!("report_traffic: {} entries to report", snap.entries.len());
-    if snap.entries.is_empty() {
+    // v1.2.8: skip entries with nothing in them. A rule now gets its counter
+    // the moment a connection OPENS rather than when it closes, so an idle but
+    // still-open connection holds a 0/0 entry — without this filter such a node
+    // would POST a batch of zeroes every cycle, forever. Only the UPLOAD is
+    // filtered: the snapshot still commits every entry, and subtracting zero is
+    // a no-op that lets the strong_count cleanup in `commit` run as usual.
+    let reports: Vec<TrafficEntry> = snap
+        .entries
+        .iter()
+        .filter(|e| e.upload > 0 || e.download > 0)
+        .cloned()
+        .collect();
+    tracing::debug!("report_traffic: {} entries to report", reports.len());
+    if reports.is_empty() {
         return;
     }
 
-    let report = TrafficReport {
-        reports: snap.entries.clone(),
-    };
+    let report = TrafficReport { reports };
 
     let url = format!("{}/api/v1/node/report_traffic", config.panel_url);
     let client = reqwest::Client::new();
@@ -1175,6 +1200,62 @@ mod tests {
         assert_eq!(
             resolve_network_interface("").is_some(),
             resolve_network_interface("auto").is_some(),
+        );
+    }
+
+    /// A handle held across a successful report must keep counting.
+    ///
+    /// `commit()` removes a rule's map entry once its counters reach zero. A
+    /// live connection holds an Arc to that entry, so removing it orphans the
+    /// handle: every later byte lands in an Arc nothing reads, and the
+    /// connection stops being billed for the rest of its life. That is the
+    /// original long-connection hole re-created at a poll boundary — and it
+    /// bites precisely the connections this change exists to fix, because they
+    /// are the ones alive across a report.
+    #[tokio::test]
+    async fn a_handle_keeps_counting_after_its_rule_was_reported_and_drained() {
+        let counter = TrafficCounter::new();
+        // A connection opens and forwards some bytes.
+        let conn = counter.handle(9).await;
+        conn.add_upload(1_000);
+        conn.add_download(2_000);
+
+        // A reporting cycle uploads them and the panel ACKs, so they are
+        // subtracted. Nothing arrived in between, so the entry drains to zero.
+        let snap = counter.snapshot().await;
+        assert_eq!(snap.entries.len(), 1);
+        snap.commit().await;
+
+        // The connection is STILL OPEN and forwards more.
+        conn.add_upload(500);
+        conn.add_download(700);
+
+        let after = counter.snapshot().await;
+        let entry = after
+            .entries
+            .iter()
+            .find(|e| e.rule_id == 9)
+            .expect("traffic after a report must still be attributed to the rule");
+        assert_eq!(entry.upload, 500);
+        assert_eq!(entry.download, 700);
+    }
+
+    /// The counterpart: once no connection holds the rule any more, a drained
+    /// entry IS removed. The strong_count guard must not turn into a leak that
+    /// keeps a row per rule the node ever forwarded.
+    #[tokio::test]
+    async fn a_drained_rule_is_removed_once_no_connection_holds_it() {
+        let counter = TrafficCounter::new();
+        {
+            let conn = counter.handle(11).await;
+            conn.add_upload(42);
+        } // connection closes here — the handle drops
+
+        let snap = counter.snapshot().await;
+        snap.commit().await;
+        assert!(
+            !counter.has_rule(11).await,
+            "a fully reported rule with no live connection must not stay in the map"
         );
     }
 
