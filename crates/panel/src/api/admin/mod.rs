@@ -941,6 +941,48 @@ mod tests {
         );
     }
 
+    /// v1.2.8: the upgrade entry must not claim the node upgraded.
+    ///
+    /// The panel writes it the moment `send_node` hands the command to the WS
+    /// socket. Everything that can actually fail happens afterwards, on the
+    /// node — download, sha256, backup, swap — and the node never reports back.
+    /// An entry that reads like a finished upgrade is a claim the panel has no
+    /// evidence for, which is worse than saying less.
+    #[tokio::test]
+    async fn upgrade_audit_says_dispatched_not_completed() {
+        let (state, pool) = test_state().await;
+        add_group(&pool, 43, 1, "cn-line").await;
+
+        crate::service::audit::record(
+            &state,
+            Some(1),
+            "upgrade_node",
+            "node",
+            "node-abc",
+            &format!(
+                "分组 {} · 已下发 → 1.2.2（升级结果以节点上报版本为准）",
+                crate::service::audit::group_label(&state, 43).await
+            ),
+        )
+        .await;
+
+        let rows = state.db.query_audit_log(None, 50, 0).await.unwrap();
+        let entry = rows
+            .iter()
+            .find(|e| e.action == "upgrade_node")
+            .expect("dispatch must be audited");
+        assert!(
+            entry.detail.contains("已下发"),
+            "the entry must say the command was dispatched, got {:?}",
+            entry.detail
+        );
+        assert!(
+            entry.detail.contains("cn-line"),
+            "and still name the group, got {:?}",
+            entry.detail
+        );
+    }
+
     /// Deleting a group is the case that MUST capture the name up front: after
     /// the row is gone the id can never be resolved again, so an entry written
     /// with only the id is permanently unreadable.

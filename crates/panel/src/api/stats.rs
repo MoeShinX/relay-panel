@@ -588,6 +588,14 @@ pub async fn upgrade_node(
         target = %target_version,
         "sent self-upgrade command to node"
     );
+    // v1.2.8: the wording says DISPATCHED, because that is all this moment
+    // knows. `send_node` returning non-zero means the command reached the WS
+    // socket; the node still has to download the binary, verify its sha256,
+    // back up the old one, swap and restart, and any of those can fail — the
+    // download routinely does where GitHub is unreachable. The node logs the
+    // failure locally and never reports it back, so an entry that read like a
+    // completed upgrade was making a claim the panel cannot support. The real
+    // outcome is the node's reported version on the node-status page.
     crate::service::audit::record(
         &state,
         Some(_admin.user_id),
@@ -595,7 +603,7 @@ pub async fn upgrade_node(
         "node",
         &node_id,
         &format!(
-            "分组 {} → {target_version}",
+            "分组 {} · 已下发 → {target_version}（升级结果以节点上报版本为准）",
             crate::service::audit::group_label(&state, group_id).await
         ),
     )
