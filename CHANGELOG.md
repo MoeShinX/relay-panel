@@ -8,6 +8,26 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **The license is now Apache-2.0, replacing AGPL-3.0.** This applies to this
+  commit onward. Every release up to and including `v1.2.9` / `node-v1.2.4`
+  remains available under AGPL-3.0 and always will — relicensing is not
+  retroactive, and a fork of an earlier tag keeps the terms it was published
+  under.
+
+  What changes for you: the network-use clause is gone. Running a modified
+  RelayPanel as a service no longer obliges you to publish your changes. Apache
+  2.0 also grants an explicit patent license, which AGPL-3.0 covered only
+  indirectly, and requires that modified files be marked as changed.
+
+  No third-party dependency forced or blocked this: every Rust crate and npm
+  package in the tree is permissive (MIT / Apache-2.0 / BSD / ISC / Zlib and
+  friends), and the only AGPL entries a license scan reported were this
+  repository's own three crates.
+
 ## [1.2.9] - 2026-09-08
 
 Maintenance release. The node ships alongside as `node-v1.2.4`; neither

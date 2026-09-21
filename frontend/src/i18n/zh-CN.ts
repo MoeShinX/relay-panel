@@ -16,7 +16,7 @@ export const zhCN = {
   // default admin/admin123 credentials to every visitor. First-install
   // instructions live in README / deploy docs only.
   changeDefaultPasswordWarning: '首次登录后请立即修改默认密码（右上角用户菜单 → 修改密码），否则任何能访问面板的人都可以使用默认凭据登录。',
-  sourceCode: 'Source Code / AGPL-3.0',
+  sourceCode: 'Source Code / Apache-2.0',
 
   // Nav
   dashboard: '仪表盘',

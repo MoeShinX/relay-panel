@@ -17,7 +17,7 @@ export const enUS: Dict = {
   // v0.3.6: defaultAdminHint removed — the login page no longer shows the
   // default admin/admin123 credentials to every visitor.
   changeDefaultPasswordWarning: 'Change the default password immediately after first login (top-right user menu → Change Password). Anyone who can reach this panel can log in with the default credentials.',
-  sourceCode: 'Source Code / AGPL-3.0',
+  sourceCode: 'Source Code / Apache-2.0',
 
   // Nav
   dashboard: 'Dashboard',

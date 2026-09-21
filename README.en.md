@@ -15,7 +15,7 @@
 <p align="center">
   <a href="https://github.com/MoeShinX/relay-panel/releases/latest"><img src="https://img.shields.io/github/v/release/MoeShinX/relay-panel?style=flat-square&label=Release&color=blue" alt="Release" /></a>
   <a href="https://github.com/MoeShinX/relay-panel/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/MoeShinX/relay-panel/ci.yml?style=flat-square&label=CI" alt="CI" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/MoeShinX/relay-panel?style=flat-square&label=License&color=red" alt="License" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/MoeShinX/relay-panel?style=flat-square&label=License&color=blue" alt="License" /></a>
 </p>
 
 <p align="center">
@@ -99,7 +99,7 @@ Rust · Axum · Tokio · sqlx · SQLite/PostgreSQL · JWT · React 19 · TypeScr
 
 ## 📄 License & Disclaimer
 
-AGPL-3.0 — see [LICENSE](LICENSE).
+Apache-2.0 — see [LICENSE](LICENSE).
 
 Open-source traffic-forwarding tool for **personal study and research only**.
 Use lawfully and at your own risk.
