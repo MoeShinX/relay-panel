@@ -8,12 +8,20 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
-## [Unreleased]
+## [1.2.10] - 2026-09-24
+
+Panel only, and a license release rather than a feature one: no code behaviour
+changes. The node stays on `node-v1.2.4` — a node version is tagged only when
+something node-side changed, and a license-only node release would prompt every
+operator to upgrade (and drop connections) for nothing. The node source on
+`main` is Apache-2.0 from this point, so the next node release ships under it.
+
+No database migration. Pull the panel image and restart.
 
 ### Changed
 
-- **The license is now Apache-2.0, replacing AGPL-3.0.** This applies to this
-  commit onward. Every release up to and including `v1.2.9` / `node-v1.2.4`
+- **The license is now Apache-2.0, replacing AGPL-3.0.** This applies from this
+  release onward. Every release up to and including `v1.2.9` / `node-v1.2.4`
   remains available under AGPL-3.0 and always will — relicensing is not
   retroactive, and a fork of an earlier tag keeps the terms it was published
   under.
