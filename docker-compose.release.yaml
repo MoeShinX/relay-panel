@@ -48,6 +48,9 @@ services:
       - GEOIP_CACHE_TTL=${GEOIP_CACHE_TTL:-604800}
     volumes:
       - panel_data:/app/data
+      # v1.2.11: request/status files for the one-click panel update. The
+      # host's relaypanel-updater.path watches ./run/update-request.
+      - ./run:/app/run
     restart: unless-stopped
 
   # The node container is OPTIONAL. Most deployments run relay-node on a

@@ -16,3 +16,7 @@ config-cache.json
 # Windows reserved device name accidentally materialised as a file by
 # `> nul` redirects under git-bash. Never a real source file.
 nul
+
+# v1.2.11: one-click panel update — shared request/status dir and DB backups
+/run/
+/backups/

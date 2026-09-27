@@ -43,3 +43,8 @@ jobs:
             exit 0
           fi
           shellcheck --severity=error "${scripts[@]}"
+
+      # v1.2.11: the one-click panel updater runs as root on the host, so its
+      # every branch is exercised here against stubbed git/docker/curl.
+      - name: panel updater scenarios
+        run: bash scripts/test-panel-updater.sh

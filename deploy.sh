@@ -37,6 +37,53 @@ info()  { echo -e "${GREEN}[INFO]${NC}  $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 fail()  { echo -e "${RED}[FAIL]${NC}  $*"; exit 1; }
 
+# v1.2.11: install the host half of the panel's one-click update (see
+# scripts/panel-updater.sh). The panel only drops ./run/update-request; this
+# systemd path unit notices it and runs the updater as root on the host, so the
+# panel container never needs the Docker socket. Best-effort: without root or
+# systemd the dashboard simply keeps pointing at the manual steps.
+install_panel_updater() {
+    local root; root="$(pwd)"
+    if [ "$(id -u)" != "0" ]; then
+        warn "Not root: one-click panel update not installed (update manually with: git pull --quiet && ./deploy.sh)"
+        return 0
+    fi
+    if ! command -v systemctl >/dev/null 2>&1 || [ ! -d /run/systemd/system ]; then
+        warn "No systemd: one-click panel update not installed (update manually with: git pull --quiet && ./deploy.sh)"
+        return 0
+    fi
+    cat > /etc/systemd/system/relaypanel-updater.service <<UNIT
+[Unit]
+Description=RelayPanel one-click update (requested from the panel)
+
+[Service]
+Type=oneshot
+WorkingDirectory=${root}
+ExecStart=/bin/bash ${root}/scripts/panel-updater.sh
+TimeoutStartSec=1800
+UNIT
+    cat > /etc/systemd/system/relaypanel-updater.path <<UNIT
+[Unit]
+Description=Watch for a RelayPanel update request
+
+[Path]
+PathExists=${root}/run/update-request
+Unit=relaypanel-updater.service
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    if ! { systemctl daemon-reload && systemctl enable --now relaypanel-updater.path >/dev/null 2>&1; }; then
+        warn "Could not enable relaypanel-updater.path; one-click panel update stays off"
+        return 0
+    fi
+    # ./run is writable by the panel container: write via a fresh temp file and
+    # rename, so a planted symlink is replaced rather than followed.
+    local tmp; tmp="$(mktemp "${root}/run/.ready.XXXXXX")" || return 0
+    echo '{"version":1}' > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "${root}/run/updater-ready"
+    info "One-click panel update enabled (relaypanel-updater.path)"
+}
+
 # Read a single KEY's value from .env WITHOUT sourcing it. Sourcing (`. ./.env`)
 # executes the file as shell, so a value containing &, $(...), backticks, spaces
 # or quotes — all legal in a PostgreSQL DSN like
@@ -660,6 +707,9 @@ else
 fi
 
 # ---------- 4. Start ----------
+# v1.2.11: shared with the panel container (./run -> /app/run) for the
+# one-click update's request and status files.
+mkdir -p run && chmod 755 run
 info "Starting services (docker compose -f $COMPOSE_FILE ${PROFILE_ARGS[*]} up -d $COMPOSE_FLAGS) ..."
 docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" up -d $COMPOSE_FLAGS
 
@@ -746,6 +796,8 @@ if [ "$RELAYPANEL_WEB_MODE" = "caddy" ]; then
     info "Caddy HTTPS endpoint OK"
 fi
 
+install_panel_updater
+
 echo ""
 info "=========================================="
 info " RelayPanel is running!"
@@ -785,4 +837,4 @@ fi
 echo ""
 echo "  Logs:      docker compose -f $COMPOSE_FILE ${PROFILE_ARGS[*]} logs -f"
 echo "  Stop:      docker compose -f $COMPOSE_FILE ${PROFILE_ARGS[*]} down"
-echo "  Update:    git pull --quiet && ./deploy.sh"
+echo "  Update:    Dashboard -> Update now, or: git pull --quiet && ./deploy.sh"
