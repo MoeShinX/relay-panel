@@ -123,25 +123,6 @@ If node logs show `websocket error` or keeps reconnecting:
 
 ---
 
-## TLS Simple vs. panel HTTPS
-
-RelayPanel has two separate TLS concerns — they are **not the same thing**:
-
-| | Panel admin HTTPS | TLS Simple (node-side) |
-|---|---|---|
-| **What it secures** | Browser ↔ panel UI/API | Client ↔ relay-node forwarding |
-| **Where configured** | Reverse proxy (Nginx/Caddy) or Compose Caddy profile | `tls_simple` in the forwarding rule |
-| **Protocol** | HTTP/WebSocket | Raw TCP |
-| **Certificate** | Let's Encrypt (via your proxy) | Self-signed or custom (per-node global cert) |
-| **Docs** | This guide | `docs/TLS-SIMPLE.md` |
-
-**TLS Simple does not replace a reverse proxy for the admin UI.** It only
-encrypts the forwarded TCP traffic between clients and the relay node. The
-panel's web interface still needs its own TLS (via Nginx, Caddy, or the
-Compose Caddy profile).
-
----
-
 ## Security checklist
 
 - [ ] Set a strong `admin` password — the first login forces a change from the

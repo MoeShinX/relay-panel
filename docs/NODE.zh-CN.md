@@ -342,10 +342,9 @@ GitHub Releases 在国内访问可能很慢。可以：
    刷屏。想更安静就设 `RUST_LOG=warn`（只显示警告/错误）。只有排查问题时才设
    `RUST_LOG=debug`（会打印每次状态上报 + 每次连接建立/断开）。
 
-8. **转发传输方式。** 业务转发当前支持 `raw`、`ws` 和 `tls_simple`。
-   其中 `ws` 是明文 WebSocket 转发；`tls_simple` 由 relay-node 直接终止 TCP
-   TLS，证书通过节点侧 `TLS_CERT_PATH` / `TLS_KEY_PATH` 配置。业务 `wss` 已取消，
-   如需面板管理界面 HTTPS，请使用外部反代或 Compose Caddy。
+8. **转发传输方式。** 业务转发只支持原始 TCP/UDP（`raw`），流量原样转发。
+   WS / TLS Simple 入口已在 node 1.0.8 停用：节点会跳过这类监听，面板 1.2.9 起
+   也不再允许保存。如需面板管理界面 HTTPS，请使用外部反代或 Compose Caddy。
 
 ---
 
@@ -385,7 +384,7 @@ curl -fL -o relay-node \
   `NODE_TOKEN` 会以 `Authorization: Bearer ...` 的形式**明文经过网络**，任何中间人
   （被入侵的路由器、ISP、公共 Wi-Fi、抓包）都能截获。
 - HTTPS / WSS 下 token 与数据都加密传输，这是最低要求。
-- 节点之间的转发流量（listener）是否加密取决于规则自身的 transport（raw/ws/tls），
+- 规则转发的业务流量是原样转发的，是否加密取决于客户端和目标服务自己用的协议，
   与面板连接无关——这里说的是**节点 ↔ 面板**这条控制通道。
 
 ### Token 的处理

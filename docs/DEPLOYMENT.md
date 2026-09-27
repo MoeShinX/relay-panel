@@ -463,9 +463,8 @@ RelayPanel nodes connect to the panel via WebSocket (`/api/v1/node/ws`) for
 real-time config push. If you run a reverse proxy (Nginx, Caddy, Cloudflare),
 you **must** enable WebSocket Upgrade support.
 
-For a complete guide covering Nginx, Caddy, Cloudflare, `PUBLIC_PANEL_URL`,
-and the difference between panel admin HTTPS and node-side TLS Simple, see
-**[docs/REVERSE-PROXY.md](REVERSE-PROXY.md)**.
+For a complete guide covering Nginx, Caddy, Cloudflare and `PUBLIC_PANEL_URL`,
+see **[docs/REVERSE-PROXY.md](REVERSE-PROXY.md)**.
 
 ### Quick examples
 

@@ -202,7 +202,7 @@ When neither is set (or `OUTBOUND_INTERFACE=auto`), the node does NOT bind a
 source address and lets the OS route normally (backward compatible). A
 misconfigured value (invalid IP, unknown NIC, non-local IP) is a **fatal
 startup error** — the node refuses to boot rather than silently sending
-traffic out the wrong interface. WS/TLS rules are IPv4-only and unaffected.
+traffic out the wrong interface.
 
 
 ---
@@ -409,7 +409,10 @@ of inactivity. Generate real traffic and the count moves.
    (only warnings/errors). Set `RUST_LOG=debug` only when diagnosing issues
    (it prints every status report + every connection open/close).
 
-8. **Transport options.** Raw (plain TCP/UDP) is the default transport.
+8. **Transport.** Forwarding is raw TCP/UDP only; traffic is relayed as-is.
+   WS / TLS Simple ingress was retired in node 1.0.8 — the node skips such
+   listeners, and panel 1.2.9+ refuses to save them. For HTTPS on the panel's
+   admin UI, use an external reverse proxy or the Compose Caddy profile.
 
 ---
 
@@ -456,9 +459,9 @@ proxy; see [REVERSE-PROXY.md](./REVERSE-PROXY.md)).
   packet capture) can grab it.
 - Over HTTPS / WSS the token and data are encrypted in transit — this is the
   minimum bar.
-- Whether the node's forwarded listener traffic is encrypted depends on the
-  rule's transport (raw/ws/tls), NOT on the panel connection. This section is
-  about the **node ↔ panel** control channel only.
+- Forwarded traffic is relayed as-is, so whether it is encrypted depends on the
+  protocol the client and target speak, NOT on the panel connection. This
+  section is about the **node ↔ panel** control channel only.
 
 ### Handling the token
 
