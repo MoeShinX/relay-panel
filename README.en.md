@@ -71,13 +71,15 @@ curl -fsSL https://raw.githubusercontent.com/MoeShinX/relay-panel/main/install.s
 
 ## 🔄 Update
 
-**Panel** (back up `.env` and your database first):
+**Panel**: when a new version is out, click "Update Now" on the dashboard — no SSH. A SQLite database is backed up automatically first; back up PostgreSQL yourself. The panel is unreachable for about half a minute; node forwarding is not affected.
+
+One-click update relies on an updater that a manual update installs, so **v1.2.10 and earlier need one manual update first** (back up `.env` and your database):
 
 ```bash
 cd /opt/relay-panel && git pull --quiet && ./deploy.sh
 ```
 
-**Nodes**: Panel → Node Status → click "Upgrade". No SSH. systemd nodes only (Docker nodes update the image instead); upgrading drops that node's live forwarding connections. See the [node documentation](docs/NODE.md#update).
+**Nodes**: Panel → Node Status → click "Upgrade". No SSH. systemd nodes only (Docker nodes update the image instead). From node-v1.2.5, a node about to restart stops accepting, reports the traffic counted so far and gives open connections up to 5 s to finish; long-lived connections (tunnels, VPNs) are still cut. See the [node documentation](docs/NODE.md#update).
 
 ---
 

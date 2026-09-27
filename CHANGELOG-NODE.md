@@ -11,7 +11,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
-## [Unreleased]
+## [1.2.5] - 2026-09-27
+
+Nothing on the wire changed (still protocol version 4), so this node runs
+against any current panel; panel 1.2.11+ is what shows its live rate.
+
+Worth taking if you bill by traffic: from this version on, a restart no longer
+drops the traffic counted since the last report. The upgrade TO 1.2.5 is still
+performed by the old binary and exits the old way — the graceful path applies
+from the next restart onward.
 
 ### Added
 
@@ -44,6 +52,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   report billed again. The regular loop never overlapped itself, so this had
   not happened; the shutdown flush is a second caller that can, so reports are
   now serialized.
+
+### Removed
+
+- **The installer's TLS Simple remnants.** The example `relay-node.env` still
+  explained how to "enable TLS Simple ingress", and the installer created
+  `/opt/relay-node/certs` for the certificate. That ingress was retired in
+  1.0.8 — the forwarder skips WS/TLS listeners, and panel 1.2.9+ refuses to
+  save such a rule — so those instructions could only produce a port that never
+  listens. Existing nodes keep their files; the installer never rewrites an
+  existing env file.
 
 ## [1.2.4] - 2026-09-08
 

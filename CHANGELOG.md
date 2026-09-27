@@ -8,7 +8,15 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
-## [Unreleased]
+## [1.2.11] - 2026-09-27
+
+Ships alongside `node-v1.2.5`; neither requires the other, and the config
+protocol is unchanged at version 4. No database migration.
+
+Upgrading: this release installs the one-click updater described below, so
+**update this time the manual way** (`git pull --quiet && ./deploy.sh`); from
+the next release on, "Update now" on the dashboard does it. Live node rates
+need `node-v1.2.5`; older nodes keep showing their 10 s figure.
 
 ### Added
 
@@ -58,6 +66,14 @@ independent `v*` / `node-v*` tracks since this release).
   Regular users see live rates only for the lines the page already shows them:
   the endpoint and the node summary now share one visibility rule (authorized
   and not hidden) instead of two copies of it.
+
+### Changed
+
+- **A GitHub link in the header**, at its right end, pointing to the
+  repository. It is shown to every user, as the login page already links the
+  same repository to everyone.
+- **System settings are reordered**: site settings first, then basic settings,
+  notifications, announcements and the audit log.
 
 ## [1.2.10] - 2026-09-24
 

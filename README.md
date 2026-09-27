@@ -70,13 +70,15 @@ curl -fsSL https://raw.githubusercontent.com/MoeShinX/relay-panel/main/install.s
 
 ## 🔄 更新
 
-**面板**（更新前请备份 `.env` 和数据库）：
+**面板**：有新版本时，在仪表盘点「马上更新」即可，无需 SSH。使用 SQLite 时会先自动备份数据库；使用 PostgreSQL 请先自行备份。更新期间面板约半分钟打不开，节点转发不受影响。
+
+一键更新依赖服务器上的更新服务，它会在手动更新时装好。所以 **v1.2.10 及更早版本需要先手动更新一次**，之后就能一键更新（更新前请备份 `.env` 和数据库）：
 
 ```bash
 cd /opt/relay-panel && git pull --quiet && ./deploy.sh
 ```
 
-**节点**：面板 → 节点状态 → 点「升级」，无需 SSH。仅 systemd 节点可用（Docker 节点改为更新镜像）；升级会断开该节点上正在进行的转发连接。详见 [转发节点文档](docs/NODE.zh-CN.md#更新)。
+**节点**：面板 → 节点状态 → 点「升级」，无需 SSH。仅 systemd 节点可用（Docker 节点改为更新镜像）。node-v1.2.5 起，节点重启前会停止接新连接、补报已计数的流量，并给进行中的连接最多 5 秒收尾；长连接（隧道、VPN）仍会断开。详见 [转发节点文档](docs/NODE.zh-CN.md#更新)。
 
 ---
 

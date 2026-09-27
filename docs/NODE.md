@@ -249,9 +249,16 @@ log into the node.
 When a node is behind, the node status page highlights that an upgrade is
 available.
 
-> **Upgrading drops the forwarding connections currently running on that node**
-> — replacing the binary requires restarting the process. Pick a quiet window if
-> the node is busy.
+> **Upgrading restarts the node process**, so forwarding on that node is
+> affected; pick a quiet window if it is busy.
+>
+> From node-v1.2.5 the node shuts down gracefully first: it stops accepting,
+> reports the traffic counted so far, and gives open TCP connections up to
+> `SHUTDOWN_DRAIN_SECS` (default 5) to finish, exiting as soon as they have.
+> New connections are refused during that window, and long-lived connections
+> (tunnels, VPNs) are still cut when it ends. The upgrade *to* 1.2.5 is still
+> carried out by the old binary and exits the old way; the graceful path
+> applies from the next restart on.
 
 **It depends on how the node was installed** — self-upgrade relies on "the old
 process exits, and something starts the new one":
