@@ -190,9 +190,6 @@ export default function MainLayout() {
             <Button type="text" size="small" icon={<LockOutlined />} onClick={() => setChangePwOpen(true)}>
               {t('changePassword')}
             </Button>
-            <Button type="text" size="small" icon={<LogoutOutlined />} onClick={logout}>
-              {t('logout')}
-            </Button>
             {/* Icon-only by request, unlike the labelled controls beside it, so
                 the tooltip and aria-label carry the name. The login page already
                 links the same repository to everyone. */}
@@ -207,6 +204,9 @@ export default function MainLayout() {
                 aria-label="GitHub"
               />
             </Tooltip>
+            <Button type="text" size="small" icon={<LogoutOutlined />} onClick={logout}>
+              {t('logout')}
+            </Button>
           </Space>
         </Header>
         <Content style={{ margin: 'var(--rp-content-padding)', background: 'var(--rp-bg)' }}>
