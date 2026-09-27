@@ -1,6 +1,7 @@
 use crate::config::NodeConfig;
 use crate::forwarder::ForwarderManager;
 use crate::poller;
+use crate::reporter::{LiveRateSampler, NodeMetrics};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -45,6 +46,7 @@ pub async fn run_ws_loop(
     config: &NodeConfig,
     manager: &Arc<Mutex<ForwarderManager>>,
     node_id: &str,
+    metrics: &Arc<NodeMetrics>,
 ) {
     let ws_url = derive_ws_url(&config.panel_url);
     let mut backoff = 1u64;
@@ -56,7 +58,7 @@ pub async fn run_ws_loop(
     loop {
         tracing::info!("websocket connecting to {} ...", ws_url);
 
-        let exit = connect_and_run(&ws_url, &config.token, config, manager, node_id).await;
+        let exit = connect_and_run(&ws_url, &config.token, config, manager, node_id, metrics).await;
         match exit {
             WsExit::ConfigChanged => {
                 tracing::info!("websocket: config_changed received, reconnecting immediately");
@@ -155,6 +157,7 @@ async fn connect_and_run(
     config: &NodeConfig,
     manager: &Arc<Mutex<ForwarderManager>>,
     node_id: &str,
+    metrics: &Arc<NodeMetrics>,
 ) -> WsExit {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::connect_async;
@@ -229,6 +232,17 @@ async fn connect_and_run(
     let mut heartbeat = interval(HEARTBEAT_INTERVAL);
     // Don't fire immediately on the first tick (we just connected).
     heartbeat.reset();
+
+    // v1.2.5: live NIC rate for the node-status page. Primed now so the first
+    // tick already has a baseline and reports a rate, instead of spending one
+    // whole interval establishing it. Per connection, so a reconnect starts a
+    // fresh baseline rather than averaging across the time it was down.
+    let mut rate_sampler = LiveRateSampler::new();
+    let _ = rate_sampler.sample(metrics).await;
+    let mut rate_tick = interval(Duration::from_secs(
+        relay_shared::protocol::LIVE_RATE_INTERVAL_SECS,
+    ));
+    rate_tick.reset();
 
     loop {
         tokio::select! {
@@ -369,10 +383,14 @@ async fn connect_and_run(
                                 tokio::spawn(async move {
                                     match crate::updater::self_upgrade(&version).await {
                                         Ok(()) => {
+                                            // v1.2.5: leave through the graceful path
+                                            // rather than exiting on the spot, so the
+                                            // traffic counted so far is billed and
+                                            // in-flight requests can finish.
                                             tracing::warn!(
-                                                "self-upgrade done; exiting to restart into new binary"
+                                                "self-upgrade done; shutting down gracefully to restart into the new binary"
                                             );
-                                            std::process::exit(0);
+                                            crate::shutdown::request();
                                         }
                                         Err(e) => {
                                             tracing::error!(
@@ -414,6 +432,21 @@ async fn connect_and_run(
                     Ok(_) => {}
                     Err(e) => {
                         return WsExit::Error(format!("stream: {}", e));
+                    }
+                }
+            }
+
+            // ── Live rate (every LIVE_RATE_INTERVAL_SECS) ──
+            _ = rate_tick.tick() => {
+                // Nothing is sent while the NIC can't be read: an absent value
+                // lets the panel fall back to the status report's rate, where a
+                // zero would claim the link is idle.
+                if let Some((up, down)) = rate_sampler.sample(metrics).await {
+                    let msg = relay_shared::protocol::NodeRateMessage::new(up, down);
+                    if let Ok(text) = serde_json::to_string(&msg) {
+                        if let Err(e) = ws_stream.send(Message::Text(text.into())).await {
+                            return WsExit::Error(format!("rate send: {}", e));
+                        }
                     }
                 }
             }

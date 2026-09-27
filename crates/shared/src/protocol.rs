@@ -721,6 +721,51 @@ pub fn sanitize_upgrade_error(raw: &str) -> String {
     }
 }
 
+/// v1.2.11 / node 1.2.5: how often a node pushes its NIC rate over the WS
+/// control channel. The status report still carries a rate too, but that one is
+/// a ~10 s average refreshed only as often as the whole report loop runs; this
+/// is the short-window figure the node-status page shows while it is open.
+pub const LIVE_RATE_INTERVAL_SECS: u64 = 2;
+
+/// v1.2.11 / node 1.2.5: node -> panel over the WS control channel, every
+/// [`LIVE_RATE_INTERVAL_SECS`]. The selected NIC's throughput over the last
+/// interval — the same machine-wide measure as `StatusReport::upload_bps`, so
+/// it includes traffic that never passes through relay-node (iptables
+/// forwarding, other services), just on a shorter window.
+///
+/// Additive in both directions: an older panel's WS loop ignores text frames it
+/// does not recognise, and an older node simply never sends one, so
+/// `CONFIG_PROTOCOL_VERSION` stays 4. The panel keeps these in memory only.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeRateMessage {
+    #[serde(rename = "type")]
+    pub msg_type: String, // "node_rate"
+    pub upload_bps: u64,
+    pub download_bps: u64,
+}
+
+impl NodeRateMessage {
+    pub const TYPE: &'static str = "node_rate";
+
+    pub fn new(upload_bps: u64, download_bps: u64) -> Self {
+        Self {
+            msg_type: Self::TYPE.into(),
+            upload_bps,
+            download_bps,
+        }
+    }
+}
+
+/// v1.2.11: one row of GET /nodes/live-rates — a node's latest pushed rate.
+/// The page merges it into the row it already has by (group_id, node_id).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeLiveRate {
+    pub group_id: i64,
+    pub node_id: String,
+    pub upload_bps: u64,
+    pub download_bps: u64,
+}
+
 impl DiagnoseRuleMessage {
     pub fn new(request_id: String, rule_id: i64, challenge: String) -> Self {
         Self {
@@ -1596,5 +1641,16 @@ mod tests {
         let r = UpgradeResult::new("7".into(), "1.2.3".into(), "1.2.4".into(), "boom\nagain");
         assert_eq!(r.error, "boom again");
         assert_eq!(r.msg_type, "upgrade_result");
+    }
+
+    /// The panel's WS loop tells this message apart from everything else by its
+    /// `type`; the wire name must not drift from the constant both sides use.
+    #[test]
+    fn node_rate_message_round_trips_with_its_type_tag() {
+        let json = serde_json::to_string(&NodeRateMessage::new(3_650_000, 128_930)).unwrap();
+        assert!(json.contains(r#""type":"node_rate""#), "{json}");
+        let back: NodeRateMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.msg_type, NodeRateMessage::TYPE);
+        assert_eq!((back.upload_bps, back.download_bps), (3_650_000, 128_930));
     }
 }

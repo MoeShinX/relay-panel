@@ -137,6 +137,11 @@ pub struct ForwarderManager {
     listen_ipv6: String,
     /// v1.0.4: resolved outbound source IPv4 (None = auto-route).
     source_ipv4: Option<std::net::Ipv4Addr>,
+    /// v1.2.5: set by `stop_accepting`. From then on `apply_config` does
+    /// nothing — the WS channel and the poll loop keep running through the
+    /// drain, and a config push arriving then would otherwise rebind the very
+    /// ports shutdown just closed.
+    shutting_down: bool,
 }
 
 impl ForwarderManager {
@@ -152,7 +157,29 @@ impl ForwarderManager {
             listen_ipv4: "0.0.0.0".into(),
             listen_ipv6: "::".into(),
             source_ipv4: None,
+            shutting_down: false,
         }
+    }
+
+    /// v1.2.5: first step of a graceful shutdown. Closes every listener so no
+    /// new connection is accepted, and leaves established connections running:
+    /// they live on their own tasks (see `gate.rs`), so aborting an accept loop
+    /// does not touch them. Nothing is re-opened afterwards — see
+    /// `shutting_down`. Returns how many listeners were closed.
+    ///
+    /// UDP has no accept loop to stop separately; its sessions are served by the
+    /// listener task itself, so they end here.
+    pub async fn stop_accepting(&mut self) -> usize {
+        self.shutting_down = true;
+        let closed = self.listeners.len();
+        for (_, m) in self.listeners.drain() {
+            let handle = m.handle;
+            handle.abort();
+            // Await so the sockets are actually released before the process
+            // moves on — a restart that races the old socket fails to bind.
+            let _ = (&mut { handle }).await;
+        }
+        closed
     }
 
     /// v1.0.4: configure dual-stack listen and outbound source.
@@ -227,6 +254,10 @@ impl ForwarderManager {
     }
 
     pub async fn apply_config(&mut self, config: &NodeConfigResponse) {
+        if self.shutting_down {
+            tracing::debug!("apply_config: ignored, node is shutting down");
+            return;
+        }
         // ── Step 1: recover dead listeners ──
         // v0.3.6: a listener task that exited (bind failure, unrecoverable
         // error, or the v0.3.5 "instant accept error killed the task" bug) left
@@ -1045,6 +1076,65 @@ mod tests {
         fresh.write_all(b"after").await.unwrap();
         let n = fresh.read(&mut buf).await.unwrap();
         assert_eq!(&buf[..n], b"after", "the rebuilt listener must forward");
+    }
+
+    /// v1.2.5: THE test for graceful shutdown. Closing the listeners must
+    /// refuse new connections WITHOUT touching an established one — otherwise
+    /// the drain would have nothing left to wait for — and a config push that
+    /// lands during the drain must not reopen the port.
+    #[tokio::test]
+    async fn stop_accepting_refuses_new_connections_but_keeps_live_ones_forwarding() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let target = echo_target().await;
+        let mut mgr = fresh_mgr();
+        mgr.listen_ipv6 = String::new();
+        let port = 40581;
+        let c = cfg(
+            port,
+            Protocol::Tcp,
+            NodeTransport::Raw,
+            vec![&target.to_string()],
+            None,
+        );
+        mgr.apply_config(&c).await;
+
+        let mut client = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("listener must be up");
+        client.write_all(b"before").await.unwrap();
+        let mut buf = [0u8; 64];
+        let n = client.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"before");
+
+        assert_eq!(
+            mgr.stop_accepting().await,
+            1,
+            "the rule's one listener must close"
+        );
+
+        // The established connection is exactly what the drain waits for.
+        client.write_all(b"during").await.unwrap();
+        let n = tokio::time::timeout(Duration::from_secs(2), client.read(&mut buf))
+            .await
+            .expect("a live connection must keep forwarding after stop_accepting")
+            .unwrap();
+        assert_eq!(&buf[..n], b"during");
+
+        assert!(
+            tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_err(),
+            "no new connection may be accepted once shutdown starts"
+        );
+
+        mgr.apply_config(&c).await;
+        assert!(
+            tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_err(),
+            "a config push during the drain must not reopen the port"
+        );
     }
 
     /// Restarting a rule this node doesn't serve is a no-op, not a panic or a

@@ -46,12 +46,24 @@ pub struct TrafficCounter {
     // lock and do a lock-free atomic fetch_add, so they never serialize on each
     // other — this is the per-packet path for both TCP and UDP forwarding.
     data: Arc<RwLock<HashMap<i64, RuleCounters>>>,
+    /// v1.2.5: held for the whole snapshot -> upload -> commit of one report.
+    ///
+    /// A snapshot does not remove anything; the bytes are only subtracted once
+    /// the panel acknowledges them. Two reports in flight at once would both
+    /// snapshot the same bytes, both upload them — the panel bills the user
+    /// twice — and then both subtract them, wrapping the u64 counter to an
+    /// enormous value that the next report bills yet again. The regular loop
+    /// never overlapped itself, so this never happened; the shutdown flush is a
+    /// second caller that can run at the same moment, and this lock is what
+    /// makes that safe. A second report waits and then sees only newer bytes.
+    report_lock: tokio::sync::Mutex<()>,
 }
 
 impl TrafficCounter {
     pub fn new() -> Self {
         Self {
             data: Arc::new(RwLock::new(HashMap::new())),
+            report_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -262,6 +274,14 @@ impl ConnectionTracker {
     /// Increment the active TCP count and return a guard whose `Drop`
     /// decrements it. Hand the guard to the per-connection task so the count
     /// is correct no matter how that task ends (normal close, error, panic).
+    /// v1.2.5: open TCP connections only. Shutdown drains on this, not on
+    /// `current()`: UDP sessions end with their listener, but their entries
+    /// linger until the idle expiry prunes them, so counting them would hold
+    /// every shutdown for the full drain window.
+    pub fn tcp_active(&self) -> u64 {
+        self.tcp.load(Ordering::Relaxed)
+    }
+
     pub fn tcp_handle(&self) -> TcpConnectionGuard {
         let prev = self.tcp.fetch_add(1, Ordering::Relaxed);
         tracing::debug!("tcp connection opened, active={}", prev + 1);
@@ -375,6 +395,8 @@ impl Drop for TcpConnectionGuard {
 }
 
 pub async fn report_traffic(config: &NodeConfig, counter: &TrafficCounter) {
+    // One report at a time — see `TrafficCounter::report_lock`.
+    let _serialized = counter.report_lock.lock().await;
     // Snapshot (non-destructive) first: the snapshotted bytes are only deducted
     // from the counters after the panel ACKs the upload (see TrafficSnapshot).
     // A failed/lost upload drops the guard without commit, so those bytes stay
@@ -646,6 +668,67 @@ impl NodeMetrics {
     pub async fn public_ipv6(&self) -> Option<String> {
         self.public_ipv6.read().await.clone()
     }
+}
+
+impl NodeMetrics {
+    /// v1.2.5: the selected NIC's cumulative (upload, download) byte counters,
+    /// for the live-rate feed. Unlike `report_status` this does NOT move the
+    /// status report's baseline (`last_net` / `last_net_at`): the two callers
+    /// sample on different clocks, and sharing a baseline would make each one
+    /// measure only the sliver of time since the other last looked.
+    ///
+    /// None when no interface is selected, so the feed sends nothing rather
+    /// than a misleading zero.
+    pub async fn nic_totals(&self) -> Option<(u64, u64)> {
+        let current = self.sample_networks().await;
+        if current.is_empty() {
+            return None;
+        }
+        let up: u64 = current.values().map(|(_, t)| *t).sum();
+        let down: u64 = current.values().map(|(r, _)| *r).sum();
+        Some((up, down))
+    }
+}
+
+/// v1.2.5: turns successive NIC counter readings into a rate for the live feed.
+/// Owns its own baseline — see [`NodeMetrics::nic_totals`] for why it can't
+/// share the status report's.
+#[derive(Default)]
+pub struct LiveRateSampler {
+    prev: Option<(u64, u64, Instant)>,
+}
+
+impl LiveRateSampler {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The (upload, download) bytes/sec since the previous call. None on the
+    /// first call (no baseline yet) and whenever the NIC can't be read.
+    pub async fn sample(&mut self, metrics: &NodeMetrics) -> Option<(u64, u64)> {
+        let (up, down) = metrics.nic_totals().await?;
+        let now = Instant::now();
+        let rate = self
+            .prev
+            .and_then(|prev| rate_between(prev, (up, down, now)));
+        self.prev = Some((up, down, now));
+        rate
+    }
+}
+
+/// Bytes/sec between two cumulative (upload, download, at) readings.
+///
+/// None when no time has passed. A counter that went DOWN — the interface was
+/// reset, or re-resolved to a different NIC with a smaller total — yields 0 for
+/// that direction via `saturating_sub` instead of an absurd wrapped value.
+fn rate_between(prev: (u64, u64, Instant), now: (u64, u64, Instant)) -> Option<(u64, u64)> {
+    let elapsed = now.2.checked_duration_since(prev.2)?.as_secs_f64();
+    if elapsed <= 0.0 {
+        return None;
+    }
+    let up = now.0.saturating_sub(prev.0) as f64 / elapsed;
+    let down = now.1.saturating_sub(prev.1) as f64 / elapsed;
+    Some((up as u64, down as u64))
 }
 
 /// One snapshot of every metric `report_status` needs, gathered under the
@@ -1300,6 +1383,7 @@ mod tests {
             listen_ipv6: "::".into(),
             outbound_interface: "auto".into(),
             outbound_bind_ipv4: None,
+            shutdown_drain_secs: 5,
         };
         report_traffic(&config, &counter).await;
 
@@ -1543,5 +1627,147 @@ mod tests {
         // this node's identity, and plain HTTP lets any on-path party set it.
         assert!(DEFAULT_IPV4_CHECK_URL.starts_with("https://"));
         assert!(DEFAULT_IPV6_CHECK_URL.starts_with("https://"));
+    }
+
+    #[test]
+    fn rate_between_divides_the_delta_by_elapsed_time() {
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_secs(2);
+        assert_eq!(
+            rate_between((1_000, 5_000, t0), (8_001_000, 262_860, t1)),
+            Some((4_000_000, 128_930))
+        );
+    }
+
+    /// A NIC reset or a switch to a different interface can make a cumulative
+    /// counter go backwards. That must read as zero, not as a wrapped u64.
+    #[test]
+    fn rate_between_treats_a_counter_that_went_down_as_zero() {
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_secs(2);
+        assert_eq!(
+            rate_between((9_000, 9_000, t0), (100, 9_200, t1)),
+            Some((0, 100))
+        );
+    }
+
+    #[test]
+    fn rate_between_needs_time_to_have_passed() {
+        let t0 = Instant::now();
+        assert_eq!(rate_between((0, 0, t0), (500, 500, t0)), None);
+        // Out-of-order readings are rejected rather than treated as negative time.
+        assert_eq!(
+            rate_between((0, 0, t0 + Duration::from_secs(1)), (500, 500, t0)),
+            None
+        );
+    }
+
+    fn config_for(panel_url: &str) -> NodeConfig {
+        NodeConfig {
+            panel_url: panel_url.into(),
+            token: "t".into(),
+            poll_interval: 10,
+            tls_cert_path: None,
+            tls_key_path: None,
+            network_interface: "auto".into(),
+            listen_ipv4: "0.0.0.0".into(),
+            listen_ipv6: "::".into(),
+            outbound_interface: "auto".into(),
+            outbound_bind_ipv4: None,
+            shutdown_drain_secs: 5,
+        }
+    }
+
+    /// A stand-in for the panel's report_traffic endpoint. It adds up every byte
+    /// it is sent — that is what the panel bills — and holds each reply for
+    /// `delay`, so two reports started together really are in flight at once.
+    async fn billing_panel(delay: Duration) -> (String, Arc<AtomicU64>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let billed = Arc::new(AtomicU64::new(0));
+        let billed_srv = billed.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                let billed = billed_srv.clone();
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    let (body_at, body_len) = loop {
+                        let n = sock.read(&mut chunk).await.unwrap_or(0);
+                        if n == 0 {
+                            return;
+                        }
+                        buf.extend_from_slice(&chunk[..n]);
+                        if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                            let head = String::from_utf8_lossy(&buf[..end]).to_ascii_lowercase();
+                            let len = head
+                                .lines()
+                                .find_map(|l| l.strip_prefix("content-length:"))
+                                .and_then(|v| v.trim().parse::<usize>().ok())
+                                .unwrap_or(0);
+                            break (end + 4, len);
+                        }
+                    };
+                    while buf.len() < body_at + body_len {
+                        let n = sock.read(&mut chunk).await.unwrap_or(0);
+                        if n == 0 {
+                            return;
+                        }
+                        buf.extend_from_slice(&chunk[..n]);
+                    }
+                    let report: TrafficReport =
+                        serde_json::from_slice(&buf[body_at..body_at + body_len]).unwrap();
+                    let bytes: u64 = report.reports.iter().map(|e| e.upload + e.download).sum();
+                    billed.fetch_add(bytes, Ordering::SeqCst);
+                    tokio::time::sleep(delay).await;
+                    let body = r#"{"code":0,"message":"ok","data":null}"#;
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+        (url, billed)
+    }
+
+    /// The shutdown flush can run while the regular 10 s report is mid-flight.
+    /// Both would snapshot the same bytes: the panel would bill them twice, and
+    /// the double commit would wrap the counter to a huge value that the next
+    /// report bills again. Serialized, every byte reaches the panel once.
+    #[tokio::test]
+    async fn two_reports_at_once_bill_each_byte_exactly_once() {
+        let (url, billed) = billing_panel(Duration::from_millis(200)).await;
+        let counter = TrafficCounter::new();
+        counter.add(7, 1_000, 500).await;
+        let config = config_for(&url);
+
+        tokio::join!(
+            report_traffic(&config, &counter),
+            report_traffic(&config, &counter)
+        );
+
+        assert_eq!(
+            billed.load(Ordering::SeqCst),
+            1_500,
+            "each byte must be billed exactly once"
+        );
+        let left = counter.snapshot().await;
+        assert!(
+            left.entries
+                .iter()
+                .all(|e| e.upload == 0 && e.download == 0),
+            "nothing may be left over — and nothing wrapped: {:?}",
+            left.entries
+                .iter()
+                .map(|e| (e.upload, e.download))
+                .collect::<Vec<_>>()
+        );
     }
 }

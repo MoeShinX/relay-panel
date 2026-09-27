@@ -19,6 +19,27 @@ pub struct NodeConfig {
     pub outbound_interface: String,
     /// v1.0.4: Exact IPv4 source for outbound connections.
     pub outbound_bind_ipv4: Option<String>,
+    /// v1.2.5: on SIGTERM (or a self-upgrade), how long to wait for open TCP
+    /// connections to finish before exiting. See [`parse_drain_secs`].
+    pub shutdown_drain_secs: u64,
+}
+
+/// v1.2.5: the drain window a node waits for open connections on shutdown.
+///
+/// Default 5 s. It is deliberately short, because it is not free: the listeners
+/// close the moment shutdown starts, so for the whole window NEW connections are
+/// refused — on top of systemd's RestartSec. It only buys time for requests
+/// already in flight; a long-lived connection (a tunnel, a VPN) is still cut
+/// when the window ends. 0 disables the wait (the final traffic flush still
+/// runs). Capped at 60 so the node always exits well inside systemd's default
+/// 90 s stop timeout instead of being SIGKILLed mid-flush.
+pub fn parse_drain_secs(raw: Option<&str>) -> u64 {
+    const DEFAULT: u64 = 5;
+    const MAX: u64 = 60;
+    match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        None => DEFAULT,
+        Some(v) => v.parse::<u64>().map(|n| n.min(MAX)).unwrap_or(DEFAULT),
+    }
 }
 
 impl NodeConfig {
@@ -61,6 +82,9 @@ impl NodeConfig {
             outbound_bind_ipv4: std::env::var("OUTBOUND_BIND_IPV4")
                 .ok()
                 .filter(|s| !s.trim().is_empty()),
+            shutdown_drain_secs: parse_drain_secs(
+                std::env::var("SHUTDOWN_DRAIN_SECS").ok().as_deref(),
+            ),
         };
         cfg.validate();
         cfg
@@ -83,5 +107,29 @@ impl NodeConfig {
             );
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drain_secs_defaults_caps_and_ignores_junk() {
+        assert_eq!(parse_drain_secs(None), 5);
+        assert_eq!(parse_drain_secs(Some("")), 5);
+        assert_eq!(parse_drain_secs(Some(" 12 ")), 12);
+        assert_eq!(
+            parse_drain_secs(Some("0")),
+            0,
+            "0 must mean: no wait, just flush"
+        );
+        assert_eq!(
+            parse_drain_secs(Some("3600")),
+            60,
+            "capped under systemd's stop timeout"
+        );
+        assert_eq!(parse_drain_secs(Some("five")), 5);
+        assert_eq!(parse_drain_secs(Some("-3")), 5);
     }
 }

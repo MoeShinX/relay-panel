@@ -665,6 +665,16 @@ export interface SharedNodeSummary {
  *  Field availability differs by source (admin sees node_id, config protocol,
  *  network_interface, disk_mount, listener_errors; users get region/line_type),
  *  hence the broad optionality. `online` is always server-supplied now. */
+/** v1.2.11: GET /nodes/live-rates — a node's latest pushed NIC rate (bytes/s).
+ *  Only nodes with a fresh reading appear; the page keeps the status report's
+ *  figure for the rest. */
+export interface NodeLiveRate {
+  group_id: number;
+  node_id: string;
+  upload_bps: number;
+  download_bps: number;
+}
+
 export interface NodeDisplayRow {
   group_id: number;
   group_name?: string | null;
