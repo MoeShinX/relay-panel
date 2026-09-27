@@ -683,6 +683,7 @@ export const enUS: Dict = {
   auditTargetRule: 'Rule',
   auditTargetGroup: 'Group',
   auditTargetNode: 'Node',
+  auditTargetPanel: 'Panel',
   auditTargetAnnouncement: 'Announcement',
   auditTargetRedeemCode: 'Redeem code',
   auditTargetRedeemBatch: 'Code batch',

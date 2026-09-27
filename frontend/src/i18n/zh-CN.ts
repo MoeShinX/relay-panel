@@ -678,6 +678,7 @@ export const zhCN = {
   auditTargetRule: '规则',
   auditTargetGroup: '分组',
   auditTargetNode: '节点',
+  auditTargetPanel: '面板',
   auditTargetAnnouncement: '公告',
   auditTargetRedeemCode: '卡密',
   auditTargetRedeemBatch: '卡密批次',

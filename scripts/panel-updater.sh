@@ -46,7 +46,16 @@ fi
 
 # Consume the request first. The .path unit watches for its existence; leaving
 # it in place would re-trigger this service the moment it exits.
-rm -f "$RUN_DIR/update-request"
+#
+# -r because the panel can create anything there — a directory named
+# update-request would survive `rm -f` and turn the path unit into a loop of
+# git pulls and deploys. rm does not follow symlinks, so -r is safe here. If it
+# still cannot be removed, stop rather than run in that loop.
+rm -rf -- "$RUN_DIR/update-request"
+if [ -e "$RUN_DIR/update-request" ] || [ -L "$RUN_DIR/update-request" ]; then
+    echo "cannot remove $RUN_DIR/update-request; refusing to run" >&2
+    exit 1
+fi
 
 STARTED_AT=$(date +%s)
 : > "$LOG.run"
@@ -118,7 +127,7 @@ log "git pull --ff-only"
 # safe.directory: this runs as root, and git refuses to touch a repository
 # owned by another user (a clone made as a regular user, deployed with sudo).
 if ! git -c safe.directory="$ROOT" pull --ff-only --quiet >>"$LOG.run" 2>&1; then
-    finish failed "git pull failed — usually local changes in $ROOT. Nothing was changed."
+    finish failed "git pull failed: GitHub unreachable from this server, or local changes in $ROOT (see the log below). Nothing was changed."
 fi
 
 RELEASE_COMPOSE="docker-compose.release.yaml"

@@ -118,6 +118,14 @@ check "reports failed" state_is failed
 check "tries to bring the panel back" grep -q "up -d panel" "$STATE/docker-calls"
 check "status is valid JSON" valid_json
 
+echo "a request planted as a directory"
+setup 1.2.10 1.2.10
+rm -f "$REPO/run/update-request"
+mkdir -p "$REPO/run/update-request/nested"
+run_updater
+check "the directory is removed (no re-trigger loop)" request_gone
+check "the run still completes" state_is up_to_date
+
 echo "old backups are pruned to five"
 setup 1.2.10 1.2.11
 echo 1.2.11 > "$STATE/next-version"
