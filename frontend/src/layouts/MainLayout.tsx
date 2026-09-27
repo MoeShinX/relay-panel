@@ -1,4 +1,4 @@
-import { Layout, Menu, Button, Space, Typography, Segmented, Modal, Form, Input, message, Spin, Badge } from 'antd';
+import { Layout, Menu, Button, Space, Typography, Segmented, Modal, Form, Input, message, Spin, Badge, Tooltip } from 'antd';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useState, Suspense } from 'react';
 import {
@@ -12,6 +12,7 @@ import {
   ShoppingOutlined,
   TeamOutlined,
   NotificationOutlined,
+  GithubOutlined,
 } from '@ant-design/icons';
 import { useI18n } from '../i18n/context';
 import api from '../api/client';
@@ -64,10 +65,10 @@ export default function MainLayout() {
     { key: '/redeem-codes', label: t('redeemCodes') },
   ];
   const systemChildren = [
+    { key: '/site-settings', label: t('siteSettings') },
     { key: '/settings', label: t('basicSettings') },
     { key: '/notify-settings', label: t('notifySettings') },
     { key: '/announcement-admin', label: t('announcementAdmin') },
-    { key: '/site-settings', label: t('siteSettings') },
     { key: '/audit-log', label: t('auditLog') },
   ];
   const adminOnlyItems = [
@@ -192,6 +193,20 @@ export default function MainLayout() {
             <Button type="text" size="small" icon={<LogoutOutlined />} onClick={logout}>
               {t('logout')}
             </Button>
+            {/* Icon-only by request, unlike the labelled controls beside it, so
+                the tooltip and aria-label carry the name. The login page already
+                links the same repository to everyone. */}
+            <Tooltip title="GitHub">
+              <Button
+                type="text"
+                size="small"
+                icon={<GithubOutlined />}
+                href="https://github.com/MoeShinX/relay-panel"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="GitHub"
+              />
+            </Tooltip>
           </Space>
         </Header>
         <Content style={{ margin: 'var(--rp-content-padding)', background: 'var(--rp-bg)' }}>
