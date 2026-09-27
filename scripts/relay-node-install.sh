@@ -401,9 +401,9 @@ export POLL_INTERVAL="${POLL_INTERVAL:-10}"
 export RUST_LOG="${RUST_LOG:-info}"
 # Optional config sourced from relay-node.env if present (written by the
 # installer with commented examples; edit it to set LISTEN_IPV4/LISTEN_IPV6,
-# OUTBOUND_INTERFACE/OUTBOUND_BIND_IPV4, or TLS_CERT_PATH/TLS_KEY_PATH). If the
-# file doesn't exist, all of these stay unset and the node uses its defaults
-# (dual-stack listen, system-routed egress, no TLS).
+# OUTBOUND_INTERFACE/OUTBOUND_BIND_IPV4 or SHUTDOWN_DRAIN_SECS). If the file
+# doesn't exist, all of these stay unset and the node uses its defaults
+# (dual-stack listen, system-routed egress).
 # NOTE: path is hardcoded (/opt/relay-node) because this script runs with set -u
 # and INSTALL_DIR is not defined in the generated start.sh context.
 if [ -f "/opt/relay-node/relay-node.env" ]; then
@@ -424,17 +424,11 @@ if grep -q '/dev/fd' "$START_SH" 2>/dev/null; then
     fail "start.sh generated incorrectly (contains /dev/fd). Aborting."
 fi
 
-# v0.4.1: create the certs directory + example env file for TLS Simple.
-# The operator places their cert+key here (or points the env file elsewhere).
-CERTS_DIR="${INSTALL_DIR}/certs"
-mkdir -p "$CERTS_DIR"
-chmod 700 "$CERTS_DIR"
-
 # Write an example env file if one doesn't exist (don't overwrite an existing
 # one — the operator may have configured it).
 ENV_FILE="${INSTALL_DIR}/relay-node.env"
 if [ ! -f "$ENV_FILE" ]; then
-    info "Writing example env file: $ENV_FILE (edit to tune listen / egress / TLS)"
+    info "Writing example env file: $ENV_FILE (edit to tune listen / egress / shutdown)"
     cat > "$ENV_FILE" <<'ENVEOF'
 # relay-node optional environment. start.sh sources this file (set -a), so any
 # variable set here is exported to relay-node. All values below are commented:
@@ -477,13 +471,6 @@ if [ ! -f "$ENV_FILE" ]; then
 # short. Long-lived connections (tunnels, VPNs) are still cut when it ends.
 # 0 = no wait (the traffic report still runs). Default 5, maximum 60.
 #   SHUTDOWN_DRAIN_SECS=5
-
-# ── TLS Simple certificate configuration (v0.4.1) ──
-# Uncomment and set these to enable TLS Simple ingress on this node.
-# The cert must be PEM format (fullchain recommended); the key must be PEM
-# (PKCS#8, PKCS#1 RSA, or SEC1 EC). The key file MUST be chmod 600.
-#   TLS_CERT_PATH=/opt/relay-node/certs/fullchain.pem
-#   TLS_KEY_PATH=/opt/relay-node/certs/privkey.pem
 ENVEOF
     chmod 600 "$ENV_FILE"
 fi
