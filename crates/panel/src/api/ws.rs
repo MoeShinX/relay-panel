@@ -129,6 +129,21 @@ impl NodeConnections {
         sent
     }
 
+    /// v1.2.12: every (group_id, node_id) with a live control channel right
+    /// now. The node-status page shows which online nodes are NOT in here:
+    /// they still forward and report over HTTP, so they look healthy, but
+    /// nothing can be pushed to them — no instant config, no remote upgrade.
+    pub async fn connected_nodes(&self) -> std::collections::HashSet<(i64, String)> {
+        let map = self.inner.read().await;
+        map.iter()
+            .flat_map(|(&gid, conns)| {
+                conns
+                    .values()
+                    .filter_map(move |e| e.node_id.clone().map(|n| (gid, n)))
+            })
+            .collect()
+    }
+
     /// v1.2.11: store a node's pushed rate on its connection. A connection
     /// without an X-Node-ID is skipped — its rate could not be matched to a row
     /// on the page anyway, and pre-0.4.14 nodes never push one.
@@ -677,5 +692,29 @@ mod tests {
             rates.iter().map(rate).collect::<Vec<_>>(),
             vec![(4, "gz-1", 222, 222)]
         );
+    }
+
+    /// A node that reports over HTTP but has no WS must be told apart from one
+    /// that has — that difference is invisible on the page otherwise.
+    #[tokio::test]
+    async fn connected_nodes_lists_live_control_channels_only() {
+        let conns = NodeConnections::new();
+        let (a, _rx1) = conns.register(2, Some("gk".into())).await;
+        let (_b, _rx2) = conns.register(3, Some("hj".into())).await;
+        let (_c, _rx3) = conns.register(4, None).await; // pre-0.4.14: no identity
+        let live = conns.connected_nodes().await;
+        assert!(live.contains(&(2, "gk".to_string())));
+        assert!(live.contains(&(3, "hj".to_string())));
+        assert_eq!(
+            live.len(),
+            2,
+            "a connection without a node id cannot be matched to a row"
+        );
+
+        conns.unregister(2, a).await;
+        assert!(!conns
+            .connected_nodes()
+            .await
+            .contains(&(2, "gk".to_string())));
     }
 }

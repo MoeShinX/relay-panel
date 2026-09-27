@@ -435,6 +435,13 @@ pub async fn report_traffic(config: &NodeConfig, counter: &TrafficCounter) {
     let client = reqwest::Client::new();
     match client
         .post(&url)
+        // v1.2.6: a request that never gets an answer used to hang this call
+        // — and with it the whole report loop, so the node stopped reporting
+        // status and traffic altogether. Generous on purpose: if the panel
+        // did record the batch but answered too slowly, the node resends it
+        // next cycle and it is counted twice (the same exposure a dropped
+        // connection already has), so this errs towards waiting.
+        .timeout(Duration::from_secs(30))
         .header("Authorization", format!("Bearer {}", config.token))
         .json(&report)
         .send()
@@ -1043,6 +1050,10 @@ pub async fn report_status(
     // rather than the node believing everything is fine.
     match client
         .post(&url)
+        // v1.2.6: without a timeout an unanswered request hung the report loop
+        // for good. Status is resent every cycle, so a short timeout loses
+        // nothing.
+        .timeout(Duration::from_secs(15))
         .header("Authorization", format!("Bearer {}", config.token))
         .json(&report)
         .send()

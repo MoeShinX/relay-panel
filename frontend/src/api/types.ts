@@ -451,6 +451,7 @@ export interface NodeStatus {
    *  The admin /nodes endpoint now stamps this so the frontend never recomputes
    *  an online threshold of its own. Optional for older payloads. */
   online?: boolean;
+  ws_connected?: boolean | null;
   cpu: number;
   mem: number;
   connections: number;
@@ -680,6 +681,10 @@ export interface NodeDisplayRow {
   group_name?: string | null;
   node_id?: string | null;
   online?: boolean;
+  /** v1.2.12 (admin /nodes only): whether the WS control channel is up. An
+   *  online node can report over HTTP with no WS at all, and then nothing can
+   *  be pushed to it. null/undefined = unknown (legacy row, or the user view). */
+  ws_connected?: boolean | null;
   node_version?: string | null;
   /** v1.0.10: "systemd" | "docker" | "manual" — gates one-click upgrade. */
   install_method?: string | null;

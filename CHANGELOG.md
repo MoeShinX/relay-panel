@@ -8,6 +8,19 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **The node-status page shows when a node has no control channel.** A node
+  can be online — reporting status over HTTP every cycle — while its WebSocket
+  control channel is down. It keeps forwarding, but config changes wait for the
+  next poll and neither a remote upgrade nor a diagnosis can reach it; until now
+  that was invisible, and surfaced only as an error after clicking "Upgrade".
+  Such nodes now carry a "Polling only" tag explaining what that means and how
+  to find the cause on the node, and their upgrade action is disabled with the
+  reason instead of failing on click.
+
 ## [1.2.11] - 2026-09-27
 
 Ships alongside `node-v1.2.5`; neither requires the other, and the config

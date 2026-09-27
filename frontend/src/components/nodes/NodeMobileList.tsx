@@ -189,6 +189,14 @@ function MobileUpgradeAffordance({
           />
         </Tooltip>
       );
+    case 'noControlChannel':
+      return (
+        <Tooltip title={t('nodeUpgradeNoWs')}>
+          <span style={tapStyle} aria-label={t('nodeUpgradeNoWs')} role="img">
+            <CloudDownloadOutlined style={{ color: '#bfbfbf' }} />
+          </span>
+        </Tooltip>
+      );
     case 'offline':
     default:
       return (

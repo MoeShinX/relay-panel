@@ -6,6 +6,7 @@ import { useI18n } from '../../i18n/context';
 import { CountryFlag } from './CountryFlag';
 import type { NodeDisplayRow } from '../../api/types';
 import api from '../../api/client';
+import { wsDownTag } from './shared';
 
 interface Props {
   row: NodeDisplayRow | null;
@@ -49,7 +50,7 @@ export function NodeDetailDrawer({ row, open, onClose, isAdmin, panelProtocol, o
       {row && (
         <Descriptions column={1} size="small" bordered>
           <Descriptions.Item label={t('status')}>
-            {row.online ? <Tag color="green">{t('online')}</Tag> : <Tag>{t('offline')}</Tag>}
+            {row.online ? <><Tag color="green">{t('online')}</Tag>{wsDownTag(row, t)}</> : <Tag>{t('offline')}</Tag>}
           </Descriptions.Item>
 
           {/* Dual-stack network — flag pill + IP, no country name. Unknown

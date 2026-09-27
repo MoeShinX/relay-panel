@@ -393,3 +393,32 @@ describe('NodeStatus live rate', () => {
     }
   });
 });
+
+describe('NodeStatus control channel', () => {
+  const serveAdmin = (node: object) => {
+    mockUseAuth.mockReturnValue({ isAdmin: true });
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/nodes') return Promise.resolve(ok([node]));
+      if (url === '/system/version') return Promise.resolve(version);
+      if (url === '/nodes/live-rates') return Promise.resolve(ok([]));
+      return Promise.reject(new Error(`unexpected ${url}`));
+    });
+  };
+
+  /** v1.2.12: online over HTTP with no WS looked exactly like a healthy node
+   *  until an upgrade failed. It must be visible on the row itself. */
+  it('marks an online node whose WS control channel is down', async () => {
+    serveAdmin({ ...adminNode, ws_connected: false });
+    render(<NodeStatus />);
+    await flush();
+    expect(screen.getByText('nodeWsDown')).toBeInTheDocument();
+  });
+
+  it('shows nothing extra when the control channel is up', async () => {
+    serveAdmin({ ...adminNode, ws_connected: true });
+    render(<NodeStatus />);
+    await flush();
+    expect(screen.queryByText('nodeWsDown')).not.toBeInTheDocument();
+  });
+});
+

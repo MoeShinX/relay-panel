@@ -56,6 +56,18 @@ describe('resolveNodeUpgrade — eligibility ladder (shared by desktop + mobile)
     expect(resolveNodeUpgrade(r, '1.1.0', 0, false).state).toBe('upgradeable');
   });
 
+  /** v1.2.12: online over HTTP but no WS control channel. The upgrade command
+   *  only travels over WS, so a button here could only end in an error. */
+  it('returns "noControlChannel" when behind + systemd + online but the WS is down', () => {
+    const r = row({ node_version: '1.0.0', install_method: 'systemd', online: true, ws_connected: false });
+    expect(resolveNodeUpgrade(r, '1.1.0', 0, false).state).toBe('noControlChannel');
+  });
+
+  it('still offers the upgrade when the WS state is unknown (older panel data)', () => {
+    const r = row({ node_version: '1.0.0', install_method: 'systemd', online: true, ws_connected: null });
+    expect(resolveNodeUpgrade(r, '1.1.0', 0, false).state).toBe('upgradeable');
+  });
+
   it('returns "offline" when behind + systemd + offline', () => {
     const r = row({ node_version: '1.0.0', install_method: 'systemd', online: false });
     expect(resolveNodeUpgrade(r, '1.1.0', 0, false).state).toBe('offline');

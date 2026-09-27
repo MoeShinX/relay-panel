@@ -15,6 +15,9 @@
  * - behind + docker       → 'docker' (amber "update image" hint)
  * - behind + non-systemd  → 'manual' (grey "no supervisor")
  * - behind + systemd      → 'upgradeable' if online, else 'offline'
+ * - …but online with no WS → 'noControlChannel' (v1.2.12): the command can
+ *   only travel over the WS control channel, so offering the button would
+ *   just end in an error after the click
  */
 import type { NodeDisplayRow } from '../../api/types';
 import { versionRelation } from '../../utils/version';
@@ -29,6 +32,7 @@ export type NodeUpgradeState =
   | 'docker'
   | 'manual'
   | 'upgradeable'
+  | 'noControlChannel'
   | 'offline';
 
 export interface NodeUpgrade {
@@ -69,6 +73,7 @@ export function resolveNodeUpgrade(
   // rel === 'behind' → the offer depends on how the node is installed.
   if (row.install_method === 'docker') return { state: 'docker' };
   if (row.install_method !== 'systemd') return { state: 'manual' };
-  return { state: row.online ? 'upgradeable' : 'offline' };
+  if (!row.online) return { state: 'offline' };
+  return { state: row.ws_connected === false ? 'noControlChannel' : 'upgradeable' };
 }
 

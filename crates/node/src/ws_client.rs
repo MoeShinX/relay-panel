@@ -17,6 +17,17 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(25);
 /// connection is dead and force a reconnect (rather than waiting for the
 /// panel's 120s timeout to notice).
 const PONG_TIMEOUT: Duration = Duration::from_secs(10);
+/// v1.2.6: how long the whole handshake — TCP connect, TLS, HTTP upgrade — may
+/// take. The heartbeat only protects a connection once it is established;
+/// before this, a handshake whose answer never came (a middlebox that accepts
+/// the TCP connection and then drops everything) left `connect_async` waiting
+/// forever. Nothing was logged and nothing was retried: a node sat for days
+/// with no control channel while its HTTP reporting looked perfectly healthy.
+#[cfg(not(test))]
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Short in tests so the black-hole test below does not sit out 15 s.
+#[cfg(test)]
+const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Derive the WebSocket URL from PANEL_URL.
 /// http://ip:port -> ws://ip:port/api/v1/node/ws
@@ -205,7 +216,17 @@ async fn connect_and_run(
         }
     }
 
-    let ws_result = connect_async(request).await;
+    let ws_result = match tokio::time::timeout(CONNECT_TIMEOUT, connect_async(request)).await {
+        Ok(r) => r,
+        // Transient: retried on the normal backoff, and — unlike the hang it
+        // replaces — visible in the log.
+        Err(_) => {
+            return WsExit::Error(format!(
+                "connect: no handshake within {}s",
+                CONNECT_TIMEOUT.as_secs()
+            ))
+        }
+    };
 
     let (mut ws_stream, _response) = match ws_result {
         Ok(c) => {
@@ -511,5 +532,59 @@ mod tests {
             derive_ws_url("127.0.0.1:18888"),
             "ws://127.0.0.1:18888/api/v1/node/ws"
         );
+    }
+
+    /// v1.2.6: THE regression test for a node that sat for days without a
+    /// control channel. The server accepts the TCP connection and then says
+    /// nothing — the handshake's answer never comes. Before the timeout,
+    /// connect_async waited on it forever: no error, no log, no retry.
+    #[tokio::test]
+    async fn a_handshake_that_never_answers_gives_up_instead_of_hanging() {
+        use super::{connect_and_run, WsExit};
+        use crate::config::NodeConfig;
+        use crate::forwarder::ForwarderManager;
+        use crate::reporter::{ConnectionTracker, NodeMetrics, TrafficCounter};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut held = Vec::new(); // keep sockets open, answer nothing
+            while let Ok((sock, _)) = listener.accept().await {
+                held.push(sock);
+            }
+        });
+
+        let config = NodeConfig {
+            panel_url: format!("http://{addr}"),
+            token: "t".into(),
+            poll_interval: 10,
+            tls_cert_path: None,
+            tls_key_path: None,
+            network_interface: "auto".into(),
+            listen_ipv4: "0.0.0.0".into(),
+            listen_ipv6: "::".into(),
+            outbound_interface: "auto".into(),
+            outbound_bind_ipv4: None,
+            shutdown_drain_secs: 5,
+        };
+        let manager = Arc::new(Mutex::new(ForwarderManager::new(
+            Arc::new(TrafficCounter::new()),
+            Arc::new(ConnectionTracker::new()),
+        )));
+        let metrics = Arc::new(NodeMetrics::new(&config.network_interface));
+        let url = super::derive_ws_url(&config.panel_url);
+
+        let exit = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            connect_and_run(&url, &config.token, &config, &manager, "n1", &metrics),
+        )
+        .await
+        .expect("connect must give up on its own, not hang");
+        match exit {
+            WsExit::Error(msg) => assert!(msg.contains("no handshake"), "unexpected error: {msg}"),
+            _ => panic!("expected a timeout error"),
+        }
     }
 }

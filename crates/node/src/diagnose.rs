@@ -154,6 +154,10 @@ async fn report(config: &NodeConfig, result: DiagnoseResult) -> Result<(), Strin
     let client = reqwest::Client::new();
     let resp = client
         .post(&url)
+        // v1.2.6: the panel stops waiting for a diagnosis after a few seconds,
+        // so an answer later than this is useless — and without a timeout the
+        // task would never end.
+        .timeout(std::time::Duration::from_secs(15))
         .header("Authorization", format!("Bearer {}", config.token))
         .json(&result)
         .send()
