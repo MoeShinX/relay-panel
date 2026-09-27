@@ -8,6 +8,28 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Node rates on the node-status page are now near real time.** The upload /
+  download rate used to be a ~10 s average that changed only as often as the
+  node's whole status report ran. A node running `node-v1.2.5` or later now
+  pushes its NIC rate over the existing WebSocket every 2 s, the panel keeps it
+  in memory (never in the database), and the page polls a small new endpoint,
+  `GET /api/v1/nodes/live-rates`, every 2 s while it is open — pausing when the
+  tab is in the background. CPU, memory, disk and cumulative traffic keep their
+  existing cadence. The detail drawer now updates while it is open too; it used
+  to show the figures from the moment it was clicked.
+
+  The rate is machine-wide, the same measure as before, so it includes traffic
+  that never passes through relay-node — iptables forwarding, other services.
+  Older nodes keep showing the 10 s figure.
+
+  Regular users see live rates only for the lines the page already shows them:
+  the endpoint and the node summary now share one visibility rule (authorized
+  and not hidden) instead of two copies of it.
+
 ## [1.2.10] - 2026-09-24
 
 Panel only, and a license release rather than a feature one: no code behaviour

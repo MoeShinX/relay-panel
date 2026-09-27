@@ -3,6 +3,7 @@ mod diagnose;
 mod forwarder;
 mod poller;
 mod reporter;
+mod shutdown;
 mod updater;
 mod ws_client;
 
@@ -231,13 +232,32 @@ async fn run() {
     // token apart (otherwise their status entries overwrite each other).
     let node_id = poller::get_or_create_node_id();
 
+    // --- Graceful shutdown (v1.2.5) ---
+    // SIGTERM / Ctrl+C / a finished self-upgrade: stop accepting, flush the
+    // traffic counted so far, give open connections a short window, flush again
+    // and exit. Exit code 0 — under systemd's Restart=always an upgrade comes
+    // back up on the new binary, and `systemctl stop` stays stopped.
+    {
+        let config_sd = config.clone();
+        let manager_sd = manager.clone();
+        let counter_sd = counter.clone();
+        let connections_sd = connections.clone();
+        tokio::spawn(async move {
+            shutdown::triggered().await;
+            shutdown::run(&config_sd, &manager_sd, &counter_sd, &connections_sd).await;
+            tracing::info!("shutdown complete");
+            std::process::exit(0);
+        });
+    }
+
     // --- Fork 1: WebSocket control channel (real-time config push) ---
     {
         let config_ws = config.clone();
         let manager_ws = manager.clone();
         let node_id_ws = node_id.clone();
+        let metrics_ws = metrics.clone();
         tokio::spawn(async move {
-            ws_client::run_ws_loop(&config_ws, &manager_ws, &node_id_ws).await;
+            ws_client::run_ws_loop(&config_ws, &manager_ws, &node_id_ws, &metrics_ws).await;
         });
     }
 

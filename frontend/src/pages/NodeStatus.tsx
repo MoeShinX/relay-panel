@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Spin, Result, Empty, Modal, message } from 'antd';
 import { LineChartOutlined } from '@ant-design/icons';
 import api from '../api/client';
-import type { ApiEnvelope, NodeStatus, SharedNodeSummary, NodeDisplayRow } from '../api/types';
+import type { ApiEnvelope, NodeStatus, SharedNodeSummary, NodeDisplayRow, NodeLiveRate } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { useAuth } from '../auth/useAuth';
 import { NodeGroupSection } from '../components/nodes/NodeGroupSection';
@@ -10,6 +10,12 @@ import { NodeDetailDrawer } from '../components/nodes/NodeDetailDrawer';
 import { stableGroupedRows } from '../components/nodes/sort';
 
 type AnyNodeRow = NodeDisplayRow;
+
+/** v1.2.11: how often the page asks for pushed rates. Matches the node's push
+ *  interval — polling faster only re-reads the same reading. */
+const LIVE_RATE_POLL_MS = 2000;
+
+const liveKey = (groupId: number, nodeId: string) => `${groupId}:${nodeId}`;
 
 interface VersionInfo {
   current_version: string;
@@ -60,6 +66,11 @@ export default function NodeStatus() {
   // 5s interval) a new tick could otherwise fire before the previous request
   // returned, stacking requests.
   const inFlightRef = useRef(false);
+  // v1.2.11: latest pushed rate per node, keyed by liveKey(). Replaced wholesale
+  // on each poll, so a node whose feed went quiet drops back to its status
+  // report figure instead of freezing on an old number.
+  const [liveRates, setLiveRates] = useState<Map<string, NodeLiveRate>>(() => new Map());
+  const liveInFlightRef = useRef(false);
 
   const loadAdmin = async () => {
     try {
@@ -86,6 +97,25 @@ export default function NodeStatus() {
       setUserRows(res.data || []);
     } catch {
       setLoadFailed(true);
+    }
+  };
+
+  const loadLiveRates = async () => {
+    // Nobody is looking: skip rather than poll a background tab every 2s.
+    if (document.hidden || liveInFlightRef.current) return;
+    liveInFlightRef.current = true;
+    try {
+      const res = await api.get<unknown, ApiEnvelope<NodeLiveRate[]>>('/nodes/live-rates');
+      const next = new Map<string, NodeLiveRate>();
+      if (res.code === 0) {
+        for (const r of res.data || []) next.set(liveKey(r.group_id, r.node_id), r);
+      }
+      setLiveRates(next);
+    } catch {
+      // Fall back to the report's figures rather than showing stale live ones.
+      setLiveRates(new Map());
+    } finally {
+      liveInFlightRef.current = false;
     }
   };
 
@@ -125,6 +155,15 @@ export default function NodeStatus() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
 
+  // v1.2.11: the live rate runs on its own, faster clock. Everything else on
+  // the page (CPU, memory, disk, cumulative traffic) keeps the 5s refresh and
+  // the node's own ~10s report cadence.
+  useEffect(() => {
+    loadLiveRates();
+    const ti = setInterval(loadLiveRates, LIVE_RATE_POLL_MS);
+    return () => clearInterval(ti);
+  }, []);
+
   // v1.0.10: admin triggers a directed node self-upgrade. Confirm first (the
   // node restarts, so its forwarding blips for a few seconds).
   const handleUpgrade = (row: AnyNodeRow) => {
@@ -147,8 +186,22 @@ export default function NodeStatus() {
     });
   };
 
-  const rows: AnyNodeRow[] | null = isAdmin ? adminRows : userRows;
+  const baseRows: AnyNodeRow[] | null = isAdmin ? adminRows : userRows;
+  // Overlay the pushed rate on online nodes that have one. The group header
+  // sums row rates, so it picks the live figures up with no change of its own.
+  const rows = useMemo(() => {
+    if (!baseRows || liveRates.size === 0) return baseRows;
+    return baseRows.map((r) => {
+      const live = r.online && r.node_id ? liveRates.get(liveKey(r.group_id, r.node_id)) : undefined;
+      return live ? { ...r, upload_bps: live.upload_bps, download_bps: live.download_bps } : r;
+    });
+  }, [baseRows, liveRates]);
   const groups = useMemo(() => (rows ? stableGroupedRows(rows) : null), [rows]);
+  // The drawer follows the node, not the snapshot taken when it was opened, so
+  // its figures (the live rate included) keep updating while it stays open.
+  const detailCurrent = detailRow
+    ? rows?.find((r) => r.group_id === detailRow.group_id && r.node_id === detailRow.node_id) ?? detailRow
+    : null;
 
   const title = t('nodeStatus');
 
@@ -213,7 +266,7 @@ export default function NodeStatus() {
         />
       ))}
       <NodeDetailDrawer
-        row={detailRow}
+        row={detailCurrent}
         open={detailRow !== null}
         onClose={() => setDetailRow(null)}
         isAdmin={isAdmin}

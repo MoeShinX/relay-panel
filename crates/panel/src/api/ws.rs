@@ -8,10 +8,11 @@ use axum::{
     response::IntoResponse,
 };
 use futures_util::{SinkExt, StreamExt};
-use relay_shared::protocol::NodeConfigResponse;
+use relay_shared::protocol::{NodeConfigResponse, NodeLiveRate, NodeRateMessage};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock};
 
 /// One live connection's sender + its optional per-node identity (v0.4.14
@@ -21,7 +22,18 @@ use tokio::sync::{mpsc, RwLock};
 struct ConnEntry {
     tx: mpsc::UnboundedSender<String>,
     node_id: Option<String>,
+    /// v1.2.11: the node's latest pushed NIC rate (upload, download, received
+    /// at). Lives on the connection on purpose: when the socket goes away the
+    /// entry goes with it, so a disconnected node can never keep showing its
+    /// last live figure.
+    rate: Option<(u64, u64, Instant)>,
 }
+
+/// v1.2.11: a pushed rate older than this is ignored and the page falls back
+/// to the status report's figure. Three push intervals: one late frame is not
+/// enough to drop a node back to the slow number, a stalled feed is.
+const LIVE_RATE_MAX_AGE: Duration =
+    Duration::from_secs(3 * relay_shared::protocol::LIVE_RATE_INTERVAL_SECS);
 /// Per-group map of live connection senders.
 type GroupConns = HashMap<u64, ConnEntry>;
 /// Shared registry: group_id -> that group's live connections.
@@ -59,7 +71,14 @@ impl NodeConnections {
             .await
             .entry(group_id)
             .or_default()
-            .insert(conn_id, ConnEntry { tx, node_id });
+            .insert(
+                conn_id,
+                ConnEntry {
+                    tx,
+                    node_id,
+                    rate: None,
+                },
+            );
         (conn_id, rx)
     }
 
@@ -108,6 +127,62 @@ impl NodeConnections {
             map.remove(&group_id);
         }
         sent
+    }
+
+    /// v1.2.11: store a node's pushed rate on its connection. A connection
+    /// without an X-Node-ID is skipped — its rate could not be matched to a row
+    /// on the page anyway, and pre-0.4.14 nodes never push one.
+    pub async fn record_rate(
+        &self,
+        group_id: i64,
+        conn_id: u64,
+        upload_bps: u64,
+        download_bps: u64,
+    ) {
+        let mut map = self.inner.write().await;
+        if let Some(entry) = map.get_mut(&group_id).and_then(|c| c.get_mut(&conn_id)) {
+            if entry.node_id.is_some() {
+                entry.rate = Some((upload_bps, download_bps, Instant::now()));
+            }
+        }
+    }
+
+    /// v1.2.11: every node's current live rate. Stale entries are left out so
+    /// the caller falls back to the status report instead of freezing on an old
+    /// number. When one node briefly has two connections (a reconnect racing the
+    /// old socket's teardown) the fresher reading wins.
+    pub async fn live_rates(&self) -> Vec<NodeLiveRate> {
+        self.live_rates_at(Instant::now()).await
+    }
+
+    async fn live_rates_at(&self, now: Instant) -> Vec<NodeLiveRate> {
+        let map = self.inner.read().await;
+        let mut best: HashMap<(i64, String), (u64, u64, Instant)> = HashMap::new();
+        for (&group_id, conns) in map.iter() {
+            for e in conns.values() {
+                let (Some(node_id), Some(rate)) = (&e.node_id, e.rate) else {
+                    continue;
+                };
+                if now.saturating_duration_since(rate.2) > LIVE_RATE_MAX_AGE {
+                    continue;
+                }
+                let key = (group_id, node_id.clone());
+                if best.get(&key).is_none_or(|cur| rate.2 > cur.2) {
+                    best.insert(key, rate);
+                }
+            }
+        }
+        let mut out: Vec<NodeLiveRate> = best
+            .into_iter()
+            .map(|((group_id, node_id), (up, down, _))| NodeLiveRate {
+                group_id,
+                node_id,
+                upload_bps: up,
+                download_bps: down,
+            })
+            .collect();
+        out.sort_by(|a, b| (a.group_id, &a.node_id).cmp(&(b.group_id, &b.node_id)));
+        out
     }
 
     /// v0.4.14: send a message ONLY to the connection(s) in a group whose
@@ -311,6 +386,18 @@ async fn handle_node_ws(
                 Ok(Some(Ok(Message::Close(_)))) | Ok(None) | Ok(Some(Err(_))) => {
                     tracing::info!("websocket disconnected: group_id={}", group_id);
                     break;
+                }
+                Ok(Some(Ok(Message::Text(text)))) => {
+                    // v1.2.11: the only node -> panel text frame is the live
+                    // rate. Anything else is ignored as before, which is also
+                    // what keeps a newer node safe against this panel.
+                    if let Ok(m) = serde_json::from_str::<NodeRateMessage>(text.as_str()) {
+                        if m.msg_type == NodeRateMessage::TYPE {
+                            node_connections
+                                .record_rate(group_id, conn_id, m.upload_bps, m.download_bps)
+                                .await;
+                        }
+                    }
                 }
                 Ok(Some(Ok(_))) => {
                     // ignore other message types
@@ -521,5 +608,74 @@ mod tests {
         assert!(ids.contains("node-b"));
         // An empty group → empty set.
         assert!(conns.online_node_ids(42).await.is_empty());
+    }
+
+    fn rate(r: &NodeLiveRate) -> (i64, &str, u64, u64) {
+        (r.group_id, r.node_id.as_str(), r.upload_bps, r.download_bps)
+    }
+
+    #[tokio::test]
+    async fn a_recorded_rate_is_reported_for_its_node() {
+        let conns = NodeConnections::new();
+        let (id, _rx) = conns.register(4, Some("gz-1".into())).await;
+        conns.record_rate(4, id, 3_650_000, 128_930).await;
+
+        let rates = conns.live_rates().await;
+        assert_eq!(
+            rates.iter().map(rate).collect::<Vec<_>>(),
+            vec![(4, "gz-1", 3_650_000, 128_930)]
+        );
+    }
+
+    /// The whole point of the feed is to be current. A reading the node stopped
+    /// refreshing must drop out so the page falls back to the status report,
+    /// not freeze on the last live number.
+    #[tokio::test]
+    async fn a_stale_rate_is_left_out() {
+        let conns = NodeConnections::new();
+        let (id, _rx) = conns.register(4, Some("gz-1".into())).await;
+        conns.record_rate(4, id, 1, 2).await;
+
+        let fresh = Instant::now();
+        assert_eq!(conns.live_rates_at(fresh).await.len(), 1);
+        let later = fresh + LIVE_RATE_MAX_AGE + Duration::from_secs(1);
+        assert!(conns.live_rates_at(later).await.is_empty());
+    }
+
+    /// Living on the connection means a disconnect takes the rate with it.
+    #[tokio::test]
+    async fn disconnecting_removes_the_rate() {
+        let conns = NodeConnections::new();
+        let (id, _rx) = conns.register(4, Some("gz-1".into())).await;
+        conns.record_rate(4, id, 1, 2).await;
+        conns.unregister(4, id).await;
+        assert!(conns.live_rates().await.is_empty());
+    }
+
+    /// Without an X-Node-ID the reading can't be matched to a row on the page.
+    #[tokio::test]
+    async fn a_connection_without_a_node_id_records_nothing() {
+        let conns = NodeConnections::new();
+        let (id, _rx) = conns.register(4, None).await;
+        conns.record_rate(4, id, 1, 2).await;
+        assert!(conns.live_rates().await.is_empty());
+    }
+
+    /// A reconnect can briefly leave the old socket registered beside the new
+    /// one. The page must show one number per node — the newest.
+    #[tokio::test]
+    async fn two_connections_for_one_node_report_the_fresher_rate() {
+        let conns = NodeConnections::new();
+        let (old, _rx1) = conns.register(4, Some("gz-1".into())).await;
+        let (new, _rx2) = conns.register(4, Some("gz-1".into())).await;
+        conns.record_rate(4, old, 111, 111).await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        conns.record_rate(4, new, 222, 222).await;
+
+        let rates = conns.live_rates().await;
+        assert_eq!(
+            rates.iter().map(rate).collect::<Vec<_>>(),
+            vec![(4, "gz-1", 222, 222)]
+        );
     }
 }

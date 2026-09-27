@@ -13,6 +13,7 @@ vi.mock('../auth/useAuth', () => ({ useAuth: mockUseAuth }));
 import NodeStatus from './NodeStatus';
 import { stableGroupedRows, compareNodeRows } from '../components/nodes/sort';
 import type { NodeDisplayRow } from '../api/types';
+import { formatBps } from '../utils/format';
 
 const ok = <T,>(data: T) => ({ code: 0, message: 'ok', data });
 
@@ -339,5 +340,56 @@ describe('NodeStatus rendered group order is stable across refreshes', () => {
     await flush();
 
     expect(isBefore(docOrderIdx('shared-one'), docOrderIdx('shared-two'))).toBe(true);
+  });
+});
+
+describe('NodeStatus live rate', () => {
+  const throughput = (up: number, down: number) => `${formatBps(up)} / ${formatBps(down)}`;
+  // The report says one thing; the pushed feed says another. Which one the page
+  // shows is the whole behaviour under test.
+  const reported = { ...adminNode, upload_bps: 1_000, download_bps: 2_000 };
+
+  const serve = (live: () => unknown[]) => {
+    mockUseAuth.mockReturnValue({ isAdmin: true });
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/nodes') return Promise.resolve(ok([reported]));
+      if (url === '/system/version') return Promise.resolve(version);
+      if (url === '/nodes/live-rates') return Promise.resolve(ok(live()));
+      return Promise.reject(new Error(`unexpected ${url}`));
+    });
+  };
+
+  it('shows the pushed rate instead of the report, and follows it on the next poll', async () => {
+    let live = [{ group_id: 1, node_id: 'n1', upload_bps: 3_650_000, download_bps: 128_930 }];
+    serve(() => live);
+
+    render(<NodeStatus />);
+    await flush();
+    expect(screen.getByText(throughput(3_650_000, 128_930))).toBeInTheDocument();
+    expect(screen.queryByText(throughput(1_000, 2_000))).not.toBeInTheDocument();
+
+    live = [{ group_id: 1, node_id: 'n1', upload_bps: 42_000, download_bps: 7_000 }];
+    await flush(2000);
+    expect(screen.getByText(throughput(42_000, 7_000))).toBeInTheDocument();
+  });
+
+  it('falls back to the report when the node has no fresh pushed rate', async () => {
+    serve(() => []);
+    render(<NodeStatus />);
+    await flush();
+    expect(screen.getByText(throughput(1_000, 2_000))).toBeInTheDocument();
+  });
+
+  it('does not poll while the tab is hidden', async () => {
+    serve(() => []);
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+    try {
+      render(<NodeStatus />);
+      await flush(10_000);
+      const liveCalls = mockGet.mock.calls.filter((c) => c[0] === '/nodes/live-rates').length;
+      expect(liveCalls).toBe(0);
+    } finally {
+      hidden.mockRestore();
+    }
   });
 });

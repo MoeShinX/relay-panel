@@ -228,6 +228,23 @@ def main():
         assert wait_for_port("127.0.0.1", TCP_LISTEN_PORT), "node TCP listener not up"
         print("[ok] node opened listeners (auth via Authorization header)")
 
+        # 3b. Live rate (panel 1.2.11 / node 1.2.5): the node pushes its NIC rate
+        #     over the WS control channel every 2s and the panel serves it from
+        #     memory. Unit tests cover each hop; this proves the real frames, the
+        #     X-Node-ID binding and the parsing line up end to end.
+        live = []
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            live = [r for r in api("GET", "/nodes/live-rates", admin_token)["data"]
+                    if r["group_id"] == in_g1_id]
+            if live:
+                break
+            time.sleep(0.5)
+        assert live, "node never appeared in /nodes/live-rates"
+        assert live[0]["node_id"], "a live rate must carry the node's id"
+        print(f"[ok] live rate pushed over WS: up={live[0]['upload_bps']}B/s "
+              f"down={live[0]['download_bps']}B/s")
+
         # 4. Verify the v0.4.0 protocol gate: a request WITHOUT the
         #    X-Config-Protocol-Version header must be rejected with 426
         #    (Upgrade Required), NOT return config. This is the gate that
@@ -380,6 +397,35 @@ def main():
         assert reject_resp["code"] == 400, \
             f"device_group_out should be rejected, got: {reject_resp}"
         print(f"[ok] rule update: name changed, device_group_out rejected (v0.4.20)")
+
+        # 13. Graceful shutdown (node 1.2.5). Traffic forwarded moments before
+        #     SIGTERM must still be billed: the node reports every 2s here, so
+        #     without the shutdown flush these bytes would almost always die with
+        #     the process. And with nothing open, the node must not sit out the
+        #     drain window refusing connections — it should exit at once, cleanly.
+        #     Needs a real SIGTERM, so Linux (CI) only: on Windows terminate()
+        #     is a hard kill.
+        if sys.platform != "win32":
+            import signal
+            by_name = {r["name"]: r for r in api("GET", "/rules", admin_token)["data"]}
+            before = by_name["tcp-rule"]["traffic_used"]
+            flush_payload = b"shutdown-flush-" + b"Z" * 5000 + b"\n"
+            assert tcp_roundtrip(TCP_LISTEN_PORT, flush_payload) == flush_payload
+            node.send_signal(signal.SIGTERM)
+            started = time.time()
+            code = node.wait(timeout=20)
+            took = time.time() - started
+            assert code == 0, f"graceful shutdown should exit 0, got {code}"
+            assert took < 4.5, (f"with no connection open the node should exit at once, "
+                                f"not wait out the drain; took {took:.1f}s")
+            by_name = {r["name"]: r for r in api("GET", "/rules", admin_token)["data"]}
+            gained = by_name["tcp-rule"]["traffic_used"] - before
+            assert gained >= 2 * len(flush_payload), (
+                f"traffic forwarded right before SIGTERM was not billed: "
+                f"+{gained}B, expected >= {2 * len(flush_payload)}B")
+            print(f"[ok] SIGTERM: exit 0 in {took:.1f}s, last {gained}B billed")
+        else:
+            print("[skip] graceful shutdown check needs SIGTERM (Linux only)")
 
         print("\nALL TESTS PASSED [PASS]")
         return 0

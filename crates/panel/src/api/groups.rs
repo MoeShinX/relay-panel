@@ -84,43 +84,80 @@ pub async fn list_shared_groups(
 ///
 /// Admin users get an empty list (they use GET /nodes for the full detail view).
 /// A DB error returns code 500 (not an empty success).
+/// GET /api/v1/nodes/live-rates — v1.2.11. Each node's latest pushed NIC rate,
+/// for the node-status page to poll every couple of seconds while it is open.
+///
+/// Admins get every node, straight from memory with no database access. Other
+/// users get only the groups [`visible_status_groups`] allows — the exact rule
+/// the summary uses, so this can never reveal a line the page itself hides.
+/// Nodes that push nothing (older versions, or no fresh reading) are simply
+/// absent; the page keeps the status report's figure for them.
+pub async fn list_live_rates(
+    user: AuthUser,
+    State(state): State<AppState>,
+) -> Json<ApiResponse<Vec<relay_shared::protocol::NodeLiveRate>>> {
+    let rates = state.node_connections.live_rates().await;
+    if user.admin {
+        return Json(ApiResponse::success(rates));
+    }
+    let visible: HashSet<i64> = match visible_status_groups(&state, &user).await {
+        Ok(groups) => groups.into_iter().map(|g| g.id).collect(),
+        Err(e) => {
+            tracing::error!("list_live_rates: visible groups lookup failed: {}", e);
+            return db_error();
+        }
+    };
+    Json(ApiResponse::success(
+        rates
+            .into_iter()
+            .filter(|r| visible.contains(&r.group_id))
+            .collect(),
+    ))
+}
+
+/// The device groups a user may see on the node-status page.
+///
+/// v1.2.11: extracted so the summary and the live-rate feed apply ONE rule. Two
+/// copies of an access filter drift, and here drift is a leak: the live feed
+/// would show a hidden or unauthorized line's throughput.
+///
+/// v1.0.7: filtered by per-user device-group authorization (same logic as
+/// list_shared_groups), AND admin-hidden groups are dropped — this is the ONLY
+/// path that honors `hidden` (the node-status page). The rule dropdown / shop
+/// (list_shared_groups) intentionally keep listing hidden groups so existing and
+/// new rules work normally. For an admin, list_shared_groups is empty (admins
+/// use GET /nodes), so this returns an empty list for them too.
+pub(crate) async fn visible_status_groups(
+    state: &AppState,
+    user: &AuthUser,
+) -> Result<Vec<SharedGroupSummary>, crate::db::error::DbError> {
+    let groups = state
+        .db
+        .list_shared_groups(user.user_id, user.admin)
+        .await?;
+    if user.admin {
+        return Ok(groups);
+    }
+    let authorized = state.db.authorized_device_group_ids(user.user_id).await?;
+    Ok(groups
+        .into_iter()
+        .filter(|g| !g.hidden && authorized.contains(&g.id))
+        .collect())
+}
+
 pub async fn list_shared_node_summary(
     user: AuthUser,
     State(state): State<AppState>,
 ) -> Json<ApiResponse<Vec<SharedNodeSummary>>> {
-    // The shared groups define which groups (and which safe metadata) to
-    // return. For an admin this is empty → empty summary list.
-    let groups: Vec<SharedGroupSummary> =
-        match state.db.list_shared_groups(user.user_id, user.admin).await {
-            Ok(g) => g,
-            Err(e) => {
-                tracing::error!("list_shared_node_summary: list_shared_groups failed: {}", e);
-                return db_error();
-            }
-        };
-
-    // v1.0.7: filter by per-user device-group authorization (same logic as
-    // list_shared_groups), AND drop admin-hidden groups — this is the ONLY path
-    // that honors `hidden` (the node-status page). The rule dropdown / shop
-    // (list_shared_groups) intentionally keep listing hidden groups so existing
-    // and new rules work normally. Admins are handled above (empty list).
-    let groups = if user.admin {
-        groups
-    } else {
-        let authorized = match state.db.authorized_device_group_ids(user.user_id).await {
-            Ok(ids) => ids,
-            Err(e) => {
-                tracing::error!(
-                    "list_shared_node_summary: authorization lookup failed: {}",
-                    e
-                );
-                return db_error();
-            }
-        };
-        groups
-            .into_iter()
-            .filter(|g| !g.hidden && authorized.contains(&g.id))
-            .collect()
+    let groups = match visible_status_groups(&state, &user).await {
+        Ok(g) => g,
+        Err(e) => {
+            tracing::error!(
+                "list_shared_node_summary: visible groups lookup failed: {}",
+                e
+            );
+            return db_error();
+        }
     };
 
     if groups.is_empty() {
@@ -477,5 +514,121 @@ mod tests {
         let out = aggregate_shared_node_summaries(groups, &rows, now);
         assert_eq!(out.len(), 1, "only the parseable row produces a node row");
         assert_eq!(out[0].node_id, "good");
+    }
+
+    mod live_rates {
+        use super::*;
+        use crate::api::system::ReleaseCache;
+        use crate::api::ws::NodeConnections;
+        use crate::config::Config;
+        use crate::db::schema::SCHEMA_SQL;
+        use crate::db::sqlite_repo::SqliteRepository;
+        use sqlx::sqlite::SqlitePoolOptions;
+        use std::sync::Arc;
+
+        /// Admin (id 1, seeded by the schema) owns three inbound lines:
+        ///   10 visible, authorized for alice
+        ///   11 HIDDEN,  authorized for alice
+        ///   12 visible, NOT authorized for alice
+        /// Each has one connected node pushing a rate.
+        async fn state() -> AppState {
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect("sqlite::memory:")
+                .await
+                .unwrap();
+            sqlx::query(SCHEMA_SQL).execute(&pool).await.unwrap();
+            for sql in [
+                "INSERT INTO users (id, username, password, admin, all_device_groups) VALUES (2, 'alice', 'x', 0, 0)",
+                "INSERT INTO device_groups (id, name, group_type, token, uid, hidden) VALUES (10, 'visible', 'in', 't10', 1, 0)",
+                "INSERT INTO device_groups (id, name, group_type, token, uid, hidden) VALUES (11, 'hidden', 'in', 't11', 1, 1)",
+                "INSERT INTO device_groups (id, name, group_type, token, uid, hidden) VALUES (12, 'unauthorized', 'in', 't12', 1, 0)",
+                "INSERT INTO user_device_groups (user_id, device_group_id) VALUES (2, 10)",
+                "INSERT INTO user_device_groups (user_id, device_group_id) VALUES (2, 11)",
+            ] {
+                sqlx::query(sql).execute(&pool).await.unwrap();
+            }
+            let node_connections = NodeConnections::new();
+            for gid in [10, 11, 12] {
+                let (conn, rx) = node_connections
+                    .register(gid, Some(format!("n{gid}")))
+                    .await;
+                std::mem::forget(rx); // keep the connection registered for the test
+                node_connections
+                    .record_rate(gid, conn, gid as u64 * 1000, 1)
+                    .await;
+            }
+            AppState {
+                db: Arc::new(SqliteRepository::new(pool)),
+                config: Config {
+                    database_path: "sqlite::memory:".into(),
+                    listen: "127.0.0.1:0".into(),
+                    key: "test-key".into(),
+                    jwt_secret: "test-secret".into(),
+                    public_dir: "public".into(),
+                    public_panel_url: String::new(),
+                    registration_enabled: false,
+                    cors_origins: vec![],
+                    geoip_enabled: false,
+                    geoip_cache_ttl: 604_800,
+                },
+                release_cache: ReleaseCache::new(),
+                node_connections,
+                diagnose: crate::api::diagnose::DiagnoseRegistry::new(),
+                geoip_in_flight: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
+            }
+        }
+
+        async fn groups_seen(user: AuthUser) -> Vec<i64> {
+            let resp = list_live_rates(user, State(state().await)).await;
+            assert_eq!(resp.0.code, 0);
+            resp.0.data.unwrap().iter().map(|r| r.group_id).collect()
+        }
+
+        #[tokio::test]
+        async fn an_admin_sees_every_node() {
+            let seen = groups_seen(AuthUser {
+                user_id: 1,
+                admin: true,
+            })
+            .await;
+            assert_eq!(seen, vec![10, 11, 12]);
+        }
+
+        /// The feed must hide exactly what the node-status page hides: a
+        /// throughput figure for a hidden or unauthorized line is still a look
+        /// at that line.
+        #[tokio::test]
+        async fn a_user_sees_only_visible_authorized_lines() {
+            let seen = groups_seen(AuthUser {
+                user_id: 2,
+                admin: false,
+            })
+            .await;
+            assert_eq!(
+                seen,
+                vec![10],
+                "hidden (11) and unauthorized (12) must be filtered out"
+            );
+        }
+
+        /// The feed and the summary share one visibility rule; pin that they
+        /// agree, so a future edit to one cannot silently diverge.
+        #[tokio::test]
+        async fn the_feed_and_the_summary_agree_on_visibility() {
+            let st = state().await;
+            let user = AuthUser {
+                user_id: 2,
+                admin: false,
+            };
+            let summary_groups: Vec<i64> = visible_status_groups(&st, &user)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|g| g.id)
+                .collect();
+            assert_eq!(summary_groups, vec![10]);
+            assert_eq!(groups_seen(user).await, summary_groups);
+        }
     }
 }

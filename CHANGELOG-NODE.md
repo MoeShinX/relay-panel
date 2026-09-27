@@ -11,6 +11,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Graceful shutdown.** On SIGTERM (`systemctl stop` / `restart`), Ctrl+C, or
+  after a one-click upgrade, the node now stops accepting, reports the traffic
+  counted so far, gives open TCP connections up to `SHUTDOWN_DRAIN_SECS`
+  (default 5, max 60, 0 = no wait) to finish — exiting the moment the last one
+  closes — reports again, and exits 0.
+
+  What this fixes, first of all, is billing. Every restart used to throw away
+  whatever had been counted since the last report — up to 10 s of forwarded
+  traffic, never charged. That is gone.
+
+  What it does NOT do is keep a long-lived connection alive across a restart.
+  A tunnel or VPN still open when the window ends is cut, exactly as before;
+  the process holding it is the one exiting. And new connections are refused
+  during the window, on top of systemd's `RestartSec` — which is why it is
+  short and ends early when nothing is open.
+
+- **Live NIC rate over the WebSocket**, every 2 s, for panel 1.2.11+'s
+  node-status page. Sampled on its own baseline so the status report's 10 s
+  figure is unaffected. An older panel ignores the frames.
+
+### Fixed
+
+- **Two traffic reports can no longer run at once.** A report snapshots the
+  counters, uploads, and only then subtracts what the panel acknowledged. Two
+  in flight together would both upload the same bytes — billed twice — and then
+  both subtract them, wrapping the counter to an enormous value that the next
+  report billed again. The regular loop never overlapped itself, so this had
+  not happened; the shutdown flush is a second caller that can, so reports are
+  now serialized.
+
 ## [1.2.4] - 2026-09-08
 
 Node only. Nothing on the wire changed (still protocol version 4), so this node

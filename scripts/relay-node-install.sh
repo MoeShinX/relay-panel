@@ -469,6 +469,15 @@ if [ ! -f "$ENV_FILE" ]; then
 #   PUBLIC_IPV4_CHECK_URL=https://ipv4.icanhazip.com
 #   PUBLIC_IPV6_CHECK_URL=https://ipv6.icanhazip.com
 
+# ── v1.2.5: graceful shutdown ──
+# On `systemctl stop` / `restart` or a one-click upgrade, the node stops
+# accepting, reports the traffic counted so far, then waits up to this many
+# seconds for open TCP connections to finish before exiting (it exits at once
+# when none are open). New connections are refused during the wait, so keep it
+# short. Long-lived connections (tunnels, VPNs) are still cut when it ends.
+# 0 = no wait (the traffic report still runs). Default 5, maximum 60.
+#   SHUTDOWN_DRAIN_SECS=5
+
 # ── TLS Simple certificate configuration (v0.4.1) ──
 # Uncomment and set these to enable TLS Simple ingress on this node.
 # The cert must be PEM format (fullchain recommended); the key must be PEM
