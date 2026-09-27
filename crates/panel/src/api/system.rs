@@ -98,6 +98,22 @@ impl ReleaseCache {
     /// The directed-upgrade handler MUST use this and MUST NEVER fall back to
     /// the panel version: a panel-only release (e.g. v1.2.0 with no node
     /// binary) would otherwise command nodes to download a non-existent asset.
+    /// v1.2.11: the latest PANEL release tag (e.g. "v1.2.11") for the one-click
+    /// panel update. Same contract as `resolve_latest_node_version`: `Ok(None)`
+    /// means the check worked and found no panel release, `Err` means the check
+    /// itself failed.
+    pub async fn resolve_latest_panel_version(&self) -> Result<Option<String>, String> {
+        let releases = match self.get().await {
+            Some(r) => r,
+            None => {
+                let fetched = fetch_github_releases().await?;
+                self.set(fetched.clone()).await;
+                fetched
+            }
+        };
+        Ok(releases.panel.as_ref().map(|r| r.tag_name.clone()))
+    }
+
     pub async fn resolve_latest_node_version(&self) -> Result<Option<String>, String> {
         // Reuse the cache if fresh; otherwise fetch + repopulate. On fetch
         // failure, do NOT cache (so the next request retries).
@@ -152,7 +168,7 @@ pub struct VersionInfo {
 }
 
 /// Parse a version string like "v0.1.4" or "0.1.4" into a semver Version.
-fn parse_version(s: &str) -> Option<semver::Version> {
+pub(crate) fn parse_version(s: &str) -> Option<semver::Version> {
     let cleaned = s.strip_prefix('v').unwrap_or(s);
     semver::Version::parse(cleaned).ok()
 }

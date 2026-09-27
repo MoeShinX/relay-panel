@@ -14,6 +14,7 @@ pub mod groups;
 pub mod middleware;
 pub mod node;
 pub mod notify;
+pub mod panel_update;
 pub mod redeem;
 pub mod restart;
 pub mod security_headers;
@@ -309,6 +310,13 @@ pub fn routes() -> Router<AppState> {
         )
         // System
         .route("/system/version", axum::routing::get(system::get_version))
+        // v1.2.11: one-click panel update. The panel only drops a request; a
+        // systemd unit on the host does the update (see panel_update.rs).
+        .route(
+            "/system/panel-update",
+            axum::routing::get(panel_update::get_panel_update)
+                .post(panel_update::start_panel_update),
+        )
         // Public, unauthenticated health probe (status + version only). Used by
         // deploy.sh and external monitors; NOT behind AdminOnly.
         .route("/health", axum::routing::get(system::health))

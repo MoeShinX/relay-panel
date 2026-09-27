@@ -12,6 +12,7 @@ import { aggregateNodesByGroup } from '../components/nodes/aggregate';
 import TrafficChart from '../components/TrafficChart';
 import NodeMetricsChart from '../components/NodeMetricsChart';
 import { formatBps, formatBytes } from '../utils/format';
+import { PanelUpdateButton } from '../components/PanelUpdateButton';
 
 const { Text } = Typography;
 
@@ -245,7 +246,11 @@ export default function Dashboard() {
             <Space>
               <Button size="small" onClick={handleIgnore}>{t('ignoreVersion')}</Button>
               <Button size="small" onClick={() => setShowChangelog(true)}>{t('viewChangelog')}</Button>
-              <Button size="small" type="primary" href={DEPLOY_DOC_URL} target="_blank">{t('updateNow')}</Button>
+              <PanelUpdateButton
+                currentVersion={versionInfo?.current_version || ''}
+                targetVersion={versionInfo?.latest_version || ''}
+                manualUrl={DEPLOY_DOC_URL}
+              />
             </Space>
           }
         />

@@ -12,6 +12,35 @@ independent `v*` / `node-v*` tracks since this release).
 
 ### Added
 
+- **One-click panel update.** "Update now" on the dashboard now updates the
+  panel instead of linking to the manual steps — like the nodes' one-click
+  upgrade, for installations made with the install script (under
+  `/opt/relay-panel`, on a systemd host).
+
+  The panel cannot do this itself the way a node does: it runs in a container,
+  and replacing a container's own image from inside requires mounting the
+  Docker socket, which would hand the panel — a public web app with
+  self-registration — root on the host. So the panel only asks. It drops a
+  request file in `./run`, a directory shared with the host; a systemd path
+  unit installed by `deploy.sh` notices it and runs `scripts/panel-updater.sh`
+  as root, which does what an operator would: `git pull --ff-only` and
+  `./deploy.sh`. A compromised panel can at most request an update to the
+  official latest release — the host ignores the request's contents and pulls
+  the official repository.
+
+  With SQLite the panel is stopped and its database copied to
+  `./backups/` first (the newest five are kept), because the new version may
+  migrate the schema. PostgreSQL is not backed up automatically. The panel is
+  unreachable for about half a minute; node forwarding is not affected. The
+  outcome — including a failed `git pull`, a version pinned in `.env`, or a
+  failed deploy (after which the panel is started again) — is shown on the
+  dashboard with the end of the updater's log, and the full log is in
+  `/var/log/relaypanel-updater.log`. The request is recorded in the audit log.
+
+  Existing installations need one manual update (`git pull && ./deploy.sh`) to
+  install the updater; until then the button keeps pointing at the manual
+  steps and says so.
+
 - **Node rates on the node-status page are now near real time.** The upload /
   download rate used to be a ~10 s average that changed only as often as the
   node's whole status report ran. A node running `node-v1.2.5` or later now

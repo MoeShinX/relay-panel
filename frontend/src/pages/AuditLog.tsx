@@ -27,6 +27,7 @@ const ACTIONS = [
   'delete_group',
   'rotate_group_token',
   'upgrade_node',
+  'upgrade_panel',
   'upgrade_node_failed',
   'create_redeem_codes',
   'void_redeem_code',
