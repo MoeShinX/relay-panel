@@ -71,6 +71,7 @@ if [ "${1:-}" = "compose" ]; then
         *' pull') printf 'PULL %s\n' "$*" >> "$log"; exit 0 ;;
         *' up -d'*)
             printf 'UP %s\n' "$*" >> "$log"
+            [ -n "${HARNESS_UP_FAILS:-}" ] && { echo 'compose up exploded' >&2; exit 1; }
             env | grep -E '^(RELAYPANEL_WEB_MODE|RELAYPANEL_PANEL_PORT_BINDING|RELAYPANEL_DOMAIN|PUBLIC_PANEL_URL|REVERSE_PROXY_EXTERNAL|ACME_EMAIL|CADDY_ACME_EMAIL_DIRECTIVE|RELAYPANEL_DB_MODE)=' | sort >> "$log"
             exit 0
             ;;
@@ -226,6 +227,20 @@ echo 'sqlite bytes' > "$TMP/upgrade-backup-done-data/data.db"
 [ ! -d "$dir/backups" ] || fail 'RELAYPANEL_BACKUP_DONE=1 must skip the second backup'
 grep -q '^STOP panel' "$log" && fail 'RELAYPANEL_BACKUP_DONE=1 must not stop the panel'
 pass 'upgrade skips the backup when the updater already took one'
+
+# If the new version cannot be started after the backup stopped the old
+# panel, deploy.sh must start the old container again and fail.
+res=$(run_case upgrade-up-fails env)
+dir=${res%|*}; log=${res#*|}
+mkdir -p "$TMP/upgrade-up-fails-data"
+echo 'sqlite bytes' > "$TMP/upgrade-up-fails-data/data.db"
+: > "$log"
+if (cd "$dir" && HARNESS_LOG="$log" HARNESS_DATA_DIR="$TMP/upgrade-up-fails-data" HARNESS_UP_FAILS=1 PATH="$TMP/fakebin-upgrade-up-fails:$PATH" bash ./deploy.sh >/tmp/rp-upgrade-up-fails-2.out 2>/tmp/rp-upgrade-up-fails-2.err); then
+    fail 'deploy.sh must fail when compose up fails'
+fi
+grep -q '^STOP panel' "$log" || fail 'expected the backup to stop the panel'
+grep -q '^START panel' "$log" || fail 'the old panel must be started again when compose up fails'
+pass 'a failed compose up after the backup brings the old panel back'
 
 # A fresh install has nothing to back up.
 res=$(run_case fresh-no-backup env)

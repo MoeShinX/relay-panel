@@ -722,7 +722,11 @@ if [ "$FRESH_INSTALL" = "0" ] && [ "${RELAYPANEL_BACKUP_DONE:-0}" != "1" ] \
     backup_rc=0
     backup_path="$(bash scripts/sqlite-backup.sh "$COMPOSE_FILE" "pre-deploy")" || backup_rc=$?
     case $backup_rc in
-        0) info "Database backed up to backups/${backup_path##*/} (the newest 5 are kept)" ;;
+        0)
+            info "Database backed up to backups/${backup_path##*/} (the newest 5 are kept)"
+            # The backup left the old panel stopped; see step 4.
+            PANEL_STOPPED_FOR_BACKUP=1
+            ;;
         3) info "No existing SQLite database found - skipping the backup" ;;
         *) fail "Database backup failed, so nothing was changed (the panel is running the old version). Check free disk space and permissions on ./backups." ;;
     esac
@@ -734,7 +738,16 @@ fi
 # one-click update's request and status files.
 mkdir -p run && chmod 755 run
 info "Starting services (docker compose -f $COMPOSE_FILE ${PROFILE_ARGS[*]} up -d $COMPOSE_FLAGS) ..."
-docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" up -d $COMPOSE_FLAGS
+if ! docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" up -d $COMPOSE_FLAGS; then
+    # v1.2.12: the backup above stopped the old panel. If the new one could
+    # not be started, bring the old container back rather than leaving the
+    # panel down.
+    if [ "${PANEL_STOPPED_FOR_BACKUP:-0}" = "1" ]; then
+        warn "Starting the previous panel container again ..."
+        docker compose -f "$COMPOSE_FILE" start panel || true
+    fi
+    fail "docker compose up failed (see the output above). Check: docker compose -f $COMPOSE_FILE ${PROFILE_ARGS[*]} logs"
+fi
 
 # ---------- 5. Verify ----------
 # Deployment success is decided by the CONTAINER + PORT + a real health
