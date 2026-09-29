@@ -8,6 +8,45 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Deleting a device group works on PostgreSQL.** The "is this group still
+  used by a rule?" check queried a `fallback_group` column that the rules
+  table does not have, so every group deletion on a PostgreSQL panel failed
+  with a database error. SQLite was unaffected.
+- **PostgreSQL migration 11 no longer claims it will retry.** When it found
+  conflicting ports it skipped itself, but the later migrations then recorded
+  the newest schema version, so it never ran again despite the log saying it
+  would. It now stops the panel with an explanation instead. (Not reachable in
+  practice: the baseline schema applied just before already rejects such data.)
+
+### Security
+
+- **Login and registration can no longer be used to exhaust the panel's CPU,
+  and no longer reveal which usernames exist.**
+  - Login attempts were limited only per username, so trying a different
+    username each time was never limited. There is now also a limit per client
+    IP (20 attempts a minute, login and registration together). Behind Caddy
+    or a reverse proxy on the same host, the client IP is taken from the
+    `X-Forwarded-For` header that proxy adds.
+  - Password hashing ran on the threads that serve every request, so a few
+    concurrent login attempts could stall the whole panel, node reports
+    included. It now runs separately, at most one per two CPU cores at a time;
+    when those are all busy, a login waits up to 3 seconds and then gets
+    "server busy" — the rest of the panel keeps working.
+  - A login with an impossibly long username or password is refused at once.
+  - The stand-in hash checked for unknown usernames was malformed, so an
+    unknown username was answered almost instantly and a known one only after
+    the real password check — the response time told which usernames exist.
+    Both now take the same time.
+- **Release workflows no longer paste the manual-dispatch version into
+  shell scripts.** It is passed as an environment variable and must be a plain
+  `X.Y.Z`. Only people with write access to the repository could trigger this.
+
+---
+
 ## [1.2.11] - 2026-09-27
 
 Ships alongside `node-v1.2.5`; neither requires the other, and the config

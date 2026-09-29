@@ -1,67 +1,47 @@
+use crate::api::auth_throttle::{
+    client_ip, run_bcrypt, IP_LIMITER, MAX_LOGIN_PASSWORD, MAX_LOGIN_USERNAME, USERNAME_LIMITER,
+};
 use crate::api::AppState;
 use crate::service::password::{
     hash_password, validate_password, verify_password, PasswordValidationError,
 };
 use crate::service::users::validate_username;
-use axum::{extract::State, Json};
+use axum::extract::{ConnectInfo, State};
+use axum::http::HeaderMap;
+use axum::{Extension, Json};
 use jsonwebtoken::{encode, EncodingKey, Header};
-use once_cell::sync::Lazy;
 use relay_shared::models::User;
 use relay_shared::protocol::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::net::SocketAddr;
 
-/// Simple in-memory login rate limiter. Tracks per-username attempt counts
-/// within a 1-minute window. Limits brute-force attacks without needing a
-/// Redis/external store. Reset on process restart (acceptable: the attacker
-/// has to re-establish state each time).
-struct LoginAttempt {
-    count: u32,
-    window_start: Instant,
-}
+/// The TCP peer, when the server was started with connect info (main.rs does;
+/// handler tests that build the router without it simply skip the per-IP
+/// limit).
+type Peer = Option<Extension<ConnectInfo<SocketAddr>>>;
 
-static LOGIN_LIMITER: Lazy<Mutex<HashMap<String, LoginAttempt>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-
-const MAX_LOGIN_ATTEMPTS: u32 = 5;
-const LOGIN_WINDOW: Duration = Duration::from_secs(60);
-
-/// Returns true if the login attempt should be blocked (too many attempts).
-/// Resets the window if it has elapsed. Also prunes expired entries when the
-/// map grows beyond CAP to prevent unbounded memory growth from crafted
-/// usernames that never succeed (and thus never get remove()d).
-fn check_rate_limit(username: &str) -> bool {
-    const CAP: usize = 10_000;
-    let now = Instant::now();
-    let mut map = LOGIN_LIMITER.lock().unwrap();
-    match map.get_mut(username) {
-        Some(entry) if now.duration_since(entry.window_start) < LOGIN_WINDOW => {
-            entry.count += 1;
-            entry.count > MAX_LOGIN_ATTEMPTS
-        }
-        _ => {
-            // New window (first attempt, or window expired)
-            map.insert(
-                username.to_string(),
-                LoginAttempt {
-                    count: 1,
-                    window_start: now,
-                },
-            );
-            // GC: drop entries whose window has expired to bound memory.
-            if map.len() > CAP {
-                map.retain(|_, v| now.duration_since(v.window_start) < LOGIN_WINDOW);
-            }
-            false
-        }
+fn too_many() -> ApiResponse<LoginResponse> {
+    ApiResponse {
+        code: 429,
+        message: "Too many login attempts. Please wait a minute and try again.".into(),
+        data: None,
     }
 }
 
-/// Clear the rate-limit counter for a username on successful login.
-fn clear_rate_limit(username: &str) {
-    LOGIN_LIMITER.lock().unwrap().remove(username);
+fn busy<T: Serialize>() -> ApiResponse<T> {
+    ApiResponse {
+        code: 429,
+        message: "The server is busy. Please try again in a moment.".into(),
+        data: None,
+    }
+}
+
+fn invalid_credentials() -> ApiResponse<LoginResponse> {
+    ApiResponse {
+        code: 401,
+        message: "Invalid credentials".into(),
+        data: None,
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -79,19 +59,35 @@ struct Claims {
 /// Verifying against this eliminates the timing side-channel that would
 /// otherwise reveal whether a username is registered (~300 ms bcrypt vs ~1 ms
 /// early return).
-static DUMMY_HASH: &str = "$2b$12$AAAAAAAAAAAAAAAAAAAAAOYEUtP4bEYKnMmFJEPW9HTZLX9R5gO4iSq";
+///
+/// v1.2.12: the previous constant was not a valid bcrypt hash, so verifying
+/// against it failed in microseconds and the side channel stayed wide open
+/// (unknown username ≈ instant, known one ≈ 250 ms). This one is a real
+/// cost-12 hash of a throwaway string; `dummy_hash_costs_a_full_bcrypt` pins it.
+static DUMMY_HASH: &str = "$2b$12$TP5SNHPKxVJPX4LDVdMoUOyPDSwBf9JhE.WrdCmN5sMMhNhPLLsXm";
 
 pub async fn login(
     State(state): State<AppState>,
+    peer: Peer,
+    headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> Json<ApiResponse<LoginResponse>> {
-    // Rate limit: max 5 attempts per username per 60s.
-    if check_rate_limit(&req.username) {
-        return Json(ApiResponse {
-            code: 429,
-            message: "Too many login attempts. Please wait a minute and try again.".into(),
-            data: None,
-        });
+    // v1.2.12: see api::auth_throttle. A login that cannot match costs
+    // nothing — no bcrypt, no rate-limit entry.
+    if req.username.is_empty()
+        || req.username.len() > MAX_LOGIN_USERNAME
+        || req.password.len() > MAX_LOGIN_PASSWORD
+    {
+        return Json(invalid_credentials());
+    }
+    if let Some(ip) = client_ip(peer.map(|Extension(ConnectInfo(a))| a), &headers) {
+        if IP_LIMITER.hit(&ip) {
+            return Json(too_many());
+        }
+    }
+    // Max 5 attempts per username per 60s.
+    if USERNAME_LIMITER.hit(&req.username) {
+        return Json(too_many());
     }
 
     let user: Option<User> = match state.db.find_by_username_not_banned(&req.username).await {
@@ -105,17 +101,19 @@ pub async fn login(
     // Always perform a bcrypt verification to prevent timing attacks that
     // reveal whether a username exists. When the user is None we verify
     // against a pre-computed dummy hash so the CPU cost is identical.
-    let (verified, user) = match user {
-        Some(u) => (verify_password(&req.password, &u.password), Some(u)),
-        None => {
-            let _ = verify_password(&req.password, DUMMY_HASH);
-            (false, None)
-        }
+    // v1.2.12: on the blocking pool, under the global bcrypt permits.
+    let hash = user
+        .as_ref()
+        .map_or_else(|| DUMMY_HASH.to_string(), |u| u.password.clone());
+    let password = req.password.clone();
+    let Some(ok) = run_bcrypt(move || verify_password(&password, &hash)).await else {
+        return Json(busy());
     };
+    let verified = ok && user.is_some();
 
     if verified {
         if let Some(user) = user {
-            clear_rate_limit(&req.username);
+            USERNAME_LIMITER.clear(&req.username);
             let claims = Claims {
                 sub: user.id,
                 admin: user.admin,
@@ -136,17 +134,26 @@ pub async fn login(
         }
     }
 
-    Json(ApiResponse {
-        code: 401,
-        message: "Invalid credentials".into(),
-        data: None,
-    })
+    Json(invalid_credentials())
 }
 
 pub async fn register(
     State(state): State<AppState>,
+    peer: Peer,
+    headers: HeaderMap,
     Json(req): Json<RegisterRequest>,
 ) -> Json<ApiResponse<()>> {
+    // v1.2.12: registration also runs bcrypt for anyone, so it shares the
+    // per-IP limit and the bcrypt permits with login.
+    if let Some(ip) = client_ip(peer.map(|Extension(ConnectInfo(a))| a), &headers) {
+        if IP_LIMITER.hit(&ip) {
+            return Json(ApiResponse {
+                code: 429,
+                message: "Too many attempts. Please wait a minute and try again.".into(),
+                data: None,
+            });
+        }
+    }
     // v0.4.10 PR3: registration toggle now lives in app_settings (admin-managed),
     // NOT the REGISTRATION_ENABLED env var. The env var only seeds the row on
     // first boot; afterwards only the admin PUT can change it. A missing row
@@ -210,7 +217,11 @@ pub async fn register(
         });
     }
 
-    let hashed = match hash_password(&req.password) {
+    let password = req.password.clone();
+    let Some(hashed) = run_bcrypt(move || hash_password(&password)).await else {
+        return Json(busy());
+    };
+    let hashed = match hashed {
         Ok(h) => h,
         Err(e) => {
             return Json(ApiResponse {
@@ -331,5 +342,24 @@ async fn default_password_change_required(db: &dyn crate::db::repo::Repository) 
         Ok(Some((_banned, _version, must_change))) => must_change,
         // User doesn't exist (fresh DB before seed) or DB error → no banner.
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DUMMY_HASH;
+    use std::str::FromStr;
+
+    /// v1.2.12: the dummy must be a well-formed cost-12 bcrypt hash, or an
+    /// unknown username is answered in microseconds and the response time
+    /// tells which usernames exist.
+    #[test]
+    fn dummy_hash_costs_a_full_bcrypt() {
+        let parts = bcrypt::HashParts::from_str(DUMMY_HASH).expect("a valid bcrypt hash");
+        assert_eq!(parts.get_cost(), 12, "same cost as real password hashes");
+        assert_eq!(
+            bcrypt::verify("not-the-password", DUMMY_HASH).ok(),
+            Some(false)
+        );
     }
 }

@@ -49,8 +49,13 @@ jobs:
     steps:
       - name: Resolve + validate tags
         id: t
+        # v1.2.12: the input arrives through env. It used to be spliced into
+        # the script as an expression — expanded before the shell ran,
+        # so the regex check below came too late to stop an injected command.
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          VER="${{ inputs.version }}"
+          VER="$INPUT_VERSION"
           # Bare X.Y.Z only — no leading 'v', no 'node-' prefix, no slashes /
           # path traversal. This value ends up in tag names and file operations.
           if ! printf '%s' "$VER" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -68,7 +73,7 @@ jobs:
           # "invisible until verified" gate that protects unaware old nodes.
           IS_DRAFT=$(gh release view "$NODE_TAG" --json isDraft -q .isDraft 2>/dev/null || echo "missing")
           if [ "$IS_DRAFT" = "missing" ]; then
-            echo "::error::node release $NODE_TAG not found — run this only AFTER node-v${{ inputs.version }} is fully published."
+            echo "::error::node release $NODE_TAG not found — run this only AFTER $NODE_TAG is fully published."
             exit 1
           fi
           if [ "$IS_DRAFT" != "false" ]; then
@@ -81,7 +86,7 @@ jobs:
         run: |
           PANEL_TAG="${{ steps.t.outputs.panel_tag }}"
           if ! gh release view "$PANEL_TAG" >/dev/null 2>&1; then
-            echo "::error::panel release $PANEL_TAG not found — publish panel v${{ inputs.version }} first."
+            echo "::error::panel release $PANEL_TAG not found — publish panel $PANEL_TAG first."
             exit 1
           fi
           echo "panel release $PANEL_TAG exists."
@@ -118,4 +123,4 @@ jobs:
             relay-node-linux-amd64 relay-node-linux-amd64.sha256 \
             relay-node-linux-arm64 relay-node-linux-arm64.sha256 \
             --clobber
-          echo "::notice::Bridged node-v${{ inputs.version }} binaries onto $PANEL_TAG — old (<=1.1.0) nodes can now complete their one cross-track upgrade."
+          echo "::notice::Bridged ${{ steps.t.outputs.node_tag }} binaries onto $PANEL_TAG — old (<=1.1.0) nodes can now complete their one cross-track upgrade."
