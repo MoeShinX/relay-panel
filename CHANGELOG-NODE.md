@@ -25,6 +25,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   most once a minute. Set `UDP_MAX_SESSIONS` in `relay-node.env` for very busy
   UDP forwarding. Refused packets also no longer add entries to the
   connection count.
+- **The installer no longer pastes `-u` / `-t` into `start.sh` unescaped.**
+  The values were inserted with `sed`, so a URL or token containing `$(...)`
+  would run on every node start, and a `|` or `&` produced a broken file. The
+  token, panel URL and service name are now validated, and `start.sh` is
+  written with proper shell quoting. The values come from the install command
+  the operator pastes, so this was not reachable remotely.
 
 ### Fixed
 
@@ -47,15 +53,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   instance now uses its own `/opt/<name>`. Re-run the install command for the
   instance to get the new `start.sh`; the default `relay-node` instance keeps
   its files where they are.
-
-### Security
-
-- **The installer no longer pastes `-u` / `-t` into `start.sh` unescaped.**
-  The values were inserted with `sed`, so a URL or token containing `$(...)`
-  would run on every node start, and a `|` or `&` produced a broken file. The
-  token, panel URL and service name are now validated, and `start.sh` is
-  written with proper shell quoting. The values come from the install command
-  the operator pastes, so this was not reachable remotely.
 
 ---
 

@@ -75,6 +75,9 @@ fn session_cap_from(env: Option<String>, nofile: Option<u64>) -> usize {
 }
 
 #[cfg(unix)]
+// rlim_t is u64 on the targets we ship (Linux x86_64/aarch64), which makes the
+// cast a no-op there, but it is not u64 on every unix.
+#[allow(clippy::unnecessary_cast)]
 fn nofile_limit() -> Option<u64> {
     let mut lim = libc::rlimit {
         rlim_cur: 0,
