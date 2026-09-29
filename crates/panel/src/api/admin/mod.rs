@@ -125,6 +125,7 @@ mod tests {
     use crate::db::schema::SCHEMA_SQL;
     use crate::db::sqlite_repo::SqliteRepository;
     use axum::extract::{Path, Query, State};
+    use axum::http::HeaderMap;
     use axum::Json;
     use relay_shared::protocol::{
         CreateGroupRequest, CreateRuleRequest, GroupType, Protocol, PublicTransport,
@@ -2263,6 +2264,8 @@ mod tests {
         let (state, _pool) = test_state().await;
         let Json(resp) = register(
             State(state.clone()),
+            None,
+            HeaderMap::new(),
             Json(RegisterRequest {
                 username: "newuser".into(),
                 password: "validpass1".into(),
@@ -2285,6 +2288,8 @@ mod tests {
 
         let Json(resp) = register(
             State(state.clone()),
+            None,
+            HeaderMap::new(),
             Json(RegisterRequest {
                 username: "newuser".into(),
                 password: "short".into(), // 5 bytes
@@ -2307,6 +2312,8 @@ mod tests {
 
         let Json(resp) = register(
             State(state.clone()),
+            None,
+            HeaderMap::new(),
             Json(RegisterRequest {
                 username: "newuser".into(),
                 password: "x".repeat(73),
@@ -2333,6 +2340,8 @@ mod tests {
 
         let Json(resp) = register(
             State(state.clone()),
+            None,
+            HeaderMap::new(),
             Json(RegisterRequest {
                 username: "newuser".into(),
                 password: pw,
@@ -2358,6 +2367,8 @@ mod tests {
 
         let Json(resp) = register(
             State(state.clone()),
+            None,
+            HeaderMap::new(),
             Json(RegisterRequest {
                 username: "alice".into(),
                 password: "validpass1".into(),
@@ -2400,9 +2411,15 @@ mod tests {
             password: "validpass1".into(),
             ..Default::default()
         };
-        let Json(r1) = register(State(state.clone()), Json(req.clone())).await;
+        let Json(r1) = register(
+            State(state.clone()),
+            None,
+            HeaderMap::new(),
+            Json(req.clone()),
+        )
+        .await;
         assert_eq!(r1.code, 0);
-        let Json(r2) = register(State(state.clone()), Json(req)).await;
+        let Json(r2) = register(State(state.clone()), None, HeaderMap::new(), Json(req)).await;
         assert_eq!(r2.code, 409, "duplicate username must yield 409");
     }
 
@@ -2532,7 +2549,7 @@ mod tests {
             password: "validpass1".into(),
             plan_id: Some(1),
         };
-        let Json(resp) = register(State(state.clone()), Json(req)).await;
+        let Json(resp) = register(State(state.clone()), None, HeaderMap::new(), Json(req)).await;
         assert_eq!(resp.code, 0, "{}", resp.message);
     }
 
@@ -2550,7 +2567,7 @@ mod tests {
             password: "validpass1".into(),
             plan_id: Some(999),
         };
-        let Json(resp) = register(State(state.clone()), Json(req)).await;
+        let Json(resp) = register(State(state.clone()), None, HeaderMap::new(), Json(req)).await;
         assert_eq!(resp.code, 400, "must reject plan not in allowed list");
     }
 
@@ -2568,7 +2585,7 @@ mod tests {
             password: "validpass1".into(),
             ..Default::default()
         };
-        let Json(resp) = register(State(state.clone()), Json(req)).await;
+        let Json(resp) = register(State(state.clone()), None, HeaderMap::new(), Json(req)).await;
         assert_eq!(resp.code, 0, "should use default plan_id=1");
     }
 
@@ -2695,7 +2712,7 @@ mod tests {
             password: "validpass1".into(),
             plan_id: Some(2),
         };
-        let Json(resp) = register(State(state.clone()), Json(req)).await;
+        let Json(resp) = register(State(state.clone()), None, HeaderMap::new(), Json(req)).await;
         assert_eq!(resp.code, 0, "register with plan 2 should succeed");
 
         // Verify the user inherited plan 2's quota.
@@ -2845,5 +2862,66 @@ mod tests {
         )
         .await;
         assert_eq!(resp.code, 400, "{}", resp.message);
+    }
+
+    /// v1.2.12: a client over its per-IP budget is refused before any bcrypt,
+    /// whatever username it rotates to (the per-username limit alone was
+    /// bypassed exactly that way).
+    #[tokio::test]
+    async fn login_is_limited_per_client_ip_across_usernames() {
+        use crate::api::auth::login;
+        use crate::api::auth_throttle::IP_LIMITER;
+        use axum::extract::ConnectInfo;
+        use axum::Extension;
+        use relay_shared::protocol::LoginRequest;
+
+        let (state, _pool) = test_state().await;
+        // An address no other test uses; the limiter is process-wide.
+        let peer: std::net::SocketAddr = "203.0.113.250:40000".parse().unwrap();
+        for _ in 0..20 {
+            IP_LIMITER.hit(&peer.ip());
+        }
+        let started = std::time::Instant::now();
+        let Json(resp) = login(
+            State(state.clone()),
+            Some(Extension(ConnectInfo(peer))),
+            HeaderMap::new(),
+            Json(LoginRequest {
+                username: "never-tried-before".into(),
+                password: "whatever1".into(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.code, 429, "{}", resp.message);
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(100),
+            "refused without running bcrypt"
+        );
+    }
+
+    /// v1.2.12: a login that cannot match (oversized username/password) is
+    /// refused up front — no bcrypt, no rate-limit entry.
+    #[tokio::test]
+    async fn login_refuses_oversized_input_without_bcrypt() {
+        use crate::api::auth::login;
+        use relay_shared::protocol::LoginRequest;
+
+        let (state, _pool) = test_state().await;
+        for (username, password) in [
+            ("a".repeat(65), "whatever1".to_string()),
+            ("admin".to_string(), "p".repeat(1025)),
+            (String::new(), "whatever1".to_string()),
+        ] {
+            let started = std::time::Instant::now();
+            let Json(resp) = login(
+                State(state.clone()),
+                None,
+                HeaderMap::new(),
+                Json(LoginRequest { username, password }),
+            )
+            .await;
+            assert_eq!(resp.code, 401, "{}", resp.message);
+            assert!(started.elapsed() < std::time::Duration::from_millis(100));
+        }
     }
 }

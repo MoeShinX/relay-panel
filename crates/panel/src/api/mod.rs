@@ -8,6 +8,7 @@ pub mod admin;
 pub mod announcements;
 pub mod audit;
 pub mod auth;
+pub mod auth_throttle;
 pub mod diagnose;
 pub mod geoip;
 pub mod groups;

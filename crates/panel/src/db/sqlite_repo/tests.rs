@@ -5633,3 +5633,40 @@ async fn admin_order_list_pages_without_overlap() {
         "the two pages must cover all three rows exactly once"
     );
 }
+
+/// v1.2.12: the pre-delete check counts rules using the group as inbound OR
+/// outbound, and nothing else. (The PG copy also queried a fallback_group
+/// column that forward_rules does not have, failing every group delete.)
+#[tokio::test]
+async fn count_rules_by_group_counts_inbound_and_outbound_use() {
+    let db = repo().await;
+    for (id, gtype) in [(1, "in"), (2, "out"), (3, "in")] {
+        sqlx::query(
+            "INSERT INTO device_groups (id, name, group_type, token, uid) \
+             VALUES (?, 'g', ?, ?, 1)",
+        )
+        .bind(id)
+        .bind(gtype)
+        .bind(format!("tok-{id}"))
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+    for (id, port, out) in [(100, 20_000, None), (101, 20_001, Some(2_i64))] {
+        sqlx::query(
+            "INSERT INTO forward_rules \
+             (id, name, uid, listen_port, device_group_in, device_group_out, target_addr, target_port) \
+             VALUES (?, 'r', 1, ?, 1, ?, '127.0.0.1', 80)",
+        )
+        .bind(id)
+        .bind(port)
+        .bind(out)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    assert_eq!(db.count_rules_by_group(1).await.unwrap(), 2, "inbound");
+    assert_eq!(db.count_rules_by_group(2).await.unwrap(), 1, "outbound");
+    assert_eq!(db.count_rules_by_group(3).await.unwrap(), 0, "unused");
+}

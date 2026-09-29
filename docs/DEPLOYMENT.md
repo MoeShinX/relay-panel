@@ -481,6 +481,8 @@ location /api/v1/node/ws {
 location / {
     proxy_pass http://127.0.0.1:18888;
     proxy_set_header Host $host;
+    # Lets the panel see the real client IP (per-IP login limits).
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 }
 ```
 

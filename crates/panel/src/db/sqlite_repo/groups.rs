@@ -227,24 +227,17 @@ impl GroupRepository for SqliteRepository {
     }
 
     async fn count_rules_by_group(&self, id: i64) -> Result<i64, DbError> {
-        // Check if fallback_group column exists (defensive: test schemas may not have it).
-        let has_fallback: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM pragma_table_info('forward_rules') WHERE name = 'fallback_group'",
+        // v1.2.12: forward_rules has no fallback_group column (that column is
+        // on device_groups). This used to probe for it and silently drop the
+        // condition; the PG copy queried it outright and failed every delete.
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM forward_rules \
+             WHERE device_group_in = ? OR device_group_out = ?",
         )
+        .bind(id)
+        .bind(id)
         .fetch_one(&self.pool)
         .await?;
-        let sql = if has_fallback.0 > 0 {
-            "SELECT COUNT(*) FROM forward_rules \
-             WHERE device_group_in = ? OR device_group_out = ? OR fallback_group = ?"
-        } else {
-            "SELECT COUNT(*) FROM forward_rules \
-             WHERE device_group_in = ? OR device_group_out = ?"
-        };
-        let mut q = sqlx::query_as(sql).bind(id).bind(id);
-        if has_fallback.0 > 0 {
-            q = q.bind(id);
-        }
-        let row: (i64,) = q.fetch_one(&self.pool).await?;
         Ok(row.0)
     }
 

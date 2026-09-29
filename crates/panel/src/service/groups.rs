@@ -162,8 +162,8 @@ impl std::fmt::Display for GroupInUseError {
 impl std::error::Error for GroupInUseError {}
 
 /// Delete an admin-owned device group. Before deleting, checks that no
-/// forward_rules reference this group via device_group_in, device_group_out,
-/// or fallback_group. Returns `GroupInUseError` with the rule count if any
+/// forward_rules reference this group via device_group_in or
+/// device_group_out. Returns `GroupInUseError` with the rule count if any
 /// references exist, so the handler can return a clear 409.
 pub async fn delete_group(
     db: &dyn Repository,

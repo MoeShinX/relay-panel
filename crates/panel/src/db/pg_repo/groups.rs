@@ -243,9 +243,11 @@ impl GroupRepository for PgRepository {
     }
 
     async fn count_rules_by_group(&self, id: i64) -> Result<i64, DbError> {
+        // v1.2.12: forward_rules has no fallback_group column (it is on
+        // device_groups); referencing it made every group delete fail on PG.
         let row: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM forward_rules \
-             WHERE device_group_in = $1 OR device_group_out = $1 OR fallback_group = $1",
+             WHERE device_group_in = $1 OR device_group_out = $1",
         )
         .bind(id)
         .fetch_one(&self.pool)
