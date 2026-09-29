@@ -35,11 +35,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 WORKDIR /app
 COPY --from=panel-build /app/target/release/relay-panel /app/relay-panel
 COPY --from=frontend-build /frontend/dist /app/public
+# v1.2.12: the panel runs as an unprivileged user. The entrypoint starts as
+# root only to hand /app/data and /app/run to it (existing installs are
+# root-owned), then drops privileges with setpriv; see
+# scripts/docker-entrypoint.sh.
+RUN useradd --system --uid 10001 --user-group --home-dir /app --no-create-home \
+        --shell /usr/sbin/nologin relaypanel && \
+    mkdir -p /app/data /app/run && chown relaypanel:relaypanel /app/data /app/run
+COPY scripts/docker-entrypoint.sh /usr/local/bin/relaypanel-entrypoint
+RUN chmod 755 /usr/local/bin/relaypanel-entrypoint
 VOLUME ["/app/data"]
 EXPOSE 18888
 ENV DATABASE_URL="sqlite:/app/data/data.db?mode=rwc" \
     LISTEN="0.0.0.0:18888" \
     PUBLIC_DIR="/app/public"
+ENTRYPOINT ["/usr/local/bin/relaypanel-entrypoint"]
 CMD ["./relay-panel"]
 
 # ---- Node runtime ----
@@ -71,9 +81,19 @@ WORKDIR /app
 COPY release-dist/panel/relay-panel /app/relay-panel
 RUN chmod +x /app/relay-panel
 COPY release-dist/frontend /app/public
+# v1.2.12: the panel runs as an unprivileged user. The entrypoint starts as
+# root only to hand /app/data and /app/run to it (existing installs are
+# root-owned), then drops privileges with setpriv; see
+# scripts/docker-entrypoint.sh.
+RUN useradd --system --uid 10001 --user-group --home-dir /app --no-create-home \
+        --shell /usr/sbin/nologin relaypanel && \
+    mkdir -p /app/data /app/run && chown relaypanel:relaypanel /app/data /app/run
+COPY scripts/docker-entrypoint.sh /usr/local/bin/relaypanel-entrypoint
+RUN chmod 755 /usr/local/bin/relaypanel-entrypoint
 VOLUME ["/app/data"]
 EXPOSE 18888
 ENV DATABASE_URL="sqlite:/app/data/data.db?mode=rwc" \
     LISTEN="0.0.0.0:18888" \
     PUBLIC_DIR="/app/public"
+ENTRYPOINT ["/usr/local/bin/relaypanel-entrypoint"]
 CMD ["./relay-panel"]
