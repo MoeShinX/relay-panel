@@ -145,6 +145,23 @@ EOF
 else
     FRESH_INSTALL=0
     warn ".env already exists - skipping secret generation"
+    # v1.2.12: the panel refuses to start with a JWT_SECRET shorter than 32
+    # bytes (it is brute-forceable offline from any issued token). Replace a
+    # short one here, so an upgrade — including the unattended one-click panel
+    # update, which runs this script — cannot leave the panel down. The cost is
+    # that everyone has to log in again once.
+    current_jwt=$(grep -m1 '^JWT_SECRET=' .env | cut -d= -f2- | tr -d '\r' || true)
+    current_jwt=${current_jwt#[\"\']}; current_jwt=${current_jwt%[\"\']}
+    if [ "${#current_jwt}" -lt 32 ]; then
+        new_jwt=$(openssl rand -hex 32)
+        if grep -q '^JWT_SECRET=' .env; then
+            sed -i "s|^JWT_SECRET=.*|JWT_SECRET=${new_jwt}|" .env
+        else
+            printf 'JWT_SECRET=%s\n' "$new_jwt" >> .env
+        fi
+        warn "JWT_SECRET in .env was missing or shorter than 32 characters - replaced with a new random one (everyone has to log in again)"
+    fi
+    unset current_jwt new_jwt
 fi
 
 # ---------- 2b. Database backend resolution ----------

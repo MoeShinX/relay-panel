@@ -11,6 +11,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **UDP sessions no longer leak.** When an idle UDP session expired, only its
+  table entry was dropped: the task reading the target's replies kept the
+  session's socket and waited forever if the target never answered again. On
+  a busy UDP rule this piled up one task and one file descriptor per idle
+  client until the node ran out of descriptors. Expiring a session now stops
+  its reader, and removing or restarting a UDP rule releases all of its
+  sessions (and the rule's cleanup task, which also used to live on).
+- **A late error on an expired UDP session could cut off the client's new
+  one.** The old session's reader removed "the session for this client" when
+  its socket failed — by then possibly the replacement session. It now only
+  removes its own.
+- **Nodes installed with `-s <name>` ran from the default instance's
+  directory.** The generated `start.sh` always changed into `/opt/relay-node`
+  and read its `relay-node.env`, and the node kept its id and config cache
+  there whenever that directory existed — so a second instance on the same
+  host shared the first one's node id and showed up as the same node. Each
+  instance now uses its own `/opt/<name>`. Re-run the install command for the
+  instance to get the new `start.sh`; the default `relay-node` instance keeps
+  its files where they are.
+
+### Security
+
+- **The installer no longer pastes `-u` / `-t` into `start.sh` unescaped.**
+  The values were inserted with `sed`, so a URL or token containing `$(...)`
+  would run on every node start, and a `|` or `&` produced a broken file. The
+  token, panel URL and service name are now validated, and `start.sh` is
+  written with proper shell quoting. The values come from the install command
+  the operator pastes, so this was not reachable remotely.
+
+---
+
 ## [1.2.5] - 2026-09-27
 
 Nothing on the wire changed (still protocol version 4), so this node runs

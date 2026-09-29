@@ -46,6 +46,54 @@ info()  { echo -e "${GREEN}[INFO]${NC}  $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 fail()  { echo -e "${RED}[FAIL]${NC}  $*"; exit 1; }
 
+# v1.2.12: validate the values that end up in start.sh, the systemd unit and
+# /opt/<name>. Before, -u/-t were spliced into start.sh with sed, so a value
+# containing $(...) ran on every node start and a "|" or "&" broke the file.
+validate_install_args() {
+    # $1 = token, $2 = panel url, $3 = service name
+    case "$1" in
+        ''|*[!A-Za-z0-9._-]*) fail "Invalid token: only letters, digits, '.', '_' and '-' are allowed. Copy it again from the panel." ;;
+    esac
+    case "$2" in
+        http://?*|https://?*) ;;
+        *) fail "Invalid panel URL: $2 (expected http://host:port or https://host)" ;;
+    esac
+    case "$2" in
+        *[[:space:]\"\'\`\$\\]*) fail "Invalid panel URL: it must not contain spaces, quotes, '\$', '\`' or '\\'." ;;
+    esac
+    case "$3" in
+        ''|.*|*[!A-Za-z0-9._-]*) fail "Invalid service name: $3 (letters, digits, '.', '_' and '-'; must not start with '.')" ;;
+    esac
+}
+
+# Write the node's start script. Values are shell-quoted with printf %q (never
+# substituted into the text), so whatever they contain stays a literal string.
+write_start_sh() {
+    # $1 = start.sh path, $2 = install dir, $3 = panel url, $4 = token
+    {
+        printf '#!/usr/bin/env bash\nset -euo pipefail\n'
+        printf 'cd %q\n' "$2"
+        printf 'export RELAY_NODE_DIR=%q\n' "$2"
+        printf 'export PANEL_URL=%q\n' "$3"
+        printf 'export NODE_TOKEN=%q\n' "$4"
+        cat <<'STARTEOF'
+export POLL_INTERVAL="${POLL_INTERVAL:-10}"
+export RUST_LOG="${RUST_LOG:-info}"
+# Optional config sourced from relay-node.env (next to this script) if present
+# (written by the installer with commented examples; edit it to set
+# LISTEN_IPV4/LISTEN_IPV6, OUTBOUND_INTERFACE/OUTBOUND_BIND_IPV4 or
+# SHUTDOWN_DRAIN_SECS). If the file doesn't exist, all of these stay unset and
+# the node uses its defaults (dual-stack listen, system-routed egress).
+if [ -f ./relay-node.env ]; then
+    set -a
+    . ./relay-node.env
+    set +a
+fi
+exec ./relay-node
+STARTEOF
+    } > "$1"
+}
+
 # ---------- Defaults ----------
 NODE_TOKEN=""
 PANEL_URL=""
@@ -92,6 +140,7 @@ fi
 if [ -z "$PANEL_URL" ]; then
     fail "Missing required option: -u/--url. Example: http://203.0.113.10:18888"
 fi
+validate_install_args "$NODE_TOKEN" "$PANEL_URL" "$SERVICE_NAME"
 
 # ---------- Platform check ----------
 if [ "$(uname -s)" != "Linux" ]; then
@@ -386,37 +435,12 @@ info "Binary installed: ${BINARY} ($(( FILE_SIZE / 1024 / 1024 )) MB, ELF ${ARCH
 fi  # end ALREADY_AT_VERSION skip (binary download/swap)
 
 # ---------- Write start.sh ----------
-# IMPORTANT: the here-doc uses quoted 'EOF' delimiter so NOTHING is expanded
-# at install time - all values are written literally. This prevents bugs like
-# $0 being /dev/fd/63 when the installer runs via bash <(curl ...).
+# v1.2.12: start.sh works from ITS OWN install dir. It used to cd into (and
+# source relay-node.env from) a hardcoded /opt/relay-node, so an instance
+# installed with -s ran from the default instance's directory.
 START_SH="${INSTALL_DIR}/start.sh"
 info "Writing start script: $START_SH"
-cat > "$START_SH" <<'STARTEOF'
-#!/usr/bin/env bash
-set -euo pipefail
-cd "/opt/relay-node"
-export PANEL_URL="__PANEL_URL__"
-export NODE_TOKEN="__NODE_TOKEN__"
-export POLL_INTERVAL="${POLL_INTERVAL:-10}"
-export RUST_LOG="${RUST_LOG:-info}"
-# Optional config sourced from relay-node.env if present (written by the
-# installer with commented examples; edit it to set LISTEN_IPV4/LISTEN_IPV6,
-# OUTBOUND_INTERFACE/OUTBOUND_BIND_IPV4 or SHUTDOWN_DRAIN_SECS). If the file
-# doesn't exist, all of these stay unset and the node uses its defaults
-# (dual-stack listen, system-routed egress).
-# NOTE: path is hardcoded (/opt/relay-node) because this script runs with set -u
-# and INSTALL_DIR is not defined in the generated start.sh context.
-if [ -f "/opt/relay-node/relay-node.env" ]; then
-    set -a
-    . "/opt/relay-node/relay-node.env"
-    set +a
-fi
-exec ./relay-node
-STARTEOF
-
-# Replace the placeholders with actual values (safe - no shell expansion).
-sed -i "s|__PANEL_URL__|${PANEL_URL}|" "$START_SH"
-sed -i "s|__NODE_TOKEN__|${NODE_TOKEN}|" "$START_SH"
+write_start_sh "$START_SH" "$INSTALL_DIR" "$PANEL_URL" "$NODE_TOKEN"
 chmod 700 "$START_SH"
 
 # Safety check: make sure /dev/fd did not leak into the file.

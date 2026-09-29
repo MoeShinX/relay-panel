@@ -158,6 +158,10 @@ ENV
 assert_file_has "$dir/.env" 'PUBLIC_PANEL_URL=https://rp.example.com'
 assert_log_has "$log" 'RELAYPANEL_PANEL_PORT_BINDING=127.0.0.1:18888'
 pass 'upgrade reverse-proxy preserves PUBLIC_PANEL_URL and same-host binding'
+# v1.2.12: the panel refuses a short JWT_SECRET, so an upgrade must replace it.
+assert_file_has "$dir/.env" 'JWT_SECRET=0123456789abcdef0123456789abcdef'
+grep -q '^JWT_SECRET=x$' "$dir/.env" && fail 'short JWT_SECRET survived the upgrade'
+pass 'upgrade replaces a short JWT_SECRET'
 
 # Upgrade separate-host reverse proxy uses public panel bind.
 res=$(run_case upgrade-rp-external env)
@@ -178,7 +182,7 @@ pass 'separate-host reverse-proxy binds public port explicitly'
 res=$(run_case pg-caddy env)
 dir=${res%|*}; log=${res#*|}
 cat > "$dir/.env" <<ENV
-JWT_SECRET=x
+JWT_SECRET=strong-existing-secret-strong-existing-secret
 PANEL_KEY=y
 DATABASE_URL=postgres://relaypanel:pass@postgres:5432/relaypanel
 RELAYPANEL_DB_MODE=embedded-postgres
@@ -191,6 +195,8 @@ assert_log_has "$log" '--profile postgres --profile caddy'
 assert_log_has "$log" 'RELAYPANEL_PANEL_PORT_BINDING=127.0.0.1:18888'
 assert_log_has "$log" 'CADDY_HTTPS https://pgcaddy.example.com/'
 pass 'embedded PostgreSQL and Caddy profiles compose together'
+assert_file_has "$dir/.env" 'JWT_SECRET=strong-existing-secret-strong-existing-secret'
+pass 'upgrade keeps an existing strong JWT_SECRET'
 
 # Invalid Caddy domain must fail before compose starts.
 dir="$TMP/bad-domain"; fake="$TMP/fakebin-bad-domain"; log="$TMP/bad-domain.log"

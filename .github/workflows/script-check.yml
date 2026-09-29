@@ -48,3 +48,8 @@ jobs:
       # every branch is exercised here against stubbed git/docker/curl.
       - name: panel updater scenarios
         run: bash scripts/test-panel-updater.sh
+
+      # v1.2.12: operator input (-t/-u/-s) is validated and written into the
+      # node's start.sh without any chance of executing.
+      - name: node installer input handling
+        run: bash scripts/test-node-install.sh

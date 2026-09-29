@@ -124,19 +124,44 @@ impl Config {
     /// Refuse to start with an obviously-insecure JWT secret. In production
     /// (where JWT_SECRET is set from docker-compose), the placeholder value
     /// must be replaced. The random fallback above is fine for local dev
-    /// because it is generated fresh each run and never equals the sentinel.
+    /// because it is generated fresh each run and passes the check.
     fn validate(&self) {
-        if self.jwt_secret.is_empty() || self.jwt_secret == INSECURE_JWT_SECRET {
+        if let Some(problem) = jwt_secret_problem(&self.jwt_secret) {
             eprintln!(
-                "FATAL: JWT_SECRET is empty or still set to the insecure\n  \
-                 placeholder \"{}\".\n  \
+                "FATAL: JWT_SECRET {}.\n  \
                  Generate one with:  openssl rand -hex 32\n  \
-                 Then set JWT_SECRET in your environment / docker-compose.yaml.",
-                INSECURE_JWT_SECRET
+                 Then set JWT_SECRET in your environment / .env and restart.\n  \
+                 (deploy.sh replaces a short JWT_SECRET in .env automatically.)",
+                problem
             );
             std::process::exit(1);
         }
     }
+}
+
+/// v1.2.12: minimum JWT_SECRET length in bytes. Tokens are HS256-signed, so
+/// anyone holding one issued token can brute-force the secret offline and then
+/// mint an admin token; a short secret falls quickly. 32 bytes is the HS256 key
+/// size (`openssl rand -hex 32` gives 64 characters, the uuid dev fallback 36).
+const MIN_JWT_SECRET_LEN: usize = 32;
+
+/// Why `secret` is unusable as the JWT signing key, or `None` if it is fine.
+fn jwt_secret_problem(secret: &str) -> Option<String> {
+    if secret.is_empty() {
+        return Some("is empty".into());
+    }
+    if secret == INSECURE_JWT_SECRET {
+        return Some(format!(
+            "is still the insecure placeholder \"{INSECURE_JWT_SECRET}\""
+        ));
+    }
+    if secret.len() < MIN_JWT_SECRET_LEN {
+        return Some(format!(
+            "is too short ({} bytes, at least {MIN_JWT_SECRET_LEN} required)",
+            secret.len()
+        ));
+    }
+    None
 }
 
 /// v0.4.16: parse `GEOIP_ENABLED` into a boolean. Extracted as a pure function
@@ -160,7 +185,23 @@ fn parse_geoip_enabled(raw: Option<String>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_geoip_enabled;
+    use super::{jwt_secret_problem, parse_geoip_enabled, INSECURE_JWT_SECRET};
+
+    /// v1.2.12: a short JWT_SECRET is brute-forceable offline from any issued
+    /// token, so the panel must refuse it — not only the empty/placeholder case.
+    #[test]
+    fn jwt_secret_must_be_long_enough() {
+        assert!(jwt_secret_problem("").is_some());
+        assert!(jwt_secret_problem(INSECURE_JWT_SECRET).is_some());
+        assert!(jwt_secret_problem("abc").is_some());
+        assert!(jwt_secret_problem(&"a".repeat(31)).is_some());
+
+        assert!(jwt_secret_problem(&"a".repeat(32)).is_none());
+        // What deploy.sh generates (openssl rand -hex 32).
+        assert!(jwt_secret_problem(&"0f".repeat(32)).is_none());
+        // The dev fallback when JWT_SECRET is unset.
+        assert!(jwt_secret_problem(&uuid::Uuid::new_v4().to_string()).is_none());
+    }
 
     /// v0.4.16: pin the GEOIP_ENABLED truth table. The default flipped from
     /// false (v0.4.15, opt-in) to true (opt-out). This test guards against a

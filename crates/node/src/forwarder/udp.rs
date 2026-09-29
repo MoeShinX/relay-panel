@@ -23,6 +23,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
+use tokio::sync::oneshot;
 use tokio::time;
 
 use super::limiter::RateLimit;
@@ -35,9 +36,33 @@ const UDP_BUF_SIZE: usize = 65535;
 // converges back to 0 in the absence of new datagrams.
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(15);
 
+type Sessions = DashMap<SocketAddr, UdpSession>;
+
 struct UdpSession {
     outbound: Arc<UdpSocket>,
     last_active: tokio::time::Instant,
+    /// v1.2.12: the session's reply reader waits on the other end. Dropping
+    /// this — i.e. the session leaving the map by idle eviction or listener
+    /// teardown — stops the reader. Before, eviction only dropped the map
+    /// entry: the reader kept its socket and sat in `recv()` forever when the
+    /// target never answered again, leaking a task and an fd per idle client.
+    _stop: oneshot::Sender<()>,
+}
+
+/// v1.2.12: tears down a listener's session state when `serve_udp_listener`
+/// returns or is aborted (rule removed / restarted). The sweeper is a detached
+/// task that used to outlive its listener forever; clearing the map drops every
+/// session's `_stop`, which ends all reply readers.
+struct SessionsTeardown {
+    sessions: Arc<Sessions>,
+    sweeper: tokio::task::AbortHandle,
+}
+
+impl Drop for SessionsTeardown {
+    fn drop(&mut self) {
+        self.sweeper.abort();
+        self.sessions.clear();
+    }
 }
 
 /// v1.0.4: serve an ALREADY-BOUND UDP socket. Binding happens in the manager
@@ -75,14 +100,14 @@ pub async fn serve_udp_listener(
     // v1.0.9: sharded concurrent map — per-packet lookups take a per-shard lock
     // (keyed by client addr) instead of one listener-wide mutex, so datagrams
     // from different clients don't serialize on each other.
-    let sessions: Arc<DashMap<SocketAddr, UdpSession>> = Arc::new(DashMap::new());
+    let sessions: Arc<Sessions> = Arc::new(DashMap::new());
 
     // Background cleanup of expired local session entries (outbound sockets).
     // This mirrors the ConnectionTracker's own expiry; together they make sure
     // idle UDP state is reclaimed promptly.
     let sessions_clone = sessions.clone();
     let connections_clone = connections.clone();
-    tokio::spawn(async move {
+    let sweeper = tokio::spawn(async move {
         let mut interval = time::interval(CLEANUP_INTERVAL);
         loop {
             interval.tick().await;
@@ -106,6 +131,10 @@ pub async fn serve_udp_listener(
             }
         }
     });
+    let _teardown = SessionsTeardown {
+        sessions: sessions.clone(),
+        sweeper: sweeper.abort_handle(),
+    };
 
     let mut buf = vec![0u8; UDP_BUF_SIZE];
     loop {
@@ -180,21 +209,23 @@ pub async fn serve_udp_listener(
             // same client that won the race while we were connecting: if one did,
             // use the winner and drop ours.
             let now = tokio::time::Instant::now();
-            let (chosen, we_won) = match sessions.entry(src) {
+            let (chosen, reader_stop) = match sessions.entry(src) {
                 Entry::Occupied(mut e) => {
                     e.get_mut().last_active = now;
-                    (e.get().outbound.clone(), false)
+                    (e.get().outbound.clone(), None)
                 }
                 Entry::Vacant(e) => {
+                    let (stop_tx, stop_rx) = oneshot::channel();
                     e.insert(UdpSession {
                         outbound: outbound.clone(),
                         last_active: now,
+                        _stop: stop_tx,
                     });
-                    (outbound.clone(), true)
+                    (outbound.clone(), Some(stop_rx))
                 }
             };
 
-            if we_won {
+            if let Some(stop) = reader_stop {
                 // The tracker was already refreshed at the top of the loop; just
                 // log the new session (the target is known only on this path).
                 tracing::debug!(
@@ -205,46 +236,18 @@ pub async fn serve_udp_listener(
                     rule_id
                 );
                 // Spawn the target -> client reader for OUR socket.
-                let inbound_c = inbound.clone();
-                let sessions_c = sessions.clone();
-                let connections_c = connections.clone();
-                let counter_c = counter.clone();
-                let rl_c = rate_limit.clone();
-                let src_c = src;
-                let outbound_c = outbound.clone();
-                let port_c = port;
-                tokio::spawn(async move {
-                    let mut rbuf = vec![0u8; UDP_BUF_SIZE];
-                    loop {
-                        match outbound_c.recv(&mut rbuf).await {
-                            Ok(m) => {
-                                // v0.4.6: throttle target→client (download) bytes
-                                // through the shared per-rule limiter BEFORE
-                                // forwarding back to the client.
-                                rl_c.acquire_download(m as u64).await;
-                                counter_c.add(rule_id, 0, m as u64).await;
-                                // A reply is activity too: refresh the tracker
-                                // (cheap, sharded) and the session's last_active
-                                // so a long request/response flow isn't expired.
-                                connections_c.udp_touch(src_c, rule_id).await;
-                                if inbound_c.send_to(&rbuf[..m], src_c).await.is_err() {
-                                    break;
-                                }
-                                if let Some(mut s) = sessions_c.get_mut(&src_c) {
-                                    s.last_active = tokio::time::Instant::now();
-                                }
-                            }
-                            Err(e) => {
-                                tracing::debug!("UDP port {}: outbound recv ended: {}", port_c, e);
-                                break;
-                            }
-                        }
-                    }
-                    // Outbound side ended (target closed / error): release this
-                    // client's session immediately rather than waiting for timeout.
-                    sessions_c.remove(&src_c);
-                    connections_c.udp_close(src_c, rule_id).await;
-                });
+                let relay = ReplyRelay {
+                    outbound: outbound.clone(),
+                    inbound: inbound.clone(),
+                    sessions: sessions.clone(),
+                    connections: connections.clone(),
+                    counter: counter.clone(),
+                    rate_limit: rate_limit.clone(),
+                    src,
+                    rule_id,
+                    port,
+                };
+                tokio::spawn(relay.run(stop));
             }
             chosen
         };
@@ -257,6 +260,66 @@ pub async fn serve_udp_listener(
             tracing::debug!("UDP port {}: send to target failed: {}", port, e);
         } else {
             counter.add(rule_id, n as u64, 0).await;
+        }
+    }
+}
+
+/// The target -> client half of one UDP session: reads the target's replies on
+/// the session's connected `outbound` socket and forwards them to `src`.
+struct ReplyRelay {
+    outbound: Arc<UdpSocket>,
+    inbound: Arc<UdpSocket>,
+    sessions: Arc<Sessions>,
+    connections: Arc<ConnectionTracker>,
+    counter: Arc<TrafficCounter>,
+    rate_limit: RateLimit,
+    src: SocketAddr,
+    rule_id: i64,
+    port: u16,
+}
+
+impl ReplyRelay {
+    /// Runs until `stop` fires (the session left the map) or the socket fails.
+    async fn run(self, mut stop: oneshot::Receiver<()>) {
+        let mut rbuf = vec![0u8; UDP_BUF_SIZE];
+        loop {
+            let m = tokio::select! {
+                // Evicted or torn down: the entry is already gone (and may by
+                // now be a NEWER session for the same client), so there is
+                // nothing of ours left to clean up.
+                _ = &mut stop => return,
+                r = self.outbound.recv(&mut rbuf) => match r {
+                    Ok(m) => m,
+                    Err(e) => {
+                        tracing::debug!("UDP port {}: outbound recv ended: {}", self.port, e);
+                        break;
+                    }
+                },
+            };
+            // v0.4.6: throttle target→client (download) bytes through the
+            // shared per-rule limiter BEFORE forwarding back to the client.
+            self.rate_limit.acquire_download(m as u64).await;
+            self.counter.add(self.rule_id, 0, m as u64).await;
+            // A reply is activity too: refresh the tracker (cheap, sharded) and
+            // the session's last_active so a long request/response flow isn't
+            // expired.
+            self.connections.udp_touch(self.src, self.rule_id).await;
+            if self.inbound.send_to(&rbuf[..m], self.src).await.is_err() {
+                break;
+            }
+            if let Some(mut s) = self.sessions.get_mut(&self.src) {
+                if Arc::ptr_eq(&s.outbound, &self.outbound) {
+                    s.last_active = tokio::time::Instant::now();
+                }
+            }
+        }
+        // Our socket failed (target unreachable / error): release this
+        // client's session now rather than waiting for the idle timeout. Only
+        // if the entry is still OURS — v1.2.12: a plain remove(&src) here used
+        // to delete a newer session that had replaced ours for the same client.
+        let ours = |_: &SocketAddr, s: &UdpSession| Arc::ptr_eq(&s.outbound, &self.outbound);
+        if self.sessions.remove_if(&self.src, ours).is_some() {
+            self.connections.udp_close(self.src, self.rule_id).await;
         }
     }
 }
@@ -432,6 +495,121 @@ mod tests {
             1,
             "the standby must not be resolved or attempted once the primary connects"
         );
+    }
+
+    async fn loopback_udp() -> UdpSocket {
+        UdpSocket::bind("127.0.0.1:0").await.unwrap()
+    }
+
+    /// An outbound socket connected to a port nobody listens on, with one
+    /// datagram already sent: the ICMP port-unreachable it provokes makes the
+    /// socket's next `recv` fail, as a dead target does in production.
+    async fn outbound_to_dead_port() -> Arc<UdpSocket> {
+        let dead = loopback_udp().await;
+        let dead_addr = dead.local_addr().unwrap();
+        drop(dead);
+        let sock = loopback_udp().await;
+        sock.connect(dead_addr).await.unwrap();
+        sock.send(b"ping").await.unwrap();
+        Arc::new(sock)
+    }
+
+    fn relay(
+        outbound: Arc<UdpSocket>,
+        inbound: Arc<UdpSocket>,
+        sessions: Arc<Sessions>,
+    ) -> ReplyRelay {
+        ReplyRelay {
+            outbound,
+            inbound,
+            sessions,
+            connections: Arc::new(ConnectionTracker::new()),
+            counter: Arc::new(TrafficCounter::new()),
+            rate_limit: RateLimit::new(None, None),
+            src: "127.0.0.1:40000".parse().unwrap(),
+            rule_id: 1,
+            port: 5000,
+        }
+    }
+
+    fn session(outbound: &Arc<UdpSocket>) -> (UdpSession, oneshot::Receiver<()>) {
+        let (tx, rx) = oneshot::channel();
+        let s = UdpSession {
+            outbound: outbound.clone(),
+            last_active: tokio::time::Instant::now(),
+            _stop: tx,
+        };
+        (s, rx)
+    }
+
+    /// v1.2.12 (H2): evicting an idle session must end its reply reader. The
+    /// target here never answers, so a reader that only watched `recv()` would
+    /// wait forever, holding its socket — one leaked task + fd per idle client.
+    #[tokio::test]
+    async fn evicting_a_session_stops_its_reader() {
+        let target = loopback_udp().await; // alive, never replies
+        let outbound = Arc::new(loopback_udp().await);
+        outbound
+            .connect(target.local_addr().unwrap())
+            .await
+            .unwrap();
+        let inbound = Arc::new(loopback_udp().await);
+        let sessions: Arc<Sessions> = Arc::new(DashMap::new());
+
+        let r = relay(outbound.clone(), inbound, sessions.clone());
+        let src = r.src;
+        let (s, stop) = session(&outbound);
+        sessions.insert(src, s);
+        let reader = tokio::spawn(r.run(stop));
+
+        // What the idle sweeper's retain() does.
+        sessions.remove(&src);
+        tokio::time::timeout(Duration::from_secs(2), reader)
+            .await
+            .expect("reader must stop once its session is evicted")
+            .unwrap();
+    }
+
+    /// v1.2.12 (H3): a reader whose socket fails must not remove a NEWER
+    /// session that has since replaced its own entry for the same client.
+    #[tokio::test]
+    async fn a_failing_stale_reader_leaves_the_current_session_alone() {
+        let stale = outbound_to_dead_port().await;
+        let current = Arc::new(loopback_udp().await);
+        let inbound = Arc::new(loopback_udp().await);
+        let sessions: Arc<Sessions> = Arc::new(DashMap::new());
+
+        let r = relay(stale.clone(), inbound, sessions.clone());
+        let src = r.src;
+        // Keep the stale reader's stop sender alive so only the socket error
+        // can end it; the map holds the current session for the same client.
+        let (_stale_entry, stale_stop) = session(&stale);
+        let (s, _current_stop) = session(&current);
+        sessions.insert(src, s);
+
+        tokio::time::timeout(Duration::from_secs(5), r.run(stale_stop))
+            .await
+            .expect("the dead target's error must end the stale reader");
+        let entry = sessions.get(&src).expect("current session must survive");
+        assert!(Arc::ptr_eq(&entry.outbound, &current));
+    }
+
+    /// The error path still cleans up its OWN session right away.
+    #[tokio::test]
+    async fn a_failing_reader_removes_its_own_session() {
+        let outbound = outbound_to_dead_port().await;
+        let inbound = Arc::new(loopback_udp().await);
+        let sessions: Arc<Sessions> = Arc::new(DashMap::new());
+
+        let r = relay(outbound.clone(), inbound, sessions.clone());
+        let src = r.src;
+        let (s, stop) = session(&outbound);
+        sessions.insert(src, s);
+
+        tokio::time::timeout(Duration::from_secs(5), r.run(stop))
+            .await
+            .expect("the dead target's error must end the reader");
+        assert!(sessions.get(&src).is_none());
     }
 
     /// No targets → None (the caller drops the datagram and warns).
