@@ -99,7 +99,7 @@ impl UserRepository for SqliteRepository {
         // none of that plan's line authorization. Keep the user row and its
         // grants on one transaction: a missing plan still yields 0 rows and a
         // failed grant insert rolls the user creation back.
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let result = sqlx::query(
             "INSERT INTO users \
              (username, password, plan_id, max_rules, traffic_limit, speed_limit, ip_limit, all_device_groups) \
@@ -259,7 +259,7 @@ impl UserRepository for SqliteRepository {
     }
 
     async fn clear_user_plan(&self, user_id: i64) -> Result<u64, DbError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         // Clear plan association + revoke the all-groups flag in one UPDATE.
         let r = sqlx::query(
             "UPDATE users SET plan_id = NULL, plan_expire_at = NULL, all_device_groups = 0 \
@@ -300,7 +300,7 @@ impl UserRepository for SqliteRepository {
     }
 
     async fn reset_traffic(&self, id: i64) -> Result<(), DbError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         sqlx::query("UPDATE users SET traffic_used = 0 WHERE id = ?")
             .bind(id)
             .execute(&mut *tx)
@@ -333,7 +333,7 @@ impl UserRepository for SqliteRepository {
         // device_groups both reference users, so the user row goes last. The user
         // delete carries the `admin = 0` guard, and if it affects 0 rows (admin or
         // already gone) we roll the whole thing back by returning before commit.
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         sqlx::query("DELETE FROM forward_rules WHERE uid = ?")
             .bind(uid)
             .execute(&mut *tx)

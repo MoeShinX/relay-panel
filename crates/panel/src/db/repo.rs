@@ -550,6 +550,17 @@ pub trait DeviceGroupAuthRepository: Send + Sync {
         user_id: i64,
         allowed_group_ids: &[i64],
     ) -> Result<u64, DbError>;
+    /// v1.2.12: apply an admin's authorization change as ONE transaction —
+    /// the optional `all_device_groups` flag, the optional explicit group set,
+    /// then pausing the user's rules outside the resulting effective set.
+    /// Done as separate calls, a failure part-way could leave a revoked group's
+    /// rules running. Returns the number of rules newly paused.
+    async fn update_user_authorization(
+        &self,
+        user_id: i64,
+        all_device_groups: Option<bool>,
+        device_group_ids: Option<&[i64]>,
+    ) -> Result<u64, DbError>;
     /// Whether the user is subject to device-group restriction — i.e. a
     /// non-admin without `all_device_groups`. The rule API uses this to decide
     /// whether to enforce the allowlist. Admins / all-device-groups users → false.

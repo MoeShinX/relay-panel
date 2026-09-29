@@ -133,18 +133,17 @@ export default function Plans() {
   };
 
   const handleDelete = async (id: number) => {
+    // v1.2.12: "still in use" comes back as HTTP 200 + code 409, not as an
+    // HTTP error, so the old catch-only check reported it as deleted.
     try {
-      await api.delete(`/admin/plans/${id}`);
+      const res = await api.delete<unknown, ApiEnvelope<null>>(`/admin/plans/${id}`);
+      if (res.code !== 0) {
+        message.error(res.message || (res.code === 409 ? t('planInUse') : t('failedDeletePlan')));
+        return;
+      }
       message.success(t('planDeleted'));
       load();
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { code?: number; message?: string } } };
-      if (err?.response?.data?.code === 409) {
-        message.error(err.response.data.message || t('planInUse'));
-      } else {
-        message.error(t('failedDeletePlan'));
-      }
-    }
+    } catch { message.error(t('failedDeletePlan')); }
   };
 
   const columns = [

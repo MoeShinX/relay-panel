@@ -33,6 +33,20 @@ impl SqliteRepository {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
+
+    /// v1.2.12: open a transaction that WRITES. `pool.begin()` issues a
+    /// deferred BEGIN: the first SELECT pins a WAL read snapshot, and if
+    /// another connection commits before this transaction's first write, that
+    /// write fails at once with SQLITE_BUSY (busy_timeout does not apply to a
+    /// stale snapshot) — a 500 on a concurrent purchase / redeem / traffic
+    /// report. BEGIN IMMEDIATE takes the write lock up front instead, where
+    /// busy_timeout does apply: a concurrent writer waits its turn. Like any
+    /// sqlx `Transaction`, it rolls back on drop.
+    pub(super) async fn begin_write(
+        &self,
+    ) -> Result<sqlx::Transaction<'static, sqlx::Sqlite>, sqlx::Error> {
+        self.pool.begin_with("BEGIN IMMEDIATE").await
+    }
 }
 
 // ── Aggregate Repository ──

@@ -472,8 +472,13 @@ const IMPORT_DEFAULTS = {
   };
 
   const handleDelete = async (id: number) => {
-    await api.delete(`/rules/${id}`);
-    message.success(t('ruleDeleted'));
+    // v1.2.12: the API reports errors as HTTP 200 + code != 0; this used to
+    // say "deleted" regardless.
+    try {
+      const res = await api.delete<unknown, ApiEnvelope<null>>(`/rules/${id}`);
+      if (res.code !== 0) { message.error(res.message); return; }
+      message.success(t('ruleDeleted'));
+    } catch { message.error(t('failedDeleteRule')); return; }
     load();
   };
 

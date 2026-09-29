@@ -392,6 +392,8 @@ export const enUS: Dict = {
   ruleUpdated: 'Rule updated',
   failedUpdateGroup: 'Failed to update group',
   failedUpdateRule: 'Failed to update rule',
+  failedDeleteRule: 'Failed to delete rule',
+  operationFailed: 'The request failed. Check your connection and try again.',
 
   // Copy actions
   copyToken: 'Copy Token',

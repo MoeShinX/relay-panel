@@ -290,35 +290,15 @@ pub async fn update_user(
     // flag and/or the explicit device-group assignments are applied here. After
     // re-authorizing, pause any of the user's rules whose inbound group is no
     // longer allowed — the rules + their data are kept so an admin can
-    // re-authorize and resume. (set_user_all_device_groups is a no-op for admins,
-    // who are always all-allowed.)
-    let authz_changed = req.all_device_groups.is_some() || req.device_group_ids.is_some();
-    if let Some(all) = req.all_device_groups {
-        if let Err(e) = state.db.set_user_all_device_groups(id, all).await {
-            tracing::error!(
-                "update_user {}: set_user_all_device_groups failed: {}",
-                id,
-                e
-            );
-            return Json(err(500, "数据库错误"));
-        }
-    }
-    if let Some(ref ids) = req.device_group_ids {
-        if let Err(e) = state.db.set_user_device_groups(id, ids).await {
-            tracing::error!("update_user {}: set_user_device_groups failed: {}", id, e);
-            return Json(err(500, "数据库错误"));
-        }
-    }
-    if authz_changed {
-        // Pause rules outside the user's NEW authorization.
-        let allowed = match state.db.authorized_device_group_ids(id).await {
-            Ok(a) => a,
-            Err(e) => {
-                tracing::error!("update_user {}: authz lookup for pause failed: {}", id, e);
-                return Json(err(500, "数据库错误"));
-            }
-        };
-        match state.db.pause_rules_outside_groups(id, &allowed).await {
+    // re-authorize and resume. (The flag is left alone for admins, who are
+    // always all-allowed.) v1.2.12: all of it is one transaction, so a failure
+    // part-way can no longer leave a revoked group's rules running.
+    if req.all_device_groups.is_some() || req.device_group_ids.is_some() {
+        match state
+            .db
+            .update_user_authorization(id, req.all_device_groups, req.device_group_ids.as_deref())
+            .await
+        {
             Ok(n) if n > 0 => {
                 tracing::warn!(
                     "update_user {}: paused {} rule(s) outside new authorization",
@@ -328,11 +308,7 @@ pub async fn update_user(
             }
             Ok(_) => {}
             Err(e) => {
-                tracing::error!(
-                    "update_user {}: pause_rules_outside_groups failed: {}",
-                    id,
-                    e
-                );
+                tracing::error!("update_user {}: authorization change failed: {}", id, e);
                 return Json(err(500, "数据库错误"));
             }
         }
@@ -547,6 +523,11 @@ pub async fn admin_set_user_plan(
             }
         }
     } else {
+        if let Some(exp) = req.plan_expire_at.as_deref() {
+            if !is_utc_timestamp(exp) {
+                return Json(err(400, "到期时间格式应为 YYYY-MM-DD HH:MM:SS (UTC)"));
+            }
+        }
         let (plan_id, expire) =
             match crate::db::repo::UserRepository::find_by_id(state.db.as_ref(), id).await {
                 Ok(Some(u)) if u.admin => return Json(err(400, "无法修改管理员用户的套餐")),
@@ -593,4 +574,32 @@ pub async fn admin_set_user_plan(
         .broadcast_all(r#"{"type":"config_changed"}"#)
         .await;
     Json(ApiResponse::success(()))
+}
+
+/// v1.2.12: expiry is stored as TEXT and compared as TEXT against
+/// `datetime('now')` (`YYYY-MM-DD HH:MM:SS`), so anything else sorts wrong: an
+/// RFC3339 `2026-10-01T00:00:00Z` stays live the whole expiry day ('T' > ' '),
+/// and `2026/10/01` or `never` never expire at all. Same rule as redeem-code
+/// expiry.
+fn is_utc_timestamp(s: &str) -> bool {
+    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_utc_timestamp;
+
+    #[test]
+    fn plan_expiry_must_use_the_stored_format() {
+        assert!(is_utc_timestamp("2026-10-01 00:00:00"));
+        assert!(is_utc_timestamp("2099-12-31 23:59:59"));
+
+        assert!(!is_utc_timestamp("2026-10-01T00:00:00Z"));
+        assert!(!is_utc_timestamp("2026-10-01T00:00:00+08:00"));
+        assert!(!is_utc_timestamp("2026/10/01 00:00:00"));
+        assert!(!is_utc_timestamp("2026-10-01"));
+        assert!(!is_utc_timestamp("never"));
+        assert!(!is_utc_timestamp(""));
+        assert!(!is_utc_timestamp("2026-13-01 00:00:00"));
+    }
 }
