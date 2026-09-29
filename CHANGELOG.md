@@ -8,6 +8,21 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **A manual upgrade backs up the SQLite database too.** Only the one-click
+  update used to copy the database to `backups/` before the new version (and
+  its schema migrations) started; `git pull && ./deploy.sh` did not. Both now
+  use the same backup: the panel is stopped for a consistent copy, the newest
+  five are kept, and if the copy fails nothing is changed and the old version
+  keeps running. When building from source, the image is built before the
+  panel is stopped, so the downtime does not include the compile. PostgreSQL
+  is still not backed up automatically.
+
+---
+
 ## [1.2.11] - 2026-09-27
 
 Ships alongside `node-v1.2.5`; neither requires the other, and the config

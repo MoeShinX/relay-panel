@@ -706,6 +706,29 @@ else
     COMPOSE_FLAGS="--build"
 fi
 
+# ---------- 3b. Back up the SQLite database before an upgrade ----------
+# v1.2.12: `up -d` below replaces the panel with the new version, whose schema
+# migrations run on start. Keep a copy from just before, as the one-click
+# update always did (it runs this script with RELAYPANEL_BACKUP_DONE=1 after
+# taking its own backup). PostgreSQL is not backed up here.
+if [ "$FRESH_INSTALL" = "0" ] && [ "${RELAYPANEL_BACKUP_DONE:-0}" != "1" ] \
+    && { [ -z "${RELAYPANEL_DB_MODE:-}" ] || [ "$RELAYPANEL_DB_MODE" = "sqlite" ]; }; then
+    # Build a source image first, so the panel is not down for the compile.
+    if [ "$COMPOSE_FLAGS" = "--build" ]; then
+        info "Building images before stopping the panel ..."
+        docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" build
+        COMPOSE_FLAGS=""
+    fi
+    backup_rc=0
+    backup_path="$(bash scripts/sqlite-backup.sh "$COMPOSE_FILE" "pre-deploy")" || backup_rc=$?
+    case $backup_rc in
+        0) info "Database backed up to backups/${backup_path##*/} (the newest 5 are kept)" ;;
+        3) info "No existing SQLite database found - skipping the backup" ;;
+        *) fail "Database backup failed, so nothing was changed (the panel is running the old version). Check free disk space and permissions on ./backups." ;;
+    esac
+    unset backup_rc backup_path
+fi
+
 # ---------- 4. Start ----------
 # v1.2.11: shared with the panel container (./run -> /app/run) for the
 # one-click update's request and status files.

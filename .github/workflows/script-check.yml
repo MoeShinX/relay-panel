@@ -48,3 +48,8 @@ jobs:
       # every branch is exercised here against stubbed git/docker/curl.
       - name: panel updater scenarios
         run: bash scripts/test-panel-updater.sh
+
+      # v1.2.12: deploy.sh web modes, DB modes and the pre-upgrade SQLite
+      # backup, against stubbed docker/curl/openssl.
+      - name: deploy.sh scenarios
+        run: bash scripts/deploy-web-mode-check.sh

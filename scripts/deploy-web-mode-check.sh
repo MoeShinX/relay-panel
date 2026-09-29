@@ -64,6 +64,10 @@ if [ "${1:-}" = "compose" ]; then
     case "$*" in
         *' ps -q caddy') echo 'caddy123'; exit 0 ;;
         *' ps -q postgres') echo 'pg123'; exit 0 ;;
+        *' ps -q panel') [ -n "${HARNESS_DATA_DIR:-}" ] && echo 'panel123'; exit 0 ;;
+        *' stop panel') printf 'STOP panel\n' >> "$log"; exit 0 ;;
+        *' start panel') printf 'START panel\n' >> "$log"; exit 0 ;;
+        *' build'*) printf 'BUILD %s\n' "$*" >> "$log"; exit 0 ;;
         *' pull') printf 'PULL %s\n' "$*" >> "$log"; exit 0 ;;
         *' up -d'*)
             printf 'UP %s\n' "$*" >> "$log"
@@ -76,6 +80,7 @@ if [ "${1:-}" = "inspect" ]; then
     case "$*" in
         *'.State.Health.Status'*'pg123') echo 'healthy'; exit 0 ;;
         *'.State.Status'*'caddy123') echo 'running'; exit 0 ;;
+        *'/app/data'*'panel123') echo "${HARNESS_DATA_DIR:-}"; exit 0 ;;
     esac
 fi
 echo "unexpected docker args: $*" >> "$log"
@@ -88,6 +93,8 @@ make_case_dir() {
     local dir="$1"
     mkdir -p "$dir"
     cp "$ROOT/deploy.sh" "$ROOT/docker-compose.release.yaml" "$ROOT/docker-compose.yaml" "$ROOT/Caddyfile" "$dir/"
+    mkdir -p "$dir/scripts"
+    cp "$ROOT/scripts/sqlite-backup.sh" "$dir/scripts/"
 }
 
 assert_file_has() {
@@ -191,6 +198,40 @@ assert_log_has "$log" '--profile postgres --profile caddy'
 assert_log_has "$log" 'RELAYPANEL_PANEL_PORT_BINDING=127.0.0.1:18888'
 assert_log_has "$log" 'CADDY_HTTPS https://pgcaddy.example.com/'
 pass 'embedded PostgreSQL and Caddy profiles compose together'
+
+# v1.2.12: a manual SQLite upgrade backs the database up with the panel
+# stopped, before the new version starts.
+res=$(run_case upgrade-backup env)
+dir=${res%|*}; log=${res#*|}
+mkdir -p "$TMP/upgrade-backup-data"
+echo 'sqlite bytes' > "$TMP/upgrade-backup-data/data.db"
+: > "$log"
+(cd "$dir" && HARNESS_LOG="$log" HARNESS_DATA_DIR="$TMP/upgrade-backup-data" PATH="$TMP/fakebin-upgrade-backup:$PATH" bash ./deploy.sh >/tmp/rp-upgrade-backup-2.out 2>/tmp/rp-upgrade-backup-2.err) \
+    || fail 'upgrade with a SQLite database failed'
+ls "$dir"/backups/data-*-pre-deploy.db >/dev/null 2>&1 || fail 'upgrade did not back up the SQLite database'
+stop_line=$(grep -n '^STOP panel' "$log" | head -1 | cut -d: -f1)
+up_line=$(grep -n '^UP ' "$log" | head -1 | cut -d: -f1)
+[ -n "$stop_line" ] && [ -n "$up_line" ] && [ "$stop_line" -lt "$up_line" ] \
+    || fail 'the panel must be stopped for the copy before the new version starts'
+pass 'manual upgrade backs up SQLite before starting the new version'
+
+# The one-click updater has already taken its backup and says so.
+res=$(run_case upgrade-backup-done env)
+dir=${res%|*}; log=${res#*|}
+mkdir -p "$TMP/upgrade-backup-done-data"
+echo 'sqlite bytes' > "$TMP/upgrade-backup-done-data/data.db"
+: > "$log"
+(cd "$dir" && HARNESS_LOG="$log" HARNESS_DATA_DIR="$TMP/upgrade-backup-done-data" RELAYPANEL_BACKUP_DONE=1 PATH="$TMP/fakebin-upgrade-backup-done:$PATH" bash ./deploy.sh >/tmp/rp-upgrade-backup-done-2.out 2>/tmp/rp-upgrade-backup-done-2.err) \
+    || fail 'upgrade with RELAYPANEL_BACKUP_DONE=1 failed'
+[ ! -d "$dir/backups" ] || fail 'RELAYPANEL_BACKUP_DONE=1 must skip the second backup'
+grep -q '^STOP panel' "$log" && fail 'RELAYPANEL_BACKUP_DONE=1 must not stop the panel'
+pass 'upgrade skips the backup when the updater already took one'
+
+# A fresh install has nothing to back up.
+res=$(run_case fresh-no-backup env)
+dir=${res%|*}
+[ ! -d "$dir/backups" ] || fail 'a fresh install must not create backups'
+pass 'fresh install takes no backup'
 
 # Invalid Caddy domain must fail before compose starts.
 dir="$TMP/bad-domain"; fake="$TMP/fakebin-bad-domain"; log="$TMP/bad-domain.log"
