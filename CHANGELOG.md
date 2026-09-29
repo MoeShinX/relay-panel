@@ -30,7 +30,11 @@ independent `v*` / `node-v*` tracks since this release).
     username each time was never limited. There is now also a limit per client
     IP (20 attempts a minute, login and registration together). Behind Caddy
     or a reverse proxy on the same host, the client IP is taken from the
-    `X-Forwarded-For` header that proxy adds.
+    `X-Forwarded-For` header that proxy adds; a proxy that does not send it
+    gets no per-IP limit rather than one counter shared by every user (add
+    `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` to nginx).
+    A reverse proxy on another host with a public address counts all its users
+    as one client.
   - Password hashing ran on the threads that serve every request, so a few
     concurrent login attempts could stall the whole panel, node reports
     included. It now runs separately, at most one per two CPU cores at a time;
