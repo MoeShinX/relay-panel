@@ -495,6 +495,14 @@ if [ ! -f "$ENV_FILE" ]; then
 # short. Long-lived connections (tunnels, VPNs) are still cut when it ends.
 # 0 = no wait (the traffic report still runs). Default 5, maximum 60.
 #   SHUTDOWN_DRAIN_SECS=5
+
+# ── v1.2.6: UDP session limit ──
+# Every UDP client address holds one socket until it has been idle for 60 s.
+# New sessions beyond this many (all rules together) are refused, so a flood of
+# forged source addresses cannot use up the node's file descriptors and stop
+# every rule. Default: half the file-descriptor limit (32768 with this
+# service's LimitNOFILE=65536). Raise both for very busy UDP forwarding.
+#   UDP_MAX_SESSIONS=32768
 ENVEOF
     chmod 600 "$ENV_FILE"
 fi

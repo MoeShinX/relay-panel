@@ -13,6 +13,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Security
+
+- **A flood of forged UDP sources can no longer take the node down.** Every
+  new UDP source address opened a socket that stayed open for 60 idle seconds,
+  with no limit, so spoofed packets could use up the node's file descriptors —
+  after which every rule, TCP included, stopped working while the node still
+  showed as online. New UDP sessions are now limited node-wide to half the
+  file-descriptor limit (32768 with the installer's service settings); beyond
+  that new sessions are refused, existing ones carry on, and the log warns at
+  most once a minute. Set `UDP_MAX_SESSIONS` in `relay-node.env` for very busy
+  UDP forwarding. Refused packets also no longer add entries to the
+  connection count.
+
 ### Fixed
 
 - **UDP sessions no longer leak.** When an idle UDP session expired, only its

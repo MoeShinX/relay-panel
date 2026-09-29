@@ -20,7 +20,8 @@ use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::oneshot;
@@ -38,9 +39,110 @@ const CLEANUP_INTERVAL: Duration = Duration::from_secs(15);
 
 type Sessions = DashMap<SocketAddr, UdpSession>;
 
+/// v1.2.12: live UDP sessions across ALL rules on this node. Each one holds a
+/// real socket (an fd) plus a reader task until it has been idle for
+/// UDP_SESSION_TIMEOUT, and a new session is opened for every new source
+/// address — including spoofed ones. Unbounded, a flood of forged sources
+/// used up the process's file descriptors, and then every rule stopped (TCP
+/// included) while the node still looked online. New sessions beyond
+/// `udp_session_cap()` are refused; existing ones carry on.
+static UDP_SESSIONS: AtomicUsize = AtomicUsize::new(0);
+
+/// The node-wide session cap: `UDP_MAX_SESSIONS` if set, otherwise half the
+/// file-descriptor limit (so the other half stays for TCP and the node
+/// itself) — 32768 under the installer's LimitNOFILE=65536. Read on first use,
+/// after main() has raised the soft limit.
+fn udp_session_cap() -> usize {
+    static CAP: OnceLock<usize> = OnceLock::new();
+    *CAP.get_or_init(|| {
+        let cap = session_cap_from(std::env::var("UDP_MAX_SESSIONS").ok(), nofile_limit());
+        tracing::info!("UDP: at most {} concurrent sessions node-wide", cap);
+        cap
+    })
+}
+
+fn session_cap_from(env: Option<String>, nofile: Option<u64>) -> usize {
+    if let Some(n) = env
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+    {
+        return n;
+    }
+    match nofile {
+        Some(n) => (n / 2).clamp(256, 524_288) as usize,
+        None => 4096,
+    }
+}
+
+#[cfg(unix)]
+fn nofile_limit() -> Option<u64> {
+    let mut lim = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit writes into a local rlimit we own.
+    (unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) } == 0).then_some(lim.rlim_cur as u64)
+}
+
+#[cfg(not(unix))]
+fn nofile_limit() -> Option<u64> {
+    None
+}
+
+/// One counted place in `counter`, given back on drop — held by the session,
+/// so a session leaving the map (idle, torn down, failed) frees its place.
+struct SessionSlot(&'static AtomicUsize);
+
+impl SessionSlot {
+    fn acquire(counter: &'static AtomicUsize, cap: usize) -> Option<Self> {
+        counter
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n < cap).then_some(n + 1)
+            })
+            .ok()
+            .map(|_| SessionSlot(counter))
+    }
+}
+
+impl Drop for SessionSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Refused new sessions since the last warning, and when that was (unix secs).
+static REFUSED_SESSIONS: AtomicU64 = AtomicU64::new(0);
+static LAST_CAP_WARNING: AtomicU64 = AtomicU64::new(0);
+
+/// Count a refused session; warn at most once a minute so a flood cannot
+/// flood the log too.
+fn note_session_refused(port: u16) {
+    REFUSED_SESSIONS.fetch_add(1, Ordering::Relaxed);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let last = LAST_CAP_WARNING.load(Ordering::Relaxed);
+    if now.saturating_sub(last) >= 60
+        && LAST_CAP_WARNING
+            .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+    {
+        tracing::warn!(
+            "UDP session limit reached ({} sessions node-wide); refused {} new session(s) \
+             since the last warning (latest on port {}). Existing sessions are unaffected. \
+             If this is real traffic, raise UDP_MAX_SESSIONS (and LimitNOFILE).",
+            udp_session_cap(),
+            REFUSED_SESSIONS.swap(0, Ordering::Relaxed),
+            port
+        );
+    }
+}
+
 struct UdpSession {
     outbound: Arc<UdpSocket>,
     last_active: tokio::time::Instant,
+    /// v1.2.12: this session's place under the node-wide cap.
+    _slot: SessionSlot,
     /// v1.2.12: the session's reply reader waits on the other end. Dropping
     /// this — i.e. the session leaving the map by idle eviction or listener
     /// teardown — stops the reader. Before, eviction only dropped the map
@@ -157,12 +259,6 @@ pub async fn serve_udp_listener(
             Err(e) => return Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
         };
 
-        // Register/refresh this client with the tracker on EVERY datagram. The
-        // tracker is a sharded DashMap (keyed by client+rule), so this is a cheap
-        // per-shard op — not a process-wide lock — and keeps the panel's count
-        // accurate without any throttling.
-        connections.udp_touch(src, rule_id).await;
-
         // Fast path: existing session. The session map is a sharded DashMap, so
         // this per-packet lookup takes only a per-shard lock (sync guard, dropped
         // before any .await).
@@ -174,6 +270,12 @@ pub async fn serve_udp_listener(
         let outbound_sock = if let Some(sock) = existing {
             sock
         } else {
+            // v1.2.12: a place under the node-wide cap first, before any
+            // socket is opened. Refused: drop the datagram.
+            let Some(slot) = SessionSlot::acquire(&UDP_SESSIONS, udp_session_cap()) else {
+                note_session_refused(port);
+                continue;
+            };
             // New session: bind an ephemeral outbound socket + pick/connect the
             // target, all WITHOUT holding any map guard.
             //
@@ -219,6 +321,7 @@ pub async fn serve_udp_listener(
                     e.insert(UdpSession {
                         outbound: outbound.clone(),
                         last_active: now,
+                        _slot: slot,
                         _stop: stop_tx,
                     });
                     (outbound.clone(), Some(stop_rx))
@@ -226,8 +329,7 @@ pub async fn serve_udp_listener(
             };
 
             if let Some(stop) = reader_stop {
-                // The tracker was already refreshed at the top of the loop; just
-                // log the new session (the target is known only on this path).
+                // Log the new session (the target is known only on this path).
                 tracing::debug!(
                     "UDP port {}: new session {} -> {} (rule {})",
                     port,
@@ -251,6 +353,14 @@ pub async fn serve_udp_listener(
             }
             chosen
         };
+
+        // Register/refresh this client with the tracker on every datagram that
+        // has a session. The tracker is a sharded DashMap (keyed by
+        // client+rule), so this is a cheap per-shard op and keeps the panel's
+        // count accurate. v1.2.12: only after the session exists — a datagram
+        // refused by the cap (or with no reachable target) used to add a
+        // tracker entry per spoofed source all the same.
+        connections.udp_touch(src, rule_id).await;
 
         // Forward client datagram to target via the connected outbound socket.
         // v0.4.6: throttle client→target (upload) bytes through the shared
@@ -532,14 +642,71 @@ mod tests {
         }
     }
 
+    /// Slots for sessions built by these tests, apart from the node-wide count.
+    static TEST_SLOTS: AtomicUsize = AtomicUsize::new(0);
+
     fn session(outbound: &Arc<UdpSocket>) -> (UdpSession, oneshot::Receiver<()>) {
         let (tx, rx) = oneshot::channel();
         let s = UdpSession {
             outbound: outbound.clone(),
             last_active: tokio::time::Instant::now(),
+            _slot: SessionSlot::acquire(&TEST_SLOTS, usize::MAX).unwrap(),
             _stop: tx,
         };
         (s, rx)
+    }
+
+    /// v1.2.12: the node-wide UDP session cap — explicit setting first, else
+    /// half the fd limit (bounded), else a fixed fallback.
+    #[test]
+    fn session_cap_follows_setting_then_fd_limit() {
+        assert_eq!(session_cap_from(Some("5000".into()), Some(65_536)), 5000);
+        assert_eq!(session_cap_from(None, Some(65_536)), 32_768);
+        // A bad or zero setting falls back to the fd-based cap.
+        assert_eq!(session_cap_from(Some("lots".into()), Some(65_536)), 32_768);
+        assert_eq!(session_cap_from(Some("0".into()), Some(65_536)), 32_768);
+        // A tiny fd limit still leaves some sessions; a huge one is bounded.
+        assert_eq!(session_cap_from(None, Some(100)), 256);
+        assert_eq!(session_cap_from(None, Some(u64::MAX)), 524_288);
+        assert_eq!(session_cap_from(None, None), 4096);
+    }
+
+    /// v1.2.12: past the cap a new session gets no slot, and a slot comes back
+    /// when its holder is dropped.
+    #[test]
+    fn session_slots_stop_at_the_cap_and_come_back() {
+        static SLOTS: AtomicUsize = AtomicUsize::new(0);
+        let a = SessionSlot::acquire(&SLOTS, 2).expect("first");
+        let _b = SessionSlot::acquire(&SLOTS, 2).expect("second");
+        assert!(SessionSlot::acquire(&SLOTS, 2).is_none(), "cap reached");
+        drop(a);
+        assert!(
+            SessionSlot::acquire(&SLOTS, 2).is_some(),
+            "a freed slot is reusable"
+        );
+    }
+
+    /// v1.2.12: a session leaving the map (idle eviction, teardown) gives its
+    /// slot back — otherwise the cap would fill up with sessions long gone.
+    #[tokio::test]
+    async fn an_evicted_session_frees_its_slot() {
+        static SLOTS: AtomicUsize = AtomicUsize::new(0);
+        let outbound = Arc::new(loopback_udp().await);
+        let sessions: Arc<Sessions> = Arc::new(DashMap::new());
+        let src: SocketAddr = "127.0.0.1:40001".parse().unwrap();
+        let (tx, _rx) = oneshot::channel();
+        sessions.insert(
+            src,
+            UdpSession {
+                outbound,
+                last_active: tokio::time::Instant::now(),
+                _slot: SessionSlot::acquire(&SLOTS, 1).unwrap(),
+                _stop: tx,
+            },
+        );
+        assert!(SessionSlot::acquire(&SLOTS, 1).is_none());
+        sessions.remove(&src);
+        assert!(SessionSlot::acquire(&SLOTS, 1).is_some());
     }
 
     /// v1.2.12 (H2): evicting an idle session must end its reply reader. The
