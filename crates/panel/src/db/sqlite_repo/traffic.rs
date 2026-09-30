@@ -7,7 +7,8 @@ use relay_shared::protocol::TrafficEntry;
 // ── TrafficRepository ──
 //
 // Atomicity + security contract (v0.4.9 hardened):
-//   - whole batch is one transaction (deferred BEGIN; SQLite serialises writers)
+//   - whole batch is one transaction (BEGIN IMMEDIATE via begin_write, so a
+//     concurrent writer waits instead of failing it with SQLITE_BUSY)
 //   - rule NOT available to this node (missing OR foreign-group): ABORT +
 //     rollback the entire batch, return Ok(vec![Unavailable]). The caller maps
 //     that to a uniform 403 with a generic message. There is deliberately NO
@@ -30,7 +31,7 @@ impl TrafficRepository for SqliteRepository {
         group_id: i64,
         entries: &[TrafficEntry],
     ) -> Result<Vec<TrafficEntryResult>, DbError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
 
         // ── v1.0.8: read this group's billing rate once for the whole batch
         // (every entry in a batch is for the SAME group_id — the node reports

@@ -108,7 +108,7 @@ impl RuleRepository for SqliteRepository {
                 return Ok(());
             }
         }
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         sqlx::query("DELETE FROM forward_rule_targets WHERE rule_id = ?")
             .bind(rule_id)
             .execute(&mut *tx)
@@ -410,6 +410,7 @@ impl RuleRepository for SqliteRepository {
         upload_limit_mbps: i32,
         download_limit_mbps: i32,
         tunnel_profile_id: Option<i64>,
+        check_owner_authorization: bool,
     ) -> Result<Option<i64>, DbError> {
         // v1.2: atomic create. Same BEGIN IMMEDIATE + conflict pre-check +
         // quota-guarded INSERT shape as insert_quota_guarded, but the INSERT is
@@ -438,6 +439,20 @@ impl RuleRepository for SqliteRepository {
                     }
                 }
             };
+        }
+
+        // v1.2.12: the owner's authorization for this group, re-checked under
+        // the write lock (see the trait docs): a revocation committed after the
+        // API's check paused the rules that existed then, not this one.
+        if check_owner_authorization {
+            let allowed = try_!(
+                conn,
+                super::user_groups::owner_may_use_group(&mut conn, uid, device_group_in).await
+            );
+            if !allowed {
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                return Err(DbError::GroupNotAuthorized);
+            }
         }
 
         // Port-conflict pre-check (socket-type aware, scoped to the group).
@@ -619,65 +634,52 @@ impl RuleRepository for SqliteRepository {
         Ok(row.map(|(v,)| v))
     }
 
-    async fn update_rule_fields(
+    async fn update_rule_full(
         &self,
         id: i64,
         scope: &ResourceScope,
-        name: Option<&str>,
-        listen_port: Option<i32>,
-        protocol: Option<&str>,
-        public_transport: Option<&str>,
-        node_transport: Option<&str>,
-        entry_transport: Option<&str>,
-        route_mode: Option<&str>,
-        ws_path: Option<Option<&str>>,
-        device_group_in: Option<i64>,
-        device_group_out: Option<Option<i64>>,
-        forward_mode: Option<&str>,
-        target_addr: Option<&str>,
-        target_port: Option<i32>,
-        paused: Option<bool>,
+        u: &RuleUpdate<'_>,
     ) -> Result<u64, DbError> {
         // Build the SET clause from the present fields, in the SAME order the
         // values are bound below. public_transport carries the two derived
         // mirror columns (node_transport, entry_transport) whenever it is set.
         let mut sets: Vec<&str> = Vec::new();
-        if name.is_some() {
+        if u.name.is_some() {
             sets.push("name = ?");
         }
-        if listen_port.is_some() {
+        if u.listen_port.is_some() {
             sets.push("listen_port = ?");
         }
-        if protocol.is_some() {
+        if u.protocol.is_some() {
             sets.push("protocol = ?");
         }
-        if public_transport.is_some() {
+        if u.public_transport.is_some() {
             sets.push("public_transport = ?");
             sets.push("node_transport = ?");
             sets.push("entry_transport = ?");
         }
-        if route_mode.is_some() {
+        if u.route_mode.is_some() {
             sets.push("route_mode = ?");
         }
-        if ws_path.is_some() {
+        if u.ws_path.is_some() {
             sets.push("ws_path = ?");
         }
-        if device_group_in.is_some() {
+        if u.device_group_in.is_some() {
             sets.push("device_group_in = ?");
         }
-        if device_group_out.is_some() {
+        if u.device_group_out.is_some() {
             sets.push("device_group_out = ?");
         }
-        if forward_mode.is_some() {
+        if u.forward_mode.is_some() {
             sets.push("forward_mode = ?");
         }
-        if target_addr.is_some() {
+        if u.target_addr.is_some() {
             sets.push("target_addr = ?");
         }
-        if target_port.is_some() {
+        if u.target_port.is_some() {
             sets.push("target_port = ?");
         }
-        if paused.is_some() {
+        if u.paused.is_some() {
             sets.push("paused = ?");
             // v1.0.8: an explicit paused write is always a human action (the
             // on/off switch, batch pause/resume) — clear auto_paused so a later
@@ -685,148 +687,172 @@ impl RuleRepository for SqliteRepository {
             // needs to reconcile.
             sets.push("auto_paused = 0");
         }
-
-        if sets.is_empty() {
+        // v1.2.12: columns that used to be written one call each after the
+        // main UPDATE — so an edit that failed half-way had already changed
+        // some of them. Each is its own column: an omitted one stays as it is.
+        if u.load_balance_strategy.is_some() {
+            sets.push("load_balance_strategy = ?");
+        }
+        if u.upload_limit_mbps.is_some() {
+            sets.push("upload_limit_mbps = ?");
+        }
+        if u.download_limit_mbps.is_some() {
+            sets.push("download_limit_mbps = ?");
+        }
+        if u.max_connections.is_some() {
+            sets.push("max_connections = ?");
+        }
+        if u.auto_restart_minutes.is_some() {
+            sets.push("auto_restart_minutes = ?");
+        }
+        if u.tunnel_profile_id.is_some() {
+            sets.push("tunnel_profile_id = ?");
+        }
+        if sets.is_empty() && u.targets.is_none() {
             return Ok(0);
         }
 
-        let sql = match scope.owner_id() {
-            None => format!("UPDATE forward_rules SET {} WHERE id = ?", sets.join(", ")),
-            Some(_) => format!(
-                "UPDATE forward_rules SET {} WHERE id = ? AND uid = ?",
-                sets.join(", ")
-            ),
+        // BEGIN IMMEDIATE takes SQLite's write lock up front, so nothing read
+        // below — paused state, quota count, authorization — can go stale
+        // before the write: every other writer, an authorization change
+        // included, runs entirely before this transaction or waits for it.
+        // A Transaction rolls back on drop, so `?` is safe everywhere below.
+        let mut tx = self.begin_write().await?;
+        let rule: Option<(i64, bool, i64)> = match scope.owner_id() {
+            None => sqlx::query_as(
+                "SELECT uid, paused, device_group_in FROM forward_rules WHERE id = ?",
+            )
+            .bind(id),
+            Some(uid) => sqlx::query_as(
+                "SELECT uid, paused, device_group_in FROM forward_rules WHERE id = ? AND uid = ?",
+            )
+            .bind(id)
+            .bind(uid),
+        }
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some((uid, is_paused, group_in)) = rule else {
+            return Ok(0);
         };
-        let mut q = sqlx::query(&sql);
-        if let Some(v) = name {
-            q = q.bind(v);
-        }
-        if let Some(v) = listen_port {
-            q = q.bind(v);
-        }
-        if let Some(v) = protocol {
-            q = q.bind(v);
-        }
-        // public_transport: bind THREE values (public, derived node, legacy mirror).
-        if let Some(v) = public_transport {
-            q = q.bind(v);
-            q = q.bind(node_transport.unwrap_or(v));
-            q = q.bind(entry_transport.unwrap_or(v));
-        }
-        if let Some(v) = route_mode {
-            q = q.bind(v);
-        }
-        // ws_path: outer Some → "update this column"; inner None → NULL.
-        if let Some(v) = ws_path {
-            q = q.bind(v);
-        }
-        if let Some(v) = device_group_in {
-            q = q.bind(v);
-        }
-        if let Some(v) = device_group_out {
-            q = q.bind(v);
-        }
-        if let Some(v) = forward_mode {
-            q = q.bind(v);
-        }
-        if let Some(v) = target_addr {
-            q = q.bind(v);
-        }
-        if let Some(v) = target_port {
-            q = q.bind(v);
-        }
-        if let Some(v) = paused {
-            q = q.bind(v);
-        }
-        q = q.bind(id);
-        if let Some(uid) = scope.owner_id() {
-            q = q.bind(uid);
-        }
 
-        if paused == Some(false) {
-            // A manual resume is a state transition into the same active-rule
-            // pool guarded by insert_quota_guarded. SQLite needs BEGIN
-            // IMMEDIATE here: a deferred read/count followed by UPDATE would
-            // let two resume requests both pass the count before either writes.
-            let mut conn = self.pool.acquire().await?;
-            sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
-
-            // Every statement below MUST go through try_! rather than `?`.
-            // BEGIN IMMEDIATE takes SQLite's write lock, and a bare `?` would
-            // return the connection to the pool with that transaction still
-            // open — sqlx only auto-rollbacks a `Transaction`, not a hand-rolled
-            // BEGIN on a PoolConnection. Every later write in the process would
-            // then block for busy_timeout and fail SQLITE_BUSY, and the next
-            // BEGIN IMMEDIATE on that pooled connection would error with
-            // "cannot start a transaction within a transaction". The UPDATE at
-            // the end makes this reachable in normal use: it can fail on the
-            // partial unique index when a resume also moves listen_port onto a
-            // port that is already taken. Same macro shape as
-            // insert_quota_guarded / create_rule_atomic above.
-            macro_rules! try_ {
-                ($conn:expr, $expr:expr) => {
-                    match $expr {
-                        Ok(v) => v,
-                        Err(e) => {
-                            let _ = sqlx::query("ROLLBACK").execute(&mut *$conn).await;
-                            return Err(DbError::from(e));
-                        }
-                    }
-                };
+        // v1.2.12: resuming the rule, or moving it to another inbound group,
+        // needs the owner's authorization for that group as it is NOW. The API
+        // checks before this transaction; an authorization revoked in between
+        // paused the owner's rules as they were then, and this one would have
+        // come back (or moved) unauthorized.
+        if u.check_owner_authorization && (u.paused == Some(false) || u.device_group_in.is_some()) {
+            let group = u.device_group_in.unwrap_or(group_in);
+            if !super::user_groups::owner_may_use_group(&mut tx, uid, group).await? {
+                return Err(DbError::GroupNotAuthorized);
             }
-
-            let target: Option<(i64, bool)> = match scope.owner_id() {
-                None => try_!(
-                    conn,
-                    sqlx::query_as("SELECT uid, paused FROM forward_rules WHERE id = ?")
-                        .bind(id)
-                        .fetch_optional(&mut *conn)
-                        .await
-                ),
-                Some(uid) => try_!(
-                    conn,
-                    sqlx::query_as(
-                        "SELECT uid, paused FROM forward_rules WHERE id = ? AND uid = ?"
-                    )
-                    .bind(id)
-                    .bind(uid)
-                    .fetch_optional(&mut *conn)
-                    .await
-                ),
-            };
-            let Some((uid, is_paused)) = target else {
-                try_!(conn, sqlx::query("COMMIT").execute(&mut *conn).await);
-                return Ok(0);
-            };
-            if is_paused {
-                let max_rules: i32 = try_!(
-                    conn,
-                    sqlx::query_scalar("SELECT COALESCE(max_rules, 0) FROM users WHERE id = ?")
-                        .bind(uid)
-                        .fetch_one(&mut *conn)
-                        .await
-                );
-                let active_rules: i64 = try_!(
-                    conn,
-                    sqlx::query_scalar(
-                        "SELECT COUNT(*) FROM forward_rules WHERE uid = ? AND paused = 0",
-                    )
-                    .bind(uid)
-                    .fetch_one(&mut *conn)
-                    .await
-                );
-                if max_rules > 0 && active_rules >= i64::from(max_rules) {
-                    let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-                    return Err(DbError::QuotaExceeded);
-                }
-            }
-            let result = try_!(conn, q.execute(&mut *conn).await);
-            try_!(conn, sqlx::query("COMMIT").execute(&mut *conn).await);
-            return Ok(result.rows_affected());
         }
 
-        let result = q.execute(&self.pool).await?;
-        Ok(result.rows_affected())
+        // A manual resume is a state transition into the same active-rule pool
+        // guarded by insert_quota_guarded / create_rule_full.
+        if u.paused == Some(false) && is_paused {
+            let max_rules: i32 =
+                sqlx::query_scalar("SELECT COALESCE(max_rules, 0) FROM users WHERE id = ?")
+                    .bind(uid)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            let active_rules: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM forward_rules WHERE uid = ? AND paused = 0",
+            )
+            .bind(uid)
+            .fetch_one(&mut *tx)
+            .await?;
+            if max_rules > 0 && active_rules >= i64::from(max_rules) {
+                return Err(DbError::QuotaExceeded);
+            }
+        }
+
+        if let Some(targets) = u.targets {
+            sqlx::query("DELETE FROM forward_rule_targets WHERE rule_id = ?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            for (idx, target) in targets.iter().enumerate() {
+                sqlx::query(
+                    "INSERT INTO forward_rule_targets (rule_id, host, port, position, enabled) \
+                     VALUES (?, ?, ?, ?, ?)",
+                )
+                .bind(id)
+                .bind(target.host.trim())
+                .bind(target.port as i32)
+                .bind(idx as i32 + 1)
+                .bind(target.enabled)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+
+        if !sets.is_empty() {
+            // The scope was checked above, in this transaction.
+            let sql = format!("UPDATE forward_rules SET {} WHERE id = ?", sets.join(", "));
+            let mut q = sqlx::query(&sql);
+            if let Some(v) = u.name {
+                q = q.bind(v);
+            }
+            if let Some(v) = u.listen_port {
+                q = q.bind(v);
+            }
+            if let Some(v) = u.protocol {
+                q = q.bind(v);
+            }
+            // public_transport: bind THREE values (public, derived node, legacy mirror).
+            if let Some(v) = u.public_transport {
+                q = q.bind(v);
+                q = q.bind(u.node_transport.unwrap_or(v));
+                q = q.bind(u.entry_transport.unwrap_or(v));
+            }
+            if let Some(v) = u.route_mode {
+                q = q.bind(v);
+            }
+            // ws_path: outer Some → "update this column"; inner None → NULL.
+            if let Some(v) = u.ws_path {
+                q = q.bind(v);
+            }
+            if let Some(v) = u.device_group_in {
+                q = q.bind(v);
+            }
+            if let Some(v) = u.device_group_out {
+                q = q.bind(v);
+            }
+            if let Some(v) = u.forward_mode {
+                q = q.bind(v);
+            }
+            if let Some(v) = u.target_addr {
+                q = q.bind(v);
+            }
+            if let Some(v) = u.target_port {
+                q = q.bind(v);
+            }
+            if let Some(v) = u.paused {
+                q = q.bind(v);
+            }
+            if let Some(v) = u.load_balance_strategy {
+                q = q.bind(v);
+            }
+            if let Some(v) = u.upload_limit_mbps {
+                q = q.bind(v);
+            }
+            if let Some(v) = u.download_limit_mbps {
+                q = q.bind(v);
+            }
+            if let Some(v) = u.max_connections {
+                q = q.bind(v);
+            }
+            if let Some(v) = u.auto_restart_minutes {
+                q = q.bind(v);
+            }
+            if let Some(v) = u.tunnel_profile_id {
+                q = q.bind(v);
+            }
+            q.bind(id).execute(&mut *tx).await?;
+        }
+
+        tx.commit().await?;
+        Ok(1)
     }
 
     async fn increment_rule_traffic(

@@ -36,13 +36,10 @@ pub fn normalize_kind(kind: &str) -> String {
 pub fn parse_expiry(raw: Option<&str>) -> Result<Option<String>, &'static str> {
     match raw.map(str::trim) {
         None | Some("") => Ok(None),
-        Some(v) => {
-            if chrono::NaiveDateTime::parse_from_str(v, "%Y-%m-%d %H:%M:%S").is_err() {
-                Err("过期时间格式应为 YYYY-MM-DD HH:MM:SS (UTC)")
-            } else {
-                Ok(Some(v.to_string()))
-            }
-        }
+        // v1.2.12: stored in the canonical form (see service::timestamps).
+        Some(v) => super::timestamps::canonical_utc(v)
+            .map(Some)
+            .ok_or("过期时间格式应为 YYYY-MM-DD HH:MM:SS (UTC)"),
     }
 }
 
@@ -82,6 +79,11 @@ mod tests {
         assert_eq!(parse_expiry(Some("   ")), Ok(None));
         assert_eq!(
             parse_expiry(Some("2026-08-01 12:00:00")),
+            Ok(Some("2026-08-01 12:00:00".to_string()))
+        );
+        // v1.2.12: stored canonical, or it sorts wrong as TEXT.
+        assert_eq!(
+            parse_expiry(Some("2026-8-1 12:00:00")),
             Ok(Some("2026-08-01 12:00:00".to_string()))
         );
         for bad in [

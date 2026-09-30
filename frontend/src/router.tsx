@@ -70,7 +70,10 @@ export const router = createBrowserRouter([
       { index: true, element: <RoleHome /> },
       // Owner-scoped resources — any authenticated user manages their own.
       { path: 'rules', element: <Rules /> },
-      { path: 'groups', element: <Groups /> },
+      // Device groups are admin-only shared infrastructure (v0.4.12; the API
+      // is AdminOnly). v1.2.12: guard the route too, so a regular user who
+      // types /groups gets the 403 page instead of a page of failing calls.
+      { path: 'groups', element: <RequireAdmin><Groups /></RequireAdmin> },
       { path: 'nodes', element: <NodeStatus /> },
       { path: 'node-status', element: <NodeStatus /> },
       // v1.0.8: self-service shop (plan purchase + order history).

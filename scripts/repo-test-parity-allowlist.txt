@@ -10,3 +10,10 @@ migration_adds_password_columns  # SQLite-only: Migration 26 idempotency test
 
 # PG-only schema-seed guard — SQLite bootstraps via SCHEMA_SQL without a seed-version table.
 apply_schema_seeds_baseline_version  # PG-only: schema_version seed baseline check
+
+# SQLite-only: WAL snapshot semantics (BEGIN IMMEDIATE vs deferred). PG takes row locks instead.
+write_transactions_do_not_fail_on_a_concurrent_write  # SQLite-only: SQLITE_BUSY on a stale WAL snapshot
+
+# PG-only: concurrent writers take row locks; SQLite's BEGIN IMMEDIATE already serialises every write.
+a_rule_write_waits_for_an_authorization_change_in_progress  # PG-only: owner-row lock ordering
+an_authorization_change_waits_for_a_rule_write_in_progress  # PG-only: owner-row lock ordering

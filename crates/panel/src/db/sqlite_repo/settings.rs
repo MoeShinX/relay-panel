@@ -89,7 +89,7 @@ impl PlanRepository for SqliteRepository {
         grant_all_groups: bool,
         device_group_ids: &[i64],
     ) -> Result<i64, DbError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let result = sqlx::query(
             "INSERT INTO plans \
              (name, max_rules, traffic, price, plan_type, duration_days, hidden, reset_traffic, description, grant_all_groups) \
@@ -227,13 +227,12 @@ impl PlanRepository for SqliteRepository {
         Ok(row.0)
     }
 
-    // v1.0.8: atomic plan purchase. This opens a DEFERRED transaction
-    // (pool.begin()); the write lock is acquired lazily on the first write
-    // (the UPDATE below), not at BEGIN. SQLite serializes writers, so under
-    // concurrent purchases the second writer either blocks briefly or fails
-    // with SQLITE_BUSY (the caller retries) — never a double-deduction,
-    // because the balance read + deduct + write all run inside this one tx
-    // against a consistent snapshot. (PG uses an explicit SELECT ... FOR
+    // v1.0.8: atomic plan purchase. v1.2.12: the transaction takes SQLite's
+    // write lock at BEGIN (begin_write), so a concurrent purchase waits for
+    // this one to commit and then reads the updated balance — never a
+    // double-deduction, and no longer a spurious SQLITE_BUSY 500 either (the
+    // old deferred BEGIN failed outright when another write landed between
+    // this read and its first write). (PG uses an explicit SELECT ... FOR
     // UPDATE row lock instead; see the PG impl.)
     async fn buy_plan(
         &self,
@@ -253,7 +252,7 @@ impl PlanRepository for SqliteRepository {
         // device_group_ids (the plan's grants).
         new_authorized_group_ids: &[i64],
     ) -> Result<(), BuyPlanError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
 
         // Read the user's current balance (canonical TEXT) + expiry + plan_id.
         // plan_id decides renew-vs-switch below.
@@ -551,7 +550,7 @@ impl PlanRepository for SqliteRepository {
         device_group_ids: &[i64],
     ) -> Result<(), DbError> {
         // REPLACE the grant set (delete-then-insert, deduped via the PK).
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         sqlx::query("DELETE FROM plan_device_groups WHERE plan_id = ?")
             .bind(plan_id)
             .execute(&mut *tx)

@@ -5,6 +5,7 @@ import api from '../api/client';
 import type { ApiEnvelope, RedeemCode, ListCodesResponse, CreateCodesResponse } from '../api/types';
 import { MAX_REDEEM_BATCH } from '../api/types';
 import { useI18n } from '../i18n/context';
+import { copyText } from '../utils/clipboard';
 
 const { Text, Paragraph } = Typography;
 
@@ -117,13 +118,11 @@ export default function RedeemCodes() {
     } catch { message.error(t('codesDeleteFailed')); }
   };
 
-  const copyText = async (text: string, okMsg: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      message.success(okMsg);
-    } catch {
-      message.error(t('copyFailed'));
-    }
+  // v1.2.12: the shared helper, which falls back to execCommand on plain-HTTP
+  // panels where navigator.clipboard does not exist.
+  const copyCodes = async (text: string, okMsg: string) => {
+    if (await copyText(text)) message.success(okMsg);
+    else message.error(t('copyFailed'));
   };
 
   const statusTag = (s: string) => {
@@ -223,7 +222,7 @@ export default function RedeemCodes() {
                 {justCreated.codes.join('\n')}
               </Paragraph>
               <Space wrap>
-                <Button size="small" icon={<CopyOutlined />} onClick={() => copyText(justCreated.codes.join('\n'), t('copied'))}>
+                <Button size="small" icon={<CopyOutlined />} onClick={() => copyCodes(justCreated.codes.join('\n'), t('copied'))}>
                   {t('copyAll')}
                 </Button>
                 <Button size="small" icon={<DownloadOutlined />} onClick={() =>

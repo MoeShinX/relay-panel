@@ -859,6 +859,7 @@ async fn pg_rule_create_full_cross_group_no_crosstalk() {
             0,
             0,
             None,
+            false,
         )
         .await
         .unwrap()
@@ -902,6 +903,7 @@ async fn pg_rule_create_full_cross_group_no_crosstalk() {
             50,
             100,
             None,
+            false,
         )
         .await
         .unwrap()
@@ -979,6 +981,7 @@ async fn pg_rule_create_full_rollback_on_target_failure() {
             0,
             0,
             None,
+            false,
         )
         .await;
     assert!(err.is_err(), "the bad target must fail the whole call");
@@ -1032,6 +1035,7 @@ async fn pg_rule_create_full_quota_exhausted_returns_none() {
             0,
             0,
             None,
+            false,
         )
         .await
         .unwrap()
@@ -1063,6 +1067,7 @@ async fn pg_rule_create_full_quota_exhausted_returns_none() {
             0,
             0,
             None,
+            false,
         )
         .await
         .unwrap(),
@@ -5737,4 +5742,461 @@ async fn pg_admin_order_list_pages_without_overlap() {
         3,
         "the two pages must cover all three rows exactly once"
     );
+}
+
+/// v1.2.12: an authorization change applies the flag, the explicit groups and
+/// the pause together (PG). Revoking group 70 pauses its rule, keeps 71's.
+#[tokio::test]
+async fn pg_update_user_authorization_revokes_and_pauses_together() {
+    let Some(db) = repo("authz_update").await else {
+        return;
+    };
+    let (alice, _) = seed_buyer_and_plan(&db, "100.00", 1000, "5.00", 0, false).await;
+    seed_device_group(&db, 70, alice).await;
+    seed_device_group(&db, 71, alice).await;
+    db.set_user_device_groups(alice, &[70, 71]).await.unwrap();
+    for (id, port, group) in [(300_i64, 21000_i32, 70_i64), (301, 21001, 71)] {
+        sqlx::query(
+            "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, \
+             target_addr, target_port, paused) VALUES ($1, 'r', $2, $3, $4, '127.0.0.1', 80, FALSE)",
+        )
+        .bind(id)
+        .bind(alice)
+        .bind(port)
+        .bind(group)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    let paused = db
+        .update_user_authorization(alice, Some(false), Some(&[71]))
+        .await
+        .unwrap();
+    assert_eq!(paused, 1);
+    assert_eq!(db.list_user_device_groups(alice).await.unwrap(), vec![71]);
+    let states: Vec<(i64, bool)> =
+        sqlx::query_as("SELECT id, paused FROM forward_rules WHERE uid = $1 ORDER BY id")
+            .bind(alice)
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(states, vec![(300, true), (301, false)]);
+    cleanup(&db).await;
+}
+
+/// v1.2.12 (M3): when the pause step fails, the flag and group changes before
+/// it must roll back too (PG).
+#[tokio::test]
+async fn pg_update_user_authorization_rolls_back_when_a_step_fails() {
+    let Some(db) = repo("authz_rollback").await else {
+        return;
+    };
+    let (alice, _) = seed_buyer_and_plan(&db, "100.00", 1000, "5.00", 0, false).await;
+    seed_device_group(&db, 70, alice).await;
+    sqlx::query("UPDATE users SET all_device_groups = TRUE WHERE id = $1")
+        .bind(alice)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    db.set_user_device_groups(alice, &[70]).await.unwrap();
+    sqlx::query(
+        "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, \
+         target_addr, target_port, paused) VALUES (300, 'r', $1, 21000, 70, '127.0.0.1', 80, FALSE)",
+    )
+    .bind(alice)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    // Make the final step (pausing the rule) fail. This database exists only
+    // for this test, so a plain trigger is fine (the pool has several
+    // connections, so a TEMP one would not reliably apply).
+    sqlx::query(
+        "CREATE FUNCTION fail_pause() RETURNS trigger AS $$ \
+         BEGIN RAISE EXCEPTION 'injected failure'; END $$ LANGUAGE plpgsql",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER fail_pause BEFORE UPDATE OF paused ON forward_rules \
+         FOR EACH ROW EXECUTE FUNCTION fail_pause()",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let result = db
+        .update_user_authorization(alice, Some(false), Some(&[]))
+        .await;
+    assert!(result.is_err(), "the injected failure must surface (PG)");
+
+    let all: bool = sqlx::query_scalar("SELECT all_device_groups FROM users WHERE id = $1")
+        .bind(alice)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert!(
+        all,
+        "the flag change must roll back with the failed pause (PG)"
+    );
+    assert_eq!(
+        db.list_user_device_groups(alice).await.unwrap(),
+        vec![70],
+        "the group change must roll back with the failed pause (PG)"
+    );
+    cleanup(&db).await;
+}
+
+// ── v1.2.12 (full audit): rule writes ──
+
+async fn pg_create_for_user_2(
+    db: &PgRepository,
+    port: i32,
+    group: i64,
+    check_owner_authorization: bool,
+) -> Result<Option<i64>, DbError> {
+    db.create_rule_full(
+        "r",
+        2,
+        port,
+        "tcp",
+        "raw",
+        "raw",
+        "direct",
+        "raw",
+        None,
+        group,
+        None,
+        "direct",
+        "127.0.0.1",
+        80,
+        &[relay_shared::protocol::RuleTargetRequest {
+            host: "127.0.0.1".into(),
+            port: 80,
+            enabled: true,
+        }],
+        "first",
+        0,
+        0,
+        None,
+        check_owner_authorization,
+    )
+    .await
+}
+
+/// A restricted user (2) and two inbound groups (70, 71) with a paused rule of
+/// theirs on each (400 on 70, 401 on 71) — what a revocation leaves behind.
+async fn pg_seed_restricted_owner(db: &PgRepository) {
+    sqlx::query(
+        "INSERT INTO users (id, username, password, admin, all_device_groups) \
+         VALUES (2, 'u2', 'x', FALSE, FALSE)",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    for gid in [70i64, 71] {
+        sqlx::query(
+            "INSERT INTO device_groups (id, name, group_type, token, uid) \
+             VALUES ($1, 'gin', 'in', $2, 1)",
+        )
+        .bind(gid)
+        .bind(format!("tok-{gid}"))
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+    for (id, port, group) in [(400i64, 22000i32, 70i64), (401, 22001, 71)] {
+        sqlx::query(
+            "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, \
+             target_addr, target_port, paused) VALUES ($1, 'r', 2, $2, $3, '127.0.0.1', 80, TRUE)",
+        )
+        .bind(id)
+        .bind(port)
+        .bind(group)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn pg_rule_writes_recheck_the_owners_group_authorization() {
+    let Some(db) = repo("rule_authz").await else {
+        return;
+    };
+    pg_seed_restricted_owner(&db).await;
+    let owner = ResourceScope::Owner(2);
+    let resume = RuleUpdate {
+        paused: Some(false),
+        check_owner_authorization: true,
+        ..RuleUpdate::default()
+    };
+    let move_to_70 = RuleUpdate {
+        device_group_in: Some(70),
+        check_owner_authorization: true,
+        ..RuleUpdate::default()
+    };
+
+    assert!(matches!(
+        pg_create_for_user_2(&db, 22002, 70, true).await,
+        Err(DbError::GroupNotAuthorized)
+    ));
+    assert!(matches!(
+        db.update_rule_full(400, &owner, &resume).await,
+        Err(DbError::GroupNotAuthorized)
+    ));
+    assert!(matches!(
+        db.update_rule_full(401, &owner, &move_to_70).await,
+        Err(DbError::GroupNotAuthorized)
+    ));
+    let rules: Vec<(i64, bool, i64)> =
+        sqlx::query_as("SELECT id, paused, device_group_in FROM forward_rules ORDER BY id")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        rules,
+        vec![(400, true, 70), (401, true, 71)],
+        "nothing written"
+    );
+
+    assert!(matches!(
+        pg_create_for_user_2(&db, 22002, 70, false).await,
+        Ok(Some(_))
+    ));
+
+    db.set_user_device_groups(2, &[70]).await.unwrap();
+    assert_eq!(db.update_rule_full(400, &owner, &resume).await.unwrap(), 1);
+    assert_eq!(
+        db.update_rule_full(401, &owner, &move_to_70).await.unwrap(),
+        1
+    );
+    assert!(matches!(
+        pg_create_for_user_2(&db, 22003, 70, true).await,
+        Ok(Some(_))
+    ));
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_a_failed_rule_edit_changes_nothing() {
+    let Some(db) = repo("rule_edit_atomic").await else {
+        return;
+    };
+    sqlx::query(
+        "INSERT INTO device_groups (id, name, group_type, token, uid) \
+         VALUES (70, 'gin', 'in', 'tok-70', 1)",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    for (id, port) in [(500i64, 23000i32), (501, 23001)] {
+        sqlx::query(
+            "INSERT INTO forward_rules (id, name, uid, listen_port, protocol, device_group_in, \
+             target_addr, target_port) VALUES ($1, 'before', 1, $2, 'tcp', 70, '127.0.0.1', 80)",
+        )
+        .bind(id)
+        .bind(port)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+    db.replace_rule_targets(
+        500,
+        &ResourceScope::All,
+        &[relay_shared::protocol::RuleTargetRequest {
+            host: "a.example.com".into(),
+            port: 1,
+            enabled: true,
+        }],
+    )
+    .await
+    .unwrap();
+
+    let new_targets = [relay_shared::protocol::RuleTargetRequest {
+        host: "b.example.com".into(),
+        port: 2,
+        enabled: true,
+    }];
+    let edit = RuleUpdate {
+        name: Some("after"),
+        upload_limit_mbps: Some(9),
+        targets: Some(&new_targets),
+        listen_port: Some(23001),
+        ..RuleUpdate::default()
+    };
+    assert!(matches!(
+        db.update_rule_full(500, &ResourceScope::All, &edit).await,
+        Err(DbError::UniqueViolation | DbError::PortConflict)
+    ));
+
+    let (name, upload): (String, i32) =
+        sqlx::query_as("SELECT name, upload_limit_mbps FROM forward_rules WHERE id = 500")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!((name.as_str(), upload), ("before", 0));
+    let targets: Vec<(String, i32)> = sqlx::query_as(
+        "SELECT host, port FROM forward_rule_targets WHERE rule_id = 500 ORDER BY position",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(targets, vec![("a.example.com".to_string(), 1)]);
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_an_omitted_rate_limit_direction_is_kept() {
+    let Some(db) = repo("rule_rate_limits").await else {
+        return;
+    };
+    sqlx::query(
+        "INSERT INTO device_groups (id, name, group_type, token, uid) \
+         VALUES (70, 'gin', 'in', 'tok-70', 1)",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, target_addr, \
+         target_port, upload_limit_mbps, download_limit_mbps) \
+         VALUES (600, 'r', 1, 24000, 70, '127.0.0.1', 80, 10, 20)",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let limits = || async {
+        sqlx::query_as::<_, (i32, i32)>(
+            "SELECT upload_limit_mbps, download_limit_mbps FROM forward_rules WHERE id = 600",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap()
+    };
+
+    let up_only = RuleUpdate {
+        upload_limit_mbps: Some(5),
+        ..RuleUpdate::default()
+    };
+    db.update_rule_full(600, &ResourceScope::All, &up_only)
+        .await
+        .unwrap();
+    assert_eq!(limits().await, (5, 20));
+
+    let down_off = RuleUpdate {
+        download_limit_mbps: Some(0),
+        ..RuleUpdate::default()
+    };
+    db.update_rule_full(600, &ResourceScope::All, &down_off)
+        .await
+        .unwrap();
+    assert_eq!(limits().await, (5, 0));
+    cleanup(&db).await;
+}
+
+/// PG runs writers concurrently, so the in-transaction check alone is not
+/// enough: a resume must WAIT for an authorization change in progress — which
+/// locks the owner's row first — and then see it.
+#[tokio::test]
+async fn pg_a_rule_write_waits_for_an_authorization_change_in_progress() {
+    let Some(db) = repo("rule_authz_wait").await else {
+        return;
+    };
+    pg_seed_restricted_owner(&db).await;
+    db.set_user_device_groups(2, &[70]).await.unwrap();
+
+    // Revoking, not committed yet: owner row locked, grant removed.
+    let mut revoke = db.pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM users WHERE id = 2 FOR UPDATE")
+        .execute(&mut *revoke)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM user_device_groups WHERE user_id = 2")
+        .execute(&mut *revoke)
+        .await
+        .unwrap();
+
+    let other = PgRepository::new(db.pool.clone());
+    let resume = tokio::spawn(async move {
+        let u = RuleUpdate {
+            paused: Some(false),
+            check_owner_authorization: true,
+            ..RuleUpdate::default()
+        };
+        other
+            .update_rule_full(400, &ResourceScope::Owner(2), &u)
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        !resume.is_finished(),
+        "the resume must wait for the authorization change"
+    );
+    revoke.commit().await.unwrap();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), resume)
+        .await
+        .expect("the resume must finish once the change commits")
+        .unwrap();
+    assert!(
+        matches!(result, Err(DbError::GroupNotAuthorized)),
+        "got {result:?}"
+    );
+    let paused: bool = sqlx::query_scalar("SELECT paused FROM forward_rules WHERE id = 400")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert!(paused);
+    cleanup(&db).await;
+}
+
+/// The other order: a rule write in progress holds the owner's row, and the
+/// authorization change waits for it — then pauses the rule it wrote.
+#[tokio::test]
+async fn pg_an_authorization_change_waits_for_a_rule_write_in_progress() {
+    let Some(db) = repo("authz_waits_rule").await else {
+        return;
+    };
+    pg_seed_restricted_owner(&db).await;
+    db.set_user_device_groups(2, &[70]).await.unwrap();
+
+    // A rule write in progress: owner row locked (as create_rule_full and a
+    // resume do), an active rule on group 70 inserted, not committed yet.
+    let mut write = db.pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM users WHERE id = 2 FOR UPDATE")
+        .execute(&mut *write)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, \
+         target_addr, target_port, paused) VALUES (402, 'new', 2, 22009, 70, '127.0.0.1', 80, FALSE)",
+    )
+    .execute(&mut *write)
+    .await
+    .unwrap();
+
+    let other = PgRepository::new(db.pool.clone());
+    let revoke = tokio::spawn(async move {
+        other
+            .update_user_authorization(2, Some(false), Some(&[]))
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        !revoke.is_finished(),
+        "the authorization change must wait for the rule write"
+    );
+    write.commit().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), revoke)
+        .await
+        .expect("the change must finish once the write commits")
+        .unwrap()
+        .unwrap();
+    let paused: bool = sqlx::query_scalar("SELECT paused FROM forward_rules WHERE id = 402")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert!(paused, "the rule written meanwhile must be paused too");
+    cleanup(&db).await;
 }
