@@ -689,10 +689,16 @@ pub trait TrafficRepository: Send + Sync {
     /// has since been deleted (rejecting it would make the node re-send the
     /// other rules' bytes under a new id). A rejected batch leaves no record,
     /// so the node can send its bytes again.
+    ///
+    /// `acked_batch_id` is the node's previous batch, which it saw
+    /// acknowledged and will never send again: its record is deleted in the
+    /// same transaction, so a node keeps one record here, not one per report.
+    /// Ignored without a `batch_id`, and when it names this batch itself.
     async fn apply_traffic_batch_with_id(
         &self,
         group_id: i64,
         batch_id: Option<&str>,
+        acked_batch_id: Option<&str>,
         entries: &[TrafficEntry],
     ) -> Result<Vec<TrafficEntryResult>, DbError>;
 
@@ -703,12 +709,13 @@ pub trait TrafficRepository: Send + Sync {
         group_id: i64,
         entries: &[TrafficEntry],
     ) -> Result<Vec<TrafficEntryResult>, DbError> {
-        self.apply_traffic_batch_with_id(group_id, None, entries)
+        self.apply_traffic_batch_with_id(group_id, None, None, entries)
             .await
     }
 
     /// v1.2.12: forget applied batch ids recorded before `cutoff`
-    /// (`YYYY-MM-DD HH:MM:SS` UTC). Returns rows deleted.
+    /// (`YYYY-MM-DD HH:MM:SS` UTC) that no later batch confirmed. Returns rows
+    /// deleted.
     async fn prune_traffic_batches(&self, cutoff: &str) -> Result<u64, DbError>;
 
     // ── v1.2.0: hourly traffic history ──

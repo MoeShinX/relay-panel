@@ -17,10 +17,13 @@ independent `v*` / `node-v*` tracks since this release).
   a dropped connection, a proxy error), the node sent those bytes again and
   they were billed a second time. Each report now carries a batch id; the
   panel records it in the same transaction as the traffic and acknowledges a
-  batch it has already applied without billing it again. Ids are kept for 24
-  hours. Needs node-v1.2.6 on the node as well — older nodes send no id and
-  are billed as before; older panels ignore the id. PostgreSQL gets schema
-  revision 28 (a new table); SQLite gets migration 45.
+  batch it has already applied without billing it again. A node's next batch
+  confirms the previous one, which is then forgotten; an id nothing confirms
+  (the node restarted, or is cut off) is kept for 30 days, so a copy re-sent
+  after an outage shorter than that is still recognised. Needs node-v1.2.6 on
+  the node as well — older nodes send no id and are billed as before; older
+  panels ignore the id. PostgreSQL gets schema revision 28 (a new table);
+  SQLite gets migration 45.
 
 ---
 

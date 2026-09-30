@@ -455,6 +455,13 @@ pub struct TrafficReport {
     /// (applied as before, no protection), older panels ignore it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch_id: Option<String>,
+    /// v1.2.12 (node-v1.2.6): the id of this node's previous batch, once the
+    /// panel has acknowledged it. The node never sends that batch again, so the
+    /// panel forgets it right here rather than after a fixed time; only ids
+    /// never confirmed (the node restarted, or has not reported since) are left
+    /// to the retention sweep.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acked_batch_id: Option<String>,
 }
 
 /// Longest `batch_id` a panel accepts (nodes send 32 hex characters).

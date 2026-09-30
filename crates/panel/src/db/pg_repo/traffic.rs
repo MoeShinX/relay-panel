@@ -6,16 +6,21 @@ use relay_shared::protocol::TrafficEntry;
 
 // ── TrafficRepository ──
 //
-// Same atomicity contract as SQLite (see sqlite_repo.rs). PG defaults to READ
-// COMMITTED, so the ownership check + write on the same tx handle is the
-// guarantee: a concurrent tx can't make our UPDATE see a different row than
-// our SELECT did because both run on the same snapshot within this tx.
+// Same atomicity contract as SQLite (see sqlite_repo.rs): one transaction, all
+// or nothing. It is NOT one snapshot: under PG's default READ COMMITTED every
+// statement reads its own, so a rule deleted or moved to another group between
+// the ownership SELECT and the UPDATEs below is still billed for this batch.
+// That is the right outcome — the bytes were forwarded while it was this
+// group's rule (a deleted rule's own counter UPDATE just matches no row). The
+// dedup row needs no snapshot: the primary key serialises two copies of one
+// batch (see below).
 #[async_trait]
 impl TrafficRepository for PgRepository {
     async fn apply_traffic_batch_with_id(
         &self,
         group_id: i64,
         batch_id: Option<&str>,
+        acked_batch_id: Option<&str>,
         entries: &[TrafficEntry],
     ) -> Result<Vec<TrafficEntryResult>, DbError> {
         let mut tx = self.pool.begin().await?;
@@ -43,6 +48,15 @@ impl TrafficRepository for PgRepository {
             if recorded == 0 {
                 let _ = tx.rollback().await;
                 return Ok(vec![TrafficEntryResult::AlreadyApplied]);
+            }
+            // The node's previous batch, acknowledged: it is never sent again.
+            // Forgotten only if this batch commits, like everything else here.
+            if let Some(acked) = acked_batch_id.filter(|a| *a != batch_id) {
+                sqlx::query("DELETE FROM traffic_batches WHERE group_id = $1 AND batch_id = $2")
+                    .bind(group_id)
+                    .bind(acked)
+                    .execute(&mut *tx)
+                    .await?;
             }
         }
 

@@ -19,12 +19,16 @@ const RETENTION_DAYS: i64 = 35;
 /// paying 35 days of rows for it would be the wrong trade.
 const METRICS_RETENTION_DAYS: i64 = 7;
 
-/// v1.2.12: applied traffic batch ids are kept a day. A node re-sends an
-/// unacknowledged batch every poll until it gets an answer, so a copy that
-/// arrives later than this would take a panel unreachable for over a day right
-/// after it had applied the batch — and even then it is one batch (one poll's
-/// traffic) billed twice, not more.
-const TRAFFIC_BATCH_RETENTION_HOURS: i64 = 24;
+/// v1.2.12: how long an applied traffic batch id is remembered when nothing
+/// confirms it. A node's next batch confirms the previous one (it saw the
+/// acknowledgement and will never re-send it), and that deletes it at once, so
+/// what is left here is each node's latest batch plus the last batch of a node
+/// that restarted — a few rows per node, whatever the window. The window is
+/// how long a node may be cut off (or the panel down) and still have its
+/// re-sent batch recognised: a copy arriving later than this, of a batch
+/// applied just before the outage, is billed a second time — one batch, one
+/// poll's traffic.
+const TRAFFIC_BATCH_RETENTION_DAYS: i64 = 30;
 
 /// One sweep per hour. Deletion is cheap (indexed range delete) and the
 /// granularity of the data is hourly anyway — sweeping faster buys nothing.
@@ -82,9 +86,9 @@ pub fn spawn(state: AppState) {
                 Err(e) => tracing::error!("audit-log: prune failed: {}", e),
             }
 
-            // v1.2.12: applied traffic batch ids (re-send dedup).
+            // v1.2.12: applied traffic batch ids no later batch confirmed (re-send dedup).
             let batch_cutoff = (chrono::Utc::now()
-                - chrono::Duration::hours(TRAFFIC_BATCH_RETENTION_HOURS))
+                - chrono::Duration::days(TRAFFIC_BATCH_RETENTION_DAYS))
             .format("%Y-%m-%d %H:%M:%S")
             .to_string();
             match state.db.prune_traffic_batches(&batch_cutoff).await {

@@ -5695,12 +5695,12 @@ async fn traffic_batch_with_the_same_id_is_billed_once() {
     let batch = [entry(100, 1000, 2000)];
 
     let first = db
-        .apply_traffic_batch_with_id(50, Some("b1"), &batch)
+        .apply_traffic_batch_with_id(50, Some("b1"), None, &batch)
         .await
         .unwrap();
     assert!(matches!(first.as_slice(), [TrafficEntryResult::Ok]));
     let again = db
-        .apply_traffic_batch_with_id(50, Some("b1"), &batch)
+        .apply_traffic_batch_with_id(50, Some("b1"), None, &batch)
         .await
         .unwrap();
     assert!(matches!(
@@ -5717,7 +5717,7 @@ async fn traffic_batch_with_the_same_id_is_billed_once() {
 
     // The same id from another group is a different batch.
     let other = db
-        .apply_traffic_batch_with_id(60, Some("b1"), &[entry(200, 5, 5)])
+        .apply_traffic_batch_with_id(60, Some("b1"), None, &[entry(200, 5, 5)])
         .await
         .unwrap();
     assert!(matches!(other.as_slice(), [TrafficEntryResult::Ok]));
@@ -5734,7 +5734,7 @@ async fn a_re_sent_batch_is_recognized_before_its_rules_are_checked() {
     let batch = [entry(100, 100, 0), entry(101, 50, 0)];
 
     let first = db
-        .apply_traffic_batch_with_id(50, Some("b2"), &batch)
+        .apply_traffic_batch_with_id(50, Some("b2"), None, &batch)
         .await
         .unwrap();
     assert!(matches!(first.as_slice(), [TrafficEntryResult::Ok]));
@@ -5744,7 +5744,7 @@ async fn a_re_sent_batch_is_recognized_before_its_rules_are_checked() {
         .unwrap();
 
     let again = db
-        .apply_traffic_batch_with_id(50, Some("b2"), &batch)
+        .apply_traffic_batch_with_id(50, Some("b2"), None, &batch)
         .await
         .unwrap();
     assert!(
@@ -5762,7 +5762,7 @@ async fn a_rejected_batch_leaves_no_record() {
     seed_batch_fixture(&db).await;
 
     let rejected = db
-        .apply_traffic_batch_with_id(50, Some("b3"), &[entry(100, 10, 0), entry(999, 1, 0)])
+        .apply_traffic_batch_with_id(50, Some("b3"), None, &[entry(100, 10, 0), entry(999, 1, 0)])
         .await
         .unwrap();
     assert!(matches!(
@@ -5772,7 +5772,7 @@ async fn a_rejected_batch_leaves_no_record() {
     assert_eq!(rule_used(&db, 100).await, 0);
 
     let retried = db
-        .apply_traffic_batch_with_id(50, Some("b3"), &[entry(100, 10, 0)])
+        .apply_traffic_batch_with_id(50, Some("b3"), None, &[entry(100, 10, 0)])
         .await
         .unwrap();
     assert!(matches!(retried.as_slice(), [TrafficEntryResult::Ok]));
@@ -5785,7 +5785,7 @@ async fn old_traffic_batch_ids_are_pruned() {
     let db = repo().await;
     seed_batch_fixture(&db).await;
     for id in ["old", "new"] {
-        db.apply_traffic_batch_with_id(50, Some(id), &[entry(100, 1, 0)])
+        db.apply_traffic_batch_with_id(50, Some(id), None, &[entry(100, 1, 0)])
             .await
             .unwrap();
     }
@@ -5807,4 +5807,57 @@ async fn old_traffic_batch_ids_are_pruned() {
         .await
         .unwrap();
     assert_eq!(left, vec!["new".to_string()]);
+}
+
+/// v1.2.12: a batch that names the node's previous, acknowledged batch deletes
+/// that record in its own transaction — forgotten when the new batch commits,
+/// kept when it is refused. Only this group's record goes, and a batch naming
+/// itself keeps its own.
+#[tokio::test]
+async fn an_acknowledged_traffic_batch_is_forgotten_with_the_next_one() {
+    let db = repo().await;
+    seed_batch_fixture(&db).await;
+    let recorded = || async {
+        sqlx::query_as::<_, (i64, String)>(
+            "SELECT group_id, batch_id FROM traffic_batches ORDER BY group_id, batch_id",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap()
+    };
+    let rec = |g: i64, id: &str| (g, id.to_string());
+
+    db.apply_traffic_batch_with_id(50, Some("a"), None, &[entry(100, 1, 0)])
+        .await
+        .unwrap();
+    let refused = db
+        .apply_traffic_batch_with_id(50, Some("b"), Some("a"), &[entry(999, 1, 0)])
+        .await
+        .unwrap();
+    assert!(matches!(
+        refused.as_slice(),
+        [TrafficEntryResult::Unavailable]
+    ));
+    assert_eq!(
+        recorded().await,
+        [rec(50, "a")],
+        "a refused batch forgets nothing"
+    );
+
+    db.apply_traffic_batch_with_id(50, Some("c"), Some("a"), &[entry(100, 1, 0)])
+        .await
+        .unwrap();
+    assert_eq!(recorded().await, [rec(50, "c")]);
+
+    db.apply_traffic_batch_with_id(60, Some("c"), None, &[entry(200, 1, 0)])
+        .await
+        .unwrap();
+    db.apply_traffic_batch_with_id(50, Some("d"), Some("c"), &[entry(100, 1, 0)])
+        .await
+        .unwrap();
+    db.apply_traffic_batch_with_id(50, Some("e"), Some("e"), &[entry(100, 1, 0)])
+        .await
+        .unwrap();
+    assert_eq!(recorded().await, [rec(50, "d"), rec(50, "e"), rec(60, "c")]);
+    assert_eq!(rule_used(&db, 100).await, 4);
 }

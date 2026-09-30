@@ -164,10 +164,16 @@ pub async fn report_traffic(
     // `code` (403/400/500) INSIDE the JSON body — NOT a real HTTP error. Nodes
     // read the JSON `code` and ignore the HTTP status on these endpoints.
     //
-    // v1.2.12: every rejection below means the batch was NOT applied (it is one
-    // transaction and nothing runs after its commit) — a node relies on that to
-    // re-send its bytes under a new batch id without double billing.
-    if let Some(id) = req.batch_id.as_deref() {
+    // v1.2.12: a 400/401/403 means the batch was NOT applied — refused before
+    // anything was written — and a node re-sends its bytes under a new batch id.
+    // A 500 promises nothing: it can come from the COMMIT itself (a database
+    // connection lost while committing reports an error for a transaction that
+    // went through), so a node re-sends the same id, which is safe either way.
+    // Do not answer 400/401/403 for anything that may have written.
+    for id in [req.batch_id.as_deref(), req.acked_batch_id.as_deref()]
+        .into_iter()
+        .flatten()
+    {
         if !valid_traffic_batch_id(id) {
             return Json(ApiResponse {
                 code: 400,
@@ -180,6 +186,7 @@ pub async fn report_traffic(
         state.db.as_ref(),
         group.id,
         req.batch_id.as_deref(),
+        req.acked_batch_id.as_deref(),
         &req.reports,
     )
     .await
@@ -463,6 +470,7 @@ mod tests {
         TrafficReport {
             reports: entries.to_vec(),
             batch_id: None,
+            acked_batch_id: None,
         }
     }
 
@@ -860,24 +868,69 @@ mod tests {
         assert_eq!(user_traffic(&pool, 2).await, 3000);
     }
 
-    /// A malformed batch id is refused before anything is applied.
+    /// A malformed batch id — or acknowledged batch id — is refused before
+    /// anything is applied.
     #[tokio::test]
     async fn an_invalid_traffic_batch_id_is_refused() {
         let (state, pool) = seeded_state().await;
-        for bad in ["", "has space", "x".repeat(65).as_str(), "semi;colon"] {
+        for acked in [false, true] {
+            for bad in ["", "has space", "x".repeat(65).as_str(), "semi;colon"] {
+                let mut r = report(
+                    "tok-A",
+                    &[TrafficEntry {
+                        rule_id: 100,
+                        upload: 1,
+                        download: 1,
+                    }],
+                );
+                if acked {
+                    r.batch_id = Some("0123456789abcdef0123456789abcdef".into());
+                    r.acked_batch_id = Some(bad.to_string());
+                } else {
+                    r.batch_id = Some(bad.to_string());
+                }
+                let Json(resp) =
+                    report_traffic(State(state.clone()), auth_headers("tok-A"), Json(r)).await;
+                assert_eq!(resp.code, 400, "acked={acked} {bad:?}: {}", resp.message);
+            }
+        }
+        assert_eq!(rule_traffic(&pool, 100).await, 0);
+    }
+
+    /// v1.2.12: a batch that names the node's previous, acknowledged batch
+    /// makes the panel forget that one — the node will never send it again —
+    /// so only the latest batch per node stays recorded.
+    #[tokio::test]
+    async fn an_acknowledged_traffic_batch_is_forgotten() {
+        let (state, pool) = seeded_state().await;
+        let send = |id: &str, acked: Option<&str>| {
             let mut r = report(
                 "tok-A",
                 &[TrafficEntry {
                     rule_id: 100,
-                    upload: 1,
-                    download: 1,
+                    upload: 10,
+                    download: 0,
                 }],
             );
-            r.batch_id = Some(bad.to_string());
-            let Json(resp) =
-                report_traffic(State(state.clone()), auth_headers("tok-A"), Json(r)).await;
-            assert_eq!(resp.code, 400, "{bad:?}: {}", resp.message);
-        }
-        assert_eq!(rule_traffic(&pool, 100).await, 0);
+            r.batch_id = Some(id.to_string());
+            r.acked_batch_id = acked.map(str::to_string);
+            report_traffic(State(state.clone()), auth_headers("tok-A"), Json(r))
+        };
+        let recorded = || async {
+            sqlx::query_scalar::<_, String>(
+                "SELECT batch_id FROM traffic_batches ORDER BY batch_id",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        };
+
+        let Json(a) = send("batch-a", None).await;
+        assert_eq!(a.code, 0, "{}", a.message);
+        assert_eq!(recorded().await, ["batch-a"]);
+        let Json(b) = send("batch-b", Some("batch-a")).await;
+        assert_eq!(b.code, 0, "{}", b.message);
+        assert_eq!(recorded().await, ["batch-b"]);
+        assert_eq!(rule_traffic(&pool, 100).await, 20);
     }
 }

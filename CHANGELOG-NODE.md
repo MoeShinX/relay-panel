@@ -23,9 +23,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   until the panel answers; the panel (1.2.12+) recognises a batch it already
   applied and acknowledges it without billing. Traffic counted meanwhile waits
   for the next batch, so a panel that is unreachable for a while delays
-  billing but loses nothing. A definite rejection from the panel (which means
-  it did not apply the batch) still sends the bytes again in a fresh batch.
-  With an older panel the id is ignored and reports behave as before.
+  billing but loses nothing. Only a refusal the panel gives before writing
+  anything (400/401/403) sends the bytes again in a fresh batch; a 500 can
+  come after the commit went through, so it is re-sent under the same id too.
+  Each batch also names the previous, acknowledged one, so the panel can
+  forget it. With an older panel the id is ignored and reports behave as
+  before.
+- **A traffic report gives up after 30 seconds.** It had no time limit, and it
+  runs in the same loop as the config poll: a request left hanging (a
+  half-open connection, a panel stuck on a database lock) stopped config
+  updates and all later reports with it. The batch is re-sent afterwards
+  under the same id, so giving up never bills twice.
+- **Pausing and resuming a rule while a report is in doubt no longer stops
+  the node's billing.** Settling the report subtracted its bytes from the
+  rule's new counter instead of the one they were read from, wrapping it to
+  about 2^64; the panel refused that value, and with it every later report
+  from the node, until the node restarted. A report is now settled against
+  the counters it was read from.
 
 ---
 

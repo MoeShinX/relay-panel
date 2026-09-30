@@ -5804,12 +5804,12 @@ async fn pg_traffic_batch_with_the_same_id_is_billed_once() {
     let batch = [pg_entry(100, 1000, 2000)];
 
     let first = db
-        .apply_traffic_batch_with_id(50, Some("b1"), &batch)
+        .apply_traffic_batch_with_id(50, Some("b1"), None, &batch)
         .await
         .unwrap();
     assert!(matches!(first.as_slice(), [TrafficEntryResult::Ok]));
     let again = db
-        .apply_traffic_batch_with_id(50, Some("b1"), &batch)
+        .apply_traffic_batch_with_id(50, Some("b1"), None, &batch)
         .await
         .unwrap();
     assert!(matches!(
@@ -5825,7 +5825,7 @@ async fn pg_traffic_batch_with_the_same_id_is_billed_once() {
     assert_eq!(user_used, 3000, "the user is charged once too (PG)");
 
     let other = db
-        .apply_traffic_batch_with_id(60, Some("b1"), &[pg_entry(200, 5, 5)])
+        .apply_traffic_batch_with_id(60, Some("b1"), None, &[pg_entry(200, 5, 5)])
         .await
         .unwrap();
     assert!(matches!(other.as_slice(), [TrafficEntryResult::Ok]));
@@ -5842,7 +5842,7 @@ async fn pg_a_re_sent_batch_is_recognized_before_its_rules_are_checked() {
     let batch = [pg_entry(100, 100, 0), pg_entry(101, 50, 0)];
 
     let first = db
-        .apply_traffic_batch_with_id(50, Some("b2"), &batch)
+        .apply_traffic_batch_with_id(50, Some("b2"), None, &batch)
         .await
         .unwrap();
     assert!(matches!(first.as_slice(), [TrafficEntryResult::Ok]));
@@ -5852,7 +5852,7 @@ async fn pg_a_re_sent_batch_is_recognized_before_its_rules_are_checked() {
         .unwrap();
 
     let again = db
-        .apply_traffic_batch_with_id(50, Some("b2"), &batch)
+        .apply_traffic_batch_with_id(50, Some("b2"), None, &batch)
         .await
         .unwrap();
     assert!(
@@ -5871,7 +5871,12 @@ async fn pg_a_rejected_batch_leaves_no_record() {
     pg_seed_batch_fixture(&db).await;
 
     let rejected = db
-        .apply_traffic_batch_with_id(50, Some("b3"), &[pg_entry(100, 10, 0), pg_entry(999, 1, 0)])
+        .apply_traffic_batch_with_id(
+            50,
+            Some("b3"),
+            None,
+            &[pg_entry(100, 10, 0), pg_entry(999, 1, 0)],
+        )
         .await
         .unwrap();
     assert!(matches!(
@@ -5881,7 +5886,7 @@ async fn pg_a_rejected_batch_leaves_no_record() {
     assert_eq!(pg_rule_used(&db, 100).await, 0);
 
     let retried = db
-        .apply_traffic_batch_with_id(50, Some("b3"), &[pg_entry(100, 10, 0)])
+        .apply_traffic_batch_with_id(50, Some("b3"), None, &[pg_entry(100, 10, 0)])
         .await
         .unwrap();
     assert!(matches!(retried.as_slice(), [TrafficEntryResult::Ok]));
@@ -5896,7 +5901,7 @@ async fn pg_old_traffic_batch_ids_are_pruned() {
     };
     pg_seed_batch_fixture(&db).await;
     for id in ["old", "new"] {
-        db.apply_traffic_batch_with_id(50, Some(id), &[pg_entry(100, 1, 0)])
+        db.apply_traffic_batch_with_id(50, Some(id), None, &[pg_entry(100, 1, 0)])
             .await
             .unwrap();
     }
@@ -5918,5 +5923,57 @@ async fn pg_old_traffic_batch_ids_are_pruned() {
         .await
         .unwrap();
     assert_eq!(left, vec!["new".to_string()]);
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_an_acknowledged_traffic_batch_is_forgotten_with_the_next_one() {
+    let Some(db) = repo("batch_acked").await else {
+        return;
+    };
+    pg_seed_batch_fixture(&db).await;
+    let recorded = || async {
+        sqlx::query_as::<_, (i64, String)>(
+            "SELECT group_id, batch_id FROM traffic_batches ORDER BY group_id, batch_id",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap()
+    };
+    let rec = |g: i64, id: &str| (g, id.to_string());
+
+    db.apply_traffic_batch_with_id(50, Some("a"), None, &[pg_entry(100, 1, 0)])
+        .await
+        .unwrap();
+    let refused = db
+        .apply_traffic_batch_with_id(50, Some("b"), Some("a"), &[pg_entry(999, 1, 0)])
+        .await
+        .unwrap();
+    assert!(matches!(
+        refused.as_slice(),
+        [TrafficEntryResult::Unavailable]
+    ));
+    assert_eq!(
+        recorded().await,
+        [rec(50, "a")],
+        "a refused batch forgets nothing"
+    );
+
+    db.apply_traffic_batch_with_id(50, Some("c"), Some("a"), &[pg_entry(100, 1, 0)])
+        .await
+        .unwrap();
+    assert_eq!(recorded().await, [rec(50, "c")]);
+
+    db.apply_traffic_batch_with_id(60, Some("c"), None, &[pg_entry(200, 1, 0)])
+        .await
+        .unwrap();
+    db.apply_traffic_batch_with_id(50, Some("d"), Some("c"), &[pg_entry(100, 1, 0)])
+        .await
+        .unwrap();
+    db.apply_traffic_batch_with_id(50, Some("e"), Some("e"), &[pg_entry(100, 1, 0)])
+        .await
+        .unwrap();
+    assert_eq!(recorded().await, [rec(50, "d"), rec(50, "e"), rec(60, "c")]);
+    assert_eq!(pg_rule_used(&db, 100).await, 4);
     cleanup(&db).await;
 }

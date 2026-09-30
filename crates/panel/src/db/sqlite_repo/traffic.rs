@@ -29,6 +29,7 @@ impl TrafficRepository for SqliteRepository {
         &self,
         group_id: i64,
         batch_id: Option<&str>,
+        acked_batch_id: Option<&str>,
         entries: &[TrafficEntry],
     ) -> Result<Vec<TrafficEntryResult>, DbError> {
         let mut tx = self.pool.begin().await?;
@@ -52,6 +53,15 @@ impl TrafficRepository for SqliteRepository {
             if recorded == 0 {
                 let _ = tx.rollback().await;
                 return Ok(vec![TrafficEntryResult::AlreadyApplied]);
+            }
+            // The node's previous batch, acknowledged: it is never sent again.
+            // Forgotten only if this batch commits, like everything else here.
+            if let Some(acked) = acked_batch_id.filter(|a| *a != batch_id) {
+                sqlx::query("DELETE FROM traffic_batches WHERE group_id = ? AND batch_id = ?")
+                    .bind(group_id)
+                    .bind(acked)
+                    .execute(&mut *tx)
+                    .await?;
             }
         }
 
