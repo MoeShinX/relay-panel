@@ -71,7 +71,7 @@ curl -fsSL https://raw.githubusercontent.com/MoeShinX/relay-panel/main/install.s
 
 ## 🔄 Update
 
-**Panel**: when a new version is out, click "Update Now" on the dashboard — no SSH. A SQLite database is backed up automatically first; back up PostgreSQL yourself. The panel is unreachable for about half a minute; node forwarding is not affected.
+**Panel**: when a new version is out, click "Update Now" on the dashboard — no SSH. A SQLite database is backed up to `backups/` first (the newest 5 are kept; a manual `./deploy.sh` upgrade does the same); back up PostgreSQL yourself. The panel is unreachable for about half a minute; node forwarding is not affected.
 
 One-click update relies on an updater that a manual update installs, so **v1.2.10 and earlier need one manual update first** (back up `.env` and your database):
 

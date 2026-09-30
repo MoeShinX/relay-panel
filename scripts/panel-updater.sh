@@ -30,8 +30,6 @@ RUN_DIR="$ROOT/run"
 # Overridable only so scripts/test-panel-updater.sh can run this unprivileged.
 LOG="${RELAYPANEL_UPDATER_LOG:-/var/log/relaypanel-updater.log}"
 LOCK="${RELAYPANEL_UPDATER_LOCK:-/run/relaypanel-updater.lock}"
-BACKUP_DIR="$ROOT/backups"
-KEEP_BACKUPS=5
 PANEL_HEALTH=http://127.0.0.1:18888/api/v1/health
 
 cd "$ROOT" || exit 1
@@ -146,43 +144,30 @@ if [ "$(env_get RELAYPANEL_BUILD_LOCAL)" != "1" ]; then
 fi
 
 # ---- 3. Back up the database (SQLite) ----
-# SQLite runs in WAL mode, so a copy taken while the panel writes can be
-# inconsistent. Stop the panel, copy the database with its -wal/-shm files, and
-# let deploy.sh start the new one.
+# scripts/sqlite-backup.sh stops the panel, copies the database and leaves the
+# panel stopped for deploy.sh to start the new one. v1.2.12: deploy.sh uses the
+# same script for manual upgrades; RELAYPANEL_BACKUP_DONE below tells it this
+# run already has its backup.
 DB_MODE="$(env_get RELAYPANEL_DB_MODE)"
 BACKUP_NOTE=""
-STOPPED=0
 if [ -z "$DB_MODE" ] || [ "$DB_MODE" = "sqlite" ]; then
-    cid="$(docker compose -f "$RELEASE_COMPOSE" ps -q panel 2>/dev/null)"
-    data_dir=""
-    [ -n "$cid" ] && data_dir="$(docker inspect -f \
-        '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}' "$cid" 2>/dev/null)"
-    if [ -n "$data_dir" ] && [ -f "$data_dir/data.db" ]; then
-        log "stopping the panel for a consistent database backup"
-        docker compose -f "$RELEASE_COMPOSE" stop panel >>"$LOG.run" 2>&1 && STOPPED=1
-        mkdir -p "$BACKUP_DIR" && chmod 700 "$BACKUP_DIR"
-        stamp="$(date +%Y%m%d-%H%M%S)-v${FROM:-unknown}"
-        ok=1
-        for f in data.db data.db-wal data.db-shm; do
-            [ -f "$data_dir/$f" ] || continue
-            cp -p "$data_dir/$f" "$BACKUP_DIR/${f/data.db/data-$stamp.db}" || ok=0
-        done
-        if [ "$ok" = "1" ]; then
-            log "backed up to $BACKUP_DIR/data-$stamp.db"
-            BACKUP_NOTE=" Database backed up to backups/data-$stamp.db."
-            # Keep the newest $KEEP_BACKUPS.
-            ls -1t "$BACKUP_DIR"/data-*.db 2>/dev/null | tail -n +$((KEEP_BACKUPS + 1)) \
-                | while read -r old; do rm -f "$old" "$old-wal" "$old-shm"; done
-        else
+    backup="$(bash "$ROOT/scripts/sqlite-backup.sh" "$RELEASE_COMPOSE" "v${FROM:-unknown}" 2>>"$LOG.run")"
+    case $? in
+        0)
+            log "backed up to $backup"
+            BACKUP_NOTE=" Database backed up to backups/${backup##*/}."
+            ;;
+        3)
+            log "could not locate the SQLite database; continuing without a backup"
+            BACKUP_NOTE=" Database NOT backed up (not found)."
+            ;;
+        *)
             # Refuse to continue without a backup: the new version may migrate
-            # the schema, and this is the one moment to keep a way back.
-            [ "$STOPPED" = "1" ] && docker compose -f "$RELEASE_COMPOSE" start panel >>"$LOG.run" 2>&1
-            finish failed "Database backup failed, so the update was not applied. The panel was restarted on the old version."
-        fi
-    else
-        log "could not locate the SQLite database; continuing without a backup"
-        BACKUP_NOTE=" Database NOT backed up (not found)."
-    fi
+            # the schema, and this is the one moment to keep a way back. The
+            # backup script started the old panel again if it had stopped it.
+            finish failed "No usable database backup could be taken (the copy failed, or the panel could not be confirmed stopped), so the update was not applied. The panel stays on the old version."
+            ;;
+    esac
 else
     BACKUP_NOTE=" PostgreSQL is not backed up automatically."
 fi
@@ -191,7 +176,7 @@ fi
 # stdin from /dev/null: an upgrade never prompts, and if something ever tried
 # to, it must fail here rather than wait forever with no terminal.
 log "running deploy.sh"
-if bash ./deploy.sh </dev/null >>"$LOG.run" 2>&1; then
+if RELAYPANEL_BACKUP_DONE=1 bash ./deploy.sh </dev/null >>"$LOG.run" 2>&1; then
     TO="$(panel_version)"
     log "panel is up on ${TO:-unknown}"
     finish succeeded "Updated ${FROM:-?} → ${TO:-?}.$BACKUP_NOTE" "$TO"
