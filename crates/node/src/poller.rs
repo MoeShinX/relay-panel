@@ -111,22 +111,30 @@ fn save_cache(config: &NodeConfigResponse) {
 }
 
 fn cache_path() -> PathBuf {
-    // Try /opt/relay-node first (production path), then current dir (dev)
-    let prod = PathBuf::from("/opt/relay-node").join(CACHE_FILE);
-    if prod.parent().map(|p| p.exists()).unwrap_or(false) {
-        return prod;
-    }
-    PathBuf::from(CACHE_FILE)
+    state_dir(std::env::var_os("RELAY_NODE_DIR")).join(CACHE_FILE)
 }
 
-/// Resolve where the node-id file lives — same directory logic as cache_path
-/// so the two files sit together (production: /opt/relay-node/, dev: cwd).
+/// Resolve where the node-id file lives — same directory as cache_path so the
+/// two files sit together.
 fn node_id_path() -> PathBuf {
-    let prod = PathBuf::from("/opt/relay-node").join(NODE_ID_FILE);
-    if prod.parent().map(|p| p.exists()).unwrap_or(false) {
+    state_dir(std::env::var_os("RELAY_NODE_DIR")).join(NODE_ID_FILE)
+}
+
+/// Directory holding the node's state files. v1.2.12: `RELAY_NODE_DIR`, which
+/// the installer writes into start.sh, wins — before it, a second instance
+/// installed with `-s` (into /opt/<name>) still used /opt/relay-node whenever
+/// that existed, sharing the first instance's node id and config cache. Without
+/// it (start.sh from older installers) the old order stays: /opt/relay-node
+/// if present (production), else the current directory (dev).
+fn state_dir(relay_node_dir: Option<std::ffi::OsString>) -> PathBuf {
+    if let Some(dir) = relay_node_dir.filter(|d| !d.is_empty()) {
+        return PathBuf::from(dir);
+    }
+    let prod = PathBuf::from("/opt/relay-node");
+    if prod.exists() {
         return prod;
     }
-    PathBuf::from(NODE_ID_FILE)
+    PathBuf::new()
 }
 
 /// Get this node's stable identity, generating + persisting it on first call.
@@ -200,6 +208,24 @@ fn fallback_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// v1.2.12: an instance installed with `-s` keeps its state in its own
+    /// install dir (RELAY_NODE_DIR from start.sh), not in /opt/relay-node.
+    #[test]
+    fn state_dir_follows_relay_node_dir() {
+        assert_eq!(
+            state_dir(Some("/opt/relay-node-hk".into())),
+            PathBuf::from("/opt/relay-node-hk")
+        );
+        // Unset or empty (start.sh from an older installer): the old lookup.
+        let legacy = if PathBuf::from("/opt/relay-node").exists() {
+            PathBuf::from("/opt/relay-node")
+        } else {
+            PathBuf::new()
+        };
+        assert_eq!(state_dir(None), legacy);
+        assert_eq!(state_dir(Some("".into())), legacy);
+    }
 
     /// A node_id generated once must be reused verbatim on every subsequent
     /// call — this stability is the contract the panel's status dedup depends
