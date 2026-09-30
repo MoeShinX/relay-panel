@@ -2846,4 +2846,47 @@ mod tests {
         .await;
         assert_eq!(resp.code, 400, "{}", resp.message);
     }
+
+    /// v1.2.12 (pre-release review): plan expiry is compared as TEXT, so the
+    /// admin API must store the canonical form. `2026-9-1 00:00:00` parses —
+    /// and stored as typed it sorted after `2026-09-30 …`, keeping a plan
+    /// meant to end on 1 September alive for the rest of the month.
+    #[tokio::test]
+    async fn admin_plan_expiry_is_stored_in_the_canonical_form() {
+        use super::admin_set_user_plan;
+        use relay_shared::protocol::AdminSetUserPlanRequest;
+
+        let (state, pool) = test_state().await;
+        add_user(&pool, 2, "alice", false).await;
+
+        let Json(resp) = admin_set_user_plan(
+            AdminOnly { user_id: 1 },
+            State(state.clone()),
+            Path(2),
+            Json(AdminSetUserPlanRequest {
+                clear: false,
+                plan_expire_at: Some(" 2026-9-1 0:00:00 ".into()),
+            }),
+        )
+        .await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+        let (stored,): (Option<String>,) =
+            sqlx::query_as("SELECT plan_expire_at FROM users WHERE id = 2")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stored.as_deref(), Some("2026-09-01 00:00:00"));
+
+        let Json(resp) = admin_set_user_plan(
+            AdminOnly { user_id: 1 },
+            State(state.clone()),
+            Path(2),
+            Json(AdminSetUserPlanRequest {
+                clear: false,
+                plan_expire_at: Some("2026/09/01 00:00:00".into()),
+            }),
+        )
+        .await;
+        assert_eq!(resp.code, 400, "{}", resp.message);
+    }
 }

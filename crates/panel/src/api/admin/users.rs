@@ -523,15 +523,20 @@ pub async fn admin_set_user_plan(
             }
         }
     } else {
-        if let Some(exp) = req.plan_expire_at.as_deref() {
-            if !is_utc_timestamp(exp) {
-                return Json(err(400, "到期时间格式应为 YYYY-MM-DD HH:MM:SS (UTC)"));
-            }
-        }
+        // v1.2.12: expiry is compared as TEXT, so only the canonical form may
+        // be stored (see service::timestamps) — a value that merely parses,
+        // like `2026-9-1 00:00:00`, sorted after the rest of the month.
+        let expire = match req.plan_expire_at.as_deref() {
+            None => None,
+            Some(raw) => match crate::service::timestamps::canonical_utc(raw) {
+                Some(v) => Some(v),
+                None => return Json(err(400, "到期时间格式应为 YYYY-MM-DD HH:MM:SS (UTC)")),
+            },
+        };
         let (plan_id, expire) =
             match crate::db::repo::UserRepository::find_by_id(state.db.as_ref(), id).await {
                 Ok(Some(u)) if u.admin => return Json(err(400, "无法修改管理员用户的套餐")),
-                Ok(Some(u)) => (u.plan_id, req.plan_expire_at.clone()),
+                Ok(Some(u)) => (u.plan_id, expire),
                 Ok(None) => return Json(err(404, "用户不存在")),
                 Err(e) => {
                     tracing::error!("admin_set_user_plan {}: find_by_id failed: {}", id, e);
@@ -574,32 +579,4 @@ pub async fn admin_set_user_plan(
         .broadcast_all(r#"{"type":"config_changed"}"#)
         .await;
     Json(ApiResponse::success(()))
-}
-
-/// v1.2.12: expiry is stored as TEXT and compared as TEXT against
-/// `datetime('now')` (`YYYY-MM-DD HH:MM:SS`), so anything else sorts wrong: an
-/// RFC3339 `2026-10-01T00:00:00Z` stays live the whole expiry day ('T' > ' '),
-/// and `2026/10/01` or `never` never expire at all. Same rule as redeem-code
-/// expiry.
-fn is_utc_timestamp(s: &str) -> bool {
-    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").is_ok()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::is_utc_timestamp;
-
-    #[test]
-    fn plan_expiry_must_use_the_stored_format() {
-        assert!(is_utc_timestamp("2026-10-01 00:00:00"));
-        assert!(is_utc_timestamp("2099-12-31 23:59:59"));
-
-        assert!(!is_utc_timestamp("2026-10-01T00:00:00Z"));
-        assert!(!is_utc_timestamp("2026-10-01T00:00:00+08:00"));
-        assert!(!is_utc_timestamp("2026/10/01 00:00:00"));
-        assert!(!is_utc_timestamp("2026-10-01"));
-        assert!(!is_utc_timestamp("never"));
-        assert!(!is_utc_timestamp(""));
-        assert!(!is_utc_timestamp("2026-13-01 00:00:00"));
-    }
 }

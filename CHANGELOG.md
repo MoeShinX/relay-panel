@@ -19,12 +19,16 @@ independent `v*` / `node-v*` tracks since this release).
   has landed in between. Write transactions now take the lock at the start, so
   concurrent requests simply wait their turn. Nothing was ever double-charged
   or lost — nodes retry a failed traffic report — but the request failed.
-- **An invalid plan expiry is refused.** The admin "adjust expiry" API stored
-  whatever string it was given, and expiry is compared as text: a value like
-  `2026/10/01` or `never` meant the plan never expired, and an RFC 3339 time
-  (`2026-10-01T00:00:00Z`) lasted until the end of that day. It now requires
-  `YYYY-MM-DD HH:MM:SS` (UTC), as redeem-code expiry already did. The panel's
-  own date picker always sent that format.
+- **Expiry times are checked and stored in one exact format.** Plan,
+  redeem-code and announcement expiry are compared as text, so any spelling
+  other than `YYYY-MM-DD HH:MM:SS` (UTC, zero-padded) sorts wrong. The admin
+  "adjust plan expiry" API stored whatever string it was given: `2026/10/01`
+  or `never` meant the plan never expired, and `2026-10-01T00:00:00Z` lasted
+  until the end of that day. Redeem codes and announcements did check the
+  format, but kept an unpadded `2026-9-1 00:00:00` as typed — which sorts
+  after `2026-09-30`, so it stayed valid for the rest of the month. All three
+  now accept only that layout and store it zero-padded. The panel's own date
+  pickers always sent the right format.
 - **Changing a user's line authorization is all-or-nothing.** The flag, the
   explicit lines and pausing the rules outside them were four separate writes;
   a failure part-way could leave a revoked line's rules running. They are now
