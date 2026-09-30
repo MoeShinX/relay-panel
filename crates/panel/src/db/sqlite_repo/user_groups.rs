@@ -151,6 +151,38 @@ async fn authorized_ids(
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
+/// v1.2.12: whether `uid` may run a rule on inbound group `group_id` — the
+/// API's rule (admins and all-groups users may use every inbound group, anyone
+/// else only the inbound groups granted to them), read on the caller's
+/// transaction so that it holds until the rule write commits.
+pub(super) async fn owner_may_use_group(
+    conn: &mut SqliteConnection,
+    uid: i64,
+    group_id: i64,
+) -> Result<bool, sqlx::Error> {
+    let flags: Option<(bool, bool)> =
+        sqlx::query_as("SELECT admin, all_device_groups FROM users WHERE id = ?")
+            .bind(uid)
+            .fetch_optional(&mut *conn)
+            .await?;
+    match flags {
+        None => Ok(false),
+        Some((true, _)) | Some((_, true)) => Ok(true),
+        Some((false, false)) => {
+            let granted: Option<(i64,)> = sqlx::query_as(
+                "SELECT 1 FROM user_device_groups udg \
+                 JOIN device_groups dg ON dg.id = udg.device_group_id \
+                 WHERE udg.user_id = ? AND udg.device_group_id = ? AND dg.group_type = 'in'",
+            )
+            .bind(uid)
+            .bind(group_id)
+            .fetch_optional(&mut *conn)
+            .await?;
+            Ok(granted.is_some())
+        }
+    }
+}
+
 /// Pause the user's active rules outside `allowed_group_ids` (all of them when
 /// it is empty). Returns the number newly paused.
 async fn pause_outside(

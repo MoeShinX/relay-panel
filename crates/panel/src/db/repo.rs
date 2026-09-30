@@ -63,6 +63,68 @@ impl ResourceScope {
     }
 }
 
+/// v1.2.12: one rule edit, for [`RuleRepository::update_rule_full`]. `None`
+/// leaves a field as it is; for the nullable columns, `Some(None)` clears it.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RuleUpdate<'a> {
+    pub name: Option<&'a str>,
+    pub listen_port: Option<i32>,
+    pub protocol: Option<&'a str>,
+    /// Writes `public_transport`, and `node_transport` / `entry_transport`
+    /// (each defaulting to this value).
+    pub public_transport: Option<&'a str>,
+    pub node_transport: Option<&'a str>,
+    pub entry_transport: Option<&'a str>,
+    pub route_mode: Option<&'a str>,
+    pub ws_path: Option<Option<&'a str>>,
+    pub device_group_in: Option<i64>,
+    pub device_group_out: Option<Option<i64>>,
+    pub forward_mode: Option<&'a str>,
+    pub target_addr: Option<&'a str>,
+    pub target_port: Option<i32>,
+    /// An explicit pause/resume also clears `auto_paused`: it is a person's
+    /// decision, which a later re-authorization must not undo.
+    pub paused: Option<bool>,
+    /// Replaces the whole target list.
+    pub targets: Option<&'a [RuleTargetRequest]>,
+    pub load_balance_strategy: Option<&'a str>,
+    pub upload_limit_mbps: Option<i32>,
+    pub download_limit_mbps: Option<i32>,
+    pub max_connections: Option<i32>,
+    pub auto_restart_minutes: Option<i32>,
+    pub tunnel_profile_id: Option<Option<i64>>,
+    /// Re-check, inside the transaction, that the owner may use the rule's
+    /// inbound group when the edit resumes it or moves it to another group.
+    /// Set for an owner editing their own rule; an admin's edit skips it, as
+    /// the API's own check does.
+    pub check_owner_authorization: bool,
+}
+
+impl RuleUpdate<'_> {
+    /// Whether the edit writes any `forward_rules` column (as opposed to only
+    /// the target list, or nothing).
+    pub fn has_columns(&self) -> bool {
+        self.name.is_some()
+            || self.listen_port.is_some()
+            || self.protocol.is_some()
+            || self.public_transport.is_some()
+            || self.route_mode.is_some()
+            || self.ws_path.is_some()
+            || self.device_group_in.is_some()
+            || self.device_group_out.is_some()
+            || self.forward_mode.is_some()
+            || self.target_addr.is_some()
+            || self.target_port.is_some()
+            || self.paused.is_some()
+            || self.load_balance_strategy.is_some()
+            || self.upload_limit_mbps.is_some()
+            || self.download_limit_mbps.is_some()
+            || self.max_connections.is_some()
+            || self.auto_restart_minutes.is_some()
+            || self.tunnel_profile_id.is_some()
+    }
+}
+
 /// Scope for tunnel-profile reads. Distinct from [`ResourceScope`] because
 /// profile isolation is by usage-context, not ownership:
 /// - `AvailableTemplates`: templates available for rule selection (ws/tls_simple,
@@ -353,6 +415,13 @@ pub trait RuleRepository: Send + Sync {
     /// `upload_limit_mbps` / `download_limit_mbps` are only written when either
     /// is non-zero (0 = unlimited = the column default). `tunnel_profile_id` is
     /// only written when `Some`.
+    ///
+    /// v1.2.12: with `check_owner_authorization`, the owner's device-group
+    /// authorization for `device_group_in` is re-checked inside the write
+    /// transaction (`Err(DbError::GroupNotAuthorized)` when missing). The API
+    /// checks it before, but an authorization revoked in between pauses only
+    /// the rules that already exist — never this one. Admins acting for a user
+    /// pass `false`, as their request skips that check too.
     #[allow(clippy::too_many_arguments)]
     async fn create_rule_full(
         &self,
@@ -375,6 +444,7 @@ pub trait RuleRepository: Send + Sync {
         upload_limit_mbps: i32,
         download_limit_mbps: i32,
         tunnel_profile_id: Option<i64>,
+        check_owner_authorization: bool,
     ) -> Result<Option<i64>, DbError>;
     /// Find (protocol, public_transport) for effective-combo validation, scoped.
     async fn find_transport_by_id(
@@ -388,7 +458,24 @@ pub trait RuleRepository: Send + Sync {
         id: i64,
         scope: &ResourceScope,
     ) -> Result<Option<Option<i64>>, DbError>;
-    /// Dynamic update of rule fields, scoped. Returns rows affected.
+    /// v1.2.12: apply a whole rule edit in ONE transaction, scoped: the
+    /// columns, the targets, and (on a resume) the quota and authorization
+    /// checks. Returns 0 when the rule is not in scope, 1 otherwise. Any error
+    /// leaves the rule as it was — an edit used to be written field by field,
+    /// so one that failed half-way had already changed the earlier fields.
+    ///
+    /// Errors: `QuotaExceeded` (resuming past the owner's max_rules),
+    /// `GroupNotAuthorized` (see [`RuleUpdate::check_owner_authorization`]),
+    /// `UniqueViolation` / `PortConflict` (listen port taken).
+    async fn update_rule_full(
+        &self,
+        id: i64,
+        scope: &ResourceScope,
+        update: &RuleUpdate<'_>,
+    ) -> Result<u64, DbError>;
+
+    /// Dynamic update of rule fields, scoped. Returns rows affected. The
+    /// scalar-column subset of [`update_rule_full`](Self::update_rule_full).
     #[allow(clippy::too_many_arguments)]
     async fn update_rule_fields(
         &self,
@@ -408,7 +495,29 @@ pub trait RuleRepository: Send + Sync {
         target_addr: Option<&str>,
         target_port: Option<i32>,
         paused: Option<bool>,
-    ) -> Result<u64, DbError>;
+    ) -> Result<u64, DbError> {
+        let update = RuleUpdate {
+            name,
+            listen_port,
+            protocol,
+            public_transport,
+            node_transport,
+            entry_transport,
+            route_mode,
+            ws_path,
+            device_group_in,
+            device_group_out,
+            forward_mode,
+            target_addr,
+            target_port,
+            paused,
+            ..RuleUpdate::default()
+        };
+        if !update.has_columns() {
+            return Ok(0);
+        }
+        self.update_rule_full(id, scope, &update).await
+    }
     /// Increment rule traffic (upload, download).
     async fn increment_rule_traffic(
         &self,

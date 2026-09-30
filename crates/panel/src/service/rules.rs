@@ -7,7 +7,7 @@
 //! trait and is unit-testable without the HTTP layer.
 
 use crate::db::error::DbError;
-use crate::db::repo::{GroupRepository, ProfileScope, Repository, ResourceScope};
+use crate::db::repo::{GroupRepository, ProfileScope, Repository, ResourceScope, RuleUpdate};
 use relay_shared::protocol::{
     CreateRuleRequest, GroupType, Protocol, PublicTransport, RuleTargetRequest, UpdateRuleRequest,
 };
@@ -260,6 +260,9 @@ pub async fn auto_assign_port(
 pub enum CreateRuleError {
     BadRequest(String),
     PortConflict(u16),
+    /// v1.2.12: the owner is not authorized for the rule's inbound group —
+    /// found inside the write transaction (see `create_rule_full`).
+    Forbidden,
     Database(DbError),
 }
 
@@ -268,6 +271,8 @@ pub enum UpdateRuleError {
     BadRequest(String),
     NotFound,
     PortConflict,
+    /// v1.2.12: see `CreateRuleError::Forbidden`; carries the message.
+    Forbidden(&'static str),
     Internal(String),
     Database(DbError),
 }
@@ -518,6 +523,10 @@ pub async fn create_rule(
                 up_mbps,
                 down_mbps,
                 req.tunnel_profile_id,
+                // A non-admin creates for themselves and is re-checked inside
+                // the transaction; an admin (for anyone) is not, as the API
+                // does not check it either.
+                !caller_admin,
             )
             .await
         {
@@ -553,6 +562,7 @@ pub async fn create_rule(
         Err(DbError::PortConflict | DbError::UniqueViolation) => {
             Err(CreateRuleError::PortConflict(last_port.unwrap_or(0)))
         }
+        Err(DbError::GroupNotAuthorized) => Err(CreateRuleError::Forbidden),
         Err(e) => {
             tracing::error!("create_rule: create_rule_full failed: {}", e);
             Err(CreateRuleError::Database(e))
@@ -564,6 +574,9 @@ fn map_create_rule_validation_error(err: CreateRuleError) -> UpdateRuleError {
     match err {
         CreateRuleError::BadRequest(msg) => UpdateRuleError::BadRequest(msg),
         CreateRuleError::PortConflict(_) => UpdateRuleError::PortConflict,
+        CreateRuleError::Forbidden => {
+            UpdateRuleError::Forbidden("device_group_in is not in your allowed device groups")
+        }
         CreateRuleError::Database(e) => UpdateRuleError::Database(e),
     }
 }
@@ -665,24 +678,9 @@ pub async fn update_rule(
         || req.load_balance_strategy.is_some()
         || req.upload_limit_mbps.is_some()
         || req.download_limit_mbps.is_some()
-        // v1.2.0: these are written by set_rule_connection_controls, not by the
-        // main UPDATE, so they belong in has_field but NOT in has_scalar_field
-        // (same category as the rate limits and targets above).
         || req.max_connections.is_some()
         || req.auto_restart_minutes.is_some()
         || req.tunnel_profile_id.is_some()
-        || req.paused.is_some();
-    let has_scalar_field = req.name.is_some()
-        || req.listen_port.is_some()
-        || req.protocol.is_some()
-        || req.public_transport.is_some()
-        || req.route_mode.is_some()
-        || req.ws_path.is_some()
-        || req.device_group_in.is_some()
-        || req.device_group_out.is_some()
-        || req.forward_mode.is_some()
-        || req.target_addr.is_some()
-        || req.target_port.is_some()
         || req.paused.is_some();
     if !has_field {
         return Err(UpdateRuleError::BadRequest("No fields to update".into()));
@@ -831,128 +829,75 @@ pub async fn update_rule(
             .map(|s| s as &str)
     });
 
-    let update_result = if has_scalar_field {
-        db.update_rule_fields(
-            id,
-            scope,
-            req.name.as_deref(),
-            req.listen_port.map(|p| p as i32),
-            req.protocol.as_ref().map(protocol_to_str),
-            public,
-            node,
-            entry,
-            req.route_mode.as_ref().map(|r| r.to_db_str()),
-            ws_path,
-            req.device_group_in,
-            device_group_out_arg,
-            req.forward_mode.as_deref(),
-            req.target_addr.as_deref(),
-            req.target_port.map(|p| p as i32),
-            req.paused,
-        )
-        .await
-    } else {
-        Ok(1)
+    // v1.2.0 connection controls. 0 = off; any other restart interval must
+    // clear the floor: a 1-minute restart loop would drop connections faster
+    // than clients reconnect, turning the safety valve into the outage.
+    //
+    // v1.2.12: checked here, with every other check, BEFORE anything is
+    // written. It used to run after the name, targets and limits had already
+    // been saved, so a rejected edit still changed the rule. An omitted field
+    // is not written at all (it keeps the rule's value), so only a value sent
+    // in this request is checked.
+    let max_connections = req.max_connections.map(|v| v.max(0));
+    let auto_restart_minutes = req.auto_restart_minutes.map(|v| v.max(0));
+    if let Some(minutes) = auto_restart_minutes {
+        if minutes != 0 && minutes < relay_shared::models::MIN_AUTO_RESTART_MINUTES {
+            return Err(UpdateRuleError::BadRequest(format!(
+                "自动重启间隔最小 {} 分钟（0 = 关闭）",
+                relay_shared::models::MIN_AUTO_RESTART_MINUTES
+            )));
+        }
+    }
+
+    // v1.2.12: the whole edit is ONE transaction (`update_rule_full`): it
+    // lands completely or not at all. Rate limits are per direction: an
+    // omitted direction keeps its limit — it used to be written as 0 (no
+    // limit), so an API client setting only the upload cap switched the
+    // download cap off.
+    let update = RuleUpdate {
+        name: req.name.as_deref(),
+        listen_port: req.listen_port.map(|p| p as i32),
+        protocol: req.protocol.as_ref().map(protocol_to_str),
+        public_transport: public,
+        node_transport: node,
+        entry_transport: entry,
+        route_mode: req.route_mode.as_ref().map(|r| r.to_db_str()),
+        ws_path,
+        device_group_in: req.device_group_in,
+        device_group_out: device_group_out_arg,
+        forward_mode: req.forward_mode.as_deref(),
+        target_addr: req.target_addr.as_deref(),
+        target_port: req.target_port.map(|p| p as i32),
+        paused: req.paused,
+        targets: normalized_targets.as_deref(),
+        load_balance_strategy: req.load_balance_strategy.map(|s| s.to_db_str()),
+        upload_limit_mbps: req.upload_limit_mbps.map(|v| v.max(0)),
+        download_limit_mbps: req.download_limit_mbps.map(|v| v.max(0)),
+        max_connections,
+        auto_restart_minutes,
+        tunnel_profile_id: req.tunnel_profile_id,
+        // An owner editing their own rule (an Owner scope) is re-checked
+        // against their device-group authorization inside the transaction;
+        // an admin's edit is not, as the API does not check it either.
+        check_owner_authorization: scope.owner_id().is_some(),
     };
 
-    match update_result {
+    match db.update_rule_full(id, scope, &update).await {
         Ok(0) => Err(UpdateRuleError::NotFound),
-        Ok(_) => {
-            if let Some(targets) = normalized_targets.as_ref() {
-                if let Err(e) = db.replace_rule_targets(id, scope, targets).await {
-                    tracing::error!("update_rule {}: replace_rule_targets failed: {}", id, e);
-                    return Err(UpdateRuleError::Database(e));
-                }
-            }
-            if let Some(strategy) = req.load_balance_strategy {
-                if let Err(e) = db
-                    .set_rule_load_balance_strategy(id, scope, strategy.to_db_str())
-                    .await
-                {
-                    tracing::error!(
-                        "update_rule {}: set_rule_load_balance_strategy failed: {}",
-                        id,
-                        e
-                    );
-                    return Err(UpdateRuleError::Database(e));
-                }
-            }
-            if req.upload_limit_mbps.is_some() || req.download_limit_mbps.is_some() {
-                let up_mbps = req.upload_limit_mbps.unwrap_or(0).max(0);
-                let down_mbps = req.download_limit_mbps.unwrap_or(0).max(0);
-                if let Err(e) = db.set_rule_rate_limits(id, scope, up_mbps, down_mbps).await {
-                    tracing::error!("update_rule {}: set_rule_rate_limits failed: {}", id, e);
-                    return Err(UpdateRuleError::Database(e));
-                }
-            }
-            // v1.2.0: connection cap + scheduled restart.
-            //
-            // Unlike the rate-limit branch above, an omitted field here falls
-            // back to the rule's CURRENT value rather than to 0. These two live
-            // in one form and are normally sent together, but defaulting to 0
-            // would mean an API client that sets only `max_connections` silently
-            // switches off that rule's scheduled restart — a destructive
-            // side-effect of an unrelated edit.
-            if req.max_connections.is_some() || req.auto_restart_minutes.is_some() {
-                let current = match db.find_rule_by_id(id, scope).await {
-                    Ok(Some(r)) => r,
-                    Ok(None) => return Err(UpdateRuleError::NotFound),
-                    Err(e) => {
-                        tracing::error!(
-                            "update_rule {}: reload for conn controls failed: {}",
-                            id,
-                            e
-                        );
-                        return Err(UpdateRuleError::Database(e));
-                    }
-                };
-                let max_connections = req
-                    .max_connections
-                    .unwrap_or(current.max_connections)
-                    .max(0);
-                let auto_restart_minutes = req
-                    .auto_restart_minutes
-                    .unwrap_or(current.auto_restart_minutes)
-                    .max(0);
-
-                // 0 = off. Any other value must clear the floor: a 1-minute
-                // restart loop would drop connections faster than clients
-                // reconnect, turning the safety valve into the outage.
-                if auto_restart_minutes != 0
-                    && auto_restart_minutes < relay_shared::models::MIN_AUTO_RESTART_MINUTES
-                {
-                    return Err(UpdateRuleError::BadRequest(format!(
-                        "自动重启间隔最小 {} 分钟（0 = 关闭）",
-                        relay_shared::models::MIN_AUTO_RESTART_MINUTES
-                    )));
-                }
-
-                if let Err(e) = db
-                    .set_rule_connection_controls(id, scope, max_connections, auto_restart_minutes)
-                    .await
-                {
-                    tracing::error!(
-                        "update_rule {}: set_rule_connection_controls failed: {}",
-                        id,
-                        e
-                    );
-                    return Err(UpdateRuleError::Database(e));
-                }
-            }
-            if let Some(pid_opt) = req.tunnel_profile_id {
-                if let Err(e) = db.set_rule_tunnel_profile(id, scope, pid_opt).await {
-                    tracing::error!("update_rule {}: set_rule_tunnel_profile failed: {}", id, e);
-                    return Err(UpdateRuleError::Database(e));
-                }
-            }
-            Ok(())
-        }
+        Ok(_) => Ok(()),
         Err(DbError::UniqueViolation | DbError::PortConflict) => Err(UpdateRuleError::PortConflict),
         Err(DbError::QuotaExceeded) => Err(UpdateRuleError::BadRequest(
             "当前套餐的启用规则数量已达上限".to_string(),
         )),
+        Err(DbError::GroupNotAuthorized) => Err(UpdateRuleError::Forbidden(
+            if req.device_group_in.is_some() {
+                "device_group_in is not in your allowed device groups"
+            } else {
+                "无法启动未被授权设备分组下的规则"
+            },
+        )),
         Err(e) => {
-            tracing::error!("update_rule {}: update_rule_fields failed: {}", id, e);
+            tracing::error!("update_rule {}: update_rule_full failed: {}", id, e);
             Err(UpdateRuleError::Database(e))
         }
     }
@@ -1244,5 +1189,149 @@ mod tests {
             let off = pseudo_random_offset(span);
             assert!(off < span, "offset {} must be < span {}", off, span);
         }
+    }
+
+    // ── v1.2.12 (full audit) ──
+
+    /// A rule of user 1 named "before" on group 1, with a 20 Mbps download cap.
+    async fn seed_edit_target(pool: &sqlx::SqlitePool) {
+        sqlx::query(
+            "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, \
+             target_addr, target_port, download_limit_mbps) \
+             VALUES (1, 'before', 1, 24010, 1, '127.0.0.1', 80, 20)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// A rejected edit changes nothing. The restart-interval floor used to be
+    /// checked only after the name (and targets, limits) had been saved.
+    #[tokio::test]
+    async fn a_rejected_edit_changes_nothing() {
+        let (pool, repo) = transport_test_db().await;
+        seed_edit_target(&pool).await;
+        let req = UpdateRuleRequest {
+            name: Some("after".into()),
+            auto_restart_minutes: Some(1),
+            ..Default::default()
+        };
+        assert!(matches!(
+            update_rule(&repo, 1, &ResourceScope::All, &req).await,
+            Err(UpdateRuleError::BadRequest(_))
+        ));
+        let rule = repo
+            .find_rule_by_id(1, &ResourceScope::All)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(rule.name, "before");
+    }
+
+    /// Setting one rate-limit direction keeps the other: it used to be
+    /// written as 0, i.e. no limit.
+    #[tokio::test]
+    async fn an_edit_of_one_rate_limit_keeps_the_other() {
+        let (pool, repo) = transport_test_db().await;
+        seed_edit_target(&pool).await;
+        let req = UpdateRuleRequest {
+            upload_limit_mbps: Some(5),
+            ..Default::default()
+        };
+        update_rule(&repo, 1, &ResourceScope::All, &req)
+            .await
+            .unwrap();
+        let rule = repo
+            .find_rule_by_id(1, &ResourceScope::All)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!((rule.upload_limit_mbps, rule.download_limit_mbps), (5, 20));
+    }
+
+    /// The API checks a restricted user's device-group authorization before
+    /// the write; an admin can revoke it in between. The write re-checks it,
+    /// so the user gets no rule — and no listener — on the revoked group:
+    /// neither a new one, nor a paused one resumed, nor one moved there.
+    #[tokio::test]
+    async fn an_authorization_revoked_after_the_api_check_still_counts() {
+        use crate::db::repo::DeviceGroupAuthRepository;
+        let (pool, repo) = transport_test_db().await;
+        sqlx::query(
+            "INSERT INTO users (id, username, password, admin, all_device_groups) \
+             VALUES (2, 'u2', 'x', 0, 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO device_groups (id, name, group_type, token, uid) VALUES (2, 'other', 'in', 'unused-2', 1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for (id, port, group) in [(7, 24020, 1), (8, 24021, 2)] {
+            sqlx::query(
+                "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, \
+                 target_addr, target_port, paused) VALUES (?, 'r', 2, ?, ?, '127.0.0.1', 80, 1)",
+            )
+            .bind(id)
+            .bind(port)
+            .bind(group)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        // The API's check passed while group 1 was granted; then it was revoked.
+        repo.update_user_authorization(2, None, Some(&[1]))
+            .await
+            .unwrap();
+        repo.update_user_authorization(2, None, Some(&[]))
+            .await
+            .unwrap();
+
+        let create: CreateRuleRequest = serde_json::from_value(serde_json::json!({
+            "name": "late", "listen_port": 24022, "protocol": "tcp",
+            "device_group_in": 1, "target_addr": "127.0.0.1", "target_port": 80
+        }))
+        .unwrap();
+        assert!(matches!(
+            create_rule(&repo, 2, false, &create).await,
+            Err(CreateRuleError::Forbidden)
+        ));
+        let owner = ResourceScope::Owner(2);
+        let resume = UpdateRuleRequest {
+            paused: Some(false),
+            ..Default::default()
+        };
+        assert!(matches!(
+            update_rule(&repo, 7, &owner, &resume).await,
+            Err(UpdateRuleError::Forbidden(_))
+        ));
+        let move_to_1 = UpdateRuleRequest {
+            device_group_in: Some(1),
+            ..Default::default()
+        };
+        assert!(matches!(
+            update_rule(&repo, 8, &owner, &move_to_1).await,
+            Err(UpdateRuleError::Forbidden(_))
+        ));
+
+        let rules: Vec<(i64, bool, i64)> =
+            sqlx::query_as("SELECT id, paused, device_group_in FROM forward_rules ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rules, vec![(7, true, 1), (8, true, 2)]);
+        let config = crate::service::node_config::build_node_config(&repo, 1)
+            .await
+            .unwrap();
+        assert!(
+            config.listeners.is_empty(),
+            "no listener on the revoked group"
+        );
+
+        // An admin may still act for the user.
+        update_rule(&repo, 7, &ResourceScope::All, &resume)
+            .await
+            .unwrap();
     }
 }

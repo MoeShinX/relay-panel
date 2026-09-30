@@ -730,6 +730,7 @@ async fn rule_create_full_cross_group_no_crosstalk() {
             0,
             0,
             None,
+            false,
         )
         .await
         .unwrap()
@@ -774,6 +775,7 @@ async fn rule_create_full_cross_group_no_crosstalk() {
             50,
             100,
             None,
+            false,
         )
         .await
         .unwrap()
@@ -852,6 +854,7 @@ async fn rule_create_full_rollback_on_target_failure() {
             0,
             0,
             None,
+            false,
         )
         .await;
     assert!(err.is_err(), "the bad target must fail the whole call");
@@ -912,6 +915,7 @@ async fn rule_create_full_quota_exhausted_returns_none() {
             0,
             0,
             None,
+            false,
         )
         .await
         .unwrap()
@@ -945,6 +949,7 @@ async fn rule_create_full_quota_exhausted_returns_none() {
             0,
             0,
             None,
+            false,
         )
         .await
         .unwrap(),
@@ -5786,4 +5791,235 @@ async fn update_user_authorization_rolls_back_when_a_step_fails() {
         vec![70],
         "the group change must roll back with the failed pause"
     );
+}
+
+// ── v1.2.12 (full audit): rule writes ──
+
+/// Create a TCP rule on `group` for user 2 through `create_rule_full`.
+async fn create_for_user_2(
+    db: &SqliteRepository,
+    port: i32,
+    group: i64,
+    check_owner_authorization: bool,
+) -> Result<Option<i64>, DbError> {
+    db.create_rule_full(
+        "r",
+        2,
+        port,
+        "tcp",
+        "raw",
+        "raw",
+        "direct",
+        "raw",
+        None,
+        group,
+        None,
+        "direct",
+        "127.0.0.1",
+        80,
+        &[relay_shared::protocol::RuleTargetRequest {
+            host: "127.0.0.1".into(),
+            port: 80,
+            enabled: true,
+        }],
+        "first",
+        0,
+        0,
+        None,
+        check_owner_authorization,
+    )
+    .await
+}
+
+/// A restricted user (2) and two inbound groups (70, 71) with a paused rule of
+/// theirs on each (400 on 70, 401 on 71) — what a revocation leaves behind.
+async fn seed_restricted_owner(db: &SqliteRepository) {
+    seed_user(db, 2, false).await;
+    sqlx::query("UPDATE users SET all_device_groups = 0 WHERE id = 2")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    seed_group(db, 70).await;
+    seed_group(db, 71).await;
+    for (id, port, group) in [(400, 22000, 70), (401, 22001, 71)] {
+        sqlx::query(
+            "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, \
+             target_addr, target_port, paused) VALUES (?, 'r', 2, ?, ?, '127.0.0.1', 80, 1)",
+        )
+        .bind(id)
+        .bind(port)
+        .bind(group)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+}
+
+/// The owner's device-group authorization is re-checked INSIDE the rule write
+/// — creating a rule, resuming one, moving one to another group — so an
+/// authorization revoked after the API's own check is still refused, and
+/// nothing is written. An admin acting for the owner is not checked (as the
+/// API does not check it either).
+#[tokio::test]
+async fn rule_writes_recheck_the_owners_group_authorization() {
+    let db = repo().await;
+    seed_restricted_owner(&db).await;
+    let owner = ResourceScope::Owner(2);
+    let resume = RuleUpdate {
+        paused: Some(false),
+        check_owner_authorization: true,
+        ..RuleUpdate::default()
+    };
+    let move_to_70 = RuleUpdate {
+        device_group_in: Some(70),
+        check_owner_authorization: true,
+        ..RuleUpdate::default()
+    };
+
+    // No grant (revoked).
+    assert!(matches!(
+        create_for_user_2(&db, 22002, 70, true).await,
+        Err(DbError::GroupNotAuthorized)
+    ));
+    assert!(matches!(
+        db.update_rule_full(400, &owner, &resume).await,
+        Err(DbError::GroupNotAuthorized)
+    ));
+    assert!(matches!(
+        db.update_rule_full(401, &owner, &move_to_70).await,
+        Err(DbError::GroupNotAuthorized)
+    ));
+    let rules: Vec<(i64, bool, i64)> =
+        sqlx::query_as("SELECT id, paused, device_group_in FROM forward_rules ORDER BY id")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        rules,
+        vec![(400, true, 70), (401, true, 71)],
+        "nothing written"
+    );
+
+    // An admin acting for the owner is not checked.
+    assert!(matches!(
+        create_for_user_2(&db, 22002, 70, false).await,
+        Ok(Some(_))
+    ));
+
+    // Granted, the owner may.
+    db.set_user_device_groups(2, &[70]).await.unwrap();
+    assert_eq!(db.update_rule_full(400, &owner, &resume).await.unwrap(), 1);
+    assert_eq!(
+        db.update_rule_full(401, &owner, &move_to_70).await.unwrap(),
+        1
+    );
+    assert!(matches!(
+        create_for_user_2(&db, 22003, 70, true).await,
+        Ok(Some(_))
+    ));
+}
+
+/// A rule edit is one transaction: when it fails — here on a listen port
+/// another rule of the group holds — no part of it is kept (the name, a limit
+/// and the target list were saved one by one before).
+#[tokio::test]
+async fn a_failed_rule_edit_changes_nothing() {
+    let db = repo().await;
+    seed_group(&db, 70).await;
+    for (id, port) in [(500, 23000), (501, 23001)] {
+        sqlx::query(
+            "INSERT INTO forward_rules (id, name, uid, listen_port, protocol, device_group_in, \
+             target_addr, target_port) VALUES (?, 'before', 1, ?, 'tcp', 70, '127.0.0.1', 80)",
+        )
+        .bind(id)
+        .bind(port)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+    db.replace_rule_targets(
+        500,
+        &ResourceScope::All,
+        &[relay_shared::protocol::RuleTargetRequest {
+            host: "a.example.com".into(),
+            port: 1,
+            enabled: true,
+        }],
+    )
+    .await
+    .unwrap();
+
+    let new_targets = [relay_shared::protocol::RuleTargetRequest {
+        host: "b.example.com".into(),
+        port: 2,
+        enabled: true,
+    }];
+    let edit = RuleUpdate {
+        name: Some("after"),
+        upload_limit_mbps: Some(9),
+        targets: Some(&new_targets),
+        listen_port: Some(23001),
+        ..RuleUpdate::default()
+    };
+    assert!(matches!(
+        db.update_rule_full(500, &ResourceScope::All, &edit).await,
+        Err(DbError::UniqueViolation | DbError::PortConflict)
+    ));
+
+    let (name, upload): (String, i32) =
+        sqlx::query_as("SELECT name, upload_limit_mbps FROM forward_rules WHERE id = 500")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!((name.as_str(), upload), ("before", 0));
+    let targets: Vec<(String, i32)> = sqlx::query_as(
+        "SELECT host, port FROM forward_rule_targets WHERE rule_id = 500 ORDER BY position",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(targets, vec![("a.example.com".to_string(), 1)]);
+}
+
+/// Each rate-limit direction is its own field: an edit that sends one leaves
+/// the other as it is (it used to be written as 0 — no limit). 0 sent
+/// explicitly still turns a limit off.
+#[tokio::test]
+async fn an_omitted_rate_limit_direction_is_kept() {
+    let db = repo().await;
+    seed_group(&db, 70).await;
+    sqlx::query(
+        "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, target_addr, \
+         target_port, upload_limit_mbps, download_limit_mbps) \
+         VALUES (600, 'r', 1, 24000, 70, '127.0.0.1', 80, 10, 20)",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let limits = || async {
+        sqlx::query_as::<_, (i32, i32)>(
+            "SELECT upload_limit_mbps, download_limit_mbps FROM forward_rules WHERE id = 600",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap()
+    };
+
+    let up_only = RuleUpdate {
+        upload_limit_mbps: Some(5),
+        ..RuleUpdate::default()
+    };
+    db.update_rule_full(600, &ResourceScope::All, &up_only)
+        .await
+        .unwrap();
+    assert_eq!(limits().await, (5, 20));
+
+    let down_off = RuleUpdate {
+        download_limit_mbps: Some(0),
+        ..RuleUpdate::default()
+    };
+    db.update_rule_full(600, &ResourceScope::All, &down_off)
+        .await
+        .unwrap();
+    assert_eq!(limits().await, (5, 0));
 }

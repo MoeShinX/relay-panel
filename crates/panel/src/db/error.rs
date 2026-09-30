@@ -25,6 +25,10 @@ pub enum DbError {
     /// This is distinct from creation returning 0 rows: callers need to tell
     /// an existing paused rule from a missing rule when a resume is rejected.
     QuotaExceeded,
+    /// v1.2.12: the write would put a rule on an inbound group its owner is
+    /// not authorized for — re-checked inside the write transaction, so an
+    /// authorization revoked after the API's own check still counts.
+    GroupNotAuthorized,
     /// FOREIGN KEY constraint violation. SQLite code "787", PostgreSQL "23503".
     ForeignKeyViolation,
     /// A required row was not found (for fetch_one-or-None patterns that are
@@ -41,6 +45,9 @@ impl std::fmt::Display for DbError {
             DbError::UniqueViolation => write!(f, "unique constraint violation"),
             DbError::PortConflict => write!(f, "listen_port conflict on inbound group"),
             DbError::QuotaExceeded => write!(f, "active rule quota exceeded"),
+            DbError::GroupNotAuthorized => {
+                write!(f, "device group not authorized for the rule's owner")
+            }
             DbError::ForeignKeyViolation => write!(f, "foreign key constraint violation"),
             DbError::NotFound => write!(f, "not found"),
             DbError::Other(e) => write!(f, "database error: {}", e),
