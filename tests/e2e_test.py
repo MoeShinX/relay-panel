@@ -106,9 +106,26 @@ def wait_for_port(host, port, timeout=30):
 
 
 def tcp_roundtrip(port, payload):
+    """Send `payload` and read back as many bytes as were sent.
+
+    The echo comes back through the relay in as many pieces as TCP and the
+    echo server (4096-byte reads) make of it, so one recv() can return just the
+    first: a 5016-byte echo read that way came back as 4096 bytes. Stops early
+    on EOF or the socket timeout and returns what did arrive, so a short echo
+    fails the caller's comparison with its real length instead of hanging.
+    """
     with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
         s.sendall(payload)
-        return s.recv(8192)
+        got = b""
+        try:
+            while len(got) < len(payload):
+                chunk = s.recv(len(payload) - len(got))
+                if not chunk:
+                    break
+                got += chunk
+        except socket.timeout:
+            pass
+        return got
 
 
 def udp_roundtrip(port, payload):
@@ -271,7 +288,7 @@ def main():
         # 5. TCP + UDP forwarding + traffic counting
         payload = b"tcp-relay-" + b"X" * 2000 + b"\n"
         resp = tcp_roundtrip(TCP_LISTEN_PORT, payload)
-        assert resp == payload, "TCP echo mismatch"
+        assert resp == payload, f"TCP echo mismatch: got {len(resp)}B of {len(payload)}B"
         print(f"[ok] TCP forwarded {len(payload)} bytes round-trip")
 
         udp_payload = b"udp-relay-" + b"Y" * 500
@@ -410,7 +427,9 @@ def main():
             by_name = {r["name"]: r for r in api("GET", "/rules", admin_token)["data"]}
             before = by_name["tcp-rule"]["traffic_used"]
             flush_payload = b"shutdown-flush-" + b"Z" * 5000 + b"\n"
-            assert tcp_roundtrip(TCP_LISTEN_PORT, flush_payload) == flush_payload
+            echo = tcp_roundtrip(TCP_LISTEN_PORT, flush_payload)
+            assert echo == flush_payload, (
+                f"echo before SIGTERM: got {len(echo)}B of {len(flush_payload)}B")
             node.send_signal(signal.SIGTERM)
             started = time.time()
             code = node.wait(timeout=20)
