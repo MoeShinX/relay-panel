@@ -88,6 +88,9 @@ if [ "${1:-}" = "inspect" ]; then
         *'.State.Health.Status'*'pg123') echo 'healthy'; exit 0 ;;
         *'.State.Status'*'caddy123') echo 'running'; exit 0 ;;
         *'/app/data'*'panel123') echo "${HARNESS_DATA_DIR:-}"; exit 0 ;;
+        *'Config.Env'*'panel123')
+            printf '%s\n' "${HARNESS_CONTAINER_ENV:-DATABASE_URL=sqlite:/app/data/data.db?mode=rwc}"
+            exit 0 ;;
         *'.State.Running'*'panel123')
             if [ -f "$log.stopped" ] || [ -n "${HARNESS_PANEL_STOPPED:-}" ]; then echo false; else echo true; fi
             exit 0 ;;
@@ -308,6 +311,33 @@ fi
 ls "$dir"/backups/data-*.db >/dev/null 2>&1 && fail 'a failed lookup must not lead to a copy'
 grep -q '^UP ' "$log" && fail 'the new version must not be started after a failed lookup'
 pass 'a failed container lookup blocks the upgrade'
+
+# v1.2.12 (full audit): the database is the file DATABASE_URL names, read
+# from the running container; a custom name used to be skipped.
+res=$(run_case upgrade-custom-db env)
+dir=${res%|*}; log=${res#*|}
+mkdir -p "$TMP/upgrade-custom-db-data"
+echo 'relay bytes' > "$TMP/upgrade-custom-db-data/relay.db"
+: > "$log"
+(cd "$dir" && HARNESS_LOG="$log" HARNESS_DATA_DIR="$TMP/upgrade-custom-db-data" HARNESS_CONTAINER_ENV='DATABASE_URL=sqlite:/app/data/relay.db?mode=rwc' PATH="$TMP/fakebin-upgrade-custom-db:$PATH" bash ./deploy.sh >/tmp/rp-upgrade-custom-db-2.out 2>/tmp/rp-upgrade-custom-db-2.err) \
+    || fail 'upgrade with a custom SQLite file name failed'
+grep -q 'relay bytes' "$dir"/backups/data-*-pre-deploy.db 2>/dev/null \
+    || fail 'the file DATABASE_URL names must be backed up'
+pass 'upgrade backs up a SQLite file with a custom name'
+
+# A database outside the data volume cannot be copied from the host: stop.
+res=$(run_case upgrade-db-outside env)
+dir=${res%|*}; log=${res#*|}
+mkdir -p "$TMP/upgrade-db-outside-data"
+echo 'sqlite bytes' > "$TMP/upgrade-db-outside-data/data.db"
+: > "$log"
+if (cd "$dir" && HARNESS_LOG="$log" HARNESS_DATA_DIR="$TMP/upgrade-db-outside-data" HARNESS_CONTAINER_ENV='DATABASE_URL=sqlite:/srv/relay.db' PATH="$TMP/fakebin-upgrade-db-outside:$PATH" bash ./deploy.sh >/tmp/rp-upgrade-db-outside-2.out 2>/tmp/rp-upgrade-db-outside-2.err); then
+    fail 'deploy.sh must stop when the database is outside the data volume'
+fi
+grep -q '^UP ' "$log" && fail 'the new version must not start without a backup'
+grep -q 'RELAYPANEL_BACKUP_DONE=1' /tmp/rp-upgrade-db-outside-2.err \
+    || fail 'the message must say how to go ahead after a manual backup'
+pass 'a database outside the data volume blocks the upgrade'
 
 # A fresh install has nothing to back up.
 res=$(run_case fresh-no-backup env)

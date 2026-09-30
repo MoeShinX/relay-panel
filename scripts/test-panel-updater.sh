@@ -71,6 +71,12 @@ case "\$*" in
   *"State.Running"*)
     [ -f "$STATE/inspect-fails" ] && exit 1
     if [ -f "$STATE/stopped" ]; then echo false; else echo true; fi ;;
+  *"Config.Env"*)
+    [ -f "$STATE/env-fails" ] && exit 1
+    if [ -f "$STATE/container-env" ]; then cat "$STATE/container-env"
+    else printf 'PATH=/usr/local/bin
+DATABASE_URL=sqlite:/app/data/data.db?mode=rwc
+'; fi ;;
   inspect*) [ -f "$STATE/mounts-fails" ] && exit 1; echo "$STATE/data" ;;
 esac
 exit 0
@@ -173,7 +179,7 @@ check "deploy.sh never ran" bash -c "[ ! -e '$STATE/deploy-backup-flag' ]"
 
 # v1.2.12 (pre-release review, round 2): a lookup that FAILS is not "no
 # database". Each of these must stop the update without touching anything.
-for flags in ps-fails mounts-fails "no-container config-fails" \
+for flags in ps-fails mounts-fails env-fails "no-container config-fails" \
              "no-container volume-ls-fails" "no-container volume-inspect-fails"; do
     echo "lookup fails: $flags"
     setup 1.2.10 1.2.11
@@ -210,6 +216,64 @@ run_updater
 check "reports succeeded" state_is succeeded
 check "database backed up" bash -c "ls '$REPO'/backups/data-*-v1.2.10.db >/dev/null 2>&1"
 check "no stop was needed" bash -c "! grep -q 'stop panel' '$STATE/docker-calls'"
+
+# v1.2.12 (full audit): the database is the file DATABASE_URL names. Any
+# other name used to count as "no data.db, nothing to back up".
+backup_holds() { # TEXT: the newest backup holds this text
+    local f; f="$(ls -1t "$REPO"/backups/data-*-v1.2.10.db 2>/dev/null | head -n1)"
+    [ -n "$f" ] && grep -q "$1" "$f"
+}
+
+echo "custom database file name"
+setup 1.2.10 1.2.11
+echo 1.2.11 > "$STATE/next-version"
+rm -f "$STATE/data/data.db"
+echo 'relay bytes' > "$STATE/data/relay.db"
+echo 'relay wal' > "$STATE/data/relay.db-wal"
+printf 'PATH=/usr/local/bin\nDATABASE_URL=sqlite:/app/data/relay.db?mode=rwc\n' > "$STATE/container-env"
+run_updater
+check "reports succeeded" state_is succeeded
+check "the named file is backed up" backup_holds 'relay bytes'
+check "with its WAL" bash -c "grep -q 'relay wal' '$REPO'/backups/data-*-v1.2.10.db-wal"
+
+echo "relative database path (the panel runs in /app)"
+setup 1.2.10 1.2.11
+echo 1.2.11 > "$STATE/next-version"
+echo 'rel bytes' > "$STATE/data/rel.db"
+printf 'DATABASE_URL=sqlite:data/rel.db\n' > "$STATE/container-env"
+run_updater
+check "reports succeeded" state_is succeeded
+check "the named file is backed up" backup_holds 'rel bytes'
+
+echo "no container: the file .env names, quoted"
+setup 1.2.10 1.2.11
+echo 1.2.11 > "$STATE/next-version"
+touch "$STATE/no-container"
+echo 'custom bytes' > "$STATE/data/custom.db"
+echo 'DATABASE_URL="sqlite:///app/data/custom.db?mode=rwc"' > "$REPO/.env"
+run_updater
+check "reports succeeded" state_is succeeded
+check "the named file is backed up" backup_holds 'custom bytes'
+
+echo "database outside the data volume"
+setup 1.2.10 1.2.11
+echo 1.2.11 > "$STATE/next-version"
+printf 'DATABASE_URL=sqlite:/srv/relay.db?mode=rwc\n' > "$STATE/container-env"
+run_updater
+check "reports failed" state_is failed
+check "says the update was not applied" message_has "not applied"
+check "no backup was taken" bash -c "! ls '$REPO'/backups/data-*.db >/dev/null 2>&1"
+check "deploy.sh never ran" bash -c "[ ! -e '$STATE/deploy-backup-flag' ]"
+check "nothing was stopped" bash -c "! grep -q 'stop panel' '$STATE/docker-calls'"
+
+echo "the panel runs on PostgreSQL"
+setup 1.2.10 1.2.11
+echo 1.2.11 > "$STATE/next-version"
+printf 'DATABASE_URL=postgres://relay:secret@db:5432/relay\n' > "$STATE/container-env"
+run_updater
+check "reports succeeded" state_is succeeded
+check "says it was not backed up" message_has "NOT backed up"
+check "nothing was stopped" bash -c "! grep -q 'stop panel' '$STATE/docker-calls'"
 
 echo "a request planted as a directory"
 setup 1.2.10 1.2.10

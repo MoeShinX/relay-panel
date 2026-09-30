@@ -8,9 +8,9 @@
 #   scripts/sqlite-backup.sh <compose-file> <label>
 #
 # SQLite runs in WAL mode, so a copy taken while the panel writes can be
-# inconsistent. This makes sure the panel is stopped, copies data.db with its
-# -wal/-shm files to backups/data-<timestamp>-<label>.db and keeps the newest
-# $KEEP_BACKUPS.
+# inconsistent. This makes sure the panel is stopped, copies the database file
+# (the one DATABASE_URL names — data.db by default) with its -wal/-shm files to
+# backups/data-<timestamp>-<label>.db and keeps the newest $KEEP_BACKUPS.
 #
 # Exit status:
 #   0  backed up; the path is printed on stdout. The panel is left STOPPED
@@ -50,6 +50,56 @@ lookup_failed() {
 ids="$(docker compose -f "$COMPOSE_FILE" ps --all -q panel 2>/dev/null)" \
     || lookup_failed "could not list the panel containers"
 cid="$(printf '%s\n' "$ids" | head -n1)"
+
+# Which file is the database: the one the panel opens, DATABASE_URL. Read it
+# from the panel container when there is one — that is what the version being
+# replaced runs with — else take what compose will hand the new one: the
+# environment, then .env, then the compose file's default. A file name other
+# than data.db used to be taken for "no data.db, nothing to back up", and the
+# upgrade went ahead without a backup.
+db_url=""
+if [ -n "$cid" ]; then
+    env_lines="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$cid" 2>/dev/null)" \
+        || lookup_failed "could not read the panel container's environment"
+    db_url="$(printf '%s\n' "$env_lines" | sed -n 's/^DATABASE_URL=//p' | tail -n1)"
+fi
+[ -n "$db_url" ] || db_url="${DATABASE_URL:-}"
+if [ -z "$db_url" ] && [ -f .env ]; then
+    # Read like deploy.sh's env_get: the last line wins, one pair of quotes goes.
+    db_url="$(sed -n 's/^DATABASE_URL=//p' .env | tail -n1)"
+    case "$db_url" in
+        \"*\") db_url="${db_url#\"}"; db_url="${db_url%\"}" ;;
+        \'*\') db_url="${db_url#\'}"; db_url="${db_url%\'}" ;;
+    esac
+fi
+db_url="${db_url:-sqlite:/app/data/data.db?mode=rwc}"
+case "$db_url" in
+    postgres://*|postgresql://*)
+        echo "the panel uses PostgreSQL; no SQLite database to back up" >&2
+        exit 3
+        ;;
+esac
+# Read the URL the way the panel (sqlx) does: drop the scheme, then the
+# ?parameters. A relative path is relative to the panel's working dir, /app.
+db_path="${db_url#sqlite://}"
+db_path="${db_path#sqlite:}"
+db_params=""
+case "$db_path" in *\?*) db_params="${db_path#*\?}"; db_path="${db_path%%\?*}" ;; esac
+if [ "$db_path" = ":memory:" ] || [[ "&$db_params&" == *"&mode=memory&"* ]]; then
+    echo "the panel's SQLite database is in memory; nothing to back up" >&2
+    exit 3
+fi
+case "$db_path" in /*) ;; *) db_path="/app/$db_path" ;; esac
+db_file=""
+case "$db_path" in /app/data/*) db_file="${db_path#/app/data/}" ;; esac
+# Refused rather than skipped: outside the data volume there is no host copy
+# to take, and a name this cannot read safely (.., %-escapes) is not guessed.
+case "$db_file" in
+    "" | */ | *..* | *%*)
+        lookup_failed "the SQLite database $db_path is not a file in the panel's data volume (/app/data); back it up yourself and re-run with RELAYPANEL_BACKUP_DONE=1"
+        ;;
+esac
+
 data_dir=""
 if [ -n "$cid" ]; then
     data_dir="$(docker inspect -f \
@@ -77,14 +127,14 @@ if [ -z "$data_dir" ]; then
     echo "no panel data volume; nothing to back up" >&2
     exit 3
 fi
-# Whether data.db exists can only be told from a readable directory: a named
-# volume's host directory is root-only, and `-f` just says "no" when run
+# Whether the database exists can only be told from a readable directory: a
+# named volume's host directory is root-only, and `-f` just says "no" when run
 # without the rights to look.
 if [ ! -d "$data_dir" ] || [ ! -r "$data_dir" ] || [ ! -x "$data_dir" ]; then
     lookup_failed "cannot read $data_dir (run as root — sudo ./deploy.sh — or back the database up yourself and re-run with RELAYPANEL_BACKUP_DONE=1)"
 fi
-if [ ! -f "$data_dir/data.db" ]; then
-    echo "no data.db in $data_dir; nothing to back up" >&2
+if [ ! -f "$data_dir/$db_file" ]; then
+    echo "no $db_file in $data_dir; nothing to back up" >&2
     exit 3
 fi
 
@@ -119,9 +169,9 @@ fi
 mkdir -p "$BACKUP_DIR" && chmod 700 "$BACKUP_DIR"
 stamp="$(date +%Y%m%d-%H%M%S)-$LABEL"
 ok=1
-for f in data.db data.db-wal data.db-shm; do
-    [ -f "$data_dir/$f" ] || continue
-    cp -p "$data_dir/$f" "$BACKUP_DIR/${f/data.db/data-$stamp.db}" || ok=0
+for suffix in "" -wal -shm; do
+    [ -f "$data_dir/$db_file$suffix" ] || continue
+    cp -p "$data_dir/$db_file$suffix" "$BACKUP_DIR/data-$stamp.db$suffix" || ok=0
 done
 if [ "$ok" != "1" ]; then
     echo "database backup failed" >&2
@@ -134,5 +184,5 @@ fi
 ls -1t "$BACKUP_DIR"/data-*.db 2>/dev/null | tail -n +$((KEEP_BACKUPS + 1)) \
     | while read -r old; do rm -f "$old" "$old-wal" "$old-shm"; done
 
-echo "backed up to $BACKUP_DIR/data-$stamp.db" >&2
+echo "backed up $db_file to $BACKUP_DIR/data-$stamp.db" >&2
 echo "$BACKUP_DIR/data-$stamp.db"

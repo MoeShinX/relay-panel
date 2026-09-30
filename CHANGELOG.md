@@ -28,6 +28,11 @@ independent `v*` / `node-v*` tracks since this release).
   - A panel that was already stopped is backed up too (and left stopped); it
     used to be treated as "no database" and skipped. After `docker compose
     down` the database is found in the leftover volume.
+  - The file backed up is the one `DATABASE_URL` names — read from the panel
+    container, else from the environment, `.env` or the default — not always
+    `data.db`; any other name used to be skipped as "nothing to back up". A
+    database outside the data volume (`/app/data`) stops the upgrade with a
+    message instead.
   - The newest five are kept. If the backup fails, nothing is changed and the
     old version stays in place; if the new version then fails to start, the
     old container is started again.
