@@ -25,12 +25,53 @@ use relay_shared::protocol::TrafficEntry;
 //   - only after COMMIT succeeds do we return Ok(vec![Ok]).
 #[async_trait]
 impl TrafficRepository for SqliteRepository {
-    async fn apply_traffic_batch(
+    async fn apply_traffic_batch_with_id(
         &self,
         group_id: i64,
+        batch_id: Option<&str>,
+        acked_batch_id: Option<&str>,
         entries: &[TrafficEntry],
     ) -> Result<Vec<TrafficEntryResult>, DbError> {
         let mut tx = self.pool.begin().await?;
+
+        // v1.2.12: a re-sent batch is acknowledged, not applied again. This
+        // comes FIRST, before any rule check: a batch that was applied and is
+        // re-sent after one of its rules was deleted must count as done —
+        // rejecting it would make the node send the other rules' bytes again
+        // under a new id, billing them twice. The row is part of this
+        // transaction, so it exists exactly when the batch was applied.
+        if let Some(batch_id) = batch_id {
+            let recorded = sqlx::query(
+                "INSERT OR IGNORE INTO traffic_batches (group_id, batch_id, created_at) \
+                 VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%S', 'now'))",
+            )
+            .bind(group_id)
+            .bind(batch_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            if recorded == 0 {
+                let _ = tx.rollback().await;
+                return Ok(vec![TrafficEntryResult::AlreadyApplied]);
+            }
+            // The node's previous batch, acknowledged: the node will not send
+            // it again. It is NOT forgotten here — a copy the node already
+            // gave up on (a timed-out request) can still reach the panel after
+            // this, and must still be recognised. Marked confirmed (only if
+            // this batch commits), it is swept a day later instead of after
+            // 30 days; see history_prune.
+            if let Some(acked) = acked_batch_id.filter(|a| *a != batch_id) {
+                sqlx::query(
+                    "UPDATE traffic_batches \
+                     SET confirmed_at = strftime('%Y-%m-%d %H:%M:%S', 'now') \
+                     WHERE group_id = ? AND batch_id = ? AND confirmed_at IS NULL",
+                )
+                .bind(group_id)
+                .bind(acked)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
 
         // ── v1.0.8: read this group's billing rate once for the whole batch
         // (every entry in a batch is for the SAME group_id — the node reports
@@ -294,6 +335,25 @@ impl TrafficRepository for SqliteRepository {
             .execute(&self.pool)
             .await?
             .rows_affected())
+    }
+
+    async fn prune_traffic_batches(
+        &self,
+        confirmed_before: &str,
+        recorded_before: &str,
+    ) -> Result<u64, DbError> {
+        // created_at <= confirmed_at, so the leading range (served by the
+        // created_at index) holds every row either condition removes.
+        Ok(sqlx::query(
+            "DELETE FROM traffic_batches WHERE created_at < ? \
+             AND (confirmed_at < ? OR created_at < ?)",
+        )
+        .bind(confirmed_before)
+        .bind(confirmed_before)
+        .bind(recorded_before)
+        .execute(&self.pool)
+        .await?
+        .rows_affected())
     }
 
     async fn record_node_metrics(&self, m: &NodeMetricSample) -> Result<(), DbError> {

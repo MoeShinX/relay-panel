@@ -390,6 +390,27 @@ CREATE TABLE IF NOT EXISTS announcements (
 CREATE INDEX IF NOT EXISTS idx_announcements_published ON announcements(published_at);
 CREATE INDEX IF NOT EXISTS idx_announcements_pinned ON announcements(pinned, published_at);
 
+-- v1.2.12: traffic batches already applied, so a node that re-sends a batch it
+-- never saw acknowledged (response lost or timed out after the panel had
+-- committed it) is not billed twice. The node sends the SAME batch_id and bytes
+-- until it gets an answer; the row is written in the same transaction as the
+-- traffic, so it exists exactly when that batch was applied. confirmed_at is
+-- set when the node's next batch says it saw the acknowledgement; the row is
+-- then kept a day more (a copy the node gave up on may still arrive late) and
+-- a row nothing confirmed is kept 30 days — both pruned by history_prune. No
+-- FK: a deleted group's rows just age out.
+--
+-- NOTE: the index is created here AND in Migration 45 next to the CREATE — see
+-- the comment on traffic_history.group_id for why never only here.
+CREATE TABLE IF NOT EXISTS traffic_batches (
+    group_id INTEGER NOT NULL,
+    batch_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    confirmed_at TEXT,
+    PRIMARY KEY (group_id, batch_id)
+);
+CREATE INDEX IF NOT EXISTS idx_traffic_batches_created ON traffic_batches(created_at);
+
 
 
 -- v1.0.9: plan ↔ device_group grant map. Buying a plan (with grant_all_groups=0)
@@ -1793,6 +1814,27 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
         "Migration 44: announcements table present ({} carried over from site config)",
         carried
     );
+
+    // ── Migration 45: v1.2.12 applied traffic batches (re-send dedup) ──
+    // See SCHEMA_SQL. A new table: nothing to backfill — batches sent before
+    // this version carry no id and are applied as before.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS traffic_batches (
+            group_id INTEGER NOT NULL,
+            batch_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            confirmed_at TEXT,
+            PRIMARY KEY (group_id, batch_id)
+        )",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_traffic_batches_created ON traffic_batches(created_at)",
+    )
+    .execute(pool)
+    .await?;
+    tracing::info!("Migration 45: traffic_batches table present");
 
     Ok(())
 }

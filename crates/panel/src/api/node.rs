@@ -163,8 +163,33 @@ pub async fn report_traffic(
     // HTTP-status note (preserved): a rejection returns HTTP 200 with a business
     // `code` (403/400/500) INSIDE the JSON body — NOT a real HTTP error. Nodes
     // read the JSON `code` and ignore the HTTP status on these endpoints.
-    match crate::service::traffic::apply_traffic_report(state.db.as_ref(), group.id, &req.reports)
-        .await
+    //
+    // v1.2.12: a 400/401/403 means the batch was NOT applied — refused before
+    // anything was written — and a node re-sends its bytes under a new batch id.
+    // A 500 promises nothing: it can come from the COMMIT itself (a database
+    // connection lost while committing reports an error for a transaction that
+    // went through), so a node re-sends the same id, which is safe either way.
+    // Do not answer 400/401/403 for anything that may have written.
+    for id in [req.batch_id.as_deref(), req.acked_batch_id.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        if !valid_traffic_batch_id(id) {
+            return Json(ApiResponse {
+                code: 400,
+                message: "invalid batch id".into(),
+                data: None,
+            });
+        }
+    }
+    match crate::service::traffic::apply_traffic_report(
+        state.db.as_ref(),
+        group.id,
+        req.batch_id.as_deref(),
+        req.acked_batch_id.as_deref(),
+        &req.reports,
+    )
+    .await
     {
         Ok(()) => Json(ApiResponse::success(())),
         Err(crate::service::traffic::TrafficReportError::Unavailable) => {
@@ -444,6 +469,8 @@ mod tests {
     fn report(_token: &str, entries: &[TrafficEntry]) -> TrafficReport {
         TrafficReport {
             reports: entries.to_vec(),
+            batch_id: None,
+            acked_batch_id: None,
         }
     }
 
@@ -809,6 +836,112 @@ mod tests {
             v.get("install_method").and_then(|x| x.as_str()),
             Some("systemd"),
             "install_method must be persisted so the upgrade UI can offer a self-upgrade"
+        );
+    }
+
+    /// v1.2.12: a node re-sends a batch whose acknowledgement it lost. The
+    /// panel acknowledges the copy (so the node can move on) but bills it once.
+    #[tokio::test]
+    async fn a_re_sent_traffic_batch_is_acknowledged_and_billed_once() {
+        let (state, pool) = seeded_state().await;
+        let send = || {
+            let mut r = report(
+                "tok-A",
+                &[TrafficEntry {
+                    rule_id: 100,
+                    upload: 1000,
+                    download: 2000,
+                }],
+            );
+            r.batch_id = Some("0123456789abcdef0123456789abcdef".into());
+            report_traffic(State(state.clone()), auth_headers("tok-A"), Json(r))
+        };
+        let Json(first) = send().await;
+        let Json(again) = send().await;
+        assert_eq!(first.code, 0, "{}", first.message);
+        assert_eq!(
+            again.code, 0,
+            "the copy must be acknowledged: {}",
+            again.message
+        );
+        assert_eq!(rule_traffic(&pool, 100).await, 3000, "billed once");
+        assert_eq!(user_traffic(&pool, 2).await, 3000);
+    }
+
+    /// A malformed batch id — or acknowledged batch id — is refused before
+    /// anything is applied.
+    #[tokio::test]
+    async fn an_invalid_traffic_batch_id_is_refused() {
+        let (state, pool) = seeded_state().await;
+        for acked in [false, true] {
+            for bad in ["", "has space", "x".repeat(65).as_str(), "semi;colon"] {
+                let mut r = report(
+                    "tok-A",
+                    &[TrafficEntry {
+                        rule_id: 100,
+                        upload: 1,
+                        download: 1,
+                    }],
+                );
+                if acked {
+                    r.batch_id = Some("0123456789abcdef0123456789abcdef".into());
+                    r.acked_batch_id = Some(bad.to_string());
+                } else {
+                    r.batch_id = Some(bad.to_string());
+                }
+                let Json(resp) =
+                    report_traffic(State(state.clone()), auth_headers("tok-A"), Json(r)).await;
+                assert_eq!(resp.code, 400, "acked={acked} {bad:?}: {}", resp.message);
+            }
+        }
+        assert_eq!(rule_traffic(&pool, 100).await, 0);
+    }
+
+    /// v1.2.12 (review): the node sends batch A, gives up waiting, re-sends
+    /// it — the re-send lands — and its next batch confirms A. The first copy
+    /// of A then reaches the panel after all. It must be recognised: the
+    /// confirmation marks A, it does not forget it (forgetting it billed the
+    /// late copy again).
+    #[tokio::test]
+    async fn a_late_copy_of_a_confirmed_batch_is_billed_once() {
+        let (state, pool) = seeded_state().await;
+        let send = |id: &str, acked: Option<&str>| {
+            let mut r = report(
+                "tok-A",
+                &[TrafficEntry {
+                    rule_id: 100,
+                    upload: 10,
+                    download: 0,
+                }],
+            );
+            r.batch_id = Some(id.to_string());
+            r.acked_batch_id = acked.map(str::to_string);
+            report_traffic(State(state.clone()), auth_headers("tok-A"), Json(r))
+        };
+        let recorded = || async {
+            sqlx::query_as::<_, (String, bool)>(
+                "SELECT batch_id, confirmed_at IS NOT NULL FROM traffic_batches \
+                 ORDER BY batch_id",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        };
+
+        let Json(a) = send("batch-a", None).await; // the re-send of A lands
+        assert_eq!(a.code, 0, "{}", a.message);
+        let Json(b) = send("batch-b", Some("batch-a")).await; // B confirms A
+        assert_eq!(b.code, 0, "{}", b.message);
+        let Json(late) = send("batch-a", None).await; // A's first copy, late
+        assert_eq!(late.code, 0, "{}", late.message);
+
+        assert_eq!(rule_traffic(&pool, 100).await, 20, "A and B once each");
+        assert_eq!(
+            recorded().await,
+            [
+                ("batch-a".to_string(), true),
+                ("batch-b".to_string(), false)
+            ]
         );
     }
 }

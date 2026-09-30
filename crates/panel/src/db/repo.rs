@@ -651,6 +651,10 @@ pub enum TrafficEntryResult {
     /// cumulative, per-user cumulative, or existing value + delta). The whole
     /// batch is rolled back; the caller returns a uniform 400.
     Overflow,
+    /// v1.2.12: this batch id was already applied — the node re-sent a batch
+    /// whose acknowledgement it never received. Nothing is written; the caller
+    /// acknowledges it again so the node can move on.
+    AlreadyApplied,
 }
 
 #[async_trait]
@@ -677,11 +681,47 @@ pub trait TrafficRepository: Send + Sync {
     /// Returns `Ok(vec![result])` even on the rejected paths (the single
     /// result element tells the caller which rejection happened); `Err` only
     /// for a genuine DB failure.
+    ///
+    /// v1.2.12: with a `batch_id`, the batch is applied at most once per
+    /// group. The id is recorded in the same transaction as the traffic, and
+    /// checked BEFORE the rules are: a re-sent batch that was already applied
+    /// returns `AlreadyApplied` and writes nothing, even if one of its rules
+    /// has since been deleted (rejecting it would make the node re-send the
+    /// other rules' bytes under a new id). A rejected batch leaves no record,
+    /// so the node can send its bytes again.
+    ///
+    /// `acked_batch_id` is the node's previous batch, which it saw
+    /// acknowledged and will never send again: its record is marked confirmed
+    /// in the same transaction. Not deleted — a copy the node already gave up
+    /// on may still arrive — but swept sooner (see `prune_traffic_batches`).
+    /// Ignored without a `batch_id`, and when it names this batch itself.
+    async fn apply_traffic_batch_with_id(
+        &self,
+        group_id: i64,
+        batch_id: Option<&str>,
+        acked_batch_id: Option<&str>,
+        entries: &[TrafficEntry],
+    ) -> Result<Vec<TrafficEntryResult>, DbError>;
+
+    /// A batch without an id (nodes before v1.2.6 send none): applied as is,
+    /// with no re-send protection.
     async fn apply_traffic_batch(
         &self,
         group_id: i64,
         entries: &[TrafficEntry],
-    ) -> Result<Vec<TrafficEntryResult>, DbError>;
+    ) -> Result<Vec<TrafficEntryResult>, DbError> {
+        self.apply_traffic_batch_with_id(group_id, None, None, entries)
+            .await
+    }
+
+    /// v1.2.12: forget applied batch ids — confirmed before `confirmed_before`,
+    /// or recorded before `recorded_before` whether confirmed or not (both
+    /// `YYYY-MM-DD HH:MM:SS` UTC). Returns rows deleted.
+    async fn prune_traffic_batches(
+        &self,
+        confirmed_before: &str,
+        recorded_before: &str,
+    ) -> Result<u64, DbError>;
 
     // ── v1.2.0: hourly traffic history ──
 

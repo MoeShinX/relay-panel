@@ -53,9 +53,16 @@ pub enum TrafficReportError {
 ///
 /// Heavy lifting (ownership check, per-rule/per-user cumulative overflow,
 /// duplicate rule_id aggregation) lives in `Repository::apply_traffic_batch`.
+///
+/// v1.2.12: with a `batch_id`, a batch already applied is acknowledged again
+/// (`Ok`) without being billed a second time, and `acked_batch_id` (the node's
+/// previous, acknowledged batch) is forgotten — see
+/// `Repository::apply_traffic_batch_with_id`.
 pub async fn apply_traffic_report(
     db: &dyn Repository,
     group_id: i64,
+    batch_id: Option<&str>,
+    acked_batch_id: Option<&str>,
     reports: &[TrafficEntry],
 ) -> Result<(), TrafficReportError> {
     // Pre-validate obvious overflow before starting a transaction. The message
@@ -74,9 +81,21 @@ pub async fn apply_traffic_report(
     // apply_traffic_batch returns Ok(vec![result]) even on rejection; the
     // element(s) tell us which uniform response to send.
     let results = db
-        .apply_traffic_batch(group_id, reports)
+        .apply_traffic_batch_with_id(group_id, batch_id, acked_batch_id, reports)
         .await
         .map_err(TrafficReportError::Database)?;
+
+    if results
+        .iter()
+        .any(|r| matches!(r, TrafficEntryResult::AlreadyApplied))
+    {
+        tracing::info!(
+            "report_traffic: group {} re-sent batch {} that was already applied; acknowledged, not billed again",
+            group_id,
+            batch_id.unwrap_or("?")
+        );
+        return Ok(());
+    }
 
     // Any non-Ok result is a whole-batch rejection (rolled back inside).
     if results
@@ -325,6 +344,8 @@ mod tests {
         let err = apply_traffic_report(
             &repo(&pool),
             10,
+            None,
+            None,
             &[TrafficEntry {
                 rule_id: 100,
                 upload: u64::MAX,
@@ -343,6 +364,8 @@ mod tests {
         let err = apply_traffic_report(
             &repo(&pool),
             10,
+            None,
+            None,
             &[TrafficEntry {
                 rule_id: 100,
                 upload: i64::MAX as u64,

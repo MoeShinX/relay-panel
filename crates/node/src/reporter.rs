@@ -56,14 +56,34 @@ pub struct TrafficCounter {
     /// never overlapped itself, so this never happened; the shutdown flush is a
     /// second caller that can run at the same moment, and this lock is what
     /// makes that safe. A second report waits and then sees only newer bytes.
-    report_lock: tokio::sync::Mutex<()>,
+    ///
+    /// v1.2.12: it also holds the batch whose outcome is not known yet — sent,
+    /// but no definite answer (timeout, dropped connection, proxy error, a
+    /// panel error that may have come after its commit). The next report
+    /// re-sends exactly that batch, same id and bytes, instead of taking a new
+    /// snapshot: the panel may already have applied it, and only the same id
+    /// lets the panel tell (it acknowledges a known id without billing it
+    /// again). See [`ReportState`].
+    report_lock: tokio::sync::Mutex<ReportState>,
+}
+
+/// v1.2.12: what one traffic report hands to the next, behind
+/// `TrafficCounter::report_lock`.
+#[derive(Default)]
+struct ReportState {
+    /// The batch sent without a definite answer yet; re-sent as is.
+    pending: Option<PendingBatch>,
+    /// The id of the last batch the panel acknowledged. The next batch carries
+    /// it, telling the panel it will not be sent again, so the panel keeps its
+    /// record only a short while more.
+    last_acked: Option<String>,
 }
 
 impl TrafficCounter {
     pub fn new() -> Self {
         Self {
             data: Arc::new(RwLock::new(HashMap::new())),
-            report_lock: tokio::sync::Mutex::new(()),
+            report_lock: tokio::sync::Mutex::new(ReportState::default()),
         }
     }
 
@@ -131,17 +151,20 @@ impl TrafficCounter {
     /// not clear), so no traffic is ever lost.
     pub async fn snapshot(&self) -> TrafficSnapshot<'_> {
         let map = self.data.read().await;
-        let entries: Vec<TrafficEntry> = map
-            .iter()
-            .map(|(rule_id, c)| TrafficEntry {
+        let mut entries = Vec::with_capacity(map.len());
+        let mut sources = Vec::with_capacity(map.len());
+        for (rule_id, c) in map.iter() {
+            entries.push(TrafficEntry {
                 rule_id: *rule_id,
                 upload: c.0.load(Ordering::Relaxed),
                 download: c.1.load(Ordering::Relaxed),
-            })
-            .collect();
+            });
+            sources.push(c.clone());
+        }
         TrafficSnapshot {
             counter: self,
             entries,
+            sources,
         }
     }
 
@@ -176,52 +199,141 @@ impl TrafficCounter {
     }
 }
 
+/// Subtract a snapshot the panel has persisted (`entries`, read from
+/// `sources` in the same order) from the counters it was read from. Bytes
+/// counted after the snapshot was taken are untouched.
+///
+/// Periodic, not the hot path. It runs on the write-locked map so the
+/// fetch_sub and the zero-entry cleanup can't race an add(), and it never
+/// awaits: a report cancelled anywhere has subtracted all of a snapshot or
+/// none of it.
+///
+/// v1.2.12: subtract from the counters the snapshot was READ from, not from
+/// whatever the map holds under the same rule id by now. A rule whose
+/// listener stops has its counter pruned; started again, it gets a NEW
+/// counter that never held the old bytes. With a batch left in doubt across
+/// that, subtracting from the new counter by rule id wrapped it to about
+/// 2^64 — a value the panel refuses, and with it every later batch from this
+/// node, so none of its traffic was billed again until it restarted. The old
+/// counter, if pruned meanwhile, takes the subtraction harmlessly.
+fn commit_read(
+    map: &mut HashMap<i64, RuleCounters>,
+    entries: &[TrafficEntry],
+    sources: Vec<RuleCounters>,
+) {
+    for (e, src) in entries.iter().zip(sources) {
+        let prev_up = src.0.fetch_sub(e.upload, Ordering::Relaxed);
+        let prev_down = src.1.fetch_sub(e.download, Ordering::Relaxed);
+        // new == 0 iff prev == snapshotted (no adds since the snapshot); bytes
+        // counted since show up as a larger prev and keep the entry.
+        let drained = prev_up == e.upload && prev_down == e.download;
+        // Only THIS counter's entry may be cleaned up: a newer counter under
+        // the same id holds bytes for the next batch.
+        let still_mapped = map.get(&e.rule_id).is_some_and(|c| Arc::ptr_eq(c, &src));
+        drop(src);
+        // v1.2.3: draining to zero is NOT enough to remove the entry. A live
+        // connection holds a RuleCounterHandle — an Arc to this very counter —
+        // and removing the map's copy would orphan it: every later byte would
+        // land in an Arc nothing reads, and that connection would stop being
+        // billed for the rest of its life. That is this release's own
+        // long-connection hole, re-created at a poll boundary, and it would hit
+        // exactly the long-lived connections the change exists to fix.
+        //
+        // strong_count == 1 (with this snapshot's own reference dropped above)
+        // means the map is the only owner, so no connection can still be
+        // writing. The check is conservative in the safe direction: a handle
+        // dropped concurrently can leave the count momentarily high, which only
+        // keeps a zeroed entry around until the next cycle.
+        if drained
+            && still_mapped
+            && map
+                .get(&e.rule_id)
+                .is_some_and(|c| Arc::strong_count(c) == 1)
+        {
+            map.remove(&e.rule_id);
+        }
+    }
+}
+
 /// Snapshot of [`TrafficCounter`] at one instant. Drop without calling
 /// [`commit`](Self::commit) to retry the same bytes; call `commit` once the
 /// panel has persisted the report.
 pub struct TrafficSnapshot<'a> {
     counter: &'a TrafficCounter,
     pub entries: Vec<TrafficEntry>,
+    /// The counter each entry was read from, in the same order.
+    sources: Vec<RuleCounters>,
 }
 
 impl TrafficSnapshot<'_> {
-    /// Subtract the snapshotted bytes from the live counters. Bytes counted
-    /// after the snapshot was taken are untouched. Safe to call once.
+    /// Subtract the snapshotted bytes from the counters they were read from.
+    /// Bytes counted after the snapshot was taken are untouched.
     pub async fn commit(self) {
-        // Periodic (not the hot path): take the write lock so fetch_sub AND the
-        // zero-entry cleanup happen without racing an add(). Only the exact
-        // snapshotted bytes are subtracted; bytes counted after the snapshot are
-        // preserved (they show up as a larger prev value → entry not removed).
-        let mut map = self.counter.data.write().await;
-        for e in &self.entries {
-            let drained = if let Some(c) = map.get(&e.rule_id) {
-                let prev_up = c.0.fetch_sub(e.upload, Ordering::Relaxed);
-                let prev_down = c.1.fetch_sub(e.download, Ordering::Relaxed);
-                // new == 0 iff prev == snapshotted (no adds since the snapshot).
-                //
-                // v1.2.3: draining to zero is NOT enough to remove the entry.
-                // A live connection holds a RuleCounterHandle — an Arc to this
-                // very counter — and removing the map's copy would orphan it:
-                // every later byte would land in an Arc nothing reads, and that
-                // connection would stop being billed for the rest of its life.
-                // That is this release's own long-connection hole, re-created
-                // at a poll boundary, and it would hit exactly the long-lived
-                // connections the change exists to fix.
-                //
-                // strong_count == 1 means the map is the only owner, so no
-                // connection can still be writing. The check is conservative in
-                // the safe direction: a handle dropped concurrently can leave
-                // the count momentarily high, which only keeps a zeroed entry
-                // around until the next cycle.
-                prev_up == e.upload && prev_down == e.download && Arc::strong_count(c) == 1
-            } else {
-                false
-            };
-            if drained {
-                map.remove(&e.rule_id);
-            }
-        }
+        let TrafficSnapshot {
+            counter,
+            entries,
+            sources,
+        } = self;
+        let mut map = counter.data.write().await;
+        commit_read(&mut map, &entries, sources);
     }
+}
+
+/// v1.2.12: a traffic batch sent to the panel whose outcome is not known yet.
+/// Kept (in `TrafficCounter::report_lock`) and re-sent unchanged until the
+/// panel answers definitely.
+struct PendingBatch {
+    /// Sent with the batch; the panel applies each id at most once.
+    id: String,
+    /// Sent with the batch: the last acknowledged batch, which the panel
+    /// marks confirmed (see `ReportState::last_acked`).
+    acked: Option<String>,
+    /// The whole snapshot, zero entries included — subtracted on success.
+    entries: Vec<TrafficEntry>,
+    /// The counter each entry was read from — what a success subtracts from.
+    sources: Vec<RuleCounters>,
+    /// What is sent: the entries that have bytes in them.
+    reports: Vec<TrafficEntry>,
+}
+
+/// What a traffic report's answer says about the batch.
+enum BatchOutcome {
+    /// The panel persisted it (code 0 — including "already applied").
+    Applied,
+    /// The panel refused it before writing anything (400/401/403). Its bytes
+    /// can go out again in a new batch.
+    NotApplied,
+    /// No definite answer: the panel may or may not have applied it — no
+    /// answer at all, or an error that can come after the commit (a 500).
+    Unknown,
+}
+
+/// v1.2.12: how long one traffic report waits for the panel. It runs in the
+/// same loop as the config poll, and without a limit a request left hanging —
+/// a half-open connection, a panel stuck on a database lock — stalled config
+/// updates and every later report with it. Giving up is safe now that the
+/// batch is re-sent under the same id: if the panel did apply it, it says so.
+const TRAFFIC_REPORT_TIMEOUT: Duration = if cfg!(test) {
+    Duration::from_millis(500)
+} else {
+    Duration::from_secs(30)
+};
+
+/// A fresh batch id: 32 random hex characters (or, where /dev/urandom is
+/// missing, pid + time + a counter — unique within this process).
+fn new_batch_id() -> String {
+    static FALLBACK_SEQ: AtomicU64 = AtomicU64::new(0);
+    crate::poller::random_hex_16().unwrap_or_else(|| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        format!(
+            "{:x}-{:x}-{:x}",
+            std::process::id(),
+            nanos,
+            FALLBACK_SEQ.fetch_add(1, Ordering::Relaxed)
+        )
+    })
 }
 
 /// How long a UDP session is considered active after its last datagram.
@@ -395,12 +507,53 @@ impl Drop for TcpConnectionGuard {
 }
 
 pub async fn report_traffic(config: &NodeConfig, counter: &TrafficCounter) {
-    // One report at a time — see `TrafficCounter::report_lock`.
-    let _serialized = counter.report_lock.lock().await;
+    // One report at a time — see `TrafficCounter::report_lock`, which also
+    // holds a batch still waiting for a definite answer.
+    let mut state = counter.report_lock.lock().await;
+    if state.pending.is_none() {
+        let acked = state.last_acked.clone();
+        let Some(batch) = next_batch(counter, acked).await else {
+            return;
+        };
+        state.pending = Some(batch);
+    }
+    // The batch stays in `pending` while it is being sent, so a report cut off
+    // mid-flight (the shutdown flush's timeout) leaves it for the next one to
+    // re-send under the same id rather than losing track of it.
+    let Some(batch) = state.pending.as_ref() else {
+        return;
+    };
+    match send_batch(config, batch).await {
+        BatchOutcome::Applied => {
+            // The only await left: cut off here, nothing is subtracted and the
+            // batch stays pending — re-sent, it is acknowledged as a copy.
+            let mut map = counter.data.write().await;
+            if let Some(PendingBatch {
+                id,
+                entries,
+                sources,
+                ..
+            }) = state.pending.take()
+            {
+                commit_read(&mut map, &entries, sources);
+                state.last_acked = Some(id);
+            }
+        }
+        // Its bytes are still in the counters; the next report takes a new
+        // snapshot (without rules pruned since) under a new id.
+        BatchOutcome::NotApplied => state.pending = None,
+        BatchOutcome::Unknown => {}
+    }
+}
+
+/// Snapshot the counters into a new batch, or `None` when there is nothing to
+/// send (the zero entries are committed right away, as before). `acked` is the
+/// last acknowledged batch id, sent along with the new batch.
+async fn next_batch(counter: &TrafficCounter, acked: Option<String>) -> Option<PendingBatch> {
     // Snapshot (non-destructive) first: the snapshotted bytes are only deducted
     // from the counters after the panel ACKs the upload (see TrafficSnapshot).
-    // A failed/lost upload drops the guard without commit, so those bytes stay
-    // and are retried on the next cycle instead of being permanently dropped.
+    // A failed/lost upload keeps them, so they are sent again instead of being
+    // permanently dropped.
     let snap = counter.snapshot().await;
     // debug, not info: this runs every poll cycle (default 10s) and would
     // flood the log at info level on a healthy node. Only the per-request
@@ -426,15 +579,33 @@ pub async fn report_traffic(config: &NodeConfig, counter: &TrafficCounter) {
         // else would ever clear it — a batch of only zeroes is exactly the case
         // that reaches this branch.
         snap.commit().await;
-        return;
+        return None;
     }
+    let TrafficSnapshot {
+        entries, sources, ..
+    } = snap;
+    Some(PendingBatch {
+        id: new_batch_id(),
+        acked,
+        entries,
+        sources,
+        reports,
+    })
+}
 
-    let report = TrafficReport { reports };
+/// POST one batch and classify the answer.
+async fn send_batch(config: &NodeConfig, batch: &PendingBatch) -> BatchOutcome {
+    let report = TrafficReport {
+        reports: batch.reports.clone(),
+        batch_id: Some(batch.id.clone()),
+        acked_batch_id: batch.acked.clone(),
+    };
 
     let url = format!("{}/api/v1/node/report_traffic", config.panel_url);
     let client = reqwest::Client::new();
     match client
         .post(&url)
+        .timeout(TRAFFIC_REPORT_TIMEOUT)
         .header("Authorization", format!("Bearer {}", config.token))
         .json(&report)
         .send()
@@ -451,34 +622,57 @@ pub async fn report_traffic(config: &NodeConfig, counter: &TrafficCounter) {
             // body and require code == 0.
             let status = r.status();
             if !status.is_success() {
-                tracing::warn!("report_traffic HTTP {} (not 2xx)", status);
-                return;
+                // Not the panel's own answer (it always replies 200): a proxy
+                // or gateway error, which says nothing about whether the panel
+                // applied the batch behind it.
+                tracing::warn!("report_traffic HTTP {} (not 2xx); will re-send", status);
+                return BatchOutcome::Unknown;
             }
             match r.json::<ApiResponse<()>>().await {
                 Ok(resp) if resp.code == 0 => {
-                    snap.commit().await;
                     tracing::info!("report_traffic HTTP {} code 0", status);
+                    BatchOutcome::Applied
                 }
-                Ok(resp) => {
-                    // Business-level rejection. Keep the bytes for retry next
-                    // cycle (the panel did NOT persist them).
+                // Refused before anything was written — a malformed or
+                // out-of-range batch (400), a bad token (401), a rule this node
+                // may not report (403). Its bytes stay for the next report.
+                Ok(resp) if matches!(resp.code, 400 | 401 | 403) => {
                     tracing::warn!(
                         "report_traffic rejected: HTTP {} code {} msg={}",
                         status,
                         resp.code,
                         resp.message
                     );
+                    BatchOutcome::NotApplied
+                }
+                // v1.2.12: anything else, a 500 above all, may have come AFTER
+                // the commit — a database connection lost while committing
+                // reports an error for a transaction that went through. A new
+                // id would then bill the same bytes again; the same id is safe
+                // either way (acknowledged as a copy, or applied now).
+                Ok(resp) => {
+                    tracing::warn!(
+                        "report_traffic failed: HTTP {} code {} msg={}; will re-send",
+                        status,
+                        resp.code,
+                        resp.message
+                    );
+                    BatchOutcome::Unknown
                 }
                 Err(e) => {
                     tracing::warn!(
-                        "report_traffic: could not parse response body (HTTP {}): {}",
+                        "report_traffic: could not parse response body (HTTP {}): {}; will re-send",
                         status,
                         e
                     );
+                    BatchOutcome::Unknown
                 }
             }
         }
-        Err(e) => tracing::warn!("report_traffic error: {}", e),
+        Err(e) => {
+            tracing::warn!("report_traffic error: {}; will re-send", e);
+            BatchOutcome::Unknown
+        }
     }
 }
 
@@ -1769,5 +1963,359 @@ mod tests {
                 .map(|e| (e.upload, e.download))
                 .collect::<Vec<_>>()
         );
+    }
+
+    // ── v1.2.12: re-sending a batch whose outcome is unknown ──
+
+    /// How the scripted panel answers one request.
+    #[derive(Clone, Copy)]
+    enum Answer {
+        /// Apply (unless the id was seen) and reply code 0.
+        Ack,
+        /// Apply, then drop the connection without replying — the node cannot
+        /// tell that the batch landed.
+        ApplyThenDrop,
+        /// Apply, then reply with this non-zero code — a commit that went
+        /// through although the panel saw an error.
+        ApplyThenFail(i32),
+        /// Reply with this non-zero code; nothing is applied.
+        Reject(i32),
+        /// Read the request and never answer.
+        Hang,
+    }
+
+    /// One request as the scripted panel saw it.
+    #[derive(Clone, Debug)]
+    struct Seen {
+        batch_id: Option<String>,
+        acked: Option<String>,
+        bytes: u64,
+    }
+
+    /// A stand-in panel that applies each batch id at most once, like the real
+    /// one, and answers the n-th request per `script` (Ack once it runs out).
+    /// Returns its URL, every request seen, and the bytes billed.
+    async fn scripted_panel(
+        script: Vec<Answer>,
+    ) -> (String, Arc<std::sync::Mutex<Vec<Seen>>>, Arc<AtomicU64>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<Seen>::new()));
+        let billed = Arc::new(AtomicU64::new(0));
+        let applied = Arc::new(std::sync::Mutex::new(
+            std::collections::HashSet::<String>::new(),
+        ));
+        let (seen_srv, billed_srv) = (seen.clone(), billed.clone());
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                let (body_at, body_len) = loop {
+                    let n = sock.read(&mut chunk).await.unwrap_or(0);
+                    if n == 0 {
+                        break (0, 0);
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&buf[..end]).to_ascii_lowercase();
+                        let len = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length:"))
+                            .and_then(|v| v.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        break (end + 4, len);
+                    }
+                };
+                if body_at == 0 {
+                    continue;
+                }
+                while buf.len() < body_at + body_len {
+                    let n = sock.read(&mut chunk).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                }
+                let report: TrafficReport =
+                    serde_json::from_slice(&buf[body_at..body_at + body_len]).unwrap();
+                let bytes: u64 = report.reports.iter().map(|e| e.upload + e.download).sum();
+                let answer = {
+                    let mut seen = seen_srv.lock().unwrap();
+                    let n = seen.len();
+                    seen.push(Seen {
+                        batch_id: report.batch_id.clone(),
+                        acked: report.acked_batch_id.clone(),
+                        bytes,
+                    });
+                    script.get(n).copied().unwrap_or(Answer::Ack)
+                };
+                let apply = || {
+                    let fresh = match &report.batch_id {
+                        Some(id) => applied.lock().unwrap().insert(id.clone()),
+                        None => true,
+                    };
+                    if fresh {
+                        billed_srv.fetch_add(bytes, Ordering::SeqCst);
+                    }
+                };
+                let reply = |code: i32| {
+                    let body = format!(r#"{{"code":{code},"message":"m","data":null}}"#);
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                };
+                match answer {
+                    Answer::Ack => {
+                        apply();
+                        let _ = sock.write_all(reply(0).as_bytes()).await;
+                    }
+                    Answer::ApplyThenDrop => {
+                        apply();
+                        drop(sock);
+                    }
+                    Answer::ApplyThenFail(code) => {
+                        apply();
+                        let _ = sock.write_all(reply(code).as_bytes()).await;
+                    }
+                    Answer::Reject(code) => {
+                        let _ = sock.write_all(reply(code).as_bytes()).await;
+                    }
+                    Answer::Hang => {
+                        tokio::spawn(async move {
+                            tokio::time::sleep(Duration::from_secs(3600)).await;
+                            drop(sock);
+                        });
+                    }
+                }
+            }
+        });
+        (url, seen, billed)
+    }
+
+    async fn left_in(counter: &TrafficCounter) -> u64 {
+        counter
+            .snapshot()
+            .await
+            .entries
+            .iter()
+            .map(|e| e.upload + e.download)
+            .sum()
+    }
+
+    /// The panel applied a batch but the answer never arrived. The node sends
+    /// the SAME batch again — same id, same bytes, not the bytes counted since
+    /// — and the panel, recognising the id, bills it once. The newer bytes go
+    /// out afterwards in a batch of their own.
+    #[tokio::test]
+    async fn a_batch_whose_answer_was_lost_is_resent_unchanged_and_billed_once() {
+        let (url, seen, billed) = scripted_panel(vec![Answer::ApplyThenDrop]).await;
+        let config = config_for(&url);
+        let counter = TrafficCounter::new();
+        counter.add(7, 1_000, 500).await;
+
+        report_traffic(&config, &counter).await; // applied, answer lost
+        assert_eq!(
+            left_in(&counter).await,
+            1_500,
+            "nothing is subtracted without an answer"
+        );
+        counter.add(7, 100, 0).await; // counted while the batch is in doubt
+
+        report_traffic(&config, &counter).await; // re-send: acknowledged as a copy
+        report_traffic(&config, &counter).await; // then the newer bytes
+
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 3, "{seen:?}");
+        assert!(seen[0].batch_id.is_some());
+        assert_eq!(
+            seen[1].batch_id, seen[0].batch_id,
+            "the re-send keeps the id"
+        );
+        assert_eq!(
+            seen[1].bytes, 1_500,
+            "and the bytes, without the newer ones"
+        );
+        assert_ne!(seen[2].batch_id, seen[0].batch_id);
+        assert_eq!(seen[2].bytes, 100);
+        assert_eq!(
+            billed.load(Ordering::SeqCst),
+            1_600,
+            "every byte billed once"
+        );
+        assert_eq!(left_in(&counter).await, 0);
+    }
+
+    /// A definite rejection means the panel did not apply the batch: its bytes
+    /// go out again in a fresh batch, under a new id.
+    #[tokio::test]
+    async fn a_rejected_batch_is_replaced_by_a_fresh_one() {
+        let (url, seen, billed) = scripted_panel(vec![Answer::Reject(403)]).await;
+        let config = config_for(&url);
+        let counter = TrafficCounter::new();
+        counter.add(7, 1_000, 0).await;
+
+        report_traffic(&config, &counter).await; // rejected, nothing applied
+        report_traffic(&config, &counter).await; // fresh batch
+
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        assert_ne!(
+            seen[1].batch_id, seen[0].batch_id,
+            "a new batch gets a new id"
+        );
+        assert_eq!(seen[1].bytes, 1_000);
+        assert_eq!(billed.load(Ordering::SeqCst), 1_000);
+        assert_eq!(left_in(&counter).await, 0);
+    }
+
+    /// A report cut off mid-flight (the shutdown flush has a timeout) keeps
+    /// its batch: the next report re-sends it under the same id.
+    #[tokio::test]
+    async fn a_cancelled_report_resends_the_same_batch() {
+        let (url, seen, billed) = scripted_panel(vec![Answer::Hang]).await;
+        let config = config_for(&url);
+        let counter = TrafficCounter::new();
+        counter.add(7, 1_000, 0).await;
+
+        let cut_off = tokio::time::timeout(
+            Duration::from_millis(300),
+            report_traffic(&config, &counter),
+        )
+        .await;
+        assert!(cut_off.is_err(), "the first report must be cut off");
+        report_traffic(&config, &counter).await;
+
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        assert_eq!(seen[1].batch_id, seen[0].batch_id);
+        assert_eq!(billed.load(Ordering::SeqCst), 1_000);
+        assert_eq!(left_in(&counter).await, 0);
+    }
+
+    /// A panel that never answers must not hold the report — and with it the
+    /// poll loop — forever. The report gives up on its own, and the next one
+    /// re-sends the same batch.
+    #[tokio::test]
+    async fn an_unanswered_report_gives_up_and_resends_the_same_batch() {
+        let (url, seen, billed) = scripted_panel(vec![Answer::Hang]).await;
+        let config = config_for(&url);
+        let counter = TrafficCounter::new();
+        counter.add(7, 1_000, 0).await;
+
+        tokio::time::timeout(Duration::from_secs(10), report_traffic(&config, &counter))
+            .await
+            .expect("the report must give up by itself");
+        report_traffic(&config, &counter).await;
+
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        assert_eq!(seen[1].batch_id, seen[0].batch_id);
+        assert_eq!(billed.load(Ordering::SeqCst), 1_000);
+        assert_eq!(left_in(&counter).await, 0);
+    }
+
+    /// A 500 can come after the commit went through (the database connection
+    /// lost while committing). The node must not treat it as "not applied":
+    /// a new id would bill the same bytes a second time.
+    #[tokio::test]
+    async fn a_server_error_is_resent_under_the_same_id() {
+        let (url, seen, billed) = scripted_panel(vec![Answer::ApplyThenFail(500)]).await;
+        let config = config_for(&url);
+        let counter = TrafficCounter::new();
+        counter.add(7, 1_000, 0).await;
+
+        report_traffic(&config, &counter).await; // applied, but answered 500
+        report_traffic(&config, &counter).await; // re-send: acknowledged as a copy
+
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        assert_eq!(seen[1].batch_id, seen[0].batch_id);
+        assert_eq!(
+            billed.load(Ordering::SeqCst),
+            1_000,
+            "billed once, not twice"
+        );
+        assert_eq!(left_in(&counter).await, 0);
+    }
+
+    /// A rule that stops and starts again while its batch is in doubt gets a
+    /// new counter. Settling the old batch must not subtract from it: that
+    /// wrapped the counter to about 2^64, which the panel refuses — and with
+    /// it every later batch from the node, so its traffic went unbilled.
+    #[tokio::test]
+    async fn a_batch_settled_after_its_rule_restarted_leaves_the_new_counter_alone() {
+        let (url, seen, billed) = scripted_panel(vec![Answer::ApplyThenDrop]).await;
+        let config = config_for(&url);
+        let counter = TrafficCounter::new();
+        counter.add(7, 1_000, 0).await;
+
+        report_traffic(&config, &counter).await; // applied, answer lost
+        counter.prune_rule(7).await; // the rule is paused: its counter goes
+        counter.add(7, 10, 0).await; // resumed: a new counter
+        report_traffic(&config, &counter).await; // re-send: acknowledged as a copy
+        report_traffic(&config, &counter).await; // the new counter's bytes
+
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 3, "{seen:?}");
+        assert_eq!(seen[1].batch_id, seen[0].batch_id);
+        assert_eq!(
+            seen[2].bytes, 10,
+            "the new counter's own bytes, not a wrapped value"
+        );
+        assert_eq!(billed.load(Ordering::SeqCst), 1_010);
+        assert_eq!(left_in(&counter).await, 0);
+    }
+
+    /// The same at the counter level: a snapshot is committed against the
+    /// counters it was read from.
+    #[tokio::test]
+    async fn a_commit_subtracts_from_the_counter_it_read() {
+        let counter = TrafficCounter::new();
+        counter.add(7, 100, 5).await;
+        let snap = counter.snapshot().await;
+        counter.prune_rule(7).await;
+        counter.add(7, 10, 0).await;
+        snap.commit().await;
+
+        let left = counter.snapshot().await;
+        assert_eq!(left.entries.len(), 1);
+        assert_eq!((left.entries[0].upload, left.entries[0].download), (10, 0));
+    }
+
+    /// Each batch names the last one the panel acknowledged, so the panel can
+    /// mark it confirmed: the node will not send it again. A refused batch was
+    /// never acknowledged, so the one after it names the same earlier batch.
+    #[tokio::test]
+    async fn each_batch_names_the_last_acknowledged_one() {
+        let (url, seen, _) = scripted_panel(vec![
+            Answer::Ack,
+            Answer::Reject(403),
+            Answer::Ack,
+            Answer::Ack,
+        ])
+        .await;
+        let config = config_for(&url);
+        let counter = TrafficCounter::new();
+
+        for _ in 0..4 {
+            counter.add(7, 100, 0).await;
+            report_traffic(&config, &counter).await;
+        }
+
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 4, "{seen:?}");
+        assert_eq!(seen[0].acked, None, "nothing acknowledged yet");
+        assert_eq!(seen[1].acked, seen[0].batch_id);
+        assert_eq!(
+            seen[2].acked, seen[0].batch_id,
+            "the refused batch is not an acknowledged one"
+        );
+        assert_eq!(seen[3].acked, seen[2].batch_id);
     }
 }

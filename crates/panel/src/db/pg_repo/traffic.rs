@@ -6,18 +6,64 @@ use relay_shared::protocol::TrafficEntry;
 
 // ── TrafficRepository ──
 //
-// Same atomicity contract as SQLite (see sqlite_repo.rs). PG defaults to READ
-// COMMITTED, so the ownership check + write on the same tx handle is the
-// guarantee: a concurrent tx can't make our UPDATE see a different row than
-// our SELECT did because both run on the same snapshot within this tx.
+// Same atomicity contract as SQLite (see sqlite_repo.rs): one transaction, all
+// or nothing. It is NOT one snapshot: under PG's default READ COMMITTED every
+// statement reads its own, so a rule deleted or moved to another group between
+// the ownership SELECT and the UPDATEs below is still billed for this batch.
+// That is the right outcome — the bytes were forwarded while it was this
+// group's rule (a deleted rule's own counter UPDATE just matches no row). The
+// dedup row needs no snapshot: the primary key serialises two copies of one
+// batch (see below).
 #[async_trait]
 impl TrafficRepository for PgRepository {
-    async fn apply_traffic_batch(
+    async fn apply_traffic_batch_with_id(
         &self,
         group_id: i64,
+        batch_id: Option<&str>,
+        acked_batch_id: Option<&str>,
         entries: &[TrafficEntry],
     ) -> Result<Vec<TrafficEntryResult>, DbError> {
         let mut tx = self.pool.begin().await?;
+
+        // v1.2.12: a re-sent batch is acknowledged, not applied again. This
+        // comes FIRST, before any rule check: a batch that was applied and is
+        // re-sent after one of its rules was deleted must count as done —
+        // rejecting it would make the node send the other rules' bytes again
+        // under a new id, billing them twice. The row is part of this
+        // transaction, so it exists exactly when the batch was applied.
+        // A concurrent copy of the same batch blocks on the primary key until
+        // this transaction ends, then sees the row (or not, if this one rolled
+        // back) — so the two can never both apply.
+        if let Some(batch_id) = batch_id {
+            let recorded = sqlx::query(
+                "INSERT INTO traffic_batches (group_id, batch_id, created_at) \
+                 VALUES ($1, $2, to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')) \
+                 ON CONFLICT (group_id, batch_id) DO NOTHING",
+            )
+            .bind(group_id)
+            .bind(batch_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            if recorded == 0 {
+                let _ = tx.rollback().await;
+                return Ok(vec![TrafficEntryResult::AlreadyApplied]);
+            }
+            // The node's previous batch, acknowledged: marked confirmed, not
+            // forgotten — a copy the node gave up on can still arrive (see the
+            // SQLite impl and history_prune).
+            if let Some(acked) = acked_batch_id.filter(|a| *a != batch_id) {
+                sqlx::query(
+                    "UPDATE traffic_batches \
+                     SET confirmed_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') \
+                     WHERE group_id = $1 AND batch_id = $2 AND confirmed_at IS NULL",
+                )
+                .bind(group_id)
+                .bind(acked)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
 
         // ── v1.0.8: read this group's billing rate once for the whole batch
         // (every entry in a batch is for the SAME group_id). rate lives on
@@ -254,6 +300,24 @@ impl TrafficRepository for PgRepository {
                 .await?
                 .rows_affected(),
         )
+    }
+
+    async fn prune_traffic_batches(
+        &self,
+        confirmed_before: &str,
+        recorded_before: &str,
+    ) -> Result<u64, DbError> {
+        // created_at <= confirmed_at, so the leading range (served by the
+        // created_at index) holds every row either condition removes.
+        Ok(sqlx::query(
+            "DELETE FROM traffic_batches WHERE created_at < $1 \
+             AND (confirmed_at < $1 OR created_at < $2)",
+        )
+        .bind(confirmed_before)
+        .bind(recorded_before)
+        .execute(&self.pool)
+        .await?
+        .rows_affected())
     }
 
     async fn record_node_metrics(&self, m: &NodeMetricSample) -> Result<(), DbError> {

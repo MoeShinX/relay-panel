@@ -8,6 +8,26 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **A re-sent traffic report is no longer billed twice.** When the panel had
+  recorded a node's traffic but its answer never reached the node (a timeout,
+  a dropped connection, a proxy error), the node sent those bytes again and
+  they were billed a second time. Each report now carries a batch id; the
+  panel records it in the same transaction as the traffic and acknowledges a
+  batch it has already applied without billing it again. A node's next batch
+  confirms the previous one, whose id is then kept one more day (a copy the
+  node had already sent may still arrive late); an id nothing confirms (the
+  node restarted, or is cut off) is kept for 30 days, so a copy re-sent after
+  an outage shorter than that is still recognised. Needs node-v1.2.6 on
+  the node as well — older nodes send no id and are billed as before; older
+  panels ignore the id. PostgreSQL gets schema revision 28 (a new table);
+  SQLite gets migration 45.
+
+---
+
 ## [1.2.11] - 2026-09-27
 
 Ships alongside `node-v1.2.5`; neither requires the other, and the config
