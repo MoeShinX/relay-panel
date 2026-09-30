@@ -82,6 +82,9 @@ pub async fn create_rule(
             409,
             format!("监听端口 {} 在此入口分组上已被占用", port),
         )),
+        // v1.2.12: the authorization re-checked inside the write transaction
+        // failed — it was revoked after the check above.
+        Err(CreateRuleError::Forbidden) => Json(err(403, "device_group_in 不在您允许的分组列表中")),
         Err(CreateRuleError::Database(e)) => {
             tracing::error!("create_rule: service failed: {}", e);
             Json(err(500, "数据库错误"))
@@ -171,6 +174,7 @@ pub async fn update_rule(
         Err(UpdateRuleError::BadRequest(msg)) => Json(err(400, msg)),
         Err(UpdateRuleError::NotFound) => Json(err(404, "规则不存在")),
         Err(UpdateRuleError::PortConflict) => Json(err(409, "监听端口在此入口分组上已被占用")),
+        Err(UpdateRuleError::Forbidden(msg)) => Json(err(403, msg)),
         Err(UpdateRuleError::Internal(msg)) => Json(err(500, msg)),
         Err(UpdateRuleError::Database(e)) => {
             tracing::error!("update_rule {}: service failed: {}", id, e);

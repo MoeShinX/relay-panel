@@ -57,6 +57,15 @@ independent `v*` / `node-v*` tracks since this release).
   instead of a page of failing requests.
 - **`CORS_ORIGINS=*` stops the panel with an explanation** instead of a bare
   crash. Wildcard CORS is deliberately unsupported; list the exact origins.
+- **A rule edit is saved completely or not at all.** Its fields were written
+  one after another, and some checks ran only after the first writes: an edit
+  that changed the name and set a 1-minute restart interval was refused, yet
+  the new name was kept. Every check now runs first and the whole edit is one
+  transaction.
+- **Setting one direction's speed limit no longer removes the other.** An edit
+  that sent only the upload limit wrote the download limit as 0 (no limit).
+  An omitted direction now keeps its limit; send 0 to remove one. The panel's
+  own form always sent both, so this affected API clients.
 
 ### Security
 
@@ -72,6 +81,19 @@ independent `v*` / `node-v*` tracks since this release).
   cannot leave the panel down; everyone has to log in again once. If you run
   the compose file by hand, set a new one with `openssl rand -hex 32`.
 
+
+
+- **Revoking a user's line authorization can no longer race with the user
+  creating or resuming a rule.** The rule API checked the authorization
+  before its write, and a revocation that landed in between paused the rules
+  that existed at that moment — not the one being written, which came up
+  running on a line the user no longer had (also by resuming a paused rule or
+  moving one to another line). The write now checks the authorization again
+  inside its own transaction, and on PostgreSQL both sides lock the user row
+  first, so each waits for the other. An admin acting for a user is not
+  checked, as before.
+
+---
 - **Release workflow permissions narrowed.** The panel release workflow gave
   every job write access to the repository and packages, including the job
   that runs `npm ci`. Jobs now get only the access they need, and the

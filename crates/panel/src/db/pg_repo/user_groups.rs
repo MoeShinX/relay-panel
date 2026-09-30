@@ -60,6 +60,14 @@ impl DeviceGroupAuthRepository for PgRepository {
         device_group_ids: Option<&[i64]>,
     ) -> Result<u64, DbError> {
         let mut tx = self.pool.begin().await?;
+        // v1.2.12: lock the user row first, as buy_plan and clear_user_plan
+        // do. Rule writes that re-check this user's authorization lock it
+        // too, so they run entirely before this change — and get paused by
+        // it — or after it, and see it.
+        sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?;
         if let Some(all) = all_device_groups {
             // Admins are always all-allowed in code, so leave their flag alone.
             sqlx::query("UPDATE users SET all_device_groups = $1 WHERE id = $2 AND admin = FALSE")
@@ -145,6 +153,39 @@ async fn authorized_ids(conn: &mut PgConnection, user_id: i64) -> Result<Vec<i64
     .fetch_all(&mut *conn)
     .await?;
     Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
+/// v1.2.12: whether `uid` may run a rule on inbound group `group_id` — the
+/// API's rule (admins and all-groups users may use every inbound group, anyone
+/// else only the inbound groups granted to them), read on the caller's
+/// transaction. The caller holds the user row lock, which every authorization
+/// change takes first, so the answer holds until the rule write commits.
+pub(super) async fn owner_may_use_group(
+    conn: &mut PgConnection,
+    uid: i64,
+    group_id: i64,
+) -> Result<bool, sqlx::Error> {
+    let flags: Option<(bool, bool)> =
+        sqlx::query_as("SELECT admin, all_device_groups FROM users WHERE id = $1")
+            .bind(uid)
+            .fetch_optional(&mut *conn)
+            .await?;
+    match flags {
+        None => Ok(false),
+        Some((true, _)) | Some((_, true)) => Ok(true),
+        Some((false, false)) => {
+            let granted: Option<(i32,)> = sqlx::query_as(
+                "SELECT 1 FROM user_device_groups udg \
+                 JOIN device_groups dg ON dg.id = udg.device_group_id \
+                 WHERE udg.user_id = $1 AND udg.device_group_id = $2 AND dg.group_type = 'in'",
+            )
+            .bind(uid)
+            .bind(group_id)
+            .fetch_optional(&mut *conn)
+            .await?;
+            Ok(granted.is_some())
+        }
+    }
 }
 
 /// Pause the user's active rules outside `allowed_group_ids` (all of them when
