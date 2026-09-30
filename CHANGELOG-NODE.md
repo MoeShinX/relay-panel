@@ -24,12 +24,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   HTTP while unreachable for remote upgrade. The handshake now gives up after
   15 s, logs why, and retries on the normal backoff.
 
-- **Status, traffic and diagnosis reports can no longer hang the node.** None
-  of the three HTTP calls had a timeout, and the first two run in the main
-  report loop: one unanswered request would have stopped the node reporting —
-  and billing — altogether. Traffic reports now wait up to 30 s (generous on
-  purpose: giving up on a batch the panel did record means sending it again),
-  status and diagnosis reports 15 s.
+- **Status and diagnosis reports can no longer hang the node.** Neither HTTP
+  call had a timeout, and the status report runs in the main report loop: one
+  unanswered request would have stopped the node reporting altogether. Both
+  now give up after 15 s. (Traffic reports get a timeout together with
+  re-send deduplication, which is what makes giving up on one safe.)
 
 ## [1.2.5] - 2026-09-27
 
