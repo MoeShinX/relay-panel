@@ -389,6 +389,8 @@ export const zhCN = {
   ruleUpdated: '规则已更新',
   failedUpdateGroup: '更新分组失败',
   failedUpdateRule: '更新规则失败',
+  failedDeleteRule: '删除规则失败',
+  operationFailed: '操作失败，请检查网络后重试',
 
   // Copy actions
   copyToken: '复制令牌',

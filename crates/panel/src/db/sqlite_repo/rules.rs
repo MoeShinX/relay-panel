@@ -108,7 +108,7 @@ impl RuleRepository for SqliteRepository {
                 return Ok(());
             }
         }
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         sqlx::query("DELETE FROM forward_rule_targets WHERE rule_id = ?")
             .bind(rule_id)
             .execute(&mut *tx)

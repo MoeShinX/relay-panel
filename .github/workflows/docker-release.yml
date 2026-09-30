@@ -11,7 +11,7 @@ name: Docker Release
 # Each architecture compiles natively on its own runner — no QEMU, no cross-toolchain.
 # The frontend is built once (architecture-independent) and shared by both legs.
 # The two per-arch images are merged into a manifest via `imagetools create`,
-# then verified before the GitHub Release is published.
+# then verified; only then is :latest moved and the GitHub Release published.
 
 on:
   push:
@@ -24,9 +24,12 @@ on:
         required: true
         default: '1.1.1'
 
+# v1.2.12: read-only by default; each job asks for exactly the write it needs.
+# build-frontend runs `npm ci` (third-party install scripts) and gets no write
+# access at all. A job-level `permissions` block REPLACES this one, so jobs
+# that check out the repo list `contents: read` again.
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -68,6 +71,9 @@ jobs:
     name: Build + push ${{ matrix.arch }} image
     runs-on: ${{ matrix.runner }}
     needs: build-frontend
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -149,6 +155,8 @@ jobs:
     name: Merge multi-arch manifest
     needs: build-and-push
     runs-on: ubuntu-latest
+    permissions:
+      packages: write
 
     steps:
       - name: Determine version
@@ -178,12 +186,6 @@ jobs:
             "$IMAGE:${VERSION}-arm64"
           echo "::notice::Multi-arch manifest $IMAGE:$VERSION created"
 
-          echo "Promoting $IMAGE:latest to point at $IMAGE:$VERSION"
-          docker buildx imagetools create -t "$IMAGE:latest" \
-            "$IMAGE:${VERSION}-amd64" \
-            "$IMAGE:${VERSION}-arm64"
-          echo "::notice::$IMAGE:latest promoted to $IMAGE:$VERSION"
-
   # Post-release verification: inspect the manifest and confirm it contains
   # both architectures. This is the panel equivalent of node-release.yml's
   # `verify` job — without it, a broken arm64 leg could leave CI green
@@ -192,6 +194,8 @@ jobs:
     name: Verify manifest
     needs: publish-manifest
     runs-on: ubuntu-latest
+    permissions:
+      packages: read
 
     steps:
       - name: Determine version
@@ -221,14 +225,61 @@ jobs:
           echo "$OUTPUT" | grep -q "linux/arm64"   || { echo "::error::Manifest missing linux/arm64"; exit 1; }
           echo "::notice::Manifest verified: both linux/amd64 and linux/arm64 present."
 
+  # v1.2.12: move :latest only AFTER verify passes (it used to be promoted in
+  # publish-manifest, before verification). Same gate as node-release.yml. The
+  # verified :X.Y.Z manifest is re-tagged, so :latest gets the exact digest
+  # that was checked.
+  promote-latest:
+    name: Promote :latest (after verify)
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+
+    steps:
+      - name: Determine version
+        id: ver
+        # The dispatch input arrives through env (never spliced into this
+        # script) and must be a bare semver.
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version must be a bare semver like 1.2.12 (got '$VERSION')"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Re-tag :X.Y.Z as :latest
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          IMAGE="${{ env.IMAGE }}"
+          echo "Promoting $IMAGE:$VERSION -> $IMAGE:latest (verified manifest)"
+          docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE:$VERSION"
+          echo "::notice::$IMAGE:latest promoted to $IMAGE:$VERSION"
+
   # Create the GitHub Release AFTER the manifest is built and verified.
   # The old shape created the release immediately after the single build,
   # meaning a broken image could never be caught before the release appeared
   # in GitHub's public listing.
   create-release:
     name: Create GitHub Release
-    needs: verify
+    needs: [verify, promote-latest]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4

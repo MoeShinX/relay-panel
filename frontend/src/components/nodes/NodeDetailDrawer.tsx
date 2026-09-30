@@ -4,7 +4,7 @@ import { DeleteOutlined } from '@ant-design/icons';
 import { formatPercent, formatBytes, formatBps, formatUptime } from '../../utils/format';
 import { useI18n } from '../../i18n/context';
 import { CountryFlag } from './CountryFlag';
-import type { NodeDisplayRow } from '../../api/types';
+import type { ApiEnvelope, NodeDisplayRow } from '../../api/types';
 import api from '../../api/client';
 
 interface Props {
@@ -32,7 +32,8 @@ export function NodeDetailDrawer({ row, open, onClose, isAdmin, panelProtocol, o
       ? `/nodes/${gid}?node_id=${encodeURIComponent(nid)}`
       : `/nodes/${gid}`;
     try {
-      await api.delete(url);
+      const res = await api.delete<unknown, ApiEnvelope<null>>(url);
+      if (res.code !== 0) { message.error(res.message); return; }
       message.success(t('nodeStatusDeleted'));
       onDeleted?.();
       onClose();

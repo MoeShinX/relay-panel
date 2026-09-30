@@ -5738,3 +5738,107 @@ async fn pg_admin_order_list_pages_without_overlap() {
         "the two pages must cover all three rows exactly once"
     );
 }
+
+/// v1.2.12: an authorization change applies the flag, the explicit groups and
+/// the pause together (PG). Revoking group 70 pauses its rule, keeps 71's.
+#[tokio::test]
+async fn pg_update_user_authorization_revokes_and_pauses_together() {
+    let Some(db) = repo("authz_update").await else {
+        return;
+    };
+    let (alice, _) = seed_buyer_and_plan(&db, "100.00", 1000, "5.00", 0, false).await;
+    seed_device_group(&db, 70, alice).await;
+    seed_device_group(&db, 71, alice).await;
+    db.set_user_device_groups(alice, &[70, 71]).await.unwrap();
+    for (id, port, group) in [(300_i64, 21000_i32, 70_i64), (301, 21001, 71)] {
+        sqlx::query(
+            "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, \
+             target_addr, target_port, paused) VALUES ($1, 'r', $2, $3, $4, '127.0.0.1', 80, FALSE)",
+        )
+        .bind(id)
+        .bind(alice)
+        .bind(port)
+        .bind(group)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    let paused = db
+        .update_user_authorization(alice, Some(false), Some(&[71]))
+        .await
+        .unwrap();
+    assert_eq!(paused, 1);
+    assert_eq!(db.list_user_device_groups(alice).await.unwrap(), vec![71]);
+    let states: Vec<(i64, bool)> =
+        sqlx::query_as("SELECT id, paused FROM forward_rules WHERE uid = $1 ORDER BY id")
+            .bind(alice)
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(states, vec![(300, true), (301, false)]);
+    cleanup(&db).await;
+}
+
+/// v1.2.12 (M3): when the pause step fails, the flag and group changes before
+/// it must roll back too (PG).
+#[tokio::test]
+async fn pg_update_user_authorization_rolls_back_when_a_step_fails() {
+    let Some(db) = repo("authz_rollback").await else {
+        return;
+    };
+    let (alice, _) = seed_buyer_and_plan(&db, "100.00", 1000, "5.00", 0, false).await;
+    seed_device_group(&db, 70, alice).await;
+    sqlx::query("UPDATE users SET all_device_groups = TRUE WHERE id = $1")
+        .bind(alice)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    db.set_user_device_groups(alice, &[70]).await.unwrap();
+    sqlx::query(
+        "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, \
+         target_addr, target_port, paused) VALUES (300, 'r', $1, 21000, 70, '127.0.0.1', 80, FALSE)",
+    )
+    .bind(alice)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    // Make the final step (pausing the rule) fail. This database exists only
+    // for this test, so a plain trigger is fine (the pool has several
+    // connections, so a TEMP one would not reliably apply).
+    sqlx::query(
+        "CREATE FUNCTION fail_pause() RETURNS trigger AS $$ \
+         BEGIN RAISE EXCEPTION 'injected failure'; END $$ LANGUAGE plpgsql",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER fail_pause BEFORE UPDATE OF paused ON forward_rules \
+         FOR EACH ROW EXECUTE FUNCTION fail_pause()",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let result = db
+        .update_user_authorization(alice, Some(false), Some(&[]))
+        .await;
+    assert!(result.is_err(), "the injected failure must surface (PG)");
+
+    let all: bool = sqlx::query_scalar("SELECT all_device_groups FROM users WHERE id = $1")
+        .bind(alice)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert!(
+        all,
+        "the flag change must roll back with the failed pause (PG)"
+    );
+    assert_eq!(
+        db.list_user_device_groups(alice).await.unwrap(),
+        vec![70],
+        "the group change must roll back with the failed pause (PG)"
+    );
+    cleanup(&db).await;
+}

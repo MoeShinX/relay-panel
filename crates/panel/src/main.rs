@@ -73,6 +73,18 @@ async fn main() {
         .nest("/api/v1", api::routes())
         .fallback_service(public_dir);
     if !config.cors_origins.is_empty() {
+        // v1.2.12: tower-http panics on a wildcard in an origin LIST, so
+        // CORS_ORIGINS=* used to crash the panel with a bare panic message.
+        // Wildcard CORS is not supported on purpose (it would let any site
+        // call the admin API); say so plainly instead.
+        if config.cors_origins.iter().any(|o| o == "*") {
+            eprintln!(
+                "FATAL: CORS_ORIGINS=* is not supported — list the exact origins \
+                 that may call the API, e.g. CORS_ORIGINS=https://panel.example.com\n  \
+                 (leave it unset for the normal same-origin deployment)."
+            );
+            std::process::exit(1);
+        }
         let origins: Vec<axum::http::HeaderValue> = config
             .cors_origins
             .iter()

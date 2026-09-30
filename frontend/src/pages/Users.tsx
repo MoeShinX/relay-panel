@@ -124,7 +124,7 @@ export default function Users() {
         message.success(t('planAssigned'));
         setEditing(null);
         load();
-      } finally { setPlanBusy(false); }
+      } catch { message.error(t('operationFailed')); } finally { setPlanBusy(false); }
     };
     const isSwitch = target.plan_id != null && planChoice !== target.plan_id;
     if (isSwitch) {
@@ -152,16 +152,18 @@ export default function Users() {
       message.success(t('userUpdated'));
       setEditing(null);
       load();
-    } finally { setPlanBusy(false); }
+    } catch { message.error(t('operationFailed')); } finally { setPlanBusy(false); }
   };
 
   useEffect(() => { load(); }, []);
 
   const handleDelete = async (id: number) => {
-    const res = await api.delete<unknown, ApiEnvelope<null>>(`/admin/users/${id}`);
-    if (res.code !== 0) { message.error(res.message); return; }
-    message.success(t('userDeleted'));
-    load();
+    try {
+      const res = await api.delete<unknown, ApiEnvelope<null>>(`/admin/users/${id}`);
+      if (res.code !== 0) { message.error(res.message); return; }
+      message.success(t('userDeleted'));
+      load();
+    } catch { message.error(t('operationFailed')); }
   };
 
   const openEdit = async (u: User) => {
@@ -209,7 +211,7 @@ export default function Users() {
       message.success(t('userUpdated'));
       setEditing(null);
       load();
-    } finally { setSaving(false); }
+    } catch { message.error(t('operationFailed')); } finally { setSaving(false); }
   };
 
   const openCreate = () => {
@@ -229,25 +231,29 @@ export default function Users() {
       message.success(t('userCreated'));
       setCreating(false);
       load();
-    } finally { setSaving(false); }
+    } catch { message.error(t('operationFailed')); } finally { setSaving(false); }
   };
 
   const handleResetTraffic = async (id: number) => {
-    const res = await api.post<unknown, ApiEnvelope<null>>(`/admin/users/${id}/reset-traffic`);
-    if (res.code !== 0) { message.error(res.message); return; }
-    message.success(t('trafficReset'));
-    load();
+    try {
+      const res = await api.post<unknown, ApiEnvelope<null>>(`/admin/users/${id}/reset-traffic`);
+      if (res.code !== 0) { message.error(res.message); return; }
+      message.success(t('trafficReset'));
+      load();
+    } catch { message.error(t('operationFailed')); }
   };
 
   // v1.0.8: suspend / unsuspend a user (non-admin only). Stops forwarding via
   // the config gate WITHOUT bumping token_version (the user stays logged in).
   const handleToggleSuspend = async (u: User) => {
-    const res = await api.put<unknown, ApiEnvelope<null>>(`/admin/users/${u.id}`, {
-      suspended: !u.suspended,
-    });
-    if (res.code !== 0) { message.error(res.message); return; }
-    message.success(u.suspended ? t('userUnsuspended') : t('userSuspended'));
-    load();
+    try {
+      const res = await api.put<unknown, ApiEnvelope<null>>(`/admin/users/${u.id}`, {
+        suspended: !u.suspended,
+      });
+      if (res.code !== 0) { message.error(res.message); return; }
+      message.success(u.suspended ? t('userUnsuspended') : t('userSuspended'));
+      load();
+    } catch { message.error(t('operationFailed')); }
   };
 
   // v0.4.10 PR4: open the admin password-reset modal for a user.
@@ -273,7 +279,7 @@ export default function Users() {
       if (res.code !== 0) { message.error(res.message); return; }
       message.success(t('passwordResetSuccess'));
       setResetting(null);
-    } finally { setSaving(false); }
+    } catch { message.error(t('operationFailed')); } finally { setSaving(false); }
   };
 
   const columns = [
