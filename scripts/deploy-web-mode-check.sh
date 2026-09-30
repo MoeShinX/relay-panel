@@ -64,9 +64,13 @@ if [ "${1:-}" = "compose" ]; then
     case "$*" in
         *' ps -q caddy') echo 'caddy123'; exit 0 ;;
         *' ps -q postgres') echo 'pg123'; exit 0 ;;
-        *' ps -q panel') [ -n "${HARNESS_DATA_DIR:-}" ] && echo 'panel123'; exit 0 ;;
-        *' stop panel') printf 'STOP panel\n' >> "$log"; exit 0 ;;
-        *' start panel') printf 'START panel\n' >> "$log"; exit 0 ;;
+        *' ps --all -q panel') [ -n "${HARNESS_DATA_DIR:-}" ] && echo 'panel123'; exit 0 ;;
+        *' stop panel')
+            printf 'STOP panel\n' >> "$log"
+            [ -n "${HARNESS_STOP_FAILS:-}" ] && exit 1
+            touch "$log.stopped"; exit 0 ;;
+        *' start panel') printf 'START panel\n' >> "$log"; rm -f "$log.stopped"; exit 0 ;;
+        *' config') [ -n "${HARNESS_VOLUME_DIR:-}" ] && printf 'name: harness\nservices: {}\n'; exit 0 ;;
         *' build'*) printf 'BUILD %s\n' "$*" >> "$log"; exit 0 ;;
         *' pull') printf 'PULL %s\n' "$*" >> "$log"; exit 0 ;;
         *' up -d'*)
@@ -82,6 +86,16 @@ if [ "${1:-}" = "inspect" ]; then
         *'.State.Health.Status'*'pg123') echo 'healthy'; exit 0 ;;
         *'.State.Status'*'caddy123') echo 'running'; exit 0 ;;
         *'/app/data'*'panel123') echo "${HARNESS_DATA_DIR:-}"; exit 0 ;;
+        *'.State.Running'*'panel123')
+            if [ -f "$log.stopped" ] || [ -n "${HARNESS_PANEL_STOPPED:-}" ]; then echo false; else echo true; fi
+            exit 0 ;;
+    esac
+fi
+if [ "${1:-}" = "volume" ]; then
+    case "$*" in
+        'volume ls'*'com.docker.compose.project=harness'*'com.docker.compose.volume=panel_data'*)
+            [ -n "${HARNESS_VOLUME_DIR:-}" ] && echo 'harness_panel_data'; exit 0 ;;
+        'volume inspect'*'harness_panel_data') echo "${HARNESS_VOLUME_DIR:-}"; exit 0 ;;
     esac
 fi
 echo "unexpected docker args: $*" >> "$log"
@@ -241,6 +255,43 @@ fi
 grep -q '^STOP panel' "$log" || fail 'expected the backup to stop the panel'
 grep -q '^START panel' "$log" || fail 'the old panel must be started again when compose up fails'
 pass 'a failed compose up after the backup brings the old panel back'
+
+# v1.2.12 (pre-release review): an admin who stopped the panel before
+# upgrading still gets a backup — and the panel is not "stopped" again.
+res=$(run_case upgrade-stopped-panel env)
+dir=${res%|*}; log=${res#*|}
+mkdir -p "$TMP/upgrade-stopped-panel-data"
+echo 'sqlite bytes' > "$TMP/upgrade-stopped-panel-data/data.db"
+: > "$log"
+(cd "$dir" && HARNESS_LOG="$log" HARNESS_DATA_DIR="$TMP/upgrade-stopped-panel-data" HARNESS_PANEL_STOPPED=1 PATH="$TMP/fakebin-upgrade-stopped-panel:$PATH" bash ./deploy.sh >/tmp/rp-upgrade-stopped-panel-2.out 2>/tmp/rp-upgrade-stopped-panel-2.err) \
+    || fail 'upgrade with a stopped panel failed'
+ls "$dir"/backups/data-*-pre-deploy.db >/dev/null 2>&1 || fail 'a stopped panel must still be backed up'
+grep -q '^STOP panel' "$log" && fail 'an already stopped panel must not be stopped again'
+pass 'upgrade backs up an already stopped panel'
+
+# A panel that cannot be stopped is not copied mid-write, and nothing changes.
+res=$(run_case upgrade-stop-fails env)
+dir=${res%|*}; log=${res#*|}
+mkdir -p "$TMP/upgrade-stop-fails-data"
+echo 'sqlite bytes' > "$TMP/upgrade-stop-fails-data/data.db"
+: > "$log"
+if (cd "$dir" && HARNESS_LOG="$log" HARNESS_DATA_DIR="$TMP/upgrade-stop-fails-data" HARNESS_STOP_FAILS=1 PATH="$TMP/fakebin-upgrade-stop-fails:$PATH" bash ./deploy.sh >/tmp/rp-upgrade-stop-fails-2.out 2>/tmp/rp-upgrade-stop-fails-2.err); then
+    fail 'deploy.sh must stop when the panel cannot be stopped for the backup'
+fi
+ls "$dir"/backups/data-*.db >/dev/null 2>&1 && fail 'no backup may be taken while the panel may still write'
+grep -q '^UP ' "$log" && fail 'the new version must not be started without a backup'
+pass 'a panel that cannot be stopped blocks the upgrade'
+
+# After `docker compose down` the container is gone but the volume is not.
+res=$(run_case upgrade-after-down env)
+dir=${res%|*}; log=${res#*|}
+mkdir -p "$TMP/upgrade-after-down-volume"
+echo 'sqlite bytes' > "$TMP/upgrade-after-down-volume/data.db"
+: > "$log"
+(cd "$dir" && HARNESS_LOG="$log" HARNESS_VOLUME_DIR="$TMP/upgrade-after-down-volume" PATH="$TMP/fakebin-upgrade-after-down:$PATH" bash ./deploy.sh >/tmp/rp-upgrade-after-down-2.out 2>/tmp/rp-upgrade-after-down-2.err) \
+    || fail 'upgrade after compose down failed'
+ls "$dir"/backups/data-*-pre-deploy.db >/dev/null 2>&1 || fail 'the database in the leftover volume must be backed up'
+pass 'upgrade after compose down backs up the volume'
 
 # A fresh install has nothing to back up.
 res=$(run_case fresh-no-backup env)

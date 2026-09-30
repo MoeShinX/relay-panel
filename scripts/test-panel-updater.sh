@@ -58,7 +58,12 @@ EOF
 #!/usr/bin/env bash
 echo "docker \$*" >> "$STATE/docker-calls"
 case "\$*" in
-  *"ps -q panel"*) echo cid123 ;;
+  *"-q panel"*) echo cid123 ;;
+  *"stop panel"*) [ -f "$STATE/stop-fails" ] && exit 1; touch "$STATE/stopped" ;;
+  *"start panel"*) rm -f "$STATE/stopped" ;;
+  *"State.Running"*)
+    [ -f "$STATE/inspect-fails" ] && exit 1
+    if [ -f "$STATE/stopped" ]; then echo false; else echo true; fi ;;
   inspect*) echo "$STATE/data" ;;
 esac
 exit 0
@@ -137,6 +142,36 @@ check "says the update was not applied" message_has "not applied"
 check "old panel started again" grep -q "start panel" "$STATE/docker-calls"
 check "deploy.sh never ran" bash -c "[ ! -e '$STATE/deploy-backup-flag' ]"
 check "status is valid JSON" valid_json
+
+# v1.2.12 (pre-release review): a stop that fails must not be followed by a
+# copy of a database that may still be written to — nor by the upgrade.
+echo "panel cannot be stopped for the backup"
+setup 1.2.10 1.2.11
+echo 1.2.11 > "$STATE/next-version"
+touch "$STATE/stop-fails"
+run_updater
+check "reports failed" state_is failed
+check "says the update was not applied" message_has "not applied"
+check "no backup was taken" bash -c "! ls '$REPO'/backups/data-*.db >/dev/null 2>&1"
+check "deploy.sh never ran" bash -c "[ ! -e '$STATE/deploy-backup-flag' ]"
+
+echo "panel state cannot be read"
+setup 1.2.10 1.2.11
+echo 1.2.11 > "$STATE/next-version"
+touch "$STATE/inspect-fails"
+run_updater
+check "reports failed" state_is failed
+check "no backup was taken" bash -c "! ls '$REPO'/backups/data-*.db >/dev/null 2>&1"
+check "deploy.sh never ran" bash -c "[ ! -e '$STATE/deploy-backup-flag' ]"
+
+echo "panel already stopped"
+setup 1.2.10 1.2.11
+echo 1.2.11 > "$STATE/next-version"
+touch "$STATE/stopped"
+run_updater
+check "reports succeeded" state_is succeeded
+check "database backed up" bash -c "ls '$REPO'/backups/data-*-v1.2.10.db >/dev/null 2>&1"
+check "no stop was needed" bash -c "! grep -q 'stop panel' '$STATE/docker-calls'"
 
 echo "a request planted as a directory"
 setup 1.2.10 1.2.10

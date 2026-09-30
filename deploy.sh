@@ -728,7 +728,7 @@ if [ "$FRESH_INSTALL" = "0" ] && [ "${RELAYPANEL_BACKUP_DONE:-0}" != "1" ] \
             PANEL_STOPPED_FOR_BACKUP=1
             ;;
         3) info "No existing SQLite database found - skipping the backup" ;;
-        *) fail "Database backup failed, so nothing was changed (the panel is running the old version). Check free disk space and permissions on ./backups." ;;
+        *) fail "No usable database backup could be taken (the copy failed, or the panel could not be confirmed stopped), so nothing was changed and the old version stays in place. See the messages above; check free disk space and permissions on ./backups." ;;
     esac
     unset backup_rc backup_path
 fi

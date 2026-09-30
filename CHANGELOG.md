@@ -15,11 +15,21 @@ independent `v*` / `node-v*` tracks since this release).
 - **A manual upgrade backs up the SQLite database too.** Only the one-click
   update used to copy the database to `backups/` before the new version (and
   its schema migrations) started; `git pull && ./deploy.sh` did not. Both now
-  use the same backup: the panel is stopped for a consistent copy, the newest
-  five are kept, and if the copy fails nothing is changed and the old version
-  keeps running. When building from source, the image is built before the
-  panel is stopped, so the downtime does not include the compile. PostgreSQL
-  is still not backed up automatically.
+  use the same backup, and it is stricter than the one-click update's was:
+  - The copy is taken only once the panel is confirmed stopped. If it cannot
+    be stopped (or its state cannot be read), there is no backup and no
+    upgrade — a copy taken while the panel writes may be inconsistent, and the
+    old one-click update carried on with it regardless.
+  - A panel that was already stopped is backed up too (and left stopped); it
+    used to be treated as "no database" and skipped. After `docker compose
+    down` the database is found in the leftover volume.
+  - The newest five are kept. If the backup fails, nothing is changed and the
+    old version stays in place; if the new version then fails to start, the
+    old container is started again.
+
+  When building from source, the image is built before the panel is stopped,
+  so the downtime does not include the compile. PostgreSQL is still not
+  backed up automatically.
 
 ---
 

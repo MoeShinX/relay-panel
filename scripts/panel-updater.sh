@@ -164,8 +164,8 @@ if [ -z "$DB_MODE" ] || [ "$DB_MODE" = "sqlite" ]; then
         *)
             # Refuse to continue without a backup: the new version may migrate
             # the schema, and this is the one moment to keep a way back. The
-            # backup script already started the old panel again.
-            finish failed "Database backup failed, so the update was not applied. The panel was restarted on the old version."
+            # backup script started the old panel again if it had stopped it.
+            finish failed "No usable database backup could be taken (the copy failed, or the panel could not be confirmed stopped), so the update was not applied. The panel stays on the old version."
             ;;
     esac
 else
