@@ -20,6 +20,11 @@ independent `v*` / `node-v*` tracks since this release).
     be stopped (or its state cannot be read), there is no backup and no
     upgrade — a copy taken while the panel writes may be inconsistent, and the
     old one-click update carried on with it regardless.
+  - A lookup that fails (listing the containers, reading the data mount or
+    volume) stops the upgrade too, instead of counting as "no database". Run
+    `deploy.sh` as root: without root the database volume cannot be read and
+    the upgrade stops with a message (back the database up yourself and
+    re-run with `RELAYPANEL_BACKUP_DONE=1` to go ahead anyway).
   - A panel that was already stopped is backed up too (and left stopped); it
     used to be treated as "no database" and skipped. After `docker compose
     down` the database is found in the leftover volume.

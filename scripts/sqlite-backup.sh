@@ -16,10 +16,12 @@
 #   0  backed up; the path is printed on stdout. The panel is left STOPPED
 #      (stopped here if it was running) — the caller is about to start the new
 #      version.
-#   3  nothing to back up (no data.db found); the panel was not touched.
-#   1  no backup: the copy failed, or the panel could not be confirmed stopped.
-#      A panel stopped here was started again; nothing else changed. Callers
-#      must not go on to upgrade: this is the one moment to keep a way back.
+#   3  nothing to back up: every lookup succeeded and found no database; the
+#      panel was not touched.
+#   1  no backup: a lookup failed (so there may well be a database), the panel
+#      could not be confirmed stopped, or the copy failed. A panel stopped here
+#      was started again; nothing else changed. Callers must not go on to
+#      upgrade: this is the one moment to keep a way back.
 # Progress goes to stderr.
 
 set -uo pipefail
@@ -33,28 +35,56 @@ KEEP_BACKUPS=5
 cd "$ROOT" || exit 1
 
 # ---- Find the database ----
+# Every query here must SUCCEED. A failed query is not "nothing there":
+# taking it as such skipped the backup — or, with the container list failing,
+# copied a database that might be in use — and the upgrade still went ahead.
+# Only lookups that succeed and find nothing count as "no database" (exit 3).
+lookup_failed() {
+    echo "$1; not upgrading without a backup" >&2
+    exit 1
+}
+
 # `ps --all`: a stopped panel (stopped by the admin before upgrading, or
 # crashed) still has its database; plain `ps` lists only running containers,
 # and the backup used to be skipped as "nothing to back up".
-cid="$(docker compose -f "$COMPOSE_FILE" ps --all -q panel 2>/dev/null | head -n1)"
+ids="$(docker compose -f "$COMPOSE_FILE" ps --all -q panel 2>/dev/null)" \
+    || lookup_failed "could not list the panel containers"
+cid="$(printf '%s\n' "$ids" | head -n1)"
 data_dir=""
 if [ -n "$cid" ]; then
     data_dir="$(docker inspect -f \
-        '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}' "$cid" 2>/dev/null)"
+        '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}' "$cid" 2>/dev/null)" \
+        || lookup_failed "could not read the panel container's mounts"
 else
     # No panel container at all (e.g. after `docker compose down`): the
     # default named volume outlives it. Find it by the labels compose puts on
     # this project's volumes.
-    project="$(docker compose -f "$COMPOSE_FILE" config 2>/dev/null | sed -n 's/^name: *//p' | head -n1)"
-    if [ -n "$project" ]; then
-        vol="$(docker volume ls -q \
-            --filter "label=com.docker.compose.project=$project" \
-            --filter "label=com.docker.compose.volume=panel_data" 2>/dev/null | head -n1)"
-        [ -n "$vol" ] && data_dir="$(docker volume inspect -f '{{.Mountpoint}}' "$vol" 2>/dev/null)"
+    config="$(docker compose -f "$COMPOSE_FILE" config 2>/dev/null)" \
+        || lookup_failed "could not read the compose configuration"
+    project="$(printf '%s\n' "$config" | sed -n 's/^name: *//p' | head -n1)"
+    [ -n "$project" ] || lookup_failed "could not tell the compose project name"
+    vols="$(docker volume ls -q \
+        --filter "label=com.docker.compose.project=$project" \
+        --filter "label=com.docker.compose.volume=panel_data" 2>/dev/null)" \
+        || lookup_failed "could not list the docker volumes"
+    vol="$(printf '%s\n' "$vols" | head -n1)"
+    if [ -n "$vol" ]; then
+        data_dir="$(docker volume inspect -f '{{.Mountpoint}}' "$vol" 2>/dev/null)" \
+            || lookup_failed "could not read the volume $vol"
     fi
 fi
-if [ -z "$data_dir" ] || [ ! -f "$data_dir/data.db" ]; then
-    echo "could not locate the SQLite database; nothing to back up" >&2
+if [ -z "$data_dir" ]; then
+    echo "no panel data volume; nothing to back up" >&2
+    exit 3
+fi
+# Whether data.db exists can only be told from a readable directory: a named
+# volume's host directory is root-only, and `-f` just says "no" when run
+# without the rights to look.
+if [ ! -d "$data_dir" ] || [ ! -r "$data_dir" ] || [ ! -x "$data_dir" ]; then
+    lookup_failed "cannot read $data_dir (run as root — sudo ./deploy.sh — or back the database up yourself and re-run with RELAYPANEL_BACKUP_DONE=1)"
+fi
+if [ ! -f "$data_dir/data.db" ]; then
+    echo "no data.db in $data_dir; nothing to back up" >&2
     exit 3
 fi
 

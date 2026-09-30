@@ -64,13 +64,15 @@ if [ "${1:-}" = "compose" ]; then
     case "$*" in
         *' ps -q caddy') echo 'caddy123'; exit 0 ;;
         *' ps -q postgres') echo 'pg123'; exit 0 ;;
-        *' ps --all -q panel') [ -n "${HARNESS_DATA_DIR:-}" ] && echo 'panel123'; exit 0 ;;
+        *' ps --all -q panel')
+            [ -n "${HARNESS_PS_FAILS:-}" ] && exit 1
+            [ -n "${HARNESS_DATA_DIR:-}" ] && echo 'panel123'; exit 0 ;;
         *' stop panel')
             printf 'STOP panel\n' >> "$log"
             [ -n "${HARNESS_STOP_FAILS:-}" ] && exit 1
             touch "$log.stopped"; exit 0 ;;
         *' start panel') printf 'START panel\n' >> "$log"; rm -f "$log.stopped"; exit 0 ;;
-        *' config') [ -n "${HARNESS_VOLUME_DIR:-}" ] && printf 'name: harness\nservices: {}\n'; exit 0 ;;
+        *' config') printf 'name: harness\nservices: {}\n'; exit 0 ;;
         *' build'*) printf 'BUILD %s\n' "$*" >> "$log"; exit 0 ;;
         *' pull') printf 'PULL %s\n' "$*" >> "$log"; exit 0 ;;
         *' up -d'*)
@@ -292,6 +294,20 @@ echo 'sqlite bytes' > "$TMP/upgrade-after-down-volume/data.db"
     || fail 'upgrade after compose down failed'
 ls "$dir"/backups/data-*-pre-deploy.db >/dev/null 2>&1 || fail 'the database in the leftover volume must be backed up'
 pass 'upgrade after compose down backs up the volume'
+
+# A failed container lookup must not be taken for "no panel": no backup
+# may be skipped, and above all no database copied without the stop check.
+res=$(run_case upgrade-ps-fails env)
+dir=${res%|*}; log=${res#*|}
+mkdir -p "$TMP/upgrade-ps-fails-volume"
+echo 'sqlite bytes' > "$TMP/upgrade-ps-fails-volume/data.db"
+: > "$log"
+if (cd "$dir" && HARNESS_LOG="$log" HARNESS_PS_FAILS=1 HARNESS_VOLUME_DIR="$TMP/upgrade-ps-fails-volume" PATH="$TMP/fakebin-upgrade-ps-fails:$PATH" bash ./deploy.sh >/tmp/rp-upgrade-ps-fails-2.out 2>/tmp/rp-upgrade-ps-fails-2.err); then
+    fail 'deploy.sh must stop when the container lookup fails'
+fi
+ls "$dir"/backups/data-*.db >/dev/null 2>&1 && fail 'a failed lookup must not lead to a copy'
+grep -q '^UP ' "$log" && fail 'the new version must not be started after a failed lookup'
+pass 'a failed container lookup blocks the upgrade'
 
 # A fresh install has nothing to back up.
 res=$(run_case fresh-no-backup env)

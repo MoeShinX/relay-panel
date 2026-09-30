@@ -58,13 +58,20 @@ EOF
 #!/usr/bin/env bash
 echo "docker \$*" >> "$STATE/docker-calls"
 case "\$*" in
-  *"-q panel"*) echo cid123 ;;
+  *"-q panel"*)
+    [ -f "$STATE/ps-fails" ] && exit 1
+    [ -f "$STATE/no-container" ] || echo cid123 ;;
   *"stop panel"*) [ -f "$STATE/stop-fails" ] && exit 1; touch "$STATE/stopped" ;;
   *"start panel"*) rm -f "$STATE/stopped" ;;
+  *" config") [ -f "$STATE/config-fails" ] && exit 1; printf 'name: relaytest\nservices: {}\n' ;;
+  "volume ls"*)
+    [ -f "$STATE/volume-ls-fails" ] && exit 1
+    [ -f "$STATE/no-volume" ] || echo relaytest_panel_data ;;
+  "volume inspect"*) [ -f "$STATE/volume-inspect-fails" ] && exit 1; echo "$STATE/data" ;;
   *"State.Running"*)
     [ -f "$STATE/inspect-fails" ] && exit 1
     if [ -f "$STATE/stopped" ]; then echo false; else echo true; fi ;;
-  inspect*) echo "$STATE/data" ;;
+  inspect*) [ -f "$STATE/mounts-fails" ] && exit 1; echo "$STATE/data" ;;
 esac
 exit 0
 EOF
@@ -163,6 +170,37 @@ run_updater
 check "reports failed" state_is failed
 check "no backup was taken" bash -c "! ls '$REPO'/backups/data-*.db >/dev/null 2>&1"
 check "deploy.sh never ran" bash -c "[ ! -e '$STATE/deploy-backup-flag' ]"
+
+# v1.2.12 (pre-release review, round 2): a lookup that FAILS is not "no
+# database". Each of these must stop the update without touching anything.
+for flags in ps-fails mounts-fails "no-container config-fails" \
+             "no-container volume-ls-fails" "no-container volume-inspect-fails"; do
+    echo "lookup fails: $flags"
+    setup 1.2.10 1.2.11
+    echo 1.2.11 > "$STATE/next-version"
+    for f in $flags; do touch "$STATE/$f"; done
+    run_updater
+    check "reports failed" state_is failed
+    check "no backup was taken" bash -c "! ls '$REPO'/backups/data-*.db >/dev/null 2>&1"
+    check "deploy.sh never ran" bash -c "[ ! -e '$STATE/deploy-backup-flag' ]"
+done
+
+echo "no container, database in the leftover volume (after compose down)"
+setup 1.2.10 1.2.11
+echo 1.2.11 > "$STATE/next-version"
+touch "$STATE/no-container"
+run_updater
+check "reports succeeded" state_is succeeded
+check "database backed up" bash -c "ls '$REPO'/backups/data-*-v1.2.10.db >/dev/null 2>&1"
+check "nothing was stopped" bash -c "! grep -q 'stop panel' '$STATE/docker-calls'"
+
+echo "no container and no volume: nothing to back up"
+setup 1.2.10 1.2.11
+echo 1.2.11 > "$STATE/next-version"
+touch "$STATE/no-container" "$STATE/no-volume"
+run_updater
+check "reports succeeded" state_is succeeded
+check "says it was not backed up" message_has "NOT backed up"
 
 echo "panel already stopped"
 setup 1.2.10 1.2.11
