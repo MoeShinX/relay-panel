@@ -39,8 +39,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   session's socket and waited forever if the target never answered again. On
   a busy UDP rule this piled up one task and one file descriptor per idle
   client until the node ran out of descriptors. Expiring a session now stops
-  its reader, and removing or restarting a UDP rule releases all of its
-  sessions (and the rule's cleanup task, which also used to live on).
+  its reader at once — also while it is waiting on the rule's rate limit, when
+  it used to hold on until the wait ended and then still forward the reply —
+  and removing or restarting a UDP rule releases all of its sessions (and the
+  rule's cleanup task, which also used to live on).
 - **A late error on an expired UDP session could cut off the client's new
   one.** The old session's reader removed "the session for this client" when
   its socket failed — by then possibly the replacement session. It now only

@@ -92,8 +92,8 @@ fn nofile_limit() -> Option<u64> {
     None
 }
 
-/// One counted place in `counter`, given back on drop — held by the session,
-/// so a session leaving the map (idle, torn down, failed) frees its place.
+/// One counted place in `counter`, given back on drop. Held by the session's
+/// socket (`SessionSocket`), so it counts sockets that are really open.
 struct SessionSlot(&'static AtomicUsize);
 
 impl SessionSlot {
@@ -110,6 +110,23 @@ impl SessionSlot {
 impl Drop for SessionSlot {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// A session's outbound socket together with its place under the cap. The
+/// place is given back only when the socket itself closes — once the map
+/// entry, the reply reader and any in-flight send have all let go of it — so
+/// the cap bounds the sockets actually open, not just the map entries.
+struct SessionSocket {
+    sock: UdpSocket,
+    _slot: SessionSlot,
+}
+
+impl std::ops::Deref for SessionSocket {
+    type Target = UdpSocket;
+
+    fn deref(&self) -> &UdpSocket {
+        &self.sock
     }
 }
 
@@ -142,10 +159,9 @@ fn note_session_refused(port: u16) {
 }
 
 struct UdpSession {
-    outbound: Arc<UdpSocket>,
+    /// v1.2.12: carries this session's place under the node-wide cap.
+    outbound: Arc<SessionSocket>,
     last_active: tokio::time::Instant,
-    /// v1.2.12: this session's place under the node-wide cap.
-    _slot: SessionSlot,
     /// v1.2.12: the session's reply reader waits on the other end. Dropping
     /// this — i.e. the session leaving the map by idle eviction or listener
     /// teardown — stops the reader. Before, eviction only dropped the map
@@ -307,7 +323,10 @@ pub async fn serve_udp_listener(
                 tracing::warn!("UDP port {}: no reachable target for session", port);
                 continue;
             };
-            let outbound = Arc::new(outbound);
+            let outbound = Arc::new(SessionSocket {
+                sock: outbound,
+                _slot: slot,
+            });
 
             // Publish via the entry API (per-shard lock, sync — no .await while
             // the guard is held). Double-check for a concurrent datagram from the
@@ -324,7 +343,6 @@ pub async fn serve_udp_listener(
                     e.insert(UdpSession {
                         outbound: outbound.clone(),
                         last_active: now,
-                        _slot: slot,
                         _stop: stop_tx,
                     });
                     (outbound.clone(), Some(stop_rx))
@@ -380,7 +398,7 @@ pub async fn serve_udp_listener(
 /// The target -> client half of one UDP session: reads the target's replies on
 /// the session's connected `outbound` socket and forwards them to `src`.
 struct ReplyRelay {
-    outbound: Arc<UdpSocket>,
+    outbound: Arc<SessionSocket>,
     inbound: Arc<UdpSocket>,
     sessions: Arc<Sessions>,
     connections: Arc<ConnectionTracker>,
@@ -396,10 +414,12 @@ impl ReplyRelay {
     async fn run(self, mut stop: oneshot::Receiver<()>) {
         let mut rbuf = vec![0u8; UDP_BUF_SIZE];
         loop {
+            // Evicted or torn down: the entry is already gone (and may by now
+            // be a NEWER session for the same client), so there is nothing of
+            // ours left to clean up. `biased` checks stop first, so a reader
+            // with more datagrams queued still stops at once.
             let m = tokio::select! {
-                // Evicted or torn down: the entry is already gone (and may by
-                // now be a NEWER session for the same client), so there is
-                // nothing of ours left to clean up.
+                biased;
                 _ = &mut stop => return,
                 r = self.outbound.recv(&mut rbuf) => match r {
                     Ok(m) => m,
@@ -411,13 +431,27 @@ impl ReplyRelay {
             };
             // v0.4.6: throttle target→client (download) bytes through the
             // shared per-rule limiter BEFORE forwarding back to the client.
-            self.rate_limit.acquire_download(m as u64).await;
+            // v1.2.12: this wait can be long on a slow rule with many sessions
+            // backed up, so it gives way to stop too — otherwise an evicted
+            // session's reader kept its socket until the wait ended and then
+            // still forwarded the queued datagram. (The limiter charges before
+            // it sleeps, so leaving mid-wait does not disturb its accounting.)
+            tokio::select! {
+                biased;
+                _ = &mut stop => return,
+                _ = self.rate_limit.acquire_download(m as u64) => {}
+            }
             self.counter.add(self.rule_id, 0, m as u64).await;
             // A reply is activity too: refresh the tracker (cheap, sharded) and
             // the session's last_active so a long request/response flow isn't
             // expired.
             self.connections.udp_touch(self.src, self.rule_id).await;
-            if self.inbound.send_to(&rbuf[..m], self.src).await.is_err() {
+            let sent = tokio::select! {
+                biased;
+                _ = &mut stop => return,
+                r = self.inbound.send_to(&rbuf[..m], self.src) => r,
+            };
+            if sent.is_err() {
                 break;
             }
             if let Some(mut s) = self.sessions.get_mut(&self.src) {
@@ -617,18 +651,29 @@ mod tests {
     /// An outbound socket connected to a port nobody listens on, with one
     /// datagram already sent: the ICMP port-unreachable it provokes makes the
     /// socket's next `recv` fail, as a dead target does in production.
-    async fn outbound_to_dead_port() -> Arc<UdpSocket> {
+    async fn outbound_to_dead_port() -> Arc<SessionSocket> {
         let dead = loopback_udp().await;
         let dead_addr = dead.local_addr().unwrap();
         drop(dead);
         let sock = loopback_udp().await;
         sock.connect(dead_addr).await.unwrap();
         sock.send(b"ping").await.unwrap();
-        Arc::new(sock)
+        tracked(sock)
+    }
+
+    /// Slots for sessions built by these tests, apart from the node-wide count.
+    static TEST_SLOTS: AtomicUsize = AtomicUsize::new(0);
+
+    /// A session socket counted under TEST_SLOTS.
+    fn tracked(sock: UdpSocket) -> Arc<SessionSocket> {
+        Arc::new(SessionSocket {
+            sock,
+            _slot: SessionSlot::acquire(&TEST_SLOTS, usize::MAX).unwrap(),
+        })
     }
 
     fn relay(
-        outbound: Arc<UdpSocket>,
+        outbound: Arc<SessionSocket>,
         inbound: Arc<UdpSocket>,
         sessions: Arc<Sessions>,
     ) -> ReplyRelay {
@@ -645,15 +690,11 @@ mod tests {
         }
     }
 
-    /// Slots for sessions built by these tests, apart from the node-wide count.
-    static TEST_SLOTS: AtomicUsize = AtomicUsize::new(0);
-
-    fn session(outbound: &Arc<UdpSocket>) -> (UdpSession, oneshot::Receiver<()>) {
+    fn session(outbound: &Arc<SessionSocket>) -> (UdpSession, oneshot::Receiver<()>) {
         let (tx, rx) = oneshot::channel();
         let s = UdpSession {
             outbound: outbound.clone(),
             last_active: tokio::time::Instant::now(),
-            _slot: SessionSlot::acquire(&TEST_SLOTS, usize::MAX).unwrap(),
             _stop: tx,
         };
         (s, rx)
@@ -689,12 +730,18 @@ mod tests {
         );
     }
 
-    /// v1.2.12: a session leaving the map (idle eviction, teardown) gives its
-    /// slot back — otherwise the cap would fill up with sessions long gone.
+    /// v1.2.12: a session's place comes back when its socket closes — when
+    /// the map entry AND everyone else holding the socket (the reply reader,
+    /// an in-flight send) have let go. Freeing it with the map entry alone let
+    /// more sockets stay open than the cap allows.
     #[tokio::test]
-    async fn an_evicted_session_frees_its_slot() {
+    async fn a_slot_is_held_until_the_socket_closes() {
         static SLOTS: AtomicUsize = AtomicUsize::new(0);
-        let outbound = Arc::new(loopback_udp().await);
+        let outbound = Arc::new(SessionSocket {
+            sock: loopback_udp().await,
+            _slot: SessionSlot::acquire(&SLOTS, 1).unwrap(),
+        });
+        let reader_copy = outbound.clone(); // what a still-running reader holds
         let sessions: Arc<Sessions> = Arc::new(DashMap::new());
         let src: SocketAddr = "127.0.0.1:40001".parse().unwrap();
         let (tx, _rx) = oneshot::channel();
@@ -703,13 +750,69 @@ mod tests {
             UdpSession {
                 outbound,
                 last_active: tokio::time::Instant::now(),
-                _slot: SessionSlot::acquire(&SLOTS, 1).unwrap(),
                 _stop: tx,
             },
         );
         assert!(SessionSlot::acquire(&SLOTS, 1).is_none());
         sessions.remove(&src);
+        assert!(
+            SessionSlot::acquire(&SLOTS, 1).is_none(),
+            "the socket is still open, so its place is still taken"
+        );
+        drop(reader_copy);
         assert!(SessionSlot::acquire(&SLOTS, 1).is_some());
+    }
+
+    /// v1.2.12: a reader waiting on the rate limit stops as soon as its
+    /// session is evicted, and does not forward the datagram it was holding.
+    #[tokio::test]
+    async fn a_throttled_reader_stops_when_its_session_is_evicted() {
+        let target = loopback_udp().await;
+        let outbound = tracked(loopback_udp().await);
+        outbound
+            .connect(target.local_addr().unwrap())
+            .await
+            .unwrap();
+        let client = loopback_udp().await;
+        let sessions: Arc<Sessions> = Arc::new(DashMap::new());
+
+        let mut r = relay(
+            outbound.clone(),
+            Arc::new(loopback_udp().await),
+            sessions.clone(),
+        );
+        // 1000 B/s with a 1 s burst: a 5000-byte reply owes ~4 s of waiting.
+        r.rate_limit = RateLimit::new(None, Some(1000));
+        r.src = client.local_addr().unwrap();
+        let src = r.src;
+        let (s, stop) = session(&outbound);
+        sessions.insert(src, s);
+        drop(outbound);
+        let reader = tokio::spawn(r.run(stop));
+
+        target
+            .send_to(
+                &[7u8; 5000],
+                sessions.get(&src).unwrap().outbound.local_addr().unwrap(),
+            )
+            .await
+            .unwrap();
+        // Let the reader take the datagram and start waiting on the limiter.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!reader.is_finished());
+
+        sessions.remove(&src);
+        tokio::time::timeout(Duration::from_secs(1), reader)
+            .await
+            .expect("an evicted reader must not sit out the rate-limit wait")
+            .unwrap();
+        let mut buf = [0u8; 8192];
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), client.recv_from(&mut buf))
+                .await
+                .is_err(),
+            "the queued datagram must not be forwarded after eviction"
+        );
     }
 
     /// v1.2.12 (H2): evicting an idle session must end its reply reader. The
@@ -718,7 +821,7 @@ mod tests {
     #[tokio::test]
     async fn evicting_a_session_stops_its_reader() {
         let target = loopback_udp().await; // alive, never replies
-        let outbound = Arc::new(loopback_udp().await);
+        let outbound = tracked(loopback_udp().await);
         outbound
             .connect(target.local_addr().unwrap())
             .await
@@ -745,7 +848,7 @@ mod tests {
     #[tokio::test]
     async fn a_failing_stale_reader_leaves_the_current_session_alone() {
         let stale = outbound_to_dead_port().await;
-        let current = Arc::new(loopback_udp().await);
+        let current = tracked(loopback_udp().await);
         let inbound = Arc::new(loopback_udp().await);
         let sessions: Arc<Sessions> = Arc::new(DashMap::new());
 
