@@ -1043,6 +1043,10 @@ pub async fn report_status(
     // rather than the node believing everything is fine.
     match client
         .post(&url)
+        // v1.2.6: without a timeout an unanswered request hung the report loop
+        // for good. Status is resent every cycle, so a short timeout loses
+        // nothing.
+        .timeout(Duration::from_secs(15))
         .header("Authorization", format!("Bearer {}", config.token))
         .json(&report)
         .send()

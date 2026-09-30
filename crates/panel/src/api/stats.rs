@@ -283,6 +283,8 @@ pub async fn get_node_status(
     };
 
     let mut statuses: Vec<serde_json::Value> = Vec::new();
+    // v1.2.12: which nodes have a live WS control channel, read once.
+    let ws_live = state.node_connections.connected_nodes().await;
     // v0.4.15 PR3: stamp `online` on every admin row using the SAME source of
     // truth (status_is_online / NODE_ONLINE_WINDOW_SECS) the shared-node
     // endpoint uses, so the admin /nodes board and the user /nodes/shared board
@@ -325,6 +327,16 @@ pub async fn get_node_status(
         if status.get("node_id").is_none() {
             status["node_id"] = serde_json::json!(node_id_from_key);
         }
+        // v1.2.12: whether this node's WS control channel is up. A node can be
+        // online — reporting over HTTP every cycle — with no WS at all, and
+        // then remote upgrade and diagnosis cannot reach it. null when the row
+        // has no node id to match (legacy rows).
+        status["ws_connected"] = match status.get("node_id").and_then(|v| v.as_str()) {
+            Some(nid) if !nid.is_empty() => {
+                serde_json::json!(ws_live.contains(&(group_id, nid.to_string())))
+            }
+            _ => serde_json::Value::Null,
+        };
 
         // v0.4.15: ensure public_ipv4 is present (fall back to legacy public_ip
         // for older nodes) and enrich with GeoIP country from the KVS cache.

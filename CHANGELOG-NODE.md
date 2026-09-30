@@ -11,6 +11,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **A WebSocket handshake that never answers no longer stalls the control
+  channel forever.** The connect step — TCP, TLS and HTTP upgrade — had no
+  timeout. The heartbeat protects a connection only once it is established, so
+  when a middlebox accepted the TCP connection and then dropped everything, the
+  node waited on the handshake indefinitely: nothing logged, nothing retried.
+  One node spent five days that way, forwarding and reporting normally over
+  HTTP while unreachable for remote upgrade. The handshake now gives up after
+  15 s, logs why, and retries on the normal backoff.
+
+- **Status and diagnosis reports can no longer hang the node.** Neither HTTP
+  call had a timeout, and the status report runs in the main report loop: one
+  unanswered request would have stopped the node reporting altogether. Both
+  now give up after 15 s. (Traffic reports get a timeout together with
+  re-send deduplication, which is what makes giving up on one safe.)
+
 ## [1.2.5] - 2026-09-27
 
 Nothing on the wire changed (still protocol version 4), so this node runs

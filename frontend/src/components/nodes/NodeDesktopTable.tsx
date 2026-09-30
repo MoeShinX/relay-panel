@@ -6,7 +6,7 @@ import type { NodeDisplayRow } from '../../api/types';
 import { NodeResourceBar, NodeDiskBar } from './NodeResourceBar';
 import { formatBps, formatBytes, formatUptime, formatPercent } from '../../utils/format';
 import { versionRelation, versionTagColor } from '../../utils/version';
-import { NetworkCell } from './shared';
+import { NetworkCell, wsDownTag } from './shared';
 import { resolveNodeUpgrade } from './upgrade';
 import { nodeDesktopColumnWidths } from './tableLayout';
 
@@ -44,7 +44,14 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
         if (v != null && panelProtocol > 0 && v !== panelProtocol) {
           return <Tag color="red">{t('protocolIncompatible')}</Tag>;
         }
-        return r.online ? <Tag color="green">{t('online')}</Tag> : <Tag>{t('offline')}</Tag>;
+        return r.online ? (
+          <>
+            <Tag color="green">{t('online')}</Tag>
+            {wsDownTag(r, t)}
+          </>
+        ) : (
+          <Tag>{t('offline')}</Tag>
+        );
       },
     },
     // v1.0.10: node version moved forward, with the upgrade action right after it.
@@ -98,6 +105,8 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
                 />
               </Tooltip>
             );
+          case 'noControlChannel':
+            return <Tooltip title={t('nodeUpgradeNoWs')}><CloudDownloadOutlined style={{ color: '#bfbfbf' }} /></Tooltip>;
           case 'offline':
           default:
             return <Tooltip title={t('offline')}><CloudDownloadOutlined style={{ color: '#bfbfbf' }} /></Tooltip>;
