@@ -27,8 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   anything (400/401/403) sends the bytes again in a fresh batch; a 500 can
   come after the commit went through, so it is re-sent under the same id too.
   Each batch also names the previous, acknowledged one, so the panel can
-  forget it. With an older panel the id is ignored and reports behave as
-  before.
+  stop keeping it for long. With an older panel the id is ignored and reports
+  behave as before.
 - **A traffic report gives up after 30 seconds.** It had no time limit, and it
   runs in the same loop as the config poll: a request left hanging (a
   half-open connection, a panel stuck on a database lock) stopped config

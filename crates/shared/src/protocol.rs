@@ -456,10 +456,10 @@ pub struct TrafficReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch_id: Option<String>,
     /// v1.2.12 (node-v1.2.6): the id of this node's previous batch, once the
-    /// panel has acknowledged it. The node never sends that batch again, so the
-    /// panel forgets it right here rather than after a fixed time; only ids
-    /// never confirmed (the node restarted, or has not reported since) are left
-    /// to the retention sweep.
+    /// panel has acknowledged it. The node will not send that batch again, so
+    /// the panel keeps its record a day more — a copy already on its way can
+    /// still arrive — instead of the 30 days it keeps ids nothing confirmed
+    /// (the node restarted, or has not reported since).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acked_batch_id: Option<String>,
 }

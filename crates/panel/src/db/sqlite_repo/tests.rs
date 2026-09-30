@@ -5779,55 +5779,77 @@ async fn a_rejected_batch_leaves_no_record() {
     assert_eq!(rule_used(&db, 100).await, 10);
 }
 
-/// Recorded ids are forgotten after the retention window.
+/// Recorded ids are forgotten after their retention: a day after the node
+/// confirmed them, or 30 days after they were recorded if nothing did.
 #[tokio::test]
 async fn old_traffic_batch_ids_are_pruned() {
     let db = repo().await;
     seed_batch_fixture(&db).await;
-    for id in ["old", "new"] {
-        db.apply_traffic_batch_with_id(50, Some(id), None, &[entry(100, 1, 0)])
-            .await
-            .unwrap();
-    }
-    sqlx::query(
-        "UPDATE traffic_batches SET created_at = '2020-01-01 00:00:00' WHERE batch_id = 'old'",
-    )
-    .execute(&db.pool)
-    .await
-    .unwrap();
-
-    assert_eq!(
-        db.prune_traffic_batches("2026-01-01 00:00:00")
-            .await
-            .unwrap(),
-        1
-    );
-    let left: Vec<String> = sqlx::query_scalar("SELECT batch_id FROM traffic_batches")
-        .fetch_all(&db.pool)
+    // (id, created_at, confirmed_at)
+    let rows = [
+        ("unconfirmed-old", "2025-11-01 00:00:00", None),
+        ("unconfirmed-recent", "2025-12-20 00:00:00", None),
+        (
+            "confirmed-past-grace",
+            "2025-12-20 00:00:00",
+            Some("2026-01-01 00:00:00"),
+        ),
+        (
+            "confirmed-in-grace",
+            "2025-12-20 00:00:00",
+            Some("2026-01-03 00:00:00"),
+        ),
+        ("new", "2026-01-03 00:00:00", None),
+    ];
+    for (id, created, confirmed) in rows {
+        sqlx::query(
+            "INSERT INTO traffic_batches (group_id, batch_id, created_at, confirmed_at) \
+             VALUES (50, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(created)
+        .bind(confirmed)
+        .execute(&db.pool)
         .await
         .unwrap();
-    assert_eq!(left, vec!["new".to_string()]);
+    }
+
+    let pruned = db
+        .prune_traffic_batches("2026-01-02 00:00:00", "2025-12-03 00:00:00")
+        .await
+        .unwrap();
+    assert_eq!(pruned, 2);
+    let left: Vec<String> =
+        sqlx::query_scalar("SELECT batch_id FROM traffic_batches ORDER BY batch_id")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(left, ["confirmed-in-grace", "new", "unconfirmed-recent"]);
 }
 
-/// v1.2.12: a batch that names the node's previous, acknowledged batch deletes
-/// that record in its own transaction — forgotten when the new batch commits,
-/// kept when it is refused. Only this group's record goes, and a batch naming
-/// itself keeps its own.
+/// v1.2.12: a batch that names the node's previous, acknowledged batch marks
+/// that record confirmed in its own transaction — when the new batch commits,
+/// not when it is refused. Only this group's record, and not a batch naming
+/// itself.
 #[tokio::test]
-async fn an_acknowledged_traffic_batch_is_forgotten_with_the_next_one() {
+async fn an_acknowledged_traffic_batch_is_marked_confirmed() {
     let db = repo().await;
     seed_batch_fixture(&db).await;
     let recorded = || async {
-        sqlx::query_as::<_, (i64, String)>(
-            "SELECT group_id, batch_id FROM traffic_batches ORDER BY group_id, batch_id",
+        sqlx::query_as::<_, (i64, String, bool)>(
+            "SELECT group_id, batch_id, confirmed_at IS NOT NULL FROM traffic_batches \
+             ORDER BY group_id, batch_id",
         )
         .fetch_all(&db.pool)
         .await
         .unwrap()
     };
-    let rec = |g: i64, id: &str| (g, id.to_string());
+    let rec = |g: i64, id: &str, confirmed: bool| (g, id.to_string(), confirmed);
 
     db.apply_traffic_batch_with_id(50, Some("a"), None, &[entry(100, 1, 0)])
+        .await
+        .unwrap();
+    db.apply_traffic_batch_with_id(60, Some("a"), None, &[entry(200, 1, 0)])
         .await
         .unwrap();
     let refused = db
@@ -5840,24 +5862,51 @@ async fn an_acknowledged_traffic_batch_is_forgotten_with_the_next_one() {
     ));
     assert_eq!(
         recorded().await,
-        [rec(50, "a")],
-        "a refused batch forgets nothing"
+        [rec(50, "a", false), rec(60, "a", false)],
+        "a refused batch confirms nothing"
     );
 
     db.apply_traffic_batch_with_id(50, Some("c"), Some("a"), &[entry(100, 1, 0)])
         .await
         .unwrap();
-    assert_eq!(recorded().await, [rec(50, "c")]);
+    db.apply_traffic_batch_with_id(50, Some("d"), Some("d"), &[entry(100, 1, 0)])
+        .await
+        .unwrap();
+    assert_eq!(
+        recorded().await,
+        [
+            rec(50, "a", true),
+            rec(50, "c", false),
+            rec(50, "d", false),
+            rec(60, "a", false)
+        ]
+    );
+}
 
-    db.apply_traffic_batch_with_id(60, Some("c"), None, &[entry(200, 1, 0)])
+/// v1.2.12 (review): a copy of a batch the node already gave up on — a request
+/// that timed out on the node but reaches the panel only now — must still be
+/// recognised AFTER the node has confirmed that batch. The node's confirmation
+/// says it will not send the batch again, not that no copy is still on its
+/// way; forgetting the id at that point billed the late copy a second time.
+#[tokio::test]
+async fn a_late_copy_of_a_confirmed_batch_is_still_recognised() {
+    let db = repo().await;
+    seed_batch_fixture(&db).await;
+    let a = [entry(100, 100, 0)];
+
+    db.apply_traffic_batch_with_id(50, Some("a"), None, &a)
         .await
-        .unwrap();
-    db.apply_traffic_batch_with_id(50, Some("d"), Some("c"), &[entry(100, 1, 0)])
+        .unwrap(); // the re-send got through
+    db.apply_traffic_batch_with_id(50, Some("b"), Some("a"), &[entry(100, 10, 0)])
         .await
-        .unwrap();
-    db.apply_traffic_batch_with_id(50, Some("e"), Some("e"), &[entry(100, 1, 0)])
+        .unwrap(); // the next batch confirms it
+    let late = db
+        .apply_traffic_batch_with_id(50, Some("a"), None, &a)
         .await
-        .unwrap();
-    assert_eq!(recorded().await, [rec(50, "d"), rec(50, "e"), rec(60, "c")]);
-    assert_eq!(rule_used(&db, 100).await, 4);
+        .unwrap(); // the first copy, arriving late
+    assert!(
+        matches!(late.as_slice(), [TrafficEntryResult::AlreadyApplied]),
+        "got {late:?}"
+    );
+    assert_eq!(rule_used(&db, 100).await, 110);
 }

@@ -54,14 +54,22 @@ impl TrafficRepository for SqliteRepository {
                 let _ = tx.rollback().await;
                 return Ok(vec![TrafficEntryResult::AlreadyApplied]);
             }
-            // The node's previous batch, acknowledged: it is never sent again.
-            // Forgotten only if this batch commits, like everything else here.
+            // The node's previous batch, acknowledged: the node will not send
+            // it again. It is NOT forgotten here — a copy the node already
+            // gave up on (a timed-out request) can still reach the panel after
+            // this, and must still be recognised. Marked confirmed (only if
+            // this batch commits), it is swept a day later instead of after
+            // 30 days; see history_prune.
             if let Some(acked) = acked_batch_id.filter(|a| *a != batch_id) {
-                sqlx::query("DELETE FROM traffic_batches WHERE group_id = ? AND batch_id = ?")
-                    .bind(group_id)
-                    .bind(acked)
-                    .execute(&mut *tx)
-                    .await?;
+                sqlx::query(
+                    "UPDATE traffic_batches \
+                     SET confirmed_at = strftime('%Y-%m-%d %H:%M:%S', 'now') \
+                     WHERE group_id = ? AND batch_id = ? AND confirmed_at IS NULL",
+                )
+                .bind(group_id)
+                .bind(acked)
+                .execute(&mut *tx)
+                .await?;
             }
         }
 
@@ -329,14 +337,23 @@ impl TrafficRepository for SqliteRepository {
             .rows_affected())
     }
 
-    async fn prune_traffic_batches(&self, cutoff: &str) -> Result<u64, DbError> {
-        Ok(
-            sqlx::query("DELETE FROM traffic_batches WHERE created_at < ?")
-                .bind(cutoff)
-                .execute(&self.pool)
-                .await?
-                .rows_affected(),
+    async fn prune_traffic_batches(
+        &self,
+        confirmed_before: &str,
+        recorded_before: &str,
+    ) -> Result<u64, DbError> {
+        // created_at <= confirmed_at, so the leading range (served by the
+        // created_at index) holds every row either condition removes.
+        Ok(sqlx::query(
+            "DELETE FROM traffic_batches WHERE created_at < ? \
+             AND (confirmed_at < ? OR created_at < ?)",
         )
+        .bind(confirmed_before)
+        .bind(confirmed_before)
+        .bind(recorded_before)
+        .execute(&self.pool)
+        .await?
+        .rows_affected())
     }
 
     async fn record_node_metrics(&self, m: &NodeMetricSample) -> Result<(), DbError> {

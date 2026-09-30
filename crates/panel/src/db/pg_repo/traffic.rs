@@ -49,14 +49,19 @@ impl TrafficRepository for PgRepository {
                 let _ = tx.rollback().await;
                 return Ok(vec![TrafficEntryResult::AlreadyApplied]);
             }
-            // The node's previous batch, acknowledged: it is never sent again.
-            // Forgotten only if this batch commits, like everything else here.
+            // The node's previous batch, acknowledged: marked confirmed, not
+            // forgotten — a copy the node gave up on can still arrive (see the
+            // SQLite impl and history_prune).
             if let Some(acked) = acked_batch_id.filter(|a| *a != batch_id) {
-                sqlx::query("DELETE FROM traffic_batches WHERE group_id = $1 AND batch_id = $2")
-                    .bind(group_id)
-                    .bind(acked)
-                    .execute(&mut *tx)
-                    .await?;
+                sqlx::query(
+                    "UPDATE traffic_batches \
+                     SET confirmed_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') \
+                     WHERE group_id = $1 AND batch_id = $2 AND confirmed_at IS NULL",
+                )
+                .bind(group_id)
+                .bind(acked)
+                .execute(&mut *tx)
+                .await?;
             }
         }
 
@@ -297,14 +302,22 @@ impl TrafficRepository for PgRepository {
         )
     }
 
-    async fn prune_traffic_batches(&self, cutoff: &str) -> Result<u64, DbError> {
-        Ok(
-            sqlx::query("DELETE FROM traffic_batches WHERE created_at < $1")
-                .bind(cutoff)
-                .execute(&self.pool)
-                .await?
-                .rows_affected(),
+    async fn prune_traffic_batches(
+        &self,
+        confirmed_before: &str,
+        recorded_before: &str,
+    ) -> Result<u64, DbError> {
+        // created_at <= confirmed_at, so the leading range (served by the
+        // created_at index) holds every row either condition removes.
+        Ok(sqlx::query(
+            "DELETE FROM traffic_batches WHERE created_at < $1 \
+             AND (confirmed_at < $1 OR created_at < $2)",
         )
+        .bind(confirmed_before)
+        .bind(recorded_before)
+        .execute(&self.pool)
+        .await?
+        .rows_affected())
     }
 
     async fn record_node_metrics(&self, m: &NodeMetricSample) -> Result<(), DbError> {

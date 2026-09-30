@@ -897,11 +897,13 @@ mod tests {
         assert_eq!(rule_traffic(&pool, 100).await, 0);
     }
 
-    /// v1.2.12: a batch that names the node's previous, acknowledged batch
-    /// makes the panel forget that one — the node will never send it again —
-    /// so only the latest batch per node stays recorded.
+    /// v1.2.12 (review): the node sends batch A, gives up waiting, re-sends
+    /// it — the re-send lands — and its next batch confirms A. The first copy
+    /// of A then reaches the panel after all. It must be recognised: the
+    /// confirmation marks A, it does not forget it (forgetting it billed the
+    /// late copy again).
     #[tokio::test]
-    async fn an_acknowledged_traffic_batch_is_forgotten() {
+    async fn a_late_copy_of_a_confirmed_batch_is_billed_once() {
         let (state, pool) = seeded_state().await;
         let send = |id: &str, acked: Option<&str>| {
             let mut r = report(
@@ -917,20 +919,29 @@ mod tests {
             report_traffic(State(state.clone()), auth_headers("tok-A"), Json(r))
         };
         let recorded = || async {
-            sqlx::query_scalar::<_, String>(
-                "SELECT batch_id FROM traffic_batches ORDER BY batch_id",
+            sqlx::query_as::<_, (String, bool)>(
+                "SELECT batch_id, confirmed_at IS NOT NULL FROM traffic_batches \
+                 ORDER BY batch_id",
             )
             .fetch_all(&pool)
             .await
             .unwrap()
         };
 
-        let Json(a) = send("batch-a", None).await;
+        let Json(a) = send("batch-a", None).await; // the re-send of A lands
         assert_eq!(a.code, 0, "{}", a.message);
-        assert_eq!(recorded().await, ["batch-a"]);
-        let Json(b) = send("batch-b", Some("batch-a")).await;
+        let Json(b) = send("batch-b", Some("batch-a")).await; // B confirms A
         assert_eq!(b.code, 0, "{}", b.message);
-        assert_eq!(recorded().await, ["batch-b"]);
-        assert_eq!(rule_traffic(&pool, 100).await, 20);
+        let Json(late) = send("batch-a", None).await; // A's first copy, late
+        assert_eq!(late.code, 0, "{}", late.message);
+
+        assert_eq!(rule_traffic(&pool, 100).await, 20, "A and B once each");
+        assert_eq!(
+            recorded().await,
+            [
+                ("batch-a".to_string(), true),
+                ("batch-b".to_string(), false)
+            ]
+        );
     }
 }

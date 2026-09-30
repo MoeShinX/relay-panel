@@ -5900,49 +5900,69 @@ async fn pg_old_traffic_batch_ids_are_pruned() {
         return;
     };
     pg_seed_batch_fixture(&db).await;
-    for id in ["old", "new"] {
-        db.apply_traffic_batch_with_id(50, Some(id), None, &[pg_entry(100, 1, 0)])
-            .await
-            .unwrap();
-    }
-    sqlx::query(
-        "UPDATE traffic_batches SET created_at = '2020-01-01 00:00:00' WHERE batch_id = 'old'",
-    )
-    .execute(&db.pool)
-    .await
-    .unwrap();
-
-    assert_eq!(
-        db.prune_traffic_batches("2026-01-01 00:00:00")
-            .await
-            .unwrap(),
-        1
-    );
-    let left: Vec<String> = sqlx::query_scalar("SELECT batch_id FROM traffic_batches")
-        .fetch_all(&db.pool)
+    let rows = [
+        ("unconfirmed-old", "2025-11-01 00:00:00", None),
+        ("unconfirmed-recent", "2025-12-20 00:00:00", None),
+        (
+            "confirmed-past-grace",
+            "2025-12-20 00:00:00",
+            Some("2026-01-01 00:00:00"),
+        ),
+        (
+            "confirmed-in-grace",
+            "2025-12-20 00:00:00",
+            Some("2026-01-03 00:00:00"),
+        ),
+        ("new", "2026-01-03 00:00:00", None),
+    ];
+    for (id, created, confirmed) in rows {
+        sqlx::query(
+            "INSERT INTO traffic_batches (group_id, batch_id, created_at, confirmed_at) \
+             VALUES (50, $1, $2, $3)",
+        )
+        .bind(id)
+        .bind(created)
+        .bind(confirmed)
+        .execute(&db.pool)
         .await
         .unwrap();
-    assert_eq!(left, vec!["new".to_string()]);
+    }
+
+    let pruned = db
+        .prune_traffic_batches("2026-01-02 00:00:00", "2025-12-03 00:00:00")
+        .await
+        .unwrap();
+    assert_eq!(pruned, 2);
+    let left: Vec<String> =
+        sqlx::query_scalar("SELECT batch_id FROM traffic_batches ORDER BY batch_id")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(left, ["confirmed-in-grace", "new", "unconfirmed-recent"]);
     cleanup(&db).await;
 }
 
 #[tokio::test]
-async fn pg_an_acknowledged_traffic_batch_is_forgotten_with_the_next_one() {
+async fn pg_an_acknowledged_traffic_batch_is_marked_confirmed() {
     let Some(db) = repo("batch_acked").await else {
         return;
     };
     pg_seed_batch_fixture(&db).await;
     let recorded = || async {
-        sqlx::query_as::<_, (i64, String)>(
-            "SELECT group_id, batch_id FROM traffic_batches ORDER BY group_id, batch_id",
+        sqlx::query_as::<_, (i64, String, bool)>(
+            "SELECT group_id, batch_id, confirmed_at IS NOT NULL FROM traffic_batches \
+             ORDER BY group_id, batch_id",
         )
         .fetch_all(&db.pool)
         .await
         .unwrap()
     };
-    let rec = |g: i64, id: &str| (g, id.to_string());
+    let rec = |g: i64, id: &str, confirmed: bool| (g, id.to_string(), confirmed);
 
     db.apply_traffic_batch_with_id(50, Some("a"), None, &[pg_entry(100, 1, 0)])
+        .await
+        .unwrap();
+    db.apply_traffic_batch_with_id(60, Some("a"), None, &[pg_entry(200, 1, 0)])
         .await
         .unwrap();
     let refused = db
@@ -5955,25 +5975,50 @@ async fn pg_an_acknowledged_traffic_batch_is_forgotten_with_the_next_one() {
     ));
     assert_eq!(
         recorded().await,
-        [rec(50, "a")],
-        "a refused batch forgets nothing"
+        [rec(50, "a", false), rec(60, "a", false)],
+        "a refused batch confirms nothing"
     );
 
     db.apply_traffic_batch_with_id(50, Some("c"), Some("a"), &[pg_entry(100, 1, 0)])
         .await
         .unwrap();
-    assert_eq!(recorded().await, [rec(50, "c")]);
+    db.apply_traffic_batch_with_id(50, Some("d"), Some("d"), &[pg_entry(100, 1, 0)])
+        .await
+        .unwrap();
+    assert_eq!(
+        recorded().await,
+        [
+            rec(50, "a", true),
+            rec(50, "c", false),
+            rec(50, "d", false),
+            rec(60, "a", false)
+        ]
+    );
+    cleanup(&db).await;
+}
 
-    db.apply_traffic_batch_with_id(60, Some("c"), None, &[pg_entry(200, 1, 0)])
+#[tokio::test]
+async fn pg_a_late_copy_of_a_confirmed_batch_is_still_recognised() {
+    let Some(db) = repo("batch_late_copy").await else {
+        return;
+    };
+    pg_seed_batch_fixture(&db).await;
+    let a = [pg_entry(100, 100, 0)];
+
+    db.apply_traffic_batch_with_id(50, Some("a"), None, &a)
         .await
         .unwrap();
-    db.apply_traffic_batch_with_id(50, Some("d"), Some("c"), &[pg_entry(100, 1, 0)])
+    db.apply_traffic_batch_with_id(50, Some("b"), Some("a"), &[pg_entry(100, 10, 0)])
         .await
         .unwrap();
-    db.apply_traffic_batch_with_id(50, Some("e"), Some("e"), &[pg_entry(100, 1, 0)])
+    let late = db
+        .apply_traffic_batch_with_id(50, Some("a"), None, &a)
         .await
         .unwrap();
-    assert_eq!(recorded().await, [rec(50, "d"), rec(50, "e"), rec(60, "c")]);
-    assert_eq!(pg_rule_used(&db, 100).await, 4);
+    assert!(
+        matches!(late.as_slice(), [TrafficEntryResult::AlreadyApplied]),
+        "got {late:?}"
+    );
+    assert_eq!(pg_rule_used(&db, 100).await, 110);
     cleanup(&db).await;
 }

@@ -74,7 +74,8 @@ struct ReportState {
     /// The batch sent without a definite answer yet; re-sent as is.
     pending: Option<PendingBatch>,
     /// The id of the last batch the panel acknowledged. The next batch carries
-    /// it, telling the panel it will never be sent again and can be forgotten.
+    /// it, telling the panel it will not be sent again, so the panel keeps its
+    /// record only a short while more.
     last_acked: Option<String>,
 }
 
@@ -284,8 +285,8 @@ impl TrafficSnapshot<'_> {
 struct PendingBatch {
     /// Sent with the batch; the panel applies each id at most once.
     id: String,
-    /// Sent with the batch: the last acknowledged batch, for the panel to
-    /// forget (see `ReportState::last_acked`).
+    /// Sent with the batch: the last acknowledged batch, which the panel
+    /// marks confirmed (see `ReportState::last_acked`).
     acked: Option<String>,
     /// The whole snapshot, zero entries included — subtracted on success.
     entries: Vec<TrafficEntry>,
@@ -2288,7 +2289,7 @@ mod tests {
     }
 
     /// Each batch names the last one the panel acknowledged, so the panel can
-    /// forget that id: the node will never send it again. A refused batch was
+    /// mark it confirmed: the node will not send it again. A refused batch was
     /// never acknowledged, so the one after it names the same earlier batch.
     #[tokio::test]
     async fn each_batch_names_the_last_acknowledged_one() {

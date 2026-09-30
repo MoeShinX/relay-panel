@@ -280,6 +280,7 @@ CREATE TABLE IF NOT EXISTS traffic_batches (
     group_id BIGINT NOT NULL,
     batch_id TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    confirmed_at TEXT,
     PRIMARY KEY (group_id, batch_id)
 );
 CREATE INDEX IF NOT EXISTS idx_traffic_batches_created ON traffic_batches(created_at);
@@ -1466,6 +1467,7 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
                 group_id BIGINT NOT NULL,
                 batch_id TEXT NOT NULL,
                 created_at TEXT NOT NULL,
+                confirmed_at TEXT,
                 PRIMARY KEY (group_id, batch_id)
             )",
         )

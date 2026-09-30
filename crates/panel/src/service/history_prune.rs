@@ -20,15 +20,20 @@ const RETENTION_DAYS: i64 = 35;
 const METRICS_RETENTION_DAYS: i64 = 7;
 
 /// v1.2.12: how long an applied traffic batch id is remembered when nothing
-/// confirms it. A node's next batch confirms the previous one (it saw the
-/// acknowledgement and will never re-send it), and that deletes it at once, so
-/// what is left here is each node's latest batch plus the last batch of a node
-/// that restarted — a few rows per node, whatever the window. The window is
-/// how long a node may be cut off (or the panel down) and still have its
-/// re-sent batch recognised: a copy arriving later than this, of a batch
-/// applied just before the outage, is billed a second time — one batch, one
-/// poll's traffic.
+/// confirms it — each node's latest batch, and the last one of a node that
+/// restarted. It is how long a node may be cut off (or the panel down) and
+/// still have its re-sent batch recognised: a copy arriving later than this,
+/// of a batch applied just before the outage, is billed a second time — one
+/// batch, one poll's traffic.
 const TRAFFIC_BATCH_RETENTION_DAYS: i64 = 30;
+
+/// v1.2.12: how long a batch id is kept once the node's next batch has
+/// confirmed it. The node will not send it again, but a copy it had already
+/// sent and given up on (a timed-out request the panel has not finished with)
+/// can still arrive, and must still be recognised. Such a copy lives as long
+/// as one request — seconds, minutes at worst — so a day is a wide margin.
+/// This is what keeps the table small: about a day of batches per node.
+const TRAFFIC_BATCH_CONFIRMED_GRACE_HOURS: i64 = 24;
 
 /// One sweep per hour. Deletion is cheap (indexed range delete) and the
 /// granularity of the data is hourly anyway — sweeping faster buys nothing.
@@ -86,16 +91,26 @@ pub fn spawn(state: AppState) {
                 Err(e) => tracing::error!("audit-log: prune failed: {}", e),
             }
 
-            // v1.2.12: applied traffic batch ids no later batch confirmed (re-send dedup).
+            // v1.2.12: applied traffic batch ids (re-send dedup): confirmed
+            // ones a day after their confirmation, the rest after 30 days.
+            let confirmed_cutoff = (chrono::Utc::now()
+                - chrono::Duration::hours(TRAFFIC_BATCH_CONFIRMED_GRACE_HOURS))
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string();
             let batch_cutoff = (chrono::Utc::now()
                 - chrono::Duration::days(TRAFFIC_BATCH_RETENTION_DAYS))
             .format("%Y-%m-%d %H:%M:%S")
             .to_string();
-            match state.db.prune_traffic_batches(&batch_cutoff).await {
+            match state
+                .db
+                .prune_traffic_batches(&confirmed_cutoff, &batch_cutoff)
+                .await
+            {
                 Ok(0) => {}
                 Ok(n) => tracing::debug!(
-                    "traffic-batches: forgot {} batch ids older than {}",
+                    "traffic-batches: forgot {} batch ids (confirmed before {}, or recorded before {})",
                     n,
+                    confirmed_cutoff,
                     batch_cutoff
                 ),
                 Err(e) => tracing::error!("traffic-batches: prune failed: {}", e),
