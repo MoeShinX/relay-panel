@@ -448,6 +448,24 @@ impl NodeTransport {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TrafficReport {
     pub reports: Vec<TrafficEntry>,
+    /// v1.2.12 (node-v1.2.6): identifies this batch so a re-send is applied at
+    /// most once. A node re-sends the SAME id and bytes until it gets a
+    /// definite answer; the panel acknowledges an id it already applied
+    /// without billing it again. Optional both ways: older nodes send none
+    /// (applied as before, no protection), older panels ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<String>,
+}
+
+/// Longest `batch_id` a panel accepts (nodes send 32 hex characters).
+pub const MAX_TRAFFIC_BATCH_ID_LEN: usize = 64;
+
+/// Whether `id` is an acceptable traffic batch id: 1–64 ASCII letters,
+/// digits or `-`.
+pub fn valid_traffic_batch_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_TRAFFIC_BATCH_ID_LEN
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

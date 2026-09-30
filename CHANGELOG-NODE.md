@@ -11,6 +11,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **A traffic report the panel did not answer is re-sent unchanged, so it is
+  never billed twice.** A report that got no definite answer (timeout, dropped
+  connection, proxy error) used to be folded into the next report, with a new
+  snapshot — and if the panel had in fact recorded it, those bytes were billed
+  twice. Now the node sends the same batch again, with the same id and bytes,
+  until the panel answers; the panel (1.2.12+) recognises a batch it already
+  applied and acknowledges it without billing. Traffic counted meanwhile waits
+  for the next batch, so a panel that is unreachable for a while delays
+  billing but loses nothing. A definite rejection from the panel (which means
+  it did not apply the batch) still sends the bytes again in a fresh batch.
+  With an older panel the id is ignored and reports behave as before.
+
+---
+
 ## [1.2.5] - 2026-09-27
 
 Nothing on the wire changed (still protocol version 4), so this node runs

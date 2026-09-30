@@ -19,6 +19,13 @@ const RETENTION_DAYS: i64 = 35;
 /// paying 35 days of rows for it would be the wrong trade.
 const METRICS_RETENTION_DAYS: i64 = 7;
 
+/// v1.2.12: applied traffic batch ids are kept a day. A node re-sends an
+/// unacknowledged batch every poll until it gets an answer, so a copy that
+/// arrives later than this would take a panel unreachable for over a day right
+/// after it had applied the batch — and even then it is one batch (one poll's
+/// traffic) billed twice, not more.
+const TRAFFIC_BATCH_RETENTION_HOURS: i64 = 24;
+
 /// One sweep per hour. Deletion is cheap (indexed range delete) and the
 /// granularity of the data is hourly anyway — sweeping faster buys nothing.
 const TICK: Duration = Duration::from_secs(3600);
@@ -73,6 +80,21 @@ pub fn spawn(state: AppState) {
                 Ok(0) => {}
                 Ok(n) => tracing::info!("audit-log: pruned {} rows older than {}", n, audit_cutoff),
                 Err(e) => tracing::error!("audit-log: prune failed: {}", e),
+            }
+
+            // v1.2.12: applied traffic batch ids (re-send dedup).
+            let batch_cutoff = (chrono::Utc::now()
+                - chrono::Duration::hours(TRAFFIC_BATCH_RETENTION_HOURS))
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string();
+            match state.db.prune_traffic_batches(&batch_cutoff).await {
+                Ok(0) => {}
+                Ok(n) => tracing::debug!(
+                    "traffic-batches: forgot {} batch ids older than {}",
+                    n,
+                    batch_cutoff
+                ),
+                Err(e) => tracing::error!("traffic-batches: prune failed: {}", e),
             }
         }
     });

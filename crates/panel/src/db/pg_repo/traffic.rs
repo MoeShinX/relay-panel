@@ -12,12 +12,39 @@ use relay_shared::protocol::TrafficEntry;
 // our SELECT did because both run on the same snapshot within this tx.
 #[async_trait]
 impl TrafficRepository for PgRepository {
-    async fn apply_traffic_batch(
+    async fn apply_traffic_batch_with_id(
         &self,
         group_id: i64,
+        batch_id: Option<&str>,
         entries: &[TrafficEntry],
     ) -> Result<Vec<TrafficEntryResult>, DbError> {
         let mut tx = self.pool.begin().await?;
+
+        // v1.2.12: a re-sent batch is acknowledged, not applied again. This
+        // comes FIRST, before any rule check: a batch that was applied and is
+        // re-sent after one of its rules was deleted must count as done —
+        // rejecting it would make the node send the other rules' bytes again
+        // under a new id, billing them twice. The row is part of this
+        // transaction, so it exists exactly when the batch was applied.
+        // A concurrent copy of the same batch blocks on the primary key until
+        // this transaction ends, then sees the row (or not, if this one rolled
+        // back) — so the two can never both apply.
+        if let Some(batch_id) = batch_id {
+            let recorded = sqlx::query(
+                "INSERT INTO traffic_batches (group_id, batch_id, created_at) \
+                 VALUES ($1, $2, to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')) \
+                 ON CONFLICT (group_id, batch_id) DO NOTHING",
+            )
+            .bind(group_id)
+            .bind(batch_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            if recorded == 0 {
+                let _ = tx.rollback().await;
+                return Ok(vec![TrafficEntryResult::AlreadyApplied]);
+            }
+        }
 
         // ── v1.0.8: read this group's billing rate once for the whole batch
         // (every entry in a batch is for the SAME group_id). rate lives on
@@ -249,6 +276,16 @@ impl TrafficRepository for PgRepository {
     async fn prune_traffic_history(&self, cutoff: &str) -> Result<u64, DbError> {
         Ok(
             sqlx::query("DELETE FROM traffic_history WHERE hour_ts < $1")
+                .bind(cutoff)
+                .execute(&self.pool)
+                .await?
+                .rows_affected(),
+        )
+    }
+
+    async fn prune_traffic_batches(&self, cutoff: &str) -> Result<u64, DbError> {
+        Ok(
+            sqlx::query("DELETE FROM traffic_batches WHERE created_at < $1")
                 .bind(cutoff)
                 .execute(&self.pool)
                 .await?

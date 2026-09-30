@@ -5633,3 +5633,178 @@ async fn admin_order_list_pages_without_overlap() {
         "the two pages must cover all three rows exactly once"
     );
 }
+
+// ── v1.2.12: traffic batch ids (re-send dedup) ──
+
+/// alice, inbound groups 50 and 60, her rules 100 and 101 on group 50 and 200
+/// on group 60. Returns alice's id.
+async fn seed_batch_fixture(db: &SqliteRepository) -> i64 {
+    db.insert_user("alice", "h", 1).await.unwrap();
+    let alice = db.find_by_username("alice").await.unwrap().unwrap().id;
+    for gid in [50, 60] {
+        sqlx::query(
+            "INSERT INTO device_groups (id, name, group_type, token, uid) \
+             VALUES (?, 'gin', 'in', ?, ?)",
+        )
+        .bind(gid)
+        .bind(format!("tok-{gid}"))
+        .bind(alice)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+    for (rid, port, gid) in [(100, 20000, 50), (101, 20001, 50), (200, 20002, 60)] {
+        sqlx::query(
+            "INSERT INTO forward_rules \
+             (id, name, uid, listen_port, device_group_in, target_addr, target_port) \
+             VALUES (?, 'r', ?, ?, ?, '127.0.0.1', 80)",
+        )
+        .bind(rid)
+        .bind(alice)
+        .bind(port)
+        .bind(gid)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+    alice
+}
+
+fn entry(rule_id: i64, upload: u64, download: u64) -> TrafficEntry {
+    TrafficEntry {
+        rule_id,
+        upload,
+        download,
+    }
+}
+
+async fn rule_used(db: &SqliteRepository, rule_id: i64) -> i64 {
+    sqlx::query_scalar("SELECT traffic_used FROM forward_rules WHERE id = ?")
+        .bind(rule_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap()
+}
+
+/// A batch re-sent with the same id (its acknowledgement was lost) is
+/// acknowledged but not billed again. Ids are per group.
+#[tokio::test]
+async fn traffic_batch_with_the_same_id_is_billed_once() {
+    let db = repo().await;
+    let alice = seed_batch_fixture(&db).await;
+    let batch = [entry(100, 1000, 2000)];
+
+    let first = db
+        .apply_traffic_batch_with_id(50, Some("b1"), &batch)
+        .await
+        .unwrap();
+    assert!(matches!(first.as_slice(), [TrafficEntryResult::Ok]));
+    let again = db
+        .apply_traffic_batch_with_id(50, Some("b1"), &batch)
+        .await
+        .unwrap();
+    assert!(matches!(
+        again.as_slice(),
+        [TrafficEntryResult::AlreadyApplied]
+    ));
+    assert_eq!(rule_used(&db, 100).await, 3000);
+    let user_used: i64 = sqlx::query_scalar("SELECT traffic_used FROM users WHERE id = ?")
+        .bind(alice)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(user_used, 3000, "the user is charged once too");
+
+    // The same id from another group is a different batch.
+    let other = db
+        .apply_traffic_batch_with_id(60, Some("b1"), &[entry(200, 5, 5)])
+        .await
+        .unwrap();
+    assert!(matches!(other.as_slice(), [TrafficEntryResult::Ok]));
+    assert_eq!(rule_used(&db, 200).await, 10);
+}
+
+/// The id is checked BEFORE the rules: a batch that was applied and is re-sent
+/// after one of its rules was deleted must count as done. Rejecting it would
+/// make the node send the other rules' bytes again under a new id.
+#[tokio::test]
+async fn a_re_sent_batch_is_recognized_before_its_rules_are_checked() {
+    let db = repo().await;
+    seed_batch_fixture(&db).await;
+    let batch = [entry(100, 100, 0), entry(101, 50, 0)];
+
+    let first = db
+        .apply_traffic_batch_with_id(50, Some("b2"), &batch)
+        .await
+        .unwrap();
+    assert!(matches!(first.as_slice(), [TrafficEntryResult::Ok]));
+    sqlx::query("DELETE FROM forward_rules WHERE id = 101")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    let again = db
+        .apply_traffic_batch_with_id(50, Some("b2"), &batch)
+        .await
+        .unwrap();
+    assert!(
+        matches!(again.as_slice(), [TrafficEntryResult::AlreadyApplied]),
+        "got {again:?}"
+    );
+    assert_eq!(rule_used(&db, 100).await, 100);
+}
+
+/// A rejected batch leaves no record: the node's next try with the same id
+/// (or with a fresh one) is applied normally.
+#[tokio::test]
+async fn a_rejected_batch_leaves_no_record() {
+    let db = repo().await;
+    seed_batch_fixture(&db).await;
+
+    let rejected = db
+        .apply_traffic_batch_with_id(50, Some("b3"), &[entry(100, 10, 0), entry(999, 1, 0)])
+        .await
+        .unwrap();
+    assert!(matches!(
+        rejected.as_slice(),
+        [TrafficEntryResult::Unavailable]
+    ));
+    assert_eq!(rule_used(&db, 100).await, 0);
+
+    let retried = db
+        .apply_traffic_batch_with_id(50, Some("b3"), &[entry(100, 10, 0)])
+        .await
+        .unwrap();
+    assert!(matches!(retried.as_slice(), [TrafficEntryResult::Ok]));
+    assert_eq!(rule_used(&db, 100).await, 10);
+}
+
+/// Recorded ids are forgotten after the retention window.
+#[tokio::test]
+async fn old_traffic_batch_ids_are_pruned() {
+    let db = repo().await;
+    seed_batch_fixture(&db).await;
+    for id in ["old", "new"] {
+        db.apply_traffic_batch_with_id(50, Some(id), &[entry(100, 1, 0)])
+            .await
+            .unwrap();
+    }
+    sqlx::query(
+        "UPDATE traffic_batches SET created_at = '2020-01-01 00:00:00' WHERE batch_id = 'old'",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        db.prune_traffic_batches("2026-01-01 00:00:00")
+            .await
+            .unwrap(),
+        1
+    );
+    let left: Vec<String> = sqlx::query_scalar("SELECT batch_id FROM traffic_batches")
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(left, vec!["new".to_string()]);
+}

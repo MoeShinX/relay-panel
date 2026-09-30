@@ -156,13 +156,11 @@ fn get_or_create_node_id_at(path: &std::path::Path) -> String {
     // No id yet: generate one (16 random bytes → 32 hex chars). std's
     // fill_bytes uses the OS CSPRNG; we don't need cryptographic strength but
     // it's the most portable "good enough random" available without extra deps.
-    let mut bytes = [0u8; 16];
-    use std::io::Read;
     // /dev/urandom on Linux (the only supported platform); fall back to a
     // time+pid-based id if unavailable so the node still boots.
-    let id = match std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes)) {
-        Ok(()) => hex_encode(&bytes),
-        Err(_) => {
+    let id = match random_hex_16() {
+        Some(id) => id,
+        None => {
             tracing::warn!("could not read /dev/urandom for node_id; using fallback");
             fallback_id()
         }
@@ -175,6 +173,17 @@ fn get_or_create_node_id_at(path: &std::path::Path) -> String {
         tracing::info!("generated node_id {} -> {}", id, path.display());
     }
     id
+}
+
+/// 16 random bytes from /dev/urandom as 32 hex characters, or `None` where
+/// that cannot be read (not Linux).
+pub(crate) fn random_hex_16() -> Option<String> {
+    use std::io::Read;
+    let mut bytes = [0u8; 16];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut bytes))
+        .ok()?;
+    Some(hex_encode(&bytes))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

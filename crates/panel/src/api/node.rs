@@ -163,8 +163,26 @@ pub async fn report_traffic(
     // HTTP-status note (preserved): a rejection returns HTTP 200 with a business
     // `code` (403/400/500) INSIDE the JSON body — NOT a real HTTP error. Nodes
     // read the JSON `code` and ignore the HTTP status on these endpoints.
-    match crate::service::traffic::apply_traffic_report(state.db.as_ref(), group.id, &req.reports)
-        .await
+    //
+    // v1.2.12: every rejection below means the batch was NOT applied (it is one
+    // transaction and nothing runs after its commit) — a node relies on that to
+    // re-send its bytes under a new batch id without double billing.
+    if let Some(id) = req.batch_id.as_deref() {
+        if !valid_traffic_batch_id(id) {
+            return Json(ApiResponse {
+                code: 400,
+                message: "invalid batch id".into(),
+                data: None,
+            });
+        }
+    }
+    match crate::service::traffic::apply_traffic_report(
+        state.db.as_ref(),
+        group.id,
+        req.batch_id.as_deref(),
+        &req.reports,
+    )
+    .await
     {
         Ok(()) => Json(ApiResponse::success(())),
         Err(crate::service::traffic::TrafficReportError::Unavailable) => {
@@ -444,6 +462,7 @@ mod tests {
     fn report(_token: &str, entries: &[TrafficEntry]) -> TrafficReport {
         TrafficReport {
             reports: entries.to_vec(),
+            batch_id: None,
         }
     }
 
@@ -810,5 +829,55 @@ mod tests {
             Some("systemd"),
             "install_method must be persisted so the upgrade UI can offer a self-upgrade"
         );
+    }
+
+    /// v1.2.12: a node re-sends a batch whose acknowledgement it lost. The
+    /// panel acknowledges the copy (so the node can move on) but bills it once.
+    #[tokio::test]
+    async fn a_re_sent_traffic_batch_is_acknowledged_and_billed_once() {
+        let (state, pool) = seeded_state().await;
+        let send = || {
+            let mut r = report(
+                "tok-A",
+                &[TrafficEntry {
+                    rule_id: 100,
+                    upload: 1000,
+                    download: 2000,
+                }],
+            );
+            r.batch_id = Some("0123456789abcdef0123456789abcdef".into());
+            report_traffic(State(state.clone()), auth_headers("tok-A"), Json(r))
+        };
+        let Json(first) = send().await;
+        let Json(again) = send().await;
+        assert_eq!(first.code, 0, "{}", first.message);
+        assert_eq!(
+            again.code, 0,
+            "the copy must be acknowledged: {}",
+            again.message
+        );
+        assert_eq!(rule_traffic(&pool, 100).await, 3000, "billed once");
+        assert_eq!(user_traffic(&pool, 2).await, 3000);
+    }
+
+    /// A malformed batch id is refused before anything is applied.
+    #[tokio::test]
+    async fn an_invalid_traffic_batch_id_is_refused() {
+        let (state, pool) = seeded_state().await;
+        for bad in ["", "has space", "x".repeat(65).as_str(), "semi;colon"] {
+            let mut r = report(
+                "tok-A",
+                &[TrafficEntry {
+                    rule_id: 100,
+                    upload: 1,
+                    download: 1,
+                }],
+            );
+            r.batch_id = Some(bad.to_string());
+            let Json(resp) =
+                report_traffic(State(state.clone()), auth_headers("tok-A"), Json(r)).await;
+            assert_eq!(resp.code, 400, "{bad:?}: {}", resp.message);
+        }
+        assert_eq!(rule_traffic(&pool, 100).await, 0);
     }
 }

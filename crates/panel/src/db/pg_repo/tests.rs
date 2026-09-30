@@ -5738,3 +5738,185 @@ async fn pg_admin_order_list_pages_without_overlap() {
         "the two pages must cover all three rows exactly once"
     );
 }
+
+// ── v1.2.12: traffic batch ids (re-send dedup) — mirrors the SQLite tests ──
+
+/// alice, inbound groups 50 and 60, her rules 100 and 101 on group 50 and 200
+/// on group 60. Returns alice's id.
+async fn pg_seed_batch_fixture(db: &PgRepository) -> i64 {
+    db.insert_user("alice", "h", 1).await.unwrap();
+    let alice = db.find_by_username("alice").await.unwrap().unwrap().id;
+    for gid in [50_i64, 60] {
+        sqlx::query(
+            "INSERT INTO device_groups (id, name, group_type, token, uid) \
+             VALUES ($1, 'gin', 'in', $2, $3)",
+        )
+        .bind(gid)
+        .bind(format!("tok-{gid}"))
+        .bind(alice)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+    for (rid, port, gid) in [
+        (100_i64, 20000_i32, 50_i64),
+        (101, 20001, 50),
+        (200, 20002, 60),
+    ] {
+        sqlx::query(
+            "INSERT INTO forward_rules \
+             (id, name, uid, listen_port, device_group_in, target_addr, target_port) \
+             VALUES ($1, 'r', $2, $3, $4, '127.0.0.1', 80)",
+        )
+        .bind(rid)
+        .bind(alice)
+        .bind(port)
+        .bind(gid)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+    alice
+}
+
+fn pg_entry(rule_id: i64, upload: u64, download: u64) -> TrafficEntry {
+    TrafficEntry {
+        rule_id,
+        upload,
+        download,
+    }
+}
+
+async fn pg_rule_used(db: &PgRepository, rule_id: i64) -> i64 {
+    sqlx::query_scalar("SELECT traffic_used FROM forward_rules WHERE id = $1")
+        .bind(rule_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn pg_traffic_batch_with_the_same_id_is_billed_once() {
+    let Some(db) = repo("batch_once").await else {
+        return;
+    };
+    let alice = pg_seed_batch_fixture(&db).await;
+    let batch = [pg_entry(100, 1000, 2000)];
+
+    let first = db
+        .apply_traffic_batch_with_id(50, Some("b1"), &batch)
+        .await
+        .unwrap();
+    assert!(matches!(first.as_slice(), [TrafficEntryResult::Ok]));
+    let again = db
+        .apply_traffic_batch_with_id(50, Some("b1"), &batch)
+        .await
+        .unwrap();
+    assert!(matches!(
+        again.as_slice(),
+        [TrafficEntryResult::AlreadyApplied]
+    ));
+    assert_eq!(pg_rule_used(&db, 100).await, 3000);
+    let user_used: i64 = sqlx::query_scalar("SELECT traffic_used FROM users WHERE id = $1")
+        .bind(alice)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(user_used, 3000, "the user is charged once too (PG)");
+
+    let other = db
+        .apply_traffic_batch_with_id(60, Some("b1"), &[pg_entry(200, 5, 5)])
+        .await
+        .unwrap();
+    assert!(matches!(other.as_slice(), [TrafficEntryResult::Ok]));
+    assert_eq!(pg_rule_used(&db, 200).await, 10);
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_a_re_sent_batch_is_recognized_before_its_rules_are_checked() {
+    let Some(db) = repo("batch_before_rules").await else {
+        return;
+    };
+    pg_seed_batch_fixture(&db).await;
+    let batch = [pg_entry(100, 100, 0), pg_entry(101, 50, 0)];
+
+    let first = db
+        .apply_traffic_batch_with_id(50, Some("b2"), &batch)
+        .await
+        .unwrap();
+    assert!(matches!(first.as_slice(), [TrafficEntryResult::Ok]));
+    sqlx::query("DELETE FROM forward_rules WHERE id = 101")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    let again = db
+        .apply_traffic_batch_with_id(50, Some("b2"), &batch)
+        .await
+        .unwrap();
+    assert!(
+        matches!(again.as_slice(), [TrafficEntryResult::AlreadyApplied]),
+        "got {again:?} (PG)"
+    );
+    assert_eq!(pg_rule_used(&db, 100).await, 100);
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_a_rejected_batch_leaves_no_record() {
+    let Some(db) = repo("batch_rejected").await else {
+        return;
+    };
+    pg_seed_batch_fixture(&db).await;
+
+    let rejected = db
+        .apply_traffic_batch_with_id(50, Some("b3"), &[pg_entry(100, 10, 0), pg_entry(999, 1, 0)])
+        .await
+        .unwrap();
+    assert!(matches!(
+        rejected.as_slice(),
+        [TrafficEntryResult::Unavailable]
+    ));
+    assert_eq!(pg_rule_used(&db, 100).await, 0);
+
+    let retried = db
+        .apply_traffic_batch_with_id(50, Some("b3"), &[pg_entry(100, 10, 0)])
+        .await
+        .unwrap();
+    assert!(matches!(retried.as_slice(), [TrafficEntryResult::Ok]));
+    assert_eq!(pg_rule_used(&db, 100).await, 10);
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_old_traffic_batch_ids_are_pruned() {
+    let Some(db) = repo("batch_prune").await else {
+        return;
+    };
+    pg_seed_batch_fixture(&db).await;
+    for id in ["old", "new"] {
+        db.apply_traffic_batch_with_id(50, Some(id), &[pg_entry(100, 1, 0)])
+            .await
+            .unwrap();
+    }
+    sqlx::query(
+        "UPDATE traffic_batches SET created_at = '2020-01-01 00:00:00' WHERE batch_id = 'old'",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        db.prune_traffic_batches("2026-01-01 00:00:00")
+            .await
+            .unwrap(),
+        1
+    );
+    let left: Vec<String> = sqlx::query_scalar("SELECT batch_id FROM traffic_batches")
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(left, vec!["new".to_string()]);
+    cleanup(&db).await;
+}
