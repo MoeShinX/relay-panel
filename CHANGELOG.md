@@ -8,6 +8,19 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Every part of the panel's Chinese font loads again.** The build inlined
+  a few of the font's smallest pieces into the stylesheet as `data:` URIs,
+  which the panel's own Content-Security-Policy does not allow for fonts, so
+  the browser refused them (a row of console errors) and the characters they
+  cover fell back to a system font. Fonts are now always separate files, and
+  CI fails if one is ever inlined again.
+
+---
+
 ## [1.2.11] - 2026-09-27
 
 Ships alongside `node-v1.2.5`; neither requires the other, and the config
