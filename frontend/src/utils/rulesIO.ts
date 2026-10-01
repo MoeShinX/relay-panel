@@ -49,6 +49,17 @@ export interface ExportEntry {
  * - Compact (no pretty-print) so it's the one-line shape shown in the import
  *   hint.
  */
+/** A group name made safe for a download's file name: whitespace and the
+ *  characters Windows or macOS reject become `-`, trimmed, at most 40
+ *  characters. '' when nothing usable is left. */
+export function exportFileLabel(name: string): string {
+  return name
+    .trim()
+    .replace(/[\\/:*?"<>|\s]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+}
+
 export function buildExportJSON(rules: ForwardRule[]): string {
   const simplified: ExportEntry[] = rules.map(r => {
     const targets = ruleTargets(r).filter(t => t.enabled);
