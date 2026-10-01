@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   asValidatedEntry,
   buildExportJSON,
+  exportFileLabel,
   parseDest,
   ruleTargets,
   validateImportEntry,
@@ -314,5 +315,22 @@ describe('export → import round-trip', () => {
     expect(entries.map(e => e.listen_port)).toEqual([10000, 10001, 10002]);
     // The second rule's two targets round-trip into two dests.
     expect(entries[1].dest).toEqual(['a.com:1', 'b.com:2']);
+  });
+});
+
+describe('exportFileLabel', () => {
+  it('keeps an ordinary group name', () => {
+    expect(exportFileLabel('hk-line')).toBe('hk-line');
+    expect(exportFileLabel('香港 01')).toBe('香港-01');
+  });
+
+  it('replaces characters a file name cannot hold', () => {
+    expect(exportFileLabel('a/b\\c:d*e?f"g<h>i|j')).toBe('a-b-c-d-e-f-g-h-i-j');
+    expect(exportFileLabel('  //HK  line//  ')).toBe('HK-line');
+  });
+
+  it('is empty when nothing usable is left, and capped at 40', () => {
+    expect(exportFileLabel(' /:* ')).toBe('');
+    expect(exportFileLabel('x'.repeat(60))).toHaveLength(40);
   });
 });

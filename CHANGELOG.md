@@ -8,6 +8,21 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Rules can be exported one inbound group at a time, and the dashboard
+  counts each group's rules.** "Export all" put every machine's targets into
+  one file. With a group filter (or a search) on the rules page, the export
+  menu now also offers "export filtered (N)", the file named after the group;
+  import already asks which group to load into, so this is how a new machine
+  gets an old one's rules. The dashboard's node table has a rules column —
+  enabled / total per group — to check that a new machine lines up with the
+  old ones.
+
+---
+
 ## [1.2.11] - 2026-09-27
 
 Ships alongside `node-v1.2.5`; neither requires the other, and the config

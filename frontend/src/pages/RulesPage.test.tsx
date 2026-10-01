@@ -195,3 +195,50 @@ describe('row actions name their rule', () => {
     expect(screen.getByLabelText('filterByGroup')).toBeInTheDocument();
   });
 });
+
+// ── v1.2.12: export one group's rules (one machine's, where each machine has
+// its own group) — "export all" mixed every machine's targets into one file.
+describe('exporting the filtered rules', () => {
+  /** Capture what a download writes: its file name and text. */
+  function captureDownload() {
+    const saved: { name?: string; blob?: Blob } = {};
+    const create = vi.fn((b: Blob) => { saved.blob = b; return 'blob:x'; });
+    Object.assign(URL, { createObjectURL: create, revokeObjectURL: vi.fn() });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      saved.name = this.download;
+    });
+    return { saved, restore: () => click.mockRestore() };
+  }
+
+  /** jsdom's Blob has no text(); FileReader reads it. */
+  const readBlob = (b: Blob) =>
+    new Promise<string>((resolve) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result));
+      r.readAsText(b);
+    });
+
+  it('exports only the selected group, named after it', async () => {
+    const user = userEvent.setup();
+    const { saved, restore } = captureDownload();
+    renderPage('/rules?group=8');
+    await waitFor(() => expect(screen.getByText('jp-game')).toBeInTheDocument());
+    await user.hover(screen.getByRole('button', { name: /exportImport/ }));
+    await user.click(await screen.findByText('exportFiltered'));
+
+    await waitFor(() => expect(saved.name).toBeDefined());
+    expect(saved.name).toMatch(/^relaypanel-rules-jp-line-\d{4}-\d{2}-\d{2}\.json$/);
+    const exported = JSON.parse(await readBlob(saved.blob!));
+    expect(exported).toEqual([{ dest: ['1.2.3.4:80'], listen_port: 10002, name: 'jp-game' }]);
+    restore();
+  });
+
+  it('is not offered while nothing is filtered', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
+    await user.hover(screen.getByRole('button', { name: /exportImport/ }));
+    expect(await screen.findByText('exportAll')).toBeInTheDocument();
+    expect(screen.queryByText('exportFiltered')).toBeNull();
+  });
+});

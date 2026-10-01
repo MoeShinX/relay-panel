@@ -39,10 +39,10 @@ afterEach(() => {
 
 /** Resolve every Dashboard API call. Unspecified endpoints 404-reject so a
  *  missed mock is loud rather than silently swallowed. */
-function mockAll(nodes: NodeStatus[]) {
+function mockAll(nodes: NodeStatus[], rules: unknown[] = [{}]) {
   mockGet.mockImplementation((url: string) => {
     if (url === '/admin/users') return Promise.resolve(ok([{}]));
-    if (url === '/rules') return Promise.resolve(ok([{}]));
+    if (url === '/rules') return Promise.resolve(ok(rules));
     if (url === '/groups') return Promise.resolve(ok([{}]));
     if (url === '/nodes') return Promise.resolve(ok(nodes));
     if (url === '/system/version') {
@@ -99,6 +99,35 @@ describe('Dashboard group aggregation', () => {
       row!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(mockNavigate).toHaveBeenCalledWith('/nodes');
+  });
+
+  // v1.2.12: each group's enabled / total rules, so a new machine (group) can
+  // be checked against the old ones — the stat card only had the grand total.
+  it('shows each group’s enabled / total rule count', async () => {
+    mockAll(
+      [
+        ns(1, { node_id: 'a', online: true }),
+        ns(1, { node_id: 'b', online: true }),
+        ns(2, { node_id: 'c', online: false }),
+      ],
+      [
+        { id: 1, device_group_in: 1, paused: false },
+        { id: 2, device_group_in: 1, paused: true },
+        { id: 3, device_group_in: 2, paused: false },
+        { id: 4, device_group_in: 2, paused: false },
+        { id: 5, device_group_in: 2, paused: false },
+      ],
+    );
+    renderDashboard();
+    await flush();
+
+    expect(screen.getAllByRole('columnheader').some((h) => h.textContent === 'groupRules')).toBe(true);
+    const cells = (gid: string) => {
+      const row = screen.getAllByText(gid)[0].closest('tr')!;
+      return Array.from(row.querySelectorAll('td')).map((td) => td.textContent);
+    };
+    expect(cells('g1')).toContain('1/2');
+    expect(cells('g2')).toContain('3/3');
   });
 
   it('shows the empty hint when no nodes report', async () => {
