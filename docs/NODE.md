@@ -156,6 +156,7 @@ export them before launching.
 | `LISTEN_IPV6` | IPv6 inbound listen address for TCP/UDP rules; empty disables IPv6 | `::` |
 | `OUTBOUND_INTERFACE` | NIC for outbound IPv4 egress; `auto` = system routing (no source bind) | `auto` |
 | `OUTBOUND_BIND_IPV4` | Exact IPv4 source for outbound TCP/UDP; overrides `OUTBOUND_INTERFACE` | (unset) |
+| `UDP_MAX_SESSIONS` | Most concurrent UDP sessions (client addresses) across all rules; new ones beyond it are refused, so forged sources cannot exhaust file descriptors | half the fd limit (32768 under the installer's `LimitNOFILE=65536`) |
 | `RUST_LOG` | Log level: `error` / `warn` / `info` / `debug` | `info` |
 
 Notes:

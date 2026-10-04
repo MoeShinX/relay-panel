@@ -21,6 +21,22 @@ independent `v*` / `node-v*` tracks since this release).
   to find the cause on the node, and their upgrade action is disabled with the
   reason instead of failing on click.
 
+### Security
+
+- **A short `JWT_SECRET` is now refused.** The panel only rejected an empty
+  secret or the placeholder, so something like `JWT_SECRET=abc` was accepted.
+  Login tokens are HS256-signed: anyone holding one issued token could
+  brute-force a short secret offline and then sign an admin token. The panel
+  now requires at least 32 characters and exits with an explanation otherwise.
+
+  Installs made with `deploy.sh` generate a 64-character secret and are
+  unaffected. If yours is shorter, `deploy.sh` — which the one-click update
+  also runs — replaces it in `.env` with a new random one, so the upgrade
+  cannot leave the panel down; everyone has to log in again once. If you run
+  the compose file by hand, set a new one with `openssl rand -hex 32`.
+
+---
+
 ## [1.2.11] - 2026-09-27
 
 Ships alongside `node-v1.2.5`; neither requires the other, and the config

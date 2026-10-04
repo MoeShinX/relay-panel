@@ -105,7 +105,8 @@ cd relay-panel
 
 ### 2. Generate secrets
 
-The panel refuses to start without a real `JWT_SECRET`. Generate one:
+The panel refuses to start without a real `JWT_SECRET` (at least 32
+characters). Generate one:
 
 ```bash
     cat > .env <<EOF

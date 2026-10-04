@@ -30,6 +30,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   now give up after 15 s. (Traffic reports get a timeout together with
   re-send deduplication, which is what makes giving up on one safe.)
 
+- **UDP sessions no longer leak.** When an idle UDP session expired, only its
+  table entry was dropped: the task reading the target's replies kept the
+  session's socket and waited forever if the target never answered again. On
+  a busy UDP rule this piled up one task and one file descriptor per idle
+  client until the node ran out of descriptors. Expiring a session now stops
+  its reader at once — also while it is waiting on the rule's rate limit, when
+  it used to hold on until the wait ended and then still forward the reply —
+  and removing or restarting a UDP rule releases all of its sessions (and the
+  rule's cleanup task, which also used to live on).
+- **A late error on an expired UDP session could cut off the client's new
+  one.** The old session's reader removed "the session for this client" when
+  its socket failed — by then possibly the replacement session. It now only
+  removes its own.
+- **Nodes installed with `-s <name>` ran from the default instance's
+  directory.** The generated `start.sh` always changed into `/opt/relay-node`
+  and read its `relay-node.env`, and the node kept its id and config cache
+  there whenever that directory existed — so a second instance on the same
+  host shared the first one's node id and showed up as the same node. Each
+  instance now uses its own `/opt/<name>`. Re-run the install command for the
+  instance to get the new `start.sh`; the default `relay-node` instance keeps
+  its files where they are.
+
+### Security
+
+- **A flood of forged UDP sources can no longer take the node down.** Every
+  new UDP source address opened a socket that stayed open for 60 idle seconds,
+  with no limit, so spoofed packets could use up the node's file descriptors —
+  after which every rule, TCP included, stopped working while the node still
+  showed as online. New UDP sessions are now limited node-wide to half the
+  file-descriptor limit (32768 with the installer's service settings); beyond
+  that new sessions are refused, existing ones carry on, and the log warns at
+  most once a minute. Set `UDP_MAX_SESSIONS` in `relay-node.env` for very busy
+  UDP forwarding. Refused packets also no longer add entries to the
+  connection count.
+- **The installer no longer pastes `-u` / `-t` into `start.sh` unescaped.**
+  The values were inserted with `sed`, so a URL or token containing `$(...)`
+  would run on every node start, and a `|` or `&` produced a broken file. The
+  token, panel URL and service name are now validated, and `start.sh` is
+  written with proper shell quoting. The values come from the install command
+  the operator pastes, so this was not reachable remotely.
+
+---
+
 ## [1.2.5] - 2026-09-27
 
 Nothing on the wire changed (still protocol version 4), so this node runs

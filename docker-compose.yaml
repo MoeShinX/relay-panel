@@ -10,7 +10,8 @@
 #      into NODE_TOKEN for the node service.
 #   4. Change the default admin password (admin/admin123) after first login.
 #
-# The panel REFUSES TO START if JWT_SECRET is empty or the placeholder.
+# The panel REFUSES TO START if JWT_SECRET is empty, the placeholder, or
+# shorter than 32 characters (deploy.sh replaces a short one in .env).
 # ============================================================================
 
 services:
