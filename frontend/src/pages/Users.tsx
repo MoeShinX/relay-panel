@@ -6,6 +6,7 @@ import dayjs, { type Dayjs } from 'dayjs';
 import api from '../api/client';
 import type { ApiEnvelope, User, Plan } from '../api/types';
 import { useI18n } from '../i18n/context';
+import { usePhoneTableScroll } from '../hooks/useIsMobile';
 import { formatBytes } from '../utils/format';
 import { makePasswordValidator } from '../utils/password';
 import { useAuth } from '../auth/useAuth';
@@ -49,6 +50,7 @@ interface ResetFormValues {
 }
 
 export default function Users() {
+  const phoneScroll = usePhoneTableScroll();
   const { t } = useI18n();
   const navigate = useNavigate();
   const [users, setUsers] = useState<User[]>([]);
@@ -405,7 +407,7 @@ export default function Users() {
           <Button icon={<ReloadOutlined />} onClick={load}>{t('refresh')}</Button>
         </Space>
       </div>
-      <Table dataSource={filteredUsers} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 20 }} scroll={{ x: 'max-content' }} />
+      <Table dataSource={filteredUsers} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 20 }} scroll={phoneScroll} />
 
       <Modal
         title={editing ? `${t('editUser')}: ${editing.username}` : t('editUser')}

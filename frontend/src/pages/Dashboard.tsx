@@ -13,7 +13,7 @@ import TrafficChart from '../components/TrafficChart';
 import NodeMetricsChart from '../components/NodeMetricsChart';
 import { formatBps, formatBytes } from '../utils/format';
 import { PanelUpdateButton } from '../components/PanelUpdateButton';
-import { useIsMobile } from '../hooks/useIsMobile';
+import { useIsMobile, usePhoneTableScroll } from '../hooks/useIsMobile';
 
 const { Text } = Typography;
 
@@ -43,6 +43,7 @@ export default function Dashboard() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
+  const phoneScroll = usePhoneTableScroll();
   const [stats, setStats] = useState({ users: 0, rules: 0, groups: 0 });
   // v1.2.0: kept whole (not just the count) for the traffic chart's drill-down.
   const [ruleList, setRuleList] = useState<ForwardRule[]>([]);
@@ -347,7 +348,7 @@ export default function Dashboard() {
               rowKey="group_id"
               pagination={false}
               size="small"
-              scroll={{ x: 'max-content' }}
+              scroll={phoneScroll}
               onRow={() => ({ onClick: () => navigate('/nodes'), style: { cursor: 'pointer' } })}
             />
         }

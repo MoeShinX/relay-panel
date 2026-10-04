@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import api from '../api/client';
 import type { ApiEnvelope, DeviceGroup, User, NodeStatus } from '../api/types';
 import { useI18n } from '../i18n/context';
+import { usePhoneTableScroll } from '../hooks/useIsMobile';
 import { copyText } from '../utils/clipboard';
 import { useAuth } from '../auth/useAuth';
 
@@ -30,6 +31,7 @@ function isLocalhost(): boolean {
 }
 
 export default function Groups() {
+  const phoneScroll = usePhoneTableScroll();
   const { t } = useI18n();
   const { isAdmin } = useAuth();
   const [groups, setGroups] = useState<DeviceGroup[]>([]);
@@ -411,7 +413,7 @@ export default function Groups() {
           dataSource={groupNodes}
           rowKey={(n: NodeStatus) => n.node_id ?? `${n.public_ipv4 ?? n.public_ip}-${n.last_seen}`}
           pagination={false}
-          scroll={{ x: 'max-content' }}
+          scroll={phoneScroll}
           size="small"
           columns={[
             { title: 'ID', dataIndex: 'node_id', key: 'node_id', width: 120, render: (v: string | undefined) => v ? <Text code style={{ fontSize: 11 }}>{v.slice(0, 8)}...{v.slice(-4)}</Text> : '-' },
@@ -448,7 +450,7 @@ export default function Groups() {
         rowKey="id"
         loading={loading}
         pagination={{ pageSize: 20 }}
-        scroll={{ x: 'max-content' }}
+        scroll={phoneScroll}
         expandable={{
           expandedRowRender,
           rowExpandable: () => true,

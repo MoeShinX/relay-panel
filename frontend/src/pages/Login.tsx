@@ -56,8 +56,11 @@ export default function Login() {
     <div style={{
       display: 'flex', justifyContent: 'center', alignItems: 'center',
       minHeight: '100vh', background: 'var(--rp-bg)',
-      // A gutter on phones; the top leaves room for the language switch.
-      padding: '56px 16px 24px',
+      // A gutter on phones; the top leaves room for the language switch. The
+      // same at the bottom, and inside the 100vh (border-box), so the card
+      // stays exactly centred on a desktop with no scrollbar.
+      padding: '56px 16px',
+      boxSizing: 'border-box',
     }}>
       <div style={{ position: 'absolute', top: 20, right: 24 }}>
         <Segmented

@@ -55,7 +55,10 @@ export default function ForcePasswordChange() {
     <div style={{
       display: 'flex', justifyContent: 'center', alignItems: 'center',
       minHeight: '100vh', background: 'var(--rp-bg)',
+      // A gutter on phones, inside the 100vh so a desktop keeps the card
+      // centred with no scrollbar.
       padding: '24px 16px',
+      boxSizing: 'border-box',
     }}>
       <Card style={{ width: '100%', maxWidth: 400, boxShadow: 'var(--rp-shadow)' }}>
         <div style={{ textAlign: 'center', marginBottom: 20 }}>

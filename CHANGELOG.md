@@ -22,7 +22,8 @@ independent `v*` / `node-v*` tracks since this release).
   cards stay in one row, and every table scrolls inside itself instead of
   widening the whole page. The login, registration and forced
   password-change cards, and the rule dialog's target address, fit a narrow
-  screen. Tablets and desktops are unchanged.
+  screen. Tablets and desktops are unchanged: the table scrolling and the
+  layout changes apply on phones only (checked at 1366px).
 
 ## [1.2.12] - 2026-10-04
 
