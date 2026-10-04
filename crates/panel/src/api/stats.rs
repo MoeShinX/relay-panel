@@ -375,10 +375,11 @@ pub async fn get_node_status(
 /// reappears on its next report. Use case: clear a stale/ghost entry that the
 /// auto-sweep hasn't caught, or remove a decommissioned node's leftover row.
 ///
-/// v0.4.10: usable by regular users for their OWN groups only. Before touching
-/// kvs we verify the caller owns `group_id` via the scoped group lookup — a
-/// non-admin deleting a status row for a group they don't own (or one that
-/// doesn't exist) gets a uniform 404. An admin (scope All) may delete any.
+/// Admin-only since v0.4.12 (nodes are admin-managed), so there is no
+/// ownership to check. v1.2.13: nor does the group have to exist. A record can
+/// outlive its group, and the old "does this group exist?" lookup made exactly
+/// those records impossible to remove: the button answered "status record not
+/// found" for a row the node list was showing.
 ///
 /// Security: the key is CONSTRUCTED from the validated group_id + node_id
 /// params, never interpolated from raw user input. The DELETE's WHERE clause
@@ -390,29 +391,6 @@ pub async fn delete_node_status(
     axum::extract::Path((group_id,)): axum::extract::Path<(i64,)>,
     axum::extract::Query(q): axum::extract::Query<DeleteStatusQuery>,
 ) -> Json<ApiResponse<()>> {
-    // v0.4.12 PR1: admin-only (nodes are admin-managed). Scope All — an admin
-    // may clear any group's status row. The key is still CONSTRUCTED from the
-    // validated group_id + node_id, never raw user input.
-    let scope = crate::db::repo::ResourceScope::All;
-    match crate::db::repo::GroupRepository::find_by_id(state.db.as_ref(), group_id, &scope).await {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-            return Json(ApiResponse {
-                code: 404,
-                message: "status record not found".into(),
-                data: None,
-            })
-        }
-        Err(e) => {
-            tracing::error!("delete_node_status: group find_by_id failed: {}", e);
-            return Json(ApiResponse {
-                code: 500,
-                message: "database error".into(),
-                data: None,
-            });
-        }
-    }
-
     // Build the target key from validated inputs.
     // node_id present → per-node key; absent → legacy per-group key.
     let key = match &q.node_id {

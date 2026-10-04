@@ -8,6 +8,18 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Deleting a device group removes its nodes from the node-status page, and
+  a node left behind by a deleted group can be removed by hand again.** The
+  group's node records used to stay — offline, listed as "Group N" — until
+  they were 24 hours old, and the remove button refused them with "status
+  record not found": it looked the group up before removing the record.
+  Deleting a group now removes its nodes' records at once, and removing a
+  record no longer needs its group to exist.
+
 ## [1.2.12] - 2026-10-04
 
 Ships alongside `node-v1.2.6`; neither requires the other, and the config

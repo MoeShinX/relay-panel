@@ -148,6 +148,26 @@ pub async fn cleanup_legacy_status(db: &dyn Repository, group_id: i64, ip: &str)
     }
 }
 
+/// Delete every node_status row of `group_id`: the per-node keys
+/// (`node_status:{gid}:{node_id}`) and the legacy per-group one
+/// (`node_status:{gid}`). For when the group itself is deleted — its nodes can
+/// no longer report (the token is gone), so the rows could only sit there,
+/// offline, until the stale sweep took them a day later.
+///
+/// Matches the exact group segment, so group 1 never takes group 10's rows
+/// with it. Returns how many rows were deleted.
+pub async fn remove_group_status(db: &dyn Repository, group_id: i64) -> Result<u64, DbError> {
+    let legacy_key = format!("node_status:{}", group_id);
+    let per_node_prefix = format!("{}:", legacy_key);
+    let mut removed = 0;
+    for (key, _) in db.scan_prefix(&legacy_key).await? {
+        if key == legacy_key || key.starts_with(&per_node_prefix) {
+            removed += db.delete(&key).await?;
+        }
+    }
+    Ok(removed)
+}
+
 /// Remove node_status entries older than [`STALE_STATUS_THRESHOLD_SECS`].
 /// Parses last_seen from the stored JSON; entries without last_seen are left
 /// alone (conservative — don't delete what we can't age).

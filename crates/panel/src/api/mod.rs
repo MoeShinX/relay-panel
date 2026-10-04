@@ -298,8 +298,9 @@ pub fn routes() -> Router<AppState> {
         // v0.4.10: node status is owner-scoped (a user sees only nodes for
         // groups they own). Renamed /node_status → /nodes.
         .route("/nodes", axum::routing::get(stats::get_node_status))
-        // v0.4.10: manually delete a node status record (owner-scoped — the
-        // caller must own the group). Renamed /node_status/{id} → /nodes/{id}.
+        // v0.4.10: manually delete a node status record. Admin-only since
+        // v0.4.12; since v1.2.13 the group need not still exist. Renamed
+        // /node_status/{id} → /nodes/{id}.
         .route(
             "/nodes/{group_id}",
             axum::routing::delete(stats::delete_node_status),

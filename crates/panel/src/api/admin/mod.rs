@@ -2967,4 +2967,101 @@ mod tests {
             assert!(started.elapsed() < std::time::Duration::from_millis(100));
         }
     }
+
+    // ── v1.2.13: node records of a deleted group ──
+    // Deleting a group left its nodes' status rows behind for the stale sweep,
+    // which keeps offline rows for 24 hours — and the remove button refused
+    // them, because it looked the (deleted) group up first.
+
+    async fn put_status(state: &AppState, key: &str) {
+        state
+            .db
+            .set(key, r#"{"last_seen":"2026-10-04T00:00:00Z"}"#)
+            .await
+            .unwrap();
+    }
+
+    async fn has_status(state: &AppState, key: &str) -> bool {
+        state.db.get(key).await.unwrap().is_some()
+    }
+
+    #[tokio::test]
+    async fn deleting_a_group_removes_its_node_records() {
+        let (state, pool) = test_state().await;
+        add_group(&pool, 1, 1, "doomed").await;
+        add_group(&pool, 10, 1, "neighbour").await;
+        put_status(&state, "node_status:1:node-a").await;
+        put_status(&state, "node_status:1").await;
+        put_status(&state, "node_status:10:node-b").await;
+
+        let Json(resp) =
+            super::delete_group(AdminOnly { user_id: 1 }, State(state.clone()), Path(1)).await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+
+        assert!(!has_status(&state, "node_status:1:node-a").await);
+        assert!(
+            !has_status(&state, "node_status:1").await,
+            "the legacy per-group row goes too"
+        );
+        assert!(
+            has_status(&state, "node_status:10:node-b").await,
+            "group 10 shares the key prefix and must keep its rows"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_group_deletion_keeps_its_node_records() {
+        let (state, pool) = test_state().await;
+        add_group(&pool, 1, 1, "in-use").await;
+        add_rule(&pool, 100, 1, 1, 20001, 0).await;
+        put_status(&state, "node_status:1:node-a").await;
+
+        let Json(resp) =
+            super::delete_group(AdminOnly { user_id: 1 }, State(state.clone()), Path(1)).await;
+        assert_eq!(resp.code, 409, "{}", resp.message);
+        assert!(has_status(&state, "node_status:1:node-a").await);
+    }
+
+    #[tokio::test]
+    async fn a_node_record_outliving_its_group_can_be_removed() {
+        use crate::api::stats::{delete_node_status, DeleteStatusQuery};
+
+        let (state, _pool) = test_state().await;
+        // Group 7 does not exist, as after a deletion that predates the
+        // cleanup above.
+        put_status(&state, "node_status:7:node-a").await;
+
+        let Json(resp) = delete_node_status(
+            AdminOnly { user_id: 1 },
+            State(state.clone()),
+            Path((7,)),
+            Query(DeleteStatusQuery {
+                node_id: Some("node-a".into()),
+            }),
+        )
+        .await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+        assert!(!has_status(&state, "node_status:7:node-a").await);
+    }
+
+    #[tokio::test]
+    async fn removing_a_node_record_that_is_not_there_is_still_404() {
+        use crate::api::stats::{delete_node_status, DeleteStatusQuery};
+
+        let (state, pool) = test_state().await;
+        add_group(&pool, 1, 1, "line").await;
+        put_status(&state, "node_status:1:node-a").await;
+
+        let Json(resp) = delete_node_status(
+            AdminOnly { user_id: 1 },
+            State(state.clone()),
+            Path((1,)),
+            Query(DeleteStatusQuery {
+                node_id: Some("node-b".into()),
+            }),
+        )
+        .await;
+        assert_eq!(resp.code, 404, "{}", resp.message);
+        assert!(has_status(&state, "node_status:1:node-a").await);
+    }
 }
