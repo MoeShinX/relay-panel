@@ -8,6 +8,22 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **The panel fits a phone.** Below 768px wide the sider is gone — even
+  collapsed it kept an 80px icon strip, a fifth of a phone screen — and the
+  menu slides in from a button in the header. The header keeps the
+  announcements bell and folds language, password, GitHub and logout into one
+  menu; before, it ran off the screen. Page titles no longer shrink to one
+  character per line beside their buttons (the buttons wrap below), card
+  headers wrap their controls under the title, the dashboard's three stat
+  cards stay in one row, and every table scrolls inside itself instead of
+  widening the whole page. The login, registration and forced
+  password-change cards, and the rule dialog's target address, fit a narrow
+  screen. Tablets and desktops are unchanged.
+
 ## [1.2.12] - 2026-10-04
 
 Ships alongside `node-v1.2.6`; neither requires the other, and the config

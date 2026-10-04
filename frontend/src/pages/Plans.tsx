@@ -196,7 +196,7 @@ export default function Plans() {
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>{t('addPlan')}</Button>
         </Space>
       </div>
-      <Table dataSource={plans} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 20 }} />
+      <Table dataSource={plans} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 20 }} scroll={{ x: 'max-content' }} />
 
       {/* v1.2.4: the operator's view of every purchase. Below the plan
           table because it is a consequence of it — you set the prices here,

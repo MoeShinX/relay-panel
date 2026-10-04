@@ -1,7 +1,11 @@
-import { Layout, Menu, Button, Space, Typography, Segmented, Modal, Form, Input, message, Spin, Badge, Tooltip } from 'antd';
+import { Layout, Menu, Button, Space, Typography, Segmented, Modal, Form, Input, message, Spin, Badge, Tooltip, Drawer, Dropdown } from 'antd';
+import type { MenuProps } from 'antd';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useState, Suspense } from 'react';
 import {
+  MenuOutlined,
+  EllipsisOutlined,
+  TranslationOutlined,
   DashboardOutlined,
   ApiOutlined,
   CloudServerOutlined,
@@ -20,6 +24,7 @@ import type { ApiEnvelope } from '../api/types';
 import { useAuth } from '../auth/useAuth';
 import { useSite } from '../hooks/useSite';
 import { useAnnouncementBadge } from '../hooks/useAnnouncementBadge';
+import { useIsMobile } from '../hooks/useIsMobile';
 import { makePasswordValidator } from '../utils/password';
 
 const { Sider, Content, Header } = Layout;
@@ -37,6 +42,10 @@ export default function MainLayout() {
   const [changePwOpen, setChangePwOpen] = useState(false);
   const [pwForm] = Form.useForm();
   const [pwSubmitting, setPwSubmitting] = useState(false);
+  // Phones get no sider: the menu slides in from the left on demand, and the
+  // header's controls fold into one menu (see the mobile branch below).
+  const isMobile = useIsMobile();
+  const [menuOpen, setMenuOpen] = useState(false);
 
   // v0.4.11 PR2: role-based navigation.
   // Admin: Dashboard → 个人中心, 转发规则, 设备分组, 节点状态, 隧道配置, 用户管理, 系统设置
@@ -120,40 +129,104 @@ export default function MainLayout() {
     }
   };
 
+  const brand = site.site_name || t('brand');
+  const brandBlock = (
+    <div style={{
+      height: 'var(--rp-header-height)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      color: '#fff', fontSize: 17, fontWeight: 600, letterSpacing: 0.5,
+    }}>
+      {brand}
+    </div>
+  );
+  // One menu for both homes: the desktop sider and the phone drawer.
+  const menu = (
+    <Menu
+      theme="dark"
+      mode="inline"
+      selectedKeys={[location.pathname]}
+      defaultOpenKeys={openKeys}
+      items={menuItems}
+      // Parent entries carry a `grp-` key and no route — clicking one only
+      // expands it, so navigating on them would 404.
+      onClick={({ key }) => {
+        if (key.startsWith('grp-')) return;
+        navigate(key);
+        setMenuOpen(false);
+      }}
+      style={{ borderRight: 0 }}
+    />
+  );
+
+  // The phone header has room for a bell and one menu; everything the desktop
+  // header spreads across a row lives here. The first row says who is signed
+  // in, which the desktop header shows as the role text.
+  const moreItems: MenuProps['items'] = [
+    { key: 'who', label: `${user?.username ?? ''} · ${isAdmin ? t('admin') : t('user')}`, disabled: true },
+    { type: 'divider' },
+    { key: 'lang', icon: <TranslationOutlined />, label: lang === 'zh-CN' ? t('langEnUS') : t('langZhCN') },
+    { key: 'password', icon: <LockOutlined />, label: t('changePassword') },
+    { key: 'github', icon: <GithubOutlined />, label: 'GitHub' },
+    { type: 'divider' },
+    { key: 'logout', icon: <LogoutOutlined />, label: t('logout'), danger: true },
+  ];
+  const onMore: MenuProps['onClick'] = ({ key }) => {
+    if (key === 'lang') setLang(lang === 'zh-CN' ? 'en-US' : 'zh-CN');
+    else if (key === 'password') setChangePwOpen(true);
+    else if (key === 'github') window.open('https://github.com/MoeShinX/relay-panel', '_blank', 'noopener,noreferrer');
+    else if (key === 'logout') logout();
+  };
+
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Sider
-        collapsible
-        breakpoint="lg"
-        width={220}
-        style={{ background: 'var(--rp-sidebar-bg)' }}
-      >
-        <div style={{
-          height: 'var(--rp-header-height)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: '#fff', fontSize: 17, fontWeight: 600, letterSpacing: 0.5,
-        }}>
-          {site.site_name || t('brand')}
-        </div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[location.pathname]}
-          defaultOpenKeys={openKeys}
-          items={menuItems}
-          // Parent entries carry a `grp-` key and no route — clicking one only
-          // expands it, so navigating on them would 404.
-          onClick={({ key }) => { if (!key.startsWith('grp-')) navigate(key); }}
-          style={{ borderRight: 0 }}
-        />
-      </Sider>
+      {isMobile ? (
+        <Drawer
+          placement="left"
+          open={menuOpen}
+          onClose={() => setMenuOpen(false)}
+          size={240}
+          closable={false}
+          styles={{ body: { padding: 0, background: 'var(--rp-sidebar-bg)' } }}
+        >
+          {brandBlock}
+          {menu}
+        </Drawer>
+      ) : (
+        <Sider
+          collapsible
+          breakpoint="lg"
+          width={220}
+          style={{ background: 'var(--rp-sidebar-bg)' }}
+        >
+          {brandBlock}
+          {menu}
+        </Sider>
+      )}
       <Layout>
         <Header style={{
           background: '#fff', height: 'var(--rp-header-height)',
-          padding: '0 24px', lineHeight: 'var(--rp-header-height)',
-          display: 'flex', justifyContent: 'flex-end', alignItems: 'center',
+          padding: isMobile ? '0 8px 0 4px' : '0 24px', lineHeight: 'var(--rp-header-height)',
+          display: 'flex', justifyContent: isMobile ? 'space-between' : 'flex-end', alignItems: 'center',
           borderBottom: '1px solid var(--rp-border)',
         }}>
+          {isMobile ? (
+            <>
+              <Space size={4}>
+                <Button type="text" icon={<MenuOutlined />} aria-label={t('openMenu')} onClick={() => setMenuOpen(true)} />
+                <Text strong style={{ fontSize: 16 }}>{brand}</Text>
+              </Space>
+              <Space size={4}>
+                {/* Icon-only here: a phone header cannot fit the labelled
+                    button. The dot still says there is something new. */}
+                <Badge dot={unread} offset={[-6, 6]}>
+                  <Button type="text" icon={<NotificationOutlined />} aria-label={t('announcements')} onClick={() => navigate('/announcements')} />
+                </Badge>
+                <Dropdown menu={{ items: moreItems, onClick: onMore }} trigger={['click']} placement="bottomRight">
+                  <Button type="text" icon={<EllipsisOutlined />} aria-label={t('moreActions')} />
+                </Dropdown>
+              </Space>
+            </>
+          ) : (
           <Space size="middle">
             {/* v1.2.4: announcements live here rather than in the sidebar.
                 The banner already carries the current notice, so a menu row
@@ -208,6 +281,7 @@ export default function MainLayout() {
               {t('logout')}
             </Button>
           </Space>
+          )}
         </Header>
         <Content style={{ margin: 'var(--rp-content-padding)', background: 'var(--rp-bg)' }}>
           {/* v1.2 (PR4): lazy-loaded pages (router.tsx) suspend here on first

@@ -55,8 +55,9 @@ export default function ForcePasswordChange() {
     <div style={{
       display: 'flex', justifyContent: 'center', alignItems: 'center',
       minHeight: '100vh', background: 'var(--rp-bg)',
+      padding: '24px 16px',
     }}>
-      <Card style={{ width: 400, boxShadow: 'var(--rp-shadow)' }}>
+      <Card style={{ width: '100%', maxWidth: 400, boxShadow: 'var(--rp-shadow)' }}>
         <div style={{ textAlign: 'center', marginBottom: 20 }}>
           <Title level={4} style={{ margin: 0 }}>{t('forcePasswordChange')}</Title>
         </div>

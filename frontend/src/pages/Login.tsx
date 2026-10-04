@@ -56,6 +56,8 @@ export default function Login() {
     <div style={{
       display: 'flex', justifyContent: 'center', alignItems: 'center',
       minHeight: '100vh', background: 'var(--rp-bg)',
+      // A gutter on phones; the top leaves room for the language switch.
+      padding: '56px 16px 24px',
     }}>
       <div style={{ position: 'absolute', top: 20, right: 24 }}>
         <Segmented
@@ -68,7 +70,7 @@ export default function Login() {
           ]}
         />
       </div>
-      <Card style={{ width: 380, boxShadow: 'var(--rp-shadow)' }}>
+      <Card style={{ width: '100%', maxWidth: 380, boxShadow: 'var(--rp-shadow)' }}>
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
           {/* v1.2.4: operator-configurable branding, falling back to the
               translated default so an unconfigured panel looks unchanged. */}

@@ -911,8 +911,9 @@ const IMPORT_DEFAULTS = {
                 style={{ marginBottom: 8 }}
               >
                 {/* Wide enough for a full IPv6 literal (up to 39 chars) — 180px
-                    truncated them mid-address. */}
-                <Input placeholder={t('targetAddress')} style={{ width: 320, maxWidth: 320 }} />
+                    truncated them mid-address. On a phone the dialog is
+                    narrower than that, so it gives way to the screen. */}
+                <Input placeholder={t('targetAddress')} style={{ width: 'min(320px, 100vw - 100px)' }} />
               </Form.Item>
               <Form.Item
                 {...field}
@@ -1287,7 +1288,7 @@ function DiagnoseNodeRow({ node, t, isAdmin }: { node: NodeDiagnoseStatus; t: (k
         )}
       </Space>
       {node.status === 'result' && node.results.length > 0 && (
-        <Table<DiagnoseTargetResult> size="small" pagination={false} style={{ marginTop: 8 }}
+        <Table<DiagnoseTargetResult> size="small" pagination={false} style={{ marginTop: 8 }} scroll={{ x: 'max-content' }}
           dataSource={node.results} rowKey="address"
           columns={[
             { title: t('diagnoseTarget'), dataIndex: 'address', key: 'address', render: (v: string) => <span className="rp-mono">{v}</span> },

@@ -30,6 +30,8 @@ export const enUS: Dict = {
   nodeStatusDeleteFailed: 'Clear failed',
   users: 'Users',
   logout: 'Logout',
+  openMenu: 'Open menu',
+  moreActions: 'More',
   changePassword: 'Change Password',
   currentPassword: 'Current Password',
   newPassword: 'New Password',

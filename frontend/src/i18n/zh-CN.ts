@@ -29,6 +29,8 @@ export const zhCN = {
   nodeStatusDeleteFailed: '清除失败',
   users: '用户管理',
   logout: '退出',
+  openMenu: '打开菜单',
+  moreActions: '更多',
   changePassword: '修改密码',
   currentPassword: '当前密码',
   newPassword: '新密码',

@@ -202,6 +202,7 @@ export default function Shop() {
         <Table
           dataSource={orders}
           columns={orderColumns}
+          scroll={{ x: 'max-content' }}
           rowKey="id"
           pagination={{ pageSize: 10 }}
           size="small"
