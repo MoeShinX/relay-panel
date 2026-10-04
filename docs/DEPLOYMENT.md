@@ -405,6 +405,13 @@ per-binary systemd service — both run inside containers.
   host for TLS termination and HTTP/3. The `Caddyfile` proxies to `panel:18888` on the
   Compose network.
 - The SQLite database persists in the `panel_data` Docker volume.
+- The panel process runs as the unprivileged user `relaypanel` (uid/gid
+  10001), not root. The container starts as root only to hand `/app/data` and
+  the `./run` mount to that user, then drops privileges. If you bind-mount a
+  host directory as `/app/data`, expect it to be owned by uid 10001 on the host.
+  For the CLI, `docker compose exec -u relaypanel panel ./relay-panel …` keeps
+  new files owned correctly (anything created as root is handed back on the
+  next panel start anyway).
 
 ---
 

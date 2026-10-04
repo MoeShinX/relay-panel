@@ -128,6 +128,21 @@ independent `v*` / `node-v*` tracks since this release).
   frontend build gets none. `:latest` on the panel image is moved only after
   the release is verified, as the node workflow already did.
 
+- **The panel no longer runs as root in its container.** It runs as the
+  unprivileged user `relaypanel` (uid/gid 10001), so a flaw in the panel no
+  longer hands an attacker root inside the container — which matters more
+  since the panel shares the host's `./run` directory with the one-click
+  updater. The container still starts as root, but only for an entrypoint that
+  gives `/app/data` and the `./run` mount point to `relaypanel` and then drops
+  privileges with `setpriv`. That step is what lets an existing install
+  upgrade in place: the database written by earlier root-run images is handed
+  over on the first start, with nothing to do by hand. The node image is
+  unchanged.
+
+  If you bind-mount a host directory as `/app/data`, it will be owned by uid
+  10001 on the host after the upgrade. When running the CLI with
+  `docker compose exec`, add `-u relaypanel`.
+
 ---
 
 ---
