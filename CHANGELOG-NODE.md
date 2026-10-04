@@ -52,6 +52,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   instance to get the new `start.sh`; the default `relay-node` instance keeps
   its files where they are.
 
+
+- **A traffic report the panel did not answer is re-sent unchanged, so it is
+  never billed twice.** A report that got no definite answer (timeout, dropped
+  connection, proxy error) used to be folded into the next report, with a new
+  snapshot — and if the panel had in fact recorded it, those bytes were billed
+  twice. Now the node sends the same batch again, with the same id and bytes,
+  until the panel answers; the panel (1.2.12+) recognises a batch it already
+  applied and acknowledges it without billing. Traffic counted meanwhile waits
+  for the next batch, so a panel that is unreachable for a while delays
+  billing but loses nothing. Only a refusal the panel gives before writing
+  anything (400/401/403) sends the bytes again in a fresh batch; a 500 can
+  come after the commit went through, so it is re-sent under the same id too.
+  Each batch also names the previous, acknowledged one, so the panel can
+  stop keeping it for long. With an older panel the id is ignored and reports
+  behave as before.
+- **A traffic report gives up after 30 seconds.** It had no time limit, and it
+  runs in the same loop as the config poll: a request left hanging (a
+  half-open connection, a panel stuck on a database lock) stopped config
+  updates and all later reports with it. The batch is re-sent afterwards
+  under the same id, so giving up never bills twice.
+- **Pausing and resuming a rule while a report is in doubt no longer stops
+  the node's billing.** Settling the report subtracted its bytes from the
+  rule's new counter instead of the one they were read from, wrapping it to
+  about 2^64; the panel refused that value, and with it every later report
+  from the node, until the node restarted. A report is now settled against
+  the counters it was read from.
+
 ### Security
 
 - **A flood of forged UDP sources can no longer take the node down.** Every
@@ -70,6 +97,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   token, panel URL and service name are now validated, and `start.sh` is
   written with proper shell quoting. The values come from the install command
   the operator pastes, so this was not reachable remotely.
+
+---
 
 ---
 

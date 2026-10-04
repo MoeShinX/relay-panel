@@ -273,6 +273,18 @@ CREATE INDEX IF NOT EXISTS idx_announcements_pinned ON announcements(pinned, pub
 -- not exist". Revisions run on fresh installs too, so the index is still
 -- created exactly once either way.
 
+-- v1.2.12: applied traffic batches (re-send dedup). Mirrors SQLite Migration 45
+-- and PG revision 28; see the SQLite SCHEMA_SQL comment. A brand-new table, so
+-- its index is safe here as well as in revision 28.
+CREATE TABLE IF NOT EXISTS traffic_batches (
+    group_id BIGINT NOT NULL,
+    batch_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    confirmed_at TEXT,
+    PRIMARY KEY (group_id, batch_id)
+);
+CREATE INDEX IF NOT EXISTS idx_traffic_batches_created ON traffic_batches(created_at);
+
 -- v1.0.9: plan ↔ device_group grant map (mirrors SQLite baseline + Migration 35).
 CREATE TABLE IF NOT EXISTS plan_device_groups (
     plan_id BIGINT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
@@ -379,7 +391,7 @@ INSERT INTO schema_version (version) VALUES (1) ON CONFLICT (version) DO NOTHING
 /// The schema revision this build's baseline `PG_SCHEMA_SQL` represents. When a
 /// future release adds a column/table, bump this and add a matching arm in
 /// `run_pg_migrations`. `apply_pg_schema` seeds `schema_version` with revision 1.
-pub const PG_SCHEMA_VERSION: i32 = 27;
+pub const PG_SCHEMA_VERSION: i32 = 28;
 
 /// Apply PG_SCHEMA_SQL to a pool. PostgreSQL's prepared-statement protocol
 /// rejects multi-statement strings ("cannot insert multiple commands into a
@@ -1450,6 +1462,35 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
             "PG migration 27: announcements table present ({} carried over from site config)",
             carried
         );
+    }
+
+    // v1.2.12 revision 28: applied traffic batches (re-send dedup). Mirrors
+    // SQLite Migration 45. A new table: nothing to backfill.
+    if current < 28 {
+        let mut tx = pool.begin().await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS traffic_batches (
+                group_id BIGINT NOT NULL,
+                batch_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                confirmed_at TEXT,
+                PRIMARY KEY (group_id, batch_id)
+            )",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_traffic_batches_created ON traffic_batches(created_at)",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO schema_version (version) VALUES (28) ON CONFLICT (version) DO NOTHING",
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        tracing::info!("PG migration 28: traffic_batches table present");
     }
 
     Ok(())
