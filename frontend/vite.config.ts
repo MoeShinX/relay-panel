@@ -9,6 +9,14 @@ export default defineConfig({
   // vendor chunk (not every page). Pages themselves are split by the per-route
   // React.lazy() in router.tsx.
   build: {
+    // v1.2.12: never inline a font. Vite turns assets under 4 KB into data:
+    // URIs, and some of Noto Sans SC's unicode-range subsets are that small —
+    // but the panel's Content-Security-Policy allows fonts only from 'self'
+    // (default-src), so the browser refused those subsets and their characters
+    // fell back to a system font. As files they load like the other subsets.
+    // Anything else keeps Vite's default (undefined).
+    assetsInlineLimit: (filePath) =>
+      /\.(woff2?|ttf|otf|eot)$/i.test(filePath) ? false : undefined,
     rollupOptions: {
       output: {
         manualChunks: {

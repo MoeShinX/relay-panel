@@ -21,7 +21,6 @@ independent `v*` / `node-v*` tracks since this release).
   to find the cause on the node, and their upgrade action is disabled with the
   reason instead of failing on click.
 
-
 - **Rules can be exported one inbound group at a time, and the dashboard
   counts each group's rules.** "Export all" put every machine's targets into
   one file. With a group filter (or a search) on the rules page, the export
@@ -131,6 +130,13 @@ independent `v*` / `node-v*` tracks since this release).
   the node as well — older nodes send no id and are billed as before; older
   panels ignore the id. PostgreSQL gets schema revision 28 (a new table);
   SQLite gets migration 45.
+
+- **Every part of the panel's Chinese font loads again.** The build inlined
+  a few of the font's smallest pieces into the stylesheet as `data:` URIs,
+  which the panel's own Content-Security-Policy does not allow for fonts, so
+  the browser refused them (a row of console errors) and the characters they
+  cover fell back to a system font. Fonts are now always separate files, and
+  CI fails if one is ever inlined again.
 
 ### Security
 

@@ -99,5 +99,15 @@ jobs:
         run: npm run build
         working-directory: frontend
 
+      # The panel's CSP allows fonts only from 'self', so a font inlined as a
+      # data: URI is refused by the browser (see vite.config.ts).
+      - name: no font inlined into the built CSS
+        run: |
+          if grep -l "data:font" dist/assets/*.css; then
+            echo "::error::a font was inlined as a data: URI, which the panel's CSP blocks"
+            exit 1
+          fi
+        working-directory: frontend
+
       - name: e2e test
         run: python3 tests/e2e_test.py
