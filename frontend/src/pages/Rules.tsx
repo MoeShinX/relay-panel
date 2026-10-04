@@ -9,7 +9,7 @@ import { MIN_AUTO_RESTART_MINUTES } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { formatBytes } from '../utils/format';
 import { useAuth } from '../auth/useAuth';
-import { asValidatedEntry, buildExportJSON, parseDest, ruleTargets, validateImportEntry } from '../utils/rulesIO';
+import { asValidatedEntry, buildExportJSON, exportFileLabel, parseDest, ruleTargets, validateImportEntry } from '../utils/rulesIO';
 
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -346,6 +346,22 @@ export default function Rules() {
   /** Export all rules as JSON download. */
   const handleExportAll = () => {
     downloadText(`relaypanel-rules-${new Date().toISOString().slice(0, 10)}.json`, buildExportJSON(rules));
+    message.success(t('exported'));
+  };
+
+  /** v1.2.12: export the rules the current filter shows — one inbound group
+   *  (one machine, where each machine has its own group) and/or a search. The
+   *  file names no group and import asks for one, so this is also how a new
+   *  machine gets an old one's rules: export here, import into its group. */
+  const handleExportFiltered = () => {
+    if (visibleRules.length === 0) return;
+    const label = selectedGroup === null
+      ? 'filtered'
+      : exportFileLabel(groupMap.get(selectedGroup)?.name ?? '') || `group-${selectedGroup}`;
+    downloadText(
+      `relaypanel-rules-${label}-${new Date().toISOString().slice(0, 10)}.json`,
+      buildExportJSON(visibleRules),
+    );
     message.success(t('exported'));
   };
 
@@ -937,7 +953,18 @@ const IMPORT_DEFAULTS = {
     </Form.List>
   );
 
+  // v1.2.12: offered once a group filter or a search narrows the list.
+  const filterActive = selectedGroup !== null || ruleSearch.trim() !== '';
   const exportMenuItems: MenuProps['items'] = [
+    ...(filterActive
+      ? [{
+        key: 'export-filtered',
+        label: t('exportFiltered').replace('{count}', String(visibleRules.length)),
+        icon: <DownloadOutlined />,
+        disabled: visibleRules.length === 0,
+        onClick: handleExportFiltered,
+      }]
+      : []),
     { key: 'export-all', label: t('exportAll'), icon: <DownloadOutlined />, onClick: handleExportAll },
     { key: 'import', label: t('import'), icon: <UploadOutlined />, onClick: () => setImportOpen(true) },
   ];

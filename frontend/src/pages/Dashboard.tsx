@@ -136,6 +136,20 @@ export default function Dashboard() {
   //  row is clickable → /nodes for per-node detail (kept there to avoid
   //  duplicating the node-status page on the dashboard).
   const groups = useMemo(() => aggregateNodesByGroup(nodes), [nodes]);
+  // v1.2.12: enabled / total rules per inbound group. Every node of a group
+  // runs that group's rules, so this is also each machine's count when a
+  // machine has its own group — and how a new machine is checked against the
+  // old ones.
+  const rulesByGroup = useMemo(() => {
+    const m = new Map<number, { enabled: number; total: number }>();
+    for (const r of ruleList) {
+      const c = m.get(r.device_group_in) ?? { enabled: 0, total: 0 };
+      c.total += 1;
+      if (!r.paused) c.enabled += 1;
+      m.set(r.device_group_in, c);
+    }
+    return m;
+  }, [ruleList]);
 
   const statusColor = (s: string) =>
     s === 'online' ? 'green' : s === 'partial' ? 'orange' : 'red';
@@ -165,6 +179,17 @@ export default function Dashboard() {
       render: (_: unknown, r: ReturnType<typeof aggregateNodesByGroup>[number]) => (
         <span className="rp-mono">{r.online_nodes}/{r.total_nodes}</span>
       ),
+    },
+    {
+      title: t('groupRules'), key: 'rules', width: 100,
+      render: (_: unknown, r: ReturnType<typeof aggregateNodesByGroup>[number]) => {
+        const c = rulesByGroup.get(r.group_id) ?? { enabled: 0, total: 0 };
+        return (
+          <Tooltip title={t('groupRulesHint')}>
+            <span className="rp-mono">{c.enabled}/{c.total}</span>
+          </Tooltip>
+        );
+      },
     },
     {
       title: t('connections'), dataIndex: 'connections', key: 'connections', width: 90,

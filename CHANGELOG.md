@@ -21,6 +21,16 @@ independent `v*` / `node-v*` tracks since this release).
   to find the cause on the node, and their upgrade action is disabled with the
   reason instead of failing on click.
 
+
+- **Rules can be exported one inbound group at a time, and the dashboard
+  counts each group's rules.** "Export all" put every machine's targets into
+  one file. With a group filter (or a search) on the rules page, the export
+  menu now also offers "export filtered (N)", the file named after the group;
+  import already asks which group to load into, so this is how a new machine
+  gets an old one's rules. The dashboard's node table has a rules column —
+  enabled / total per group — to check that a new machine lines up with the
+  old ones.
+
 ### Changed
 
 - **A manual upgrade backs up the SQLite database too.** Only the one-click
