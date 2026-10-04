@@ -1,10 +1,30 @@
 /* eslint-disable react-refresh/only-export-components */
+import type { ReactNode } from 'react';
 import { Tag, Tooltip, Typography } from 'antd';
 import type { Tfn } from './types';
 import type { NodeDisplayRow } from '../../api/types';
 import { CountryFlag } from './CountryFlag';
+import { formatPercent } from '../../utils/format';
 
 const { Text } = Typography;
+
+/** v1.2.13: "AMD EPYC 7B13 · 4 核" (node-v1.2.7+ reports both) — either half
+ *  alone when only one is known, null when neither is (older nodes).
+ *  `coresLabel` is the "{n} 核" template. */
+export function cpuSummary(r: NodeDisplayRow, coresLabel: string): string | null {
+  const parts = [
+    r.cpu_model,
+    r.cpu_cores ? coresLabel.replace('{n}', String(r.cpu_cores)) : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(' · ') : null;
+}
+
+/** The CPU bar's tooltip: usage, then the CPU model on a second line when the
+ *  node reports one. */
+export function cpuTooltip(r: NodeDisplayRow, t: Tfn): ReactNode {
+  const model = cpuSummary(r, t('cpuCores'));
+  return <>CPU: {formatPercent(r.cpu)}{model && <><br />{model}</>}</>;
+}
 
 /** Dual-stack network cell — IPv4 line + IPv6 line. Each line shows the
  *  CountryFlag pill (SVG, no Emoji) followed by the IP. No country name and
