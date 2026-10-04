@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import api from '../api/client';
 import type { ApiEnvelope, Plan, Order, UserSelf } from '../api/types';
 import { useI18n } from '../i18n/context';
-import { usePhoneTableScroll } from '../hooks/useIsMobile';
+import { useTableScroll } from '../hooks/useIsMobile';
 import { formatBytes } from '../utils/format';
 
 const { Text, Title } = Typography;
@@ -17,7 +17,7 @@ const { Text, Title } = Typography;
  * price). A suspended user can still buy (buying does NOT auto-unsuspend).
  */
 export default function Shop() {
-  const phoneScroll = usePhoneTableScroll();
+  const tableScroll = useTableScroll();
   const { t } = useI18n();
   const [plans, setPlans] = useState<Plan[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -204,7 +204,7 @@ export default function Shop() {
         <Table
           dataSource={orders}
           columns={orderColumns}
-          scroll={phoneScroll}
+          scroll={tableScroll}
           rowKey="id"
           pagination={{ pageSize: 10 }}
           size="small"

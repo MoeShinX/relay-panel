@@ -139,6 +139,23 @@ export default function MainLayout() {
       {brand}
     </div>
   );
+  // The drawer's copy keeps an operator's long site name inside its 56px: a
+  // margin each side, at most two lines, then an ellipsis (full name on hover).
+  const drawerBrandBlock = (
+    <div title={brand} style={{
+      height: 'var(--rp-header-height)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      padding: '0 16px',
+      color: '#fff', fontSize: 17, fontWeight: 600, letterSpacing: 0.5,
+    }}>
+      <span style={{
+        display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2,
+        overflow: 'hidden', overflowWrap: 'anywhere', textAlign: 'center', lineHeight: 1.3,
+      }}>
+        {brand}
+      </span>
+    </div>
+  );
   // One menu for both homes: the desktop sider and the phone drawer.
   const menu = (
     <Menu
@@ -188,7 +205,7 @@ export default function MainLayout() {
           closable={false}
           styles={{ body: { padding: 0, background: 'var(--rp-sidebar-bg)' } }}
         >
-          {brandBlock}
+          {drawerBrandBlock}
           {menu}
         </Drawer>
       ) : (
@@ -211,11 +228,14 @@ export default function MainLayout() {
         }}>
           {isMobile ? (
             <>
-              <Space size={4}>
-                <Button type="text" icon={<MenuOutlined />} aria-label={t('openMenu')} onClick={() => setMenuOpen(true)} />
-                <Text strong style={{ fontSize: 16 }}>{brand}</Text>
-              </Space>
-              <Space size={4}>
+              {/* The site name is the operator's: a long one stays on one line
+                  and ends in an ellipsis (full name on tap) — wrapping, each
+                  line took the header's 56px line height and burst the bar. */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: '1 1 auto', minWidth: 0 }}>
+                <Button type="text" icon={<MenuOutlined />} aria-label={t('openMenu')} onClick={() => setMenuOpen(true)} style={{ flexShrink: 0 }} />
+                <Text strong ellipsis={{ tooltip: brand }} style={{ fontSize: 16, minWidth: 0 }}>{brand}</Text>
+              </div>
+              <Space size={4} style={{ flexShrink: 0 }}>
                 {/* Icon-only here: a phone header cannot fit the labelled
                     button. The dot still says there is something new. */}
                 <Badge dot={unread} offset={[-6, 6]}>

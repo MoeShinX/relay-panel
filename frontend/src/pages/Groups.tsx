@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import api from '../api/client';
 import type { ApiEnvelope, DeviceGroup, User, NodeStatus } from '../api/types';
 import { useI18n } from '../i18n/context';
-import { usePhoneTableScroll } from '../hooks/useIsMobile';
+import { useTableScroll } from '../hooks/useIsMobile';
 import { copyText } from '../utils/clipboard';
 import { useAuth } from '../auth/useAuth';
 
@@ -31,7 +31,7 @@ function isLocalhost(): boolean {
 }
 
 export default function Groups() {
-  const phoneScroll = usePhoneTableScroll();
+  const tableScroll = useTableScroll();
   const { t } = useI18n();
   const { isAdmin } = useAuth();
   const [groups, setGroups] = useState<DeviceGroup[]>([]);
@@ -335,7 +335,9 @@ export default function Groups() {
       title: t('nodeToken'), dataIndex: 'token', key: 'token',
       render: (tk: string, g: DeviceGroup) => (
         <Space>
-          <Text code style={{ maxWidth: 180 }} ellipsis>{tk}</Text>
+          {/* 150, not 180: with the wrapping actions this lets the table fit a
+              1280px window (the ellipsis still shows ~17 characters). */}
+          <Text code style={{ maxWidth: 150 }} ellipsis>{tk}</Text>
           <Tooltip title={t('copyInstallCommand')}>
             <Button size="small" type="text" icon={<CodeOutlined />} aria-label={t('copyInstallCommand')} onClick={() => showInstallCommand(g)} />
           </Tooltip>
@@ -369,9 +371,13 @@ export default function Groups() {
         hidden && !isMonitorOnly(g) ? <Tag>{t('yes')}</Tag> : dash,
     },
     {
-      title: t('action'), key: 'action', width: 190,
+      // v1.2.13: no fixed width, and the buttons wrap — one line where there is
+      // room, folded on a narrow window instead of pushing the page wider than
+      // a 1280px laptop. (A fixed width would fold them even on a wide screen;
+      // the minimum keeps a fold to two lines rather than one button each.)
+      title: t('action'), key: 'action',
       render: (_: unknown, g: DeviceGroup) => (
-        <Space size={0}>
+        <Space size={0} wrap style={{ minWidth: 150 }}>
           <Button size="small" type="text" icon={<EditOutlined />} onClick={() => handleEdit(g)}>{t('edit')}</Button>
           <Tooltip title={t('rotateTokenHint')}>
             <Button
@@ -413,7 +419,7 @@ export default function Groups() {
           dataSource={groupNodes}
           rowKey={(n: NodeStatus) => n.node_id ?? `${n.public_ipv4 ?? n.public_ip}-${n.last_seen}`}
           pagination={false}
-          scroll={phoneScroll}
+          scroll={tableScroll}
           size="small"
           columns={[
             { title: 'ID', dataIndex: 'node_id', key: 'node_id', width: 120, render: (v: string | undefined) => v ? <Text code style={{ fontSize: 11 }}>{v.slice(0, 8)}...{v.slice(-4)}</Text> : '-' },
@@ -450,7 +456,7 @@ export default function Groups() {
         rowKey="id"
         loading={loading}
         pagination={{ pageSize: 20 }}
-        scroll={phoneScroll}
+        scroll={tableScroll}
         expandable={{
           expandedRowRender,
           rowExpandable: () => true,

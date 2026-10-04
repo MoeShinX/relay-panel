@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
-import { useIsMobile, usePhoneTableScroll } from './useIsMobile';
+import { useIsMobile, useTableScroll } from './useIsMobile';
 
 /** Make matchMedia answer `matches` for every query. */
 function viewport(matches: boolean) {
@@ -29,17 +29,18 @@ describe('useIsMobile', () => {
   });
 });
 
-// v1.2.13: a wide table scrolls inside itself on a phone; on a desktop it gets
-// no scroll container at all, so it lays out exactly as before (cells wrap to
-// fit the window instead of a scrollbar appearing).
-describe('usePhoneTableScroll', () => {
-  it('scrolls a table sideways on a phone', () => {
+// v1.2.13: on a phone a wide table keeps its natural width and scrolls inside
+// itself. On a desktop it is `x: true` — laid out like a plain table (cells
+// wrap to fit), with only what cannot fit in a narrow window scrolling inside
+// the table rather than widening the page.
+describe('useTableScroll', () => {
+  it('keeps a table at its natural width on a phone', () => {
     viewport(true);
-    expect(renderHook(() => usePhoneTableScroll()).result.current).toEqual({ x: 'max-content' });
+    expect(renderHook(() => useTableScroll()).result.current).toEqual({ x: 'max-content' });
   });
 
-  it('leaves a desktop table alone', () => {
+  it('fits a desktop table to the window, containing any overflow', () => {
     viewport(false);
-    expect(renderHook(() => usePhoneTableScroll()).result.current).toBeUndefined();
+    expect(renderHook(() => useTableScroll()).result.current).toEqual({ x: true });
   });
 });

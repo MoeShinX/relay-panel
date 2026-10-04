@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
@@ -8,7 +8,8 @@ const { mockLogout } = vi.hoisted(() => ({ mockLogout: vi.fn() }));
 vi.mock('../auth/useAuth', () => ({
   useAuth: () => ({ isAdmin: true, user: { id: 1, username: 'admin' }, logout: mockLogout }),
 }));
-vi.mock('../hooks/useSite', () => ({ useSite: () => ({ site_name: 'RelayPanel', subtitle: '' }) }));
+const { mockSite } = vi.hoisted(() => ({ mockSite: vi.fn(() => ({ site_name: 'RelayPanel', subtitle: '' })) }));
+vi.mock('../hooks/useSite', () => ({ useSite: mockSite }));
 vi.mock('../hooks/useAnnouncementBadge', () => ({
   useAnnouncementBadge: () => ({ latestId: 0, unread: false, markSeen: vi.fn() }),
 }));
@@ -34,6 +35,7 @@ const renderAt = (path = '/') =>
 beforeEach(() => {
   mockIsMobile.mockReset();
   mockLogout.mockReset();
+  mockSite.mockReturnValue({ site_name: 'RelayPanel', subtitle: '' });
 });
 
 describe('MainLayout on a desktop', () => {
@@ -78,5 +80,25 @@ describe('MainLayout on a phone', () => {
 
     await user.click(screen.getByText('logout'));
     expect(mockLogout).toHaveBeenCalled();
+  });
+
+  // The site name is the operator's. Wrapped in the phone header, each line
+  // took the header's 56px line height and burst the bar; in the drawer it ran
+  // edge to edge and could spill onto the menu.
+  it('keeps a long site name to one line in the header and inside the drawer', async () => {
+    const long = '星河科技 RelayPanel 中转加速服务面板 香港日本美国专线';
+    mockIsMobile.mockReturnValue(true);
+    mockSite.mockReturnValue({ site_name: long, subtitle: '' });
+    const user = userEvent.setup();
+    const { container } = renderAt();
+
+    const headerBrand = within(container.querySelector('.ant-layout-header') as HTMLElement)
+      .getByText(long)
+      .closest('.ant-typography') as HTMLElement;
+    expect(headerBrand.className).toContain('ant-typography-ellipsis');
+
+    await user.click(screen.getByRole('button', { name: 'openMenu' }));
+    const drawerBrand = await screen.findByTitle(long);
+    expect(drawerBrand.closest('.ant-drawer')).not.toBeNull();
   });
 });

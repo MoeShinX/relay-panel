@@ -22,8 +22,20 @@ independent `v*` / `node-v*` tracks since this release).
   cards stay in one row, and every table scrolls inside itself instead of
   widening the whole page. The login, registration and forced
   password-change cards, and the rule dialog's target address, fit a narrow
-  screen. Tablets and desktops are unchanged: the table scrolling and the
-  layout changes apply on phones only (checked at 1366px).
+  screen. A long site name stays on one line in the phone header (with an
+  ellipsis) and within two lines in the menu drawer. Desktop layouts are
+  unchanged apart from the fix below.
+
+### Fixed
+
+- **The users and device-groups pages fit a laptop screen.** At 1366px the
+  users page, and at 1280px the device-groups page, were wider than the
+  window and scrolled sideways as a whole, because their action buttons sat
+  on one line (up to five for a user). The buttons now fold onto a second
+  line where the window is narrow and stay on one where there is room, and a
+  table that still does not fit scrolls inside itself instead of widening the
+  page. Row heights are unchanged, and on a wide screen the tables look as
+  before.
 
 ## [1.2.12] - 2026-10-04
 

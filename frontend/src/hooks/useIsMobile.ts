@@ -20,11 +20,17 @@ export function useIsMobile(breakpoint = 768): boolean {
 }
 
 const PHONE_TABLE_SCROLL = { x: 'max-content' } as const;
+const WIDE_TABLE_SCROLL = { x: true } as const;
 
-/** The `scroll` prop for a wide table. On a phone the table scrolls sideways
- *  inside itself instead of widening the whole page. Anywhere wider it is
- *  undefined — no scroll container at all — so a desktop table lays out
- *  exactly as it did before: cells wrap to fit the window, no scrollbar. */
-export function usePhoneTableScroll(): { x: 'max-content' } | undefined {
-  return useIsMobile() ? PHONE_TABLE_SCROLL : undefined;
+/** The `scroll` prop for a wide table.
+ *
+ *  On a phone the table keeps its natural width and scrolls sideways inside
+ *  itself, rather than wrapping every cell into a narrow column.
+ *
+ *  Anywhere wider it is `x: true`: the table is laid out exactly as a plain
+ *  one (auto width, at least the window's — cells wrap to fit, no scrollbar
+ *  while it fits), and only a table that still cannot fit, in a narrow
+ *  window, scrolls inside itself instead of widening the whole page. */
+export function useTableScroll(): { x: 'max-content' } | { x: true } {
+  return useIsMobile() ? PHONE_TABLE_SCROLL : WIDE_TABLE_SCROLL;
 }
