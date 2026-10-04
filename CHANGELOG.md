@@ -21,6 +21,37 @@ independent `v*` / `node-v*` tracks since this release).
   to find the cause on the node, and their upgrade action is disabled with the
   reason instead of failing on click.
 
+### Changed
+
+- **A manual upgrade backs up the SQLite database too.** Only the one-click
+  update used to copy the database to `backups/` before the new version (and
+  its schema migrations) started; `git pull && ./deploy.sh` did not. Both now
+  use the same backup, and it is stricter than the one-click update's was:
+  - The copy is taken only once the panel is confirmed stopped. If it cannot
+    be stopped (or its state cannot be read), there is no backup and no
+    upgrade — a copy taken while the panel writes may be inconsistent, and the
+    old one-click update carried on with it regardless.
+  - A lookup that fails (listing the containers, reading the data mount or
+    volume) stops the upgrade too, instead of counting as "no database". Run
+    `deploy.sh` as root: without root the database volume cannot be read and
+    the upgrade stops with a message (back the database up yourself and
+    re-run with `RELAYPANEL_BACKUP_DONE=1` to go ahead anyway).
+  - A panel that was already stopped is backed up too (and left stopped); it
+    used to be treated as "no database" and skipped. After `docker compose
+    down` the database is found in the leftover volume.
+  - The file backed up is the one `DATABASE_URL` names — read from the panel
+    container, else from the environment, `.env` or the default — not always
+    `data.db`; any other name used to be skipped as "nothing to back up". A
+    database outside the data volume (`/app/data`) stops the upgrade with a
+    message instead.
+  - The newest five are kept. If the backup fails, nothing is changed and the
+    old version stays in place; if the new version then fails to start, the
+    old container is started again.
+
+  When building from source, the image is built before the panel is stopped,
+  so the downtime does not include the compile. PostgreSQL is still not
+  backed up automatically.
+
 ### Fixed
 
 - **Concurrent writes no longer fail with a 500 on SQLite.** A purchase,
@@ -81,8 +112,6 @@ independent `v*` / `node-v*` tracks since this release).
   cannot leave the panel down; everyone has to log in again once. If you run
   the compose file by hand, set a new one with `openssl rand -hex 32`.
 
-
-
 - **Revoking a user's line authorization can no longer race with the user
   creating or resuming a rule.** The rule API checked the authorization
   before its write, and a revocation that landed in between paused the rules
@@ -93,7 +122,6 @@ independent `v*` / `node-v*` tracks since this release).
   first, so each waits for the other. An admin acting for a user is not
   checked, as before.
 
----
 - **Release workflow permissions narrowed.** The panel release workflow gave
   every job write access to the repository and packages, including the job
   that runs `npm ci`. Jobs now get only the access they need, and the

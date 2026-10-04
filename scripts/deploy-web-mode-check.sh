@@ -64,9 +64,20 @@ if [ "${1:-}" = "compose" ]; then
     case "$*" in
         *' ps -q caddy') echo 'caddy123'; exit 0 ;;
         *' ps -q postgres') echo 'pg123'; exit 0 ;;
+        *' ps --all -q panel')
+            [ -n "${HARNESS_PS_FAILS:-}" ] && exit 1
+            [ -n "${HARNESS_DATA_DIR:-}" ] && echo 'panel123'; exit 0 ;;
+        *' stop panel')
+            printf 'STOP panel\n' >> "$log"
+            [ -n "${HARNESS_STOP_FAILS:-}" ] && exit 1
+            touch "$log.stopped"; exit 0 ;;
+        *' start panel') printf 'START panel\n' >> "$log"; rm -f "$log.stopped"; exit 0 ;;
+        *' config') printf 'name: harness\nservices: {}\n'; exit 0 ;;
+        *' build'*) printf 'BUILD %s\n' "$*" >> "$log"; exit 0 ;;
         *' pull') printf 'PULL %s\n' "$*" >> "$log"; exit 0 ;;
         *' up -d'*)
             printf 'UP %s\n' "$*" >> "$log"
+            [ -n "${HARNESS_UP_FAILS:-}" ] && { echo 'compose up exploded' >&2; exit 1; }
             env | grep -E '^(RELAYPANEL_WEB_MODE|RELAYPANEL_PANEL_PORT_BINDING|RELAYPANEL_DOMAIN|PUBLIC_PANEL_URL|REVERSE_PROXY_EXTERNAL|ACME_EMAIL|CADDY_ACME_EMAIL_DIRECTIVE|RELAYPANEL_DB_MODE)=' | sort >> "$log"
             exit 0
             ;;
@@ -76,6 +87,20 @@ if [ "${1:-}" = "inspect" ]; then
     case "$*" in
         *'.State.Health.Status'*'pg123') echo 'healthy'; exit 0 ;;
         *'.State.Status'*'caddy123') echo 'running'; exit 0 ;;
+        *'/app/data'*'panel123') echo "${HARNESS_DATA_DIR:-}"; exit 0 ;;
+        *'Config.Env'*'panel123')
+            printf '%s\n' "${HARNESS_CONTAINER_ENV:-DATABASE_URL=sqlite:/app/data/data.db?mode=rwc}"
+            exit 0 ;;
+        *'.State.Running'*'panel123')
+            if [ -f "$log.stopped" ] || [ -n "${HARNESS_PANEL_STOPPED:-}" ]; then echo false; else echo true; fi
+            exit 0 ;;
+    esac
+fi
+if [ "${1:-}" = "volume" ]; then
+    case "$*" in
+        'volume ls'*'com.docker.compose.project=harness'*'com.docker.compose.volume=panel_data'*)
+            [ -n "${HARNESS_VOLUME_DIR:-}" ] && echo 'harness_panel_data'; exit 0 ;;
+        'volume inspect'*'harness_panel_data') echo "${HARNESS_VOLUME_DIR:-}"; exit 0 ;;
     esac
 fi
 echo "unexpected docker args: $*" >> "$log"
@@ -88,6 +113,8 @@ make_case_dir() {
     local dir="$1"
     mkdir -p "$dir"
     cp "$ROOT/deploy.sh" "$ROOT/docker-compose.release.yaml" "$ROOT/docker-compose.yaml" "$ROOT/Caddyfile" "$dir/"
+    mkdir -p "$dir/scripts"
+    cp "$ROOT/scripts/sqlite-backup.sh" "$dir/scripts/"
 }
 
 assert_file_has() {
@@ -197,6 +224,132 @@ assert_log_has "$log" 'CADDY_HTTPS https://pgcaddy.example.com/'
 pass 'embedded PostgreSQL and Caddy profiles compose together'
 assert_file_has "$dir/.env" 'JWT_SECRET=strong-existing-secret-strong-existing-secret'
 pass 'upgrade keeps an existing strong JWT_SECRET'
+
+# v1.2.12: a manual SQLite upgrade backs the database up with the panel
+# stopped, before the new version starts.
+res=$(run_case upgrade-backup env)
+dir=${res%|*}; log=${res#*|}
+mkdir -p "$TMP/upgrade-backup-data"
+echo 'sqlite bytes' > "$TMP/upgrade-backup-data/data.db"
+: > "$log"
+(cd "$dir" && HARNESS_LOG="$log" HARNESS_DATA_DIR="$TMP/upgrade-backup-data" PATH="$TMP/fakebin-upgrade-backup:$PATH" bash ./deploy.sh >/tmp/rp-upgrade-backup-2.out 2>/tmp/rp-upgrade-backup-2.err) \
+    || fail 'upgrade with a SQLite database failed'
+ls "$dir"/backups/data-*-pre-deploy.db >/dev/null 2>&1 || fail 'upgrade did not back up the SQLite database'
+stop_line=$(grep -n '^STOP panel' "$log" | head -1 | cut -d: -f1)
+up_line=$(grep -n '^UP ' "$log" | head -1 | cut -d: -f1)
+[ -n "$stop_line" ] && [ -n "$up_line" ] && [ "$stop_line" -lt "$up_line" ] \
+    || fail 'the panel must be stopped for the copy before the new version starts'
+pass 'manual upgrade backs up SQLite before starting the new version'
+
+# The one-click updater has already taken its backup and says so.
+res=$(run_case upgrade-backup-done env)
+dir=${res%|*}; log=${res#*|}
+mkdir -p "$TMP/upgrade-backup-done-data"
+echo 'sqlite bytes' > "$TMP/upgrade-backup-done-data/data.db"
+: > "$log"
+(cd "$dir" && HARNESS_LOG="$log" HARNESS_DATA_DIR="$TMP/upgrade-backup-done-data" RELAYPANEL_BACKUP_DONE=1 PATH="$TMP/fakebin-upgrade-backup-done:$PATH" bash ./deploy.sh >/tmp/rp-upgrade-backup-done-2.out 2>/tmp/rp-upgrade-backup-done-2.err) \
+    || fail 'upgrade with RELAYPANEL_BACKUP_DONE=1 failed'
+[ ! -d "$dir/backups" ] || fail 'RELAYPANEL_BACKUP_DONE=1 must skip the second backup'
+grep -q '^STOP panel' "$log" && fail 'RELAYPANEL_BACKUP_DONE=1 must not stop the panel'
+pass 'upgrade skips the backup when the updater already took one'
+
+# If the new version cannot be started after the backup stopped the old
+# panel, deploy.sh must start the old container again and fail.
+res=$(run_case upgrade-up-fails env)
+dir=${res%|*}; log=${res#*|}
+mkdir -p "$TMP/upgrade-up-fails-data"
+echo 'sqlite bytes' > "$TMP/upgrade-up-fails-data/data.db"
+: > "$log"
+if (cd "$dir" && HARNESS_LOG="$log" HARNESS_DATA_DIR="$TMP/upgrade-up-fails-data" HARNESS_UP_FAILS=1 PATH="$TMP/fakebin-upgrade-up-fails:$PATH" bash ./deploy.sh >/tmp/rp-upgrade-up-fails-2.out 2>/tmp/rp-upgrade-up-fails-2.err); then
+    fail 'deploy.sh must fail when compose up fails'
+fi
+grep -q '^STOP panel' "$log" || fail 'expected the backup to stop the panel'
+grep -q '^START panel' "$log" || fail 'the old panel must be started again when compose up fails'
+pass 'a failed compose up after the backup brings the old panel back'
+
+# v1.2.12 (pre-release review): an admin who stopped the panel before
+# upgrading still gets a backup — and the panel is not "stopped" again.
+res=$(run_case upgrade-stopped-panel env)
+dir=${res%|*}; log=${res#*|}
+mkdir -p "$TMP/upgrade-stopped-panel-data"
+echo 'sqlite bytes' > "$TMP/upgrade-stopped-panel-data/data.db"
+: > "$log"
+(cd "$dir" && HARNESS_LOG="$log" HARNESS_DATA_DIR="$TMP/upgrade-stopped-panel-data" HARNESS_PANEL_STOPPED=1 PATH="$TMP/fakebin-upgrade-stopped-panel:$PATH" bash ./deploy.sh >/tmp/rp-upgrade-stopped-panel-2.out 2>/tmp/rp-upgrade-stopped-panel-2.err) \
+    || fail 'upgrade with a stopped panel failed'
+ls "$dir"/backups/data-*-pre-deploy.db >/dev/null 2>&1 || fail 'a stopped panel must still be backed up'
+grep -q '^STOP panel' "$log" && fail 'an already stopped panel must not be stopped again'
+pass 'upgrade backs up an already stopped panel'
+
+# A panel that cannot be stopped is not copied mid-write, and nothing changes.
+res=$(run_case upgrade-stop-fails env)
+dir=${res%|*}; log=${res#*|}
+mkdir -p "$TMP/upgrade-stop-fails-data"
+echo 'sqlite bytes' > "$TMP/upgrade-stop-fails-data/data.db"
+: > "$log"
+if (cd "$dir" && HARNESS_LOG="$log" HARNESS_DATA_DIR="$TMP/upgrade-stop-fails-data" HARNESS_STOP_FAILS=1 PATH="$TMP/fakebin-upgrade-stop-fails:$PATH" bash ./deploy.sh >/tmp/rp-upgrade-stop-fails-2.out 2>/tmp/rp-upgrade-stop-fails-2.err); then
+    fail 'deploy.sh must stop when the panel cannot be stopped for the backup'
+fi
+ls "$dir"/backups/data-*.db >/dev/null 2>&1 && fail 'no backup may be taken while the panel may still write'
+grep -q '^UP ' "$log" && fail 'the new version must not be started without a backup'
+pass 'a panel that cannot be stopped blocks the upgrade'
+
+# After `docker compose down` the container is gone but the volume is not.
+res=$(run_case upgrade-after-down env)
+dir=${res%|*}; log=${res#*|}
+mkdir -p "$TMP/upgrade-after-down-volume"
+echo 'sqlite bytes' > "$TMP/upgrade-after-down-volume/data.db"
+: > "$log"
+(cd "$dir" && HARNESS_LOG="$log" HARNESS_VOLUME_DIR="$TMP/upgrade-after-down-volume" PATH="$TMP/fakebin-upgrade-after-down:$PATH" bash ./deploy.sh >/tmp/rp-upgrade-after-down-2.out 2>/tmp/rp-upgrade-after-down-2.err) \
+    || fail 'upgrade after compose down failed'
+ls "$dir"/backups/data-*-pre-deploy.db >/dev/null 2>&1 || fail 'the database in the leftover volume must be backed up'
+pass 'upgrade after compose down backs up the volume'
+
+# A failed container lookup must not be taken for "no panel": no backup
+# may be skipped, and above all no database copied without the stop check.
+res=$(run_case upgrade-ps-fails env)
+dir=${res%|*}; log=${res#*|}
+mkdir -p "$TMP/upgrade-ps-fails-volume"
+echo 'sqlite bytes' > "$TMP/upgrade-ps-fails-volume/data.db"
+: > "$log"
+if (cd "$dir" && HARNESS_LOG="$log" HARNESS_PS_FAILS=1 HARNESS_VOLUME_DIR="$TMP/upgrade-ps-fails-volume" PATH="$TMP/fakebin-upgrade-ps-fails:$PATH" bash ./deploy.sh >/tmp/rp-upgrade-ps-fails-2.out 2>/tmp/rp-upgrade-ps-fails-2.err); then
+    fail 'deploy.sh must stop when the container lookup fails'
+fi
+ls "$dir"/backups/data-*.db >/dev/null 2>&1 && fail 'a failed lookup must not lead to a copy'
+grep -q '^UP ' "$log" && fail 'the new version must not be started after a failed lookup'
+pass 'a failed container lookup blocks the upgrade'
+
+# v1.2.12 (full audit): the database is the file DATABASE_URL names, read
+# from the running container; a custom name used to be skipped.
+res=$(run_case upgrade-custom-db env)
+dir=${res%|*}; log=${res#*|}
+mkdir -p "$TMP/upgrade-custom-db-data"
+echo 'relay bytes' > "$TMP/upgrade-custom-db-data/relay.db"
+: > "$log"
+(cd "$dir" && HARNESS_LOG="$log" HARNESS_DATA_DIR="$TMP/upgrade-custom-db-data" HARNESS_CONTAINER_ENV='DATABASE_URL=sqlite:/app/data/relay.db?mode=rwc' PATH="$TMP/fakebin-upgrade-custom-db:$PATH" bash ./deploy.sh >/tmp/rp-upgrade-custom-db-2.out 2>/tmp/rp-upgrade-custom-db-2.err) \
+    || fail 'upgrade with a custom SQLite file name failed'
+grep -q 'relay bytes' "$dir"/backups/data-*-pre-deploy.db 2>/dev/null \
+    || fail 'the file DATABASE_URL names must be backed up'
+pass 'upgrade backs up a SQLite file with a custom name'
+
+# A database outside the data volume cannot be copied from the host: stop.
+res=$(run_case upgrade-db-outside env)
+dir=${res%|*}; log=${res#*|}
+mkdir -p "$TMP/upgrade-db-outside-data"
+echo 'sqlite bytes' > "$TMP/upgrade-db-outside-data/data.db"
+: > "$log"
+if (cd "$dir" && HARNESS_LOG="$log" HARNESS_DATA_DIR="$TMP/upgrade-db-outside-data" HARNESS_CONTAINER_ENV='DATABASE_URL=sqlite:/srv/relay.db' PATH="$TMP/fakebin-upgrade-db-outside:$PATH" bash ./deploy.sh >/tmp/rp-upgrade-db-outside-2.out 2>/tmp/rp-upgrade-db-outside-2.err); then
+    fail 'deploy.sh must stop when the database is outside the data volume'
+fi
+grep -q '^UP ' "$log" && fail 'the new version must not start without a backup'
+grep -q 'RELAYPANEL_BACKUP_DONE=1' /tmp/rp-upgrade-db-outside-2.err \
+    || fail 'the message must say how to go ahead after a manual backup'
+pass 'a database outside the data volume blocks the upgrade'
+
+# A fresh install has nothing to back up.
+res=$(run_case fresh-no-backup env)
+dir=${res%|*}
+[ ! -d "$dir/backups" ] || fail 'a fresh install must not create backups'
+pass 'fresh install takes no backup'
 
 # Invalid Caddy domain must fail before compose starts.
 dir="$TMP/bad-domain"; fake="$TMP/fakebin-bad-domain"; log="$TMP/bad-domain.log"

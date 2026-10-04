@@ -723,12 +723,48 @@ else
     COMPOSE_FLAGS="--build"
 fi
 
+# ---------- 3b. Back up the SQLite database before an upgrade ----------
+# v1.2.12: `up -d` below replaces the panel with the new version, whose schema
+# migrations run on start. Keep a copy from just before, as the one-click
+# update always did (it runs this script with RELAYPANEL_BACKUP_DONE=1 after
+# taking its own backup). PostgreSQL is not backed up here.
+if [ "$FRESH_INSTALL" = "0" ] && [ "${RELAYPANEL_BACKUP_DONE:-0}" != "1" ] \
+    && { [ -z "${RELAYPANEL_DB_MODE:-}" ] || [ "$RELAYPANEL_DB_MODE" = "sqlite" ]; }; then
+    # Build a source image first, so the panel is not down for the compile.
+    if [ "$COMPOSE_FLAGS" = "--build" ]; then
+        info "Building images before stopping the panel ..."
+        docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" build
+        COMPOSE_FLAGS=""
+    fi
+    backup_rc=0
+    backup_path="$(bash scripts/sqlite-backup.sh "$COMPOSE_FILE" "pre-deploy")" || backup_rc=$?
+    case $backup_rc in
+        0)
+            info "Database backed up to backups/${backup_path##*/} (the newest 5 are kept)"
+            # The backup left the old panel stopped; see step 4.
+            PANEL_STOPPED_FOR_BACKUP=1
+            ;;
+        3) info "No existing SQLite database found - skipping the backup" ;;
+        *) fail "No usable database backup could be taken (the copy failed, or the panel could not be confirmed stopped), so nothing was changed and the old version stays in place. See the messages above; check free disk space and permissions on ./backups." ;;
+    esac
+    unset backup_rc backup_path
+fi
+
 # ---------- 4. Start ----------
 # v1.2.11: shared with the panel container (./run -> /app/run) for the
 # one-click update's request and status files.
 mkdir -p run && chmod 755 run
 info "Starting services (docker compose -f $COMPOSE_FILE ${PROFILE_ARGS[*]} up -d $COMPOSE_FLAGS) ..."
-docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" up -d $COMPOSE_FLAGS
+if ! docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" up -d $COMPOSE_FLAGS; then
+    # v1.2.12: the backup above stopped the old panel. If the new one could
+    # not be started, bring the old container back rather than leaving the
+    # panel down.
+    if [ "${PANEL_STOPPED_FOR_BACKUP:-0}" = "1" ]; then
+        warn "Starting the previous panel container again ..."
+        docker compose -f "$COMPOSE_FILE" start panel || true
+    fi
+    fail "docker compose up failed (see the output above). Check: docker compose -f $COMPOSE_FILE ${PROFILE_ARGS[*]} logs"
+fi
 
 # ---------- 5. Verify ----------
 # Deployment success is decided by the CONTAINER + PORT + a real health

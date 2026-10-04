@@ -53,3 +53,8 @@ jobs:
       # node's start.sh without any chance of executing.
       - name: node installer input handling
         run: bash scripts/test-node-install.sh
+
+      # v1.2.12: deploy.sh web modes, DB modes and the pre-upgrade SQLite
+      # backup, against stubbed docker/curl/openssl.
+      - name: deploy.sh scenarios
+        run: bash scripts/deploy-web-mode-check.sh
