@@ -23,6 +23,11 @@
   轻量：Panel ~7 MB + Node ~4 MB。部署方式：Docker Compose。数据库：SQLite / PostgreSQL。
 </p>
 
+<p align="center">
+  🖥️ <strong>在线演示</strong>：<a href="https://demo.relaypanel.dev">demo.relaypanel.dev</a>，账号 <code>admin</code>，密码 <code>demo8888</code><br/>
+  可以新增和修改，不能删除和改密码；节点是真实的，可以试转发。
+</p>
+
 ---
 
 ## ✨ 功能亮点

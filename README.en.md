@@ -24,6 +24,11 @@
   Deploy: Docker Compose. Database: SQLite / PostgreSQL.
 </p>
 
+<p align="center">
+  🖥️ <strong>Live demo</strong>: <a href="https://demo.relaypanel.dev">demo.relaypanel.dev</a>, user <code>admin</code>, password <code>demo8888</code><br/>
+  You can add and edit, but not delete or change passwords; the nodes are real, so forwarding works.
+</p>
+
 ---
 
 ## ✨ Features
