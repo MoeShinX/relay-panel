@@ -8,7 +8,29 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
-## [Unreleased]
+## [1.2.12] - 2026-10-04
+
+Ships alongside `node-v1.2.6`; neither requires the other, and the config
+protocol is unchanged at version 4. One schema change, applied on start: a
+table of traffic batch ids (SQLite migration 45, PostgreSQL revision 28).
+
+Upgrading: "Update now" on the dashboard, or `git pull --quiet && ./deploy.sh`.
+Three things to know first:
+
+- **`JWT_SECRET` must now be at least 32 characters.** `deploy.sh` — which the
+  one-click update runs — replaces a shorter one, which signs everyone out
+  once. If you run the compose file by hand, set a new one before upgrading or
+  the panel will not start.
+- **The panel no longer runs as root in its container.** The existing database
+  is handed over on the first start, with nothing to do — unless you bind-mount
+  `/app/data` (it becomes owned by uid 10001) or run the CLI with
+  `docker compose exec` (add `-u relaypanel`).
+- **Logins are now also limited per client IP** (20 a minute). A reverse proxy
+  that reaches the panel from a public address — one on another server —
+  counts as a single client for everyone behind it.
+
+A re-sent traffic report is billed once only when the node runs `node-v1.2.6`
+as well.
 
 ### Added
 
@@ -61,6 +83,9 @@ independent `v*` / `node-v*` tracks since this release).
   so the downtime does not include the compile. PostgreSQL is still not
   backed up automatically.
 
+- **The top bar's GitHub icon sits before "Log out"**, so the order is
+  change password → GitHub → log out, with log out last.
+
 ### Fixed
 
 - **Concurrent writes no longer fail with a 500 on SQLite.** A purchase,
@@ -70,6 +95,7 @@ independent `v*` / `node-v*` tracks since this release).
   has landed in between. Write transactions now take the lock at the start, so
   concurrent requests simply wait their turn. Nothing was ever double-charged
   or lost — nodes retry a failed traffic report — but the request failed.
+
 - **Expiry times are checked and stored in one exact format.** Plan,
   redeem-code and announcement expiry are compared as text, so any spelling
   other than `YYYY-MM-DD HH:MM:SS` (UTC, zero-padded) sorts wrong. The admin
@@ -80,28 +106,35 @@ independent `v*` / `node-v*` tracks since this release).
   after `2026-09-30`, so it stayed valid for the rest of the month. All three
   now accept only that layout and store it zero-padded. The panel's own date
   pickers always sent the right format.
+
 - **Changing a user's line authorization is all-or-nothing.** The flag, the
   explicit lines and pausing the rules outside them were four separate writes;
   a failure part-way could leave a revoked line's rules running. They are now
   one transaction. (The admin UI no longer edits these directly — plans do —
   but the API still accepts them.)
+
 - **Deleting a line or plan that is still in use no longer says "deleted".**
   The panel refused the deletion, but the page announced success anyway. The
   same applied to deleting a rule or a node status entry that the panel
   rejected. Several admin actions also failed silently on a network error;
   they now say so.
+
 - **Copying new redeem codes works on a plain-HTTP panel.** It used the
   browser clipboard API directly, which only exists on HTTPS.
+
 - **The device-groups page is admin-only in the browser too.** The API already
   refused regular users; opening `/groups` directly now shows the 403 page
   instead of a page of failing requests.
+
 - **`CORS_ORIGINS=*` stops the panel with an explanation** instead of a bare
   crash. Wildcard CORS is deliberately unsupported; list the exact origins.
+
 - **A rule edit is saved completely or not at all.** Its fields were written
   one after another, and some checks ran only after the first writes: an edit
   that changed the name and set a 1-minute restart interval was refused, yet
   the new name was kept. Every check now runs first and the whole edit is one
   transaction.
+
 - **Setting one direction's speed limit no longer removes the other.** An edit
   that sent only the upload limit wrote the download limit as 0 (no limit).
   An omitted direction now keeps its limit; send 0 to remove one. The panel's
@@ -111,6 +144,7 @@ independent `v*` / `node-v*` tracks since this release).
   used by a rule?" check queried a `fallback_group` column that the rules
   table does not have, so every group deletion on a PostgreSQL panel failed
   with a database error. SQLite was unaffected.
+
 - **PostgreSQL migration 11 no longer claims it will retry.** When it found
   conflicting ports it skipped itself, but the later migrations then recorded
   the newest schema version, so it never ran again despite the log saying it
@@ -204,13 +238,15 @@ independent `v*` / `node-v*` tracks since this release).
     unknown username was answered almost instantly and a known one only after
     the real password check — the response time told which usernames exist.
     Both now take the same time.
+
 - **Release workflows no longer paste the manual-dispatch version into
   shell scripts.** It is passed as an environment variable and must be a plain
   `X.Y.Z`. Only people with write access to the repository could trigger this.
 
----
-
----
+- **Frontend dependencies updated.** `npm audit` reported 9 advisories;
+  react-router is now 7.18.4, and the rest were test and build tools. None was
+  reachable in the panel: the React Router ones concern server rendering and
+  navigation to untrusted paths, neither of which the panel does.
 
 ## [1.2.11] - 2026-09-27
 

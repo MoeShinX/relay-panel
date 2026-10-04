@@ -11,7 +11,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
-## [Unreleased]
+## [1.2.6] - 2026-10-04
+
+Runs against any current panel (still protocol version 4). Traffic reports now
+carry a batch id, which panel 1.2.12+ uses to bill a re-sent report once; older
+panels ignore it.
+
+Worth taking on nodes with a shaky link to the panel: a stuck control-channel
+handshake now retries on its own, and an unanswered report no longer stalls
+the node. Nodes installed with `-s <name>` should re-run their install command
+once, to get the corrected `start.sh`.
 
 ### Fixed
 
@@ -39,10 +48,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   it used to hold on until the wait ended and then still forward the reply —
   and removing or restarting a UDP rule releases all of its sessions (and the
   rule's cleanup task, which also used to live on).
+
 - **A late error on an expired UDP session could cut off the client's new
   one.** The old session's reader removed "the session for this client" when
   its socket failed — by then possibly the replacement session. It now only
   removes its own.
+
 - **Nodes installed with `-s <name>` ran from the default instance's
   directory.** The generated `start.sh` always changed into `/opt/relay-node`
   and read its `relay-node.env`, and the node kept its id and config cache
@@ -51,7 +62,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   instance now uses its own `/opt/<name>`. Re-run the install command for the
   instance to get the new `start.sh`; the default `relay-node` instance keeps
   its files where they are.
-
 
 - **A traffic report the panel did not answer is re-sent unchanged, so it is
   never billed twice.** A report that got no definite answer (timeout, dropped
@@ -67,11 +77,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   Each batch also names the previous, acknowledged one, so the panel can
   stop keeping it for long. With an older panel the id is ignored and reports
   behave as before.
+
 - **A traffic report gives up after 30 seconds.** It had no time limit, and it
   runs in the same loop as the config poll: a request left hanging (a
   half-open connection, a panel stuck on a database lock) stopped config
   updates and all later reports with it. The batch is re-sent afterwards
   under the same id, so giving up never bills twice.
+
 - **Pausing and resuming a rule while a report is in doubt no longer stops
   the node's billing.** Settling the report subtracted its bytes from the
   rule's new counter instead of the one they were read from, wrapping it to
@@ -91,16 +103,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   most once a minute. Set `UDP_MAX_SESSIONS` in `relay-node.env` for very busy
   UDP forwarding. Refused packets also no longer add entries to the
   connection count.
+
 - **The installer no longer pastes `-u` / `-t` into `start.sh` unescaped.**
   The values were inserted with `sed`, so a URL or token containing `$(...)`
   would run on every node start, and a `|` or `&` produced a broken file. The
   token, panel URL and service name are now validated, and `start.sh` is
   written with proper shell quoting. The values come from the install command
   the operator pastes, so this was not reachable remotely.
-
----
-
----
 
 ## [1.2.5] - 2026-09-27
 

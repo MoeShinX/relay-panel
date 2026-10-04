@@ -429,6 +429,7 @@ The first-resort checks, for when you don't want to leave this file:
 | Symptom | Fix |
 |---------|-----|
 | `JWT_SECRET must be set` | You didn't create `.env` or it's empty. Run step 2. |
+| `JWT_SECRET is too short` | Since 1.2.12 it must be at least 32 characters. Re-run `./deploy.sh`, which replaces a short one, or set one from `openssl rand -hex 32`. |
 | Panel unreachable | `docker compose logs panel` — the log names the actual cause. |
 | Node shows offline but the process is running | The node can't reach the panel over HTTP (firewall / `PUBLIC_PANEL_URL`). Check `journalctl -u relay-node` for `report_status` errors. |
 | Node not forwarding | Verify `NODE_TOKEN` matches a group token from the UI. |
