@@ -5633,3 +5633,157 @@ async fn admin_order_list_pages_without_overlap() {
         "the two pages must cover all three rows exactly once"
     );
 }
+
+/// v1.2.12: a write transaction that reads first must not fail with
+/// SQLITE_BUSY when another connection writes in between. With a deferred
+/// BEGIN the SELECT pins a WAL snapshot, the other write commits straight
+/// away, and this transaction's UPDATE then fails at once — busy_timeout does
+/// not cover a stale snapshot — which surfaced as a 500 on concurrent
+/// purchases / redeems / traffic reports. `begin_write` takes the write lock
+/// up front, so the other writer waits for the commit instead.
+///
+/// Needs a real WAL file with several connections, unlike the in-memory
+/// single-connection harness above.
+#[tokio::test]
+async fn write_transactions_do_not_fail_on_a_concurrent_write() {
+    let path = std::env::temp_dir().join(format!(
+        "relaypanel-begin-write-{}-{}.db",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let url = format!(
+        "sqlite:{}?mode=rwc",
+        path.to_string_lossy().replace('\\', "/")
+    );
+    let pool = crate::db::init::init_db(&url).await.unwrap();
+    let db = SqliteRepository::new(pool.clone());
+
+    let mut tx = db.begin_write().await.unwrap();
+    let _: i64 = sqlx::query_scalar("SELECT traffic_used FROM users WHERE id = 1")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+
+    // Another request writes while this transaction is between its read and
+    // its write.
+    let other = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            sqlx::query("UPDATE users SET traffic_used = traffic_used + 1 WHERE id = 1")
+                .execute(&pool)
+                .await
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    sqlx::query("UPDATE users SET traffic_used = traffic_used + 10 WHERE id = 1")
+        .execute(&mut *tx)
+        .await
+        .expect("the write must not fail with SQLITE_BUSY");
+    tx.commit().await.unwrap();
+    other
+        .await
+        .unwrap()
+        .expect("the other writer must wait for the lock, not fail");
+
+    let used: i64 = sqlx::query_scalar("SELECT traffic_used FROM users WHERE id = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(used, 11, "both writes must land");
+
+    pool.close().await;
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+    }
+}
+
+/// v1.2.12: an authorization change applies the flag, the explicit groups and
+/// the pause together. Revoking group 70 pauses its rule and keeps group 71's.
+#[tokio::test]
+async fn update_user_authorization_revokes_and_pauses_together() {
+    let db = repo().await;
+    let (alice, _) = seed_buyer_and_plan(&db, "100.00", 1000, "5.00", 0, false).await;
+    seed_device_group(&db, 70, alice).await;
+    seed_device_group(&db, 71, alice).await;
+    db.set_user_device_groups(alice, &[70, 71]).await.unwrap();
+    for (id, port, group) in [(300, 21000, 70), (301, 21001, 71)] {
+        sqlx::query(
+            "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, \
+             target_addr, target_port, paused) VALUES (?, 'r', ?, ?, ?, '127.0.0.1', 80, 0)",
+        )
+        .bind(id)
+        .bind(alice)
+        .bind(port)
+        .bind(group)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    let paused = db
+        .update_user_authorization(alice, Some(false), Some(&[71]))
+        .await
+        .unwrap();
+    assert_eq!(paused, 1);
+    assert_eq!(db.list_user_device_groups(alice).await.unwrap(), vec![71]);
+    let states: Vec<(i64, bool)> =
+        sqlx::query_as("SELECT id, paused FROM forward_rules WHERE uid = ? ORDER BY id")
+            .bind(alice)
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(states, vec![(300, true), (301, false)]);
+}
+
+/// v1.2.12 (M3): when the pause step fails, the flag and group changes before
+/// it must roll back too — not leave the user half re-authorized.
+#[tokio::test]
+async fn update_user_authorization_rolls_back_when_a_step_fails() {
+    let db = repo().await;
+    let (alice, _) = seed_buyer_and_plan(&db, "100.00", 1000, "5.00", 0, false).await;
+    seed_device_group(&db, 70, alice).await;
+    sqlx::query("UPDATE users SET all_device_groups = 1 WHERE id = ?")
+        .bind(alice)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    db.set_user_device_groups(alice, &[70]).await.unwrap();
+    sqlx::query(
+        "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, \
+         target_addr, target_port, paused) VALUES (300, 'r', ?, 21000, 70, '127.0.0.1', 80, 0)",
+    )
+    .bind(alice)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    // Make the final step (pausing the rule) fail. The harness has a single
+    // connection, so this TEMP trigger is in effect for the call below.
+    sqlx::query(
+        "CREATE TEMP TRIGGER fail_pause BEFORE UPDATE OF paused ON forward_rules \
+         BEGIN SELECT RAISE(ABORT, 'injected failure'); END",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let result = db
+        .update_user_authorization(alice, Some(false), Some(&[]))
+        .await;
+    assert!(result.is_err(), "the injected failure must surface");
+
+    let all: bool = sqlx::query_scalar("SELECT all_device_groups FROM users WHERE id = ?")
+        .bind(alice)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert!(all, "the flag change must roll back with the failed pause");
+    assert_eq!(
+        db.list_user_device_groups(alice).await.unwrap(),
+        vec![70],
+        "the group change must roll back with the failed pause"
+    );
+}

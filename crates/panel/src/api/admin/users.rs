@@ -290,35 +290,15 @@ pub async fn update_user(
     // flag and/or the explicit device-group assignments are applied here. After
     // re-authorizing, pause any of the user's rules whose inbound group is no
     // longer allowed — the rules + their data are kept so an admin can
-    // re-authorize and resume. (set_user_all_device_groups is a no-op for admins,
-    // who are always all-allowed.)
-    let authz_changed = req.all_device_groups.is_some() || req.device_group_ids.is_some();
-    if let Some(all) = req.all_device_groups {
-        if let Err(e) = state.db.set_user_all_device_groups(id, all).await {
-            tracing::error!(
-                "update_user {}: set_user_all_device_groups failed: {}",
-                id,
-                e
-            );
-            return Json(err(500, "数据库错误"));
-        }
-    }
-    if let Some(ref ids) = req.device_group_ids {
-        if let Err(e) = state.db.set_user_device_groups(id, ids).await {
-            tracing::error!("update_user {}: set_user_device_groups failed: {}", id, e);
-            return Json(err(500, "数据库错误"));
-        }
-    }
-    if authz_changed {
-        // Pause rules outside the user's NEW authorization.
-        let allowed = match state.db.authorized_device_group_ids(id).await {
-            Ok(a) => a,
-            Err(e) => {
-                tracing::error!("update_user {}: authz lookup for pause failed: {}", id, e);
-                return Json(err(500, "数据库错误"));
-            }
-        };
-        match state.db.pause_rules_outside_groups(id, &allowed).await {
+    // re-authorize and resume. (The flag is left alone for admins, who are
+    // always all-allowed.) v1.2.12: all of it is one transaction, so a failure
+    // part-way can no longer leave a revoked group's rules running.
+    if req.all_device_groups.is_some() || req.device_group_ids.is_some() {
+        match state
+            .db
+            .update_user_authorization(id, req.all_device_groups, req.device_group_ids.as_deref())
+            .await
+        {
             Ok(n) if n > 0 => {
                 tracing::warn!(
                     "update_user {}: paused {} rule(s) outside new authorization",
@@ -328,11 +308,7 @@ pub async fn update_user(
             }
             Ok(_) => {}
             Err(e) => {
-                tracing::error!(
-                    "update_user {}: pause_rules_outside_groups failed: {}",
-                    id,
-                    e
-                );
+                tracing::error!("update_user {}: authorization change failed: {}", id, e);
                 return Json(err(500, "数据库错误"));
             }
         }
@@ -547,10 +523,20 @@ pub async fn admin_set_user_plan(
             }
         }
     } else {
+        // v1.2.12: expiry is compared as TEXT, so only the canonical form may
+        // be stored (see service::timestamps) — a value that merely parses,
+        // like `2026-9-1 00:00:00`, sorted after the rest of the month.
+        let expire = match req.plan_expire_at.as_deref() {
+            None => None,
+            Some(raw) => match crate::service::timestamps::canonical_utc(raw) {
+                Some(v) => Some(v),
+                None => return Json(err(400, "到期时间格式应为 YYYY-MM-DD HH:MM:SS (UTC)")),
+            },
+        };
         let (plan_id, expire) =
             match crate::db::repo::UserRepository::find_by_id(state.db.as_ref(), id).await {
                 Ok(Some(u)) if u.admin => return Json(err(400, "无法修改管理员用户的套餐")),
-                Ok(Some(u)) => (u.plan_id, req.plan_expire_at.clone()),
+                Ok(Some(u)) => (u.plan_id, expire),
                 Ok(None) => return Json(err(404, "用户不存在")),
                 Err(e) => {
                     tracing::error!("admin_set_user_plan {}: find_by_id failed: {}", id, e);

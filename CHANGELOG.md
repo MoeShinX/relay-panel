@@ -21,6 +21,43 @@ independent `v*` / `node-v*` tracks since this release).
   to find the cause on the node, and their upgrade action is disabled with the
   reason instead of failing on click.
 
+### Fixed
+
+- **Concurrent writes no longer fail with a 500 on SQLite.** A purchase,
+  redeem or traffic report that ran at the same moment as another write could
+  fail outright with "database is busy": its transaction read first and only
+  asked for the write lock later, and SQLite refuses that when another write
+  has landed in between. Write transactions now take the lock at the start, so
+  concurrent requests simply wait their turn. Nothing was ever double-charged
+  or lost — nodes retry a failed traffic report — but the request failed.
+- **Expiry times are checked and stored in one exact format.** Plan,
+  redeem-code and announcement expiry are compared as text, so any spelling
+  other than `YYYY-MM-DD HH:MM:SS` (UTC, zero-padded) sorts wrong. The admin
+  "adjust plan expiry" API stored whatever string it was given: `2026/10/01`
+  or `never` meant the plan never expired, and `2026-10-01T00:00:00Z` lasted
+  until the end of that day. Redeem codes and announcements did check the
+  format, but kept an unpadded `2026-9-1 00:00:00` as typed — which sorts
+  after `2026-09-30`, so it stayed valid for the rest of the month. All three
+  now accept only that layout and store it zero-padded. The panel's own date
+  pickers always sent the right format.
+- **Changing a user's line authorization is all-or-nothing.** The flag, the
+  explicit lines and pausing the rules outside them were four separate writes;
+  a failure part-way could leave a revoked line's rules running. They are now
+  one transaction. (The admin UI no longer edits these directly — plans do —
+  but the API still accepts them.)
+- **Deleting a line or plan that is still in use no longer says "deleted".**
+  The panel refused the deletion, but the page announced success anyway. The
+  same applied to deleting a rule or a node status entry that the panel
+  rejected. Several admin actions also failed silently on a network error;
+  they now say so.
+- **Copying new redeem codes works on a plain-HTTP panel.** It used the
+  browser clipboard API directly, which only exists on HTTPS.
+- **The device-groups page is admin-only in the browser too.** The API already
+  refused regular users; opening `/groups` directly now shows the 403 page
+  instead of a page of failing requests.
+- **`CORS_ORIGINS=*` stops the panel with an explanation** instead of a bare
+  crash. Wildcard CORS is deliberately unsupported; list the exact origins.
+
 ### Security
 
 - **A short `JWT_SECRET` is now refused.** The panel only rejected an empty
@@ -34,6 +71,14 @@ independent `v*` / `node-v*` tracks since this release).
   also runs — replaces it in `.env` with a new random one, so the upgrade
   cannot leave the panel down; everyone has to log in again once. If you run
   the compose file by hand, set a new one with `openssl rand -hex 32`.
+
+- **Release workflow permissions narrowed.** The panel release workflow gave
+  every job write access to the repository and packages, including the job
+  that runs `npm ci`. Jobs now get only the access they need, and the
+  frontend build gets none. `:latest` on the panel image is moved only after
+  the release is verified, as the node workflow already did.
+
+---
 
 ---
 

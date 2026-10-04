@@ -13,7 +13,7 @@ impl RedeemRepository for SqliteRepository {
         if codes.is_empty() {
             return Ok(0);
         }
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let mut inserted = 0u64;
         for c in codes {
             // OR IGNORE: `code` is UNIQUE and generation is random, so a
@@ -47,7 +47,7 @@ impl RedeemRepository for SqliteRepository {
         // taken on the first write (the claim below), and SQLite serializes
         // writers, so a concurrent redeemer either blocks briefly or gets
         // SQLITE_BUSY — never a double credit.
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
 
         // Read the code first so we can tell "expired" apart from "not
         // redeemable" — the user needs to know an expired card isn't a typo.
@@ -199,7 +199,7 @@ impl RedeemRepository for SqliteRepository {
         if ids.is_empty() {
             return Ok(0);
         }
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let mut deleted = 0u64;
         for id in ids {
             // `status != 'used'` — unused and voided rows are disposable;

@@ -1,12 +1,12 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const { mockGet, mockPost, mockPut } = vi.hoisted(() => ({
-  mockGet: vi.fn(), mockPost: vi.fn(), mockPut: vi.fn(),
+const { mockGet, mockPost, mockPut, mockDelete } = vi.hoisted(() => ({
+  mockGet: vi.fn(), mockPost: vi.fn(), mockPut: vi.fn(), mockDelete: vi.fn(),
 }));
 vi.mock('../api/client', () => ({
-  default: { get: mockGet, post: mockPost, put: mockPut, delete: vi.fn() },
+  default: { get: mockGet, post: mockPost, put: mockPut, delete: mockDelete },
 }));
 const { mockUseAuth } = vi.hoisted(() => ({ mockUseAuth: vi.fn() }));
 vi.mock('../auth/useAuth', () => ({ useAuth: mockUseAuth }));
@@ -174,5 +174,32 @@ describe('monitor-only groups hide the forwarding fields', () => {
     await waitFor(() => expect(screen.getByText('g1')).toBeInTheDocument());
     expect(screen.queryByText('10000-65535')).toBeNull();
     expect(screen.queryByText('1.2.3.4')).toBeNull();
+  });
+});
+
+// ── v1.2.12: the API answers "still in use" with HTTP 200 + code 409. The old
+// handler only looked for an HTTP error, so it announced the group as deleted
+// while it was still there.
+describe('deleting a group', () => {
+  async function confirmDelete() {
+    const user = userEvent.setup();
+    render(<Groups />);
+    await waitFor(() => expect(screen.getByText('g1')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'delete' }));
+    const pop = (await screen.findByText('deleteGroupConfirm')).closest('.ant-popover') as HTMLElement;
+    await user.click(within(pop).getByRole('button', { name: /ok/i }));
+  }
+
+  it('shows the in-use refusal instead of claiming success', async () => {
+    mockDelete.mockResolvedValue({ code: 409, message: '该分组仍被 3 条规则使用，请先迁移规则。', data: null });
+    await confirmDelete();
+    expect(await screen.findByText('该分组仍被 3 条规则使用，请先迁移规则。')).toBeInTheDocument();
+    expect(screen.queryByText('groupDeleted')).toBeNull();
+  });
+
+  it('confirms a real deletion', async () => {
+    mockDelete.mockResolvedValue(ok(null));
+    await confirmDelete();
+    expect(await screen.findByText('groupDeleted')).toBeInTheDocument();
   });
 });
