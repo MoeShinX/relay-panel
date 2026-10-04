@@ -826,9 +826,8 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     // UDP-bearing). The old global rule was strictly stricter, so a DB that
     // satisfied it also satisfies the new partial indexes. A DB that never had
     // the global index (or had duplicates) could still violate a partial index,
-    // so we detect per-partition duplicates first and SKIP (keeping whatever
-    // index exists) rather than fail the migration — mirroring SQLite
-    // Migration 28 and PG-side caution.
+    // so we detect per-partition duplicates first and refuse to start with a
+    // clear message (v1.2.12; it used to skip, see below).
     if current < 11 {
         let mut tx = pool.begin().await?;
 
@@ -852,16 +851,23 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         .await?;
 
         if tcp_dupes.0 > 0 || udp_dupes.0 > 0 {
-            tracing::error!(
-                "PG migration 11 SKIPPED: forward_rules has conflicting (device_group_in, \
-                 listen_port) rows (tcp partition: {}, udp partition: {}). The new partial \
-                 UNIQUE indexes were NOT created. Resolve the conflicts and restart.",
-                tcp_dupes.0,
-                udp_dupes.0
-            );
-            // Do NOT advance schema_version: leave revision < 11 so the
-            // migration re-attempts on next boot once the operator fixes data.
+            // v1.2.12: stop here instead of skipping. The old skip rolled back
+            // without recording revision 11, but the later revisions below
+            // still ran and recorded up to PG_SCHEMA_VERSION — and schema_version
+            // is read as MAX(version), so the next boot short-circuited and
+            // revision 11 never re-ran, despite this message promising it
+            // would. (In practice this is not reached: the baseline applied
+            // before migrations creates the same partial indexes and already
+            // fails on such data.)
             tx.rollback().await?;
+            let msg = format!(
+                "PG migration 11: forward_rules has conflicting (device_group_in, listen_port) \
+                 rows (tcp partition: {}, udp partition: {}). Resolve the conflicts and restart; \
+                 the migration runs again then.",
+                tcp_dupes.0, udp_dupes.0
+            );
+            tracing::error!("{msg}");
+            return Err(sqlx::Error::Protocol(msg));
         } else {
             sqlx::query("DROP INDEX IF EXISTS idx_forward_rules_listen_port")
                 .execute(&mut *tx)

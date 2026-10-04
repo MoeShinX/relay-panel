@@ -146,7 +146,14 @@ async fn main() {
     );
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    // v1.2.12: connect info gives login/register the TCP peer for their
+    // per-IP attempt limit (api::auth_throttle).
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }
 
 /// Open the configured backend, run migrations, and return the repository.
