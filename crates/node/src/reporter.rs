@@ -1210,6 +1210,9 @@ pub async fn report_status(
         // v1.0.10: how this node is run, so the panel only offers a one-click
         // self-upgrade to systemd nodes (docker → update image; manual → none).
         install_method: Some(crate::updater::install_method().to_string()),
+        // node-v1.2.7: what CPU this is, for the panel's detail drawer.
+        cpu_model: crate::cpuinfo::cpu_info().model.clone(),
+        cpu_cores: crate::cpuinfo::cpu_info().cores,
     };
 
     // debug, not info: this runs every poll cycle (default 10s). Keeping it

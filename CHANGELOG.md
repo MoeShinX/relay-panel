@@ -8,6 +8,16 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **A node's detail drawer shows its CPU model and core count**, e.g. "AMD
+  EPYC 7B13 · 4 核", under the CPU usage. Nodes on `node-v1.2.7` or later
+  report it; older ones show "-". On a VPS it is whatever the hypervisor
+  exposes — often the host's CPU, sometimes just "QEMU Virtual CPU". Admin
+  view only, as the user view has no such data.
+
 ## [1.2.12] - 2026-10-04
 
 Ships alongside `node-v1.2.6`; neither requires the other, and the config

@@ -217,6 +217,25 @@ pub async fn report_traffic(
     }
 }
 
+/// Longest node-reported display string kept (the CPU model; real ones are
+/// well under 64 characters).
+const MAX_DISPLAY_TEXT: usize = 128;
+
+/// A node-reported string made fit to show: whitespace runs collapsed,
+/// control characters dropped, capped at [`MAX_DISPLAY_TEXT`] characters.
+/// None when nothing is left.
+fn display_text(raw: &str) -> Option<String> {
+    let text: String = raw
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_DISPLAY_TEXT)
+        .collect();
+    (!text.is_empty()).then_some(text)
+}
+
 pub async fn report_status(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -302,6 +321,11 @@ pub async fn report_status(
             // frontend saw `undefined` and wrongly showed every node as "manual",
             // hiding the upgrade button on legitimately systemd-managed nodes.
             "install_method": req.install_method,
+            // v1.2.13: the CPU model and logical CPU count (node-v1.2.7+), for
+            // the detail drawer. The model is free text from the node, so it
+            // is cleaned and capped before it is stored.
+            "cpu_model": req.cpu_model.as_deref().and_then(display_text),
+            "cpu_cores": req.cpu_cores.filter(|n| *n > 0),
         });
         // Status persistence is best-effort: the original used .ok() to swallow
         // any DB error so a transient failure never broke the report cycle.
@@ -729,6 +753,8 @@ mod tests {
             config_protocol_version: None,
             listener_errors: None,
             install_method: None,
+            cpu_model: None,
+            cpu_cores: None,
         };
         let Json(resp) = report_status(State(state.clone()), h, Json(req)).await;
         assert_eq!(resp.code, 401, "missing token → business 401, not HTTP 401");
@@ -819,6 +845,8 @@ mod tests {
             config_protocol_version: None,
             listener_errors: None,
             install_method: Some("systemd".into()),
+            cpu_model: None,
+            cpu_cores: None,
         };
         let Json(resp) =
             report_status(State(state.clone()), auth_headers("tok-A"), Json(req)).await;
@@ -837,6 +865,62 @@ mod tests {
             Some("systemd"),
             "install_method must be persisted so the upgrade UI can offer a self-upgrade"
         );
+    }
+
+    /// v1.2.13: the CPU model and core count reach the stored status, the
+    /// model cleaned (it is free text from the node) and capped.
+    #[tokio::test]
+    async fn report_status_stores_the_cpu_model_and_cores() {
+        use relay_shared::protocol::StatusReport;
+        let (state, _pool) = seeded_state().await;
+        let send = |model: String, cores: u32| {
+            let state = state.clone();
+            async move {
+                let req: StatusReport = serde_json::from_value(serde_json::json!({
+                    "cpu_usage": 0.0, "mem_usage": 0.0, "active_connections": 0,
+                    "uptime_secs": 0, "node_id": "n1",
+                    "cpu_model": model, "cpu_cores": cores,
+                }))
+                .unwrap();
+                let Json(resp) =
+                    report_status(State(state.clone()), auth_headers("tok-A"), Json(req)).await;
+                assert_eq!(resp.code, 0, "{}", resp.message);
+                let raw = state.db.get("node_status:10:n1").await.unwrap().unwrap();
+                serde_json::from_str::<serde_json::Value>(&raw).unwrap()
+            }
+        };
+
+        let v = send("  AMD   EPYC 7B13\u{7}  ".into(), 4).await;
+        assert_eq!(v["cpu_model"], "AMD EPYC 7B13");
+        assert_eq!(v["cpu_cores"], 4);
+
+        let v = send("x".repeat(1000), 0).await;
+        assert_eq!(
+            v["cpu_model"].as_str().unwrap().len(),
+            super::MAX_DISPLAY_TEXT
+        );
+        assert!(v["cpu_cores"].is_null(), "0 CPUs is no answer");
+
+        let v = send(" \t ".into(), 2).await;
+        assert!(v["cpu_model"].is_null(), "a blank model is no model");
+    }
+
+    /// An older node sends neither field; the stored status has them null.
+    #[tokio::test]
+    async fn an_older_node_without_cpu_fields_still_reports() {
+        use relay_shared::protocol::StatusReport;
+        let (state, _pool) = seeded_state().await;
+        let req: StatusReport = serde_json::from_value(serde_json::json!({
+            "cpu_usage": 1.0, "mem_usage": 2.0, "active_connections": 0,
+            "uptime_secs": 5, "node_id": "n1", "node_version": "1.2.6",
+        }))
+        .unwrap();
+        let Json(resp) =
+            report_status(State(state.clone()), auth_headers("tok-A"), Json(req)).await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+        let raw = state.db.get("node_status:10:n1").await.unwrap().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert!(v["cpu_model"].is_null() && v["cpu_cores"].is_null());
     }
 
     /// v1.2.12: a node re-sends a batch whose acknowledgement it lost. The

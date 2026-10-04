@@ -569,6 +569,14 @@ pub struct StatusReport {
     /// send this; the panel treats a missing value as "unknown" (no self-upgrade).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub install_method: Option<String>,
+    /// node-v1.2.7: the CPU model (e.g. "AMD EPYC 7B13") and logical CPU
+    /// count, for the panel's node detail drawer. Read once at startup. The
+    /// model is None when the machine names none the node recognises (some
+    /// ARM boards). Older nodes send neither; the panel renders "-".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_cores: Option<u32>,
 }
 
 /// One listener bind failure reported by a node. Carries enough context for the
