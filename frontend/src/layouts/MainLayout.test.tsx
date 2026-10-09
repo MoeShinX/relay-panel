@@ -47,6 +47,27 @@ describe('MainLayout on a desktop', () => {
     // the announcements control carries its label as visible text
     expect(screen.getByText('announcements')).toBeInTheDocument();
   });
+
+  // A long site name wrapped down over the menu: 59 characters stood 91px tall
+  // in the open sider's 56px brand block, and six lines in the collapsed one.
+  it('clamps a long site name in the sider, open or collapsed', async () => {
+    const long = '星河科技 RelayPanel 中转加速服务面板 香港日本美国专线';
+    mockIsMobile.mockReturnValue(false);
+    mockSite.mockReturnValue({ site_name: long, subtitle: '' });
+    const user = userEvent.setup();
+    const { container } = renderAt();
+    const sider = container.querySelector('.ant-layout-sider') as HTMLElement;
+    const brandOf = () => within(sider).getByTitle(long);
+    const clampOf = () => brandOf().querySelector('span') as HTMLElement;
+    expect(clampOf().style.webkitLineClamp).toBe('2');
+    expect(brandOf().style.fontSize).toBe('17px');
+
+    await user.click(sider.querySelector('.ant-layout-sider-trigger') as HTMLElement);
+    await waitFor(() => expect(sider.className).toContain('ant-layout-sider-collapsed'));
+    expect(clampOf().style.webkitLineClamp).toBe('2');
+    // 80px is narrower than RelayPanel at 17px
+    expect(brandOf().style.fontSize).toBe('13px');
+  });
 });
 
 // v1.2.13: phones get no sider — it took a fifth of a 375px screen even

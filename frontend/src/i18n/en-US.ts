@@ -703,7 +703,7 @@ export const enUS: Dict = {
   // ── v1.2.4: site settings ──
   siteSettings: 'Site Settings',
   siteName: 'Site name',
-  siteNameHint: 'Shown on the login page, in the sidebar, and as the browser tab title. Empty falls back to RelayPanel.',
+  siteNameHint: 'Shown on the login page, in the sidebar, and as the browser tab title. The sidebar fits two lines (about 35 letters) and ends a longer name with an ellipsis. Empty falls back to RelayPanel.',
   siteSubtitle: 'Subtitle',
   siteSubtitleHint: 'Small text under the name on the login page. Empty keeps the default.',
   siteAnnouncement: 'Announcement',

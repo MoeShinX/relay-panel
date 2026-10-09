@@ -698,7 +698,7 @@ export const zhCN = {
   // ── v1.2.4: 站点设置 ──
   siteSettings: '站点设置',
   siteName: '站点名称',
-  siteNameHint: '显示在登录页、左侧边栏和浏览器标签标题。留空则使用 RelayPanel。',
+  siteNameHint: '显示在登录页、左侧边栏和浏览器标签标题。侧边栏最多显示两行（约 20 个汉字），超出部分显示省略号。留空则使用 RelayPanel。',
   siteSubtitle: '副标题',
   siteSubtitleHint: '登录页站点名称下方的小字。留空则使用默认文案。',
   siteAnnouncement: '公告',

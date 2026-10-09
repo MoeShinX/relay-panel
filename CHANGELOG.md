@@ -36,6 +36,14 @@ independent `v*` / `node-v*` tracks since this release).
   table that still does not fit scrolls inside itself instead of widening the
   page. Row heights are unchanged, and on a wide screen the tables look as
   before.
+- **A long site name no longer spills over the desktop sidebar menu.** It
+  wrapped as far down as it needed — 59 characters stood 91px tall in the
+  56px brand block, and six lines once the sidebar was collapsed. It now
+  keeps to two lines and ends in an ellipsis, with the full name on hover;
+  the site settings hint says how much fits (about 20 Chinese characters).
+  The collapsed sidebar shows the name at 13px, so the default RelayPanel,
+  which was wider than its 80px, now fits too. The name length limit stays
+  at 64 characters: the login page and the browser tab show it in full.
 
 ## [1.2.12] - 2026-10-04
 

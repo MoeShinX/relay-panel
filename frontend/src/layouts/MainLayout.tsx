@@ -46,6 +46,7 @@ export default function MainLayout() {
   // header's controls fold into one menu (see the mobile branch below).
   const isMobile = useIsMobile();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [siderCollapsed, setSiderCollapsed] = useState(false);
 
   // v0.4.11 PR2: role-based navigation.
   // Admin: Dashboard → 个人中心, 转发规则, 设备分组, 节点状态, 隧道配置, 用户管理, 系统设置
@@ -130,23 +131,16 @@ export default function MainLayout() {
   };
 
   const brand = site.site_name || t('brand');
-  const brandBlock = (
-    <div style={{
-      height: 'var(--rp-header-height)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      color: '#fff', fontSize: 17, fontWeight: 600, letterSpacing: 0.5,
-    }}>
-      {brand}
-    </div>
-  );
-  // The drawer's copy keeps an operator's long site name inside its 56px: a
-  // margin each side, at most two lines, then an ellipsis (full name on hover).
-  const drawerBrandBlock = (
+  // The drawer and the sider keep an operator's long site name inside their
+  // 56px: a margin each side, at most two lines, then an ellipsis (full name
+  // on hover). The collapsed sider is 80px, narrower than RelayPanel itself
+  // at 17px, so there the name drops to 13px.
+  const brandBlock = (collapsed = false) => (
     <div title={brand} style={{
       height: 'var(--rp-header-height)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
-      padding: '0 16px',
-      color: '#fff', fontSize: 17, fontWeight: 600, letterSpacing: 0.5,
+      padding: collapsed ? '0 4px' : '0 16px',
+      color: '#fff', fontSize: collapsed ? 13 : 17, fontWeight: 600, letterSpacing: collapsed ? 0 : 0.5,
     }}>
       <span style={{
         display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2,
@@ -205,7 +199,7 @@ export default function MainLayout() {
           closable={false}
           styles={{ body: { padding: 0, background: 'var(--rp-sidebar-bg)' } }}
         >
-          {drawerBrandBlock}
+          {brandBlock()}
           {menu}
         </Drawer>
       ) : (
@@ -213,9 +207,10 @@ export default function MainLayout() {
           collapsible
           breakpoint="lg"
           width={220}
+          onCollapse={(collapsed) => setSiderCollapsed(collapsed)}
           style={{ background: 'var(--rp-sidebar-bg)' }}
         >
-          {brandBlock}
+          {brandBlock(siderCollapsed)}
           {menu}
         </Sider>
       )}
