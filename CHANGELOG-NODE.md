@@ -11,6 +11,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **The node reports its CPU model and core count**, for the panel's node
+  detail drawer (panel 1.2.13+; older panels ignore them). Read once from
+  `/proc/cpuinfo` at startup. Most arm64 kernels name no model there, so the
+  common cloud ARM cores (Neoverse N1/N2/V1/V2, Cortex-A5x/A7x, Ampere-1) are
+  recognised from their part codes; an unrecognised one is sent as just its
+  vendor, or not at all.
+
 ## [1.2.6] - 2026-10-04
 
 Runs against any current panel (still protocol version 4). Traffic reports now

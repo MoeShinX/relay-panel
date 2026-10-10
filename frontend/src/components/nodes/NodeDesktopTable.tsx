@@ -6,7 +6,7 @@ import type { NodeDisplayRow } from '../../api/types';
 import { NodeResourceBar, NodeDiskBar } from './NodeResourceBar';
 import { formatBps, formatBytes, formatUptime, formatPercent } from '../../utils/format';
 import { versionRelation, versionTagColor } from '../../utils/version';
-import { NetworkCell, wsDownTag } from './shared';
+import { NetworkCell, cpuTooltip, wsDownTag } from './shared';
 import { resolveNodeUpgrade } from './upgrade';
 import { nodeDesktopColumnWidths } from './tableLayout';
 
@@ -123,7 +123,7 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
     },
     {
       title: 'CPU', key: 'cpu', width: nodeDesktopColumnWidths.cpu,
-      render: (_: unknown, r: NodeDisplayRow) => <NodeResourceBar value={r.cpu} tooltip={`CPU: ${formatPercent(r.cpu)}`} />,
+      render: (_: unknown, r: NodeDisplayRow) => <NodeResourceBar value={r.cpu} tooltip={cpuTooltip(r, t)} />,
     },
     {
       title: t('mem'), key: 'mem', width: nodeDesktopColumnWidths.mem,

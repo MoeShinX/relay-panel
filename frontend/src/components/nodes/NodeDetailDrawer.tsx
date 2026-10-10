@@ -6,7 +6,7 @@ import { useI18n } from '../../i18n/context';
 import { CountryFlag } from './CountryFlag';
 import type { ApiEnvelope, NodeDisplayRow } from '../../api/types';
 import api from '../../api/client';
-import { wsDownTag } from './shared';
+import { cpuSummary, wsDownTag } from './shared';
 
 interface Props {
   row: NodeDisplayRow | null;
@@ -76,6 +76,11 @@ export function NodeDetailDrawer({ row, open, onClose, isAdmin, panelProtocol, o
           <Descriptions.Item label={t('nodeVersion')}>{row.node_version || '-'}</Descriptions.Item>
           <Descriptions.Item label={t('connections')}>{row.connections || 0}</Descriptions.Item>
           <Descriptions.Item label="CPU">{formatPercent(row.cpu)}</Descriptions.Item>
+          {/* v1.2.13: model + core count come from node-v1.2.7+ via the admin
+           *  /nodes row; the user view has neither, so it gets no empty row. */}
+          {(isAdmin || row.cpu_model || row.cpu_cores) && (
+            <Descriptions.Item label={t('cpuModel')}>{cpuSummary(row, t('cpuCores')) ?? '-'}</Descriptions.Item>
+          )}
           <Descriptions.Item label={t('mem')}>{formatPercent(row.mem)}</Descriptions.Item>
           <Descriptions.Item label={t('disk')}>
             {row.disk_usage_percent == null && row.disk_used == null

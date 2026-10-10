@@ -453,6 +453,11 @@ export interface NodeStatus {
   online?: boolean;
   ws_connected?: boolean | null;
   cpu: number;
+  /** v1.2.13 (node-v1.2.7+): CPU model, e.g. "AMD EPYC 7B13"; null when the
+   *  machine names none the node recognises. Missing on older nodes. */
+  cpu_model?: string | null;
+  /** v1.2.13 (node-v1.2.7+): logical CPU count. */
+  cpu_cores?: number | null;
   mem: number;
   connections: number;
   /** v0.3.2: SYSTEM uptime (since OS boot). Was process uptime before v0.3.2. */
@@ -691,6 +696,9 @@ export interface NodeDisplayRow {
   config_protocol_version?: number | null;
   connections?: number | null;
   cpu?: number | null;
+  /** v1.2.13 (admin /nodes, node-v1.2.7+): CPU model and logical CPU count. */
+  cpu_model?: string | null;
+  cpu_cores?: number | null;
   mem?: number | null;
   uptime?: number | null;
   process_uptime?: number | null;

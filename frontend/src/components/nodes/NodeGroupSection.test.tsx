@@ -1,8 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { Tfn } from './types';
 import type { NodeDisplayRow } from '../../api/types';
-import { statusTag } from './shared';
+import { cpuSummary, statusTag } from './shared';
 import { NodeGroupSection } from './NodeGroupSection';
 import { nodeDesktopColumnWidths } from './tableLayout';
 
@@ -207,5 +208,41 @@ describe('NodeGroupSection v1.2 node-version comparison', () => {
     const buttons = screen.queryAllByRole('button');
     for (const b of buttons) b.click();
     expect(onUpgrade).not.toHaveBeenCalled();
+  });
+});
+
+// ── v1.2.13: the CPU bar's tooltip names the CPU (node-v1.2.7+) ──
+describe('CPU model in the CPU tooltip', () => {
+  // Echo keys, except the core-count template, so "4 核" is really built.
+  const tCores = ((key: string) => (key === 'cpuCores' ? '{n} 核' : key)) as unknown as Tfn;
+  const section = (r: NodeDisplayRow, isMobile: boolean) =>
+    render(
+      <NodeGroupSection rows={[r]} panelProtocol={0} latestNodeVersion="1.1.0" nodeVersionCheckFailed={false} isMobile={isMobile} t={tCores} openDetail={vi.fn()} />,
+    );
+
+  it('summarises model and cores, or whichever is known', () => {
+    expect(cpuSummary(row({ cpu_model: 'AMD EPYC 7B13', cpu_cores: 4 }), '{n} 核')).toBe('AMD EPYC 7B13 · 4 核');
+    expect(cpuSummary(row({ cpu_model: 'AMD EPYC 7B13' }), '{n} 核')).toBe('AMD EPYC 7B13');
+    expect(cpuSummary(row({ cpu_cores: 4 }), '{n} 核')).toBe('4 核');
+    expect(cpuSummary(row({}), '{n} 核')).toBeNull();
+  });
+
+  for (const isMobile of [false, true]) {
+    it(`shows the model under the usage on hover (${isMobile ? 'mobile' : 'desktop'})`, async () => {
+      const { container } = section(
+        row({ online: true, cpu: 3.2, cpu_model: 'AMD EPYC 7B13', cpu_cores: 4 }),
+        isMobile,
+      );
+      await userEvent.setup().hover(container.querySelector('.ant-progress') as HTMLElement);
+      const tip = await screen.findByText(/AMD EPYC 7B13 · 4 核/);
+      expect(tip.textContent).toContain('CPU: 3.2%');
+    });
+  }
+
+  it('shows only the usage for an older node', async () => {
+    const { container } = section(row({ online: true, cpu: 3.2 }), false);
+    await userEvent.setup().hover(container.querySelector('.ant-progress') as HTMLElement);
+    const tip = await screen.findByText(/CPU: 3\.2%/);
+    expect(tip.textContent).toBe('CPU: 3.2%');
   });
 });

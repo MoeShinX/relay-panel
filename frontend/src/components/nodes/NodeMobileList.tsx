@@ -4,7 +4,7 @@ import { CloudDownloadOutlined, CheckCircleOutlined, CloudServerOutlined } from 
 import type { Tfn } from './types';
 import type { NodeDisplayRow } from '../../api/types';
 import { NodeResourceBar } from './NodeResourceBar';
-import { NetworkCell, statusTag } from './shared';
+import { NetworkCell, cpuTooltip, statusTag } from './shared';
 import { formatBps, formatUptime } from '../../utils/format';
 import { versionRelation, versionTagColor } from '../../utils/version';
 import { resolveNodeUpgrade, type NodeUpgradeState } from './upgrade';
@@ -94,7 +94,7 @@ export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', no
             <div style={{ display: 'flex', gap: 12, marginTop: 6 }}>
               <div style={{ flex: 1 }}>
                 <Text type="secondary" style={{ fontSize: 11 }}>CPU</Text>
-                <NodeResourceBar value={r.cpu} tooltip={`CPU: ${r.cpu ?? '-'}%`} />
+                <NodeResourceBar value={r.cpu} tooltip={cpuTooltip(r, t)} />
               </div>
               <div style={{ flex: 1 }}>
                 <Text type="secondary" style={{ fontSize: 11 }}>{t('mem')}</Text>

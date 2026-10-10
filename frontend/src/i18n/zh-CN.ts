@@ -361,6 +361,8 @@ export const zhCN = {
   bootTraffic: '开机以来累计流量',
   diskOfTotal: '{used} / {total}',
   nodeVersion: '节点版本',
+  cpuModel: 'CPU 型号',
+  cpuCores: '{n} 核',
   nodeUpgrade: '节点更新',
   nodeUpgradeTip: '升级到 v{v}',
   nodeUpgradeLatest: '已是最新',

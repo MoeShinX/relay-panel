@@ -1,5 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
  
+import type { ReactNode } from 'react';
 import { Progress, Tooltip, Typography } from 'antd';
 import { formatPercent, formatBytes } from '../../utils/format';
 import type { Tfn } from './types';
@@ -15,7 +16,7 @@ export function usageColor(p: number): string {
 
 /** A compact CPU/mem progress bar with a precise-value tooltip. Missing → "-"
  *  (never a misleading 0%). */
-export function NodeResourceBar({ value, tooltip }: { value?: number | null; tooltip: string }) {
+export function NodeResourceBar({ value, tooltip }: { value?: number | null; tooltip: ReactNode }) {
   if (value == null) return <Text type="secondary">-</Text>;
   const pct = Math.round(value);
   return (

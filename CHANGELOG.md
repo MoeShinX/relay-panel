@@ -10,6 +10,16 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Added
+
+- **The node-status page shows each node's CPU model and core count**, e.g.
+  "AMD EPYC 7B13 · 4 核": in the detail drawer under the CPU usage, and in the
+  CPU bar's tooltip, on the desktop table and the mobile list alike. Nodes on
+  `node-v1.2.7` or later report it; older ones show "-" in the drawer and just
+  the usage in the tooltip. On a VPS it is whatever the hypervisor exposes —
+  often the host's CPU, sometimes just "QEMU Virtual CPU". Admin view only, as
+  the user view has no such data.
+
 ### Fixed
 
 - **Deleting a device group removes its nodes from the node-status page, and
@@ -19,6 +29,8 @@ independent `v*` / `node-v*` tracks since this release).
   record not found": it looked the group up before removing the record.
   Deleting a group now removes its nodes' records at once, and removing a
   record no longer needs its group to exist.
+
+---
 
 ## [1.2.12] - 2026-10-04
 
