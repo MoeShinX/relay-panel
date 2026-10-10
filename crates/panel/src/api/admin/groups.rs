@@ -201,9 +201,23 @@ pub async fn delete_group(
             )
             .await;
             // v1.0.4: close WS connections for the deleted group so nodes
-            // stop reporting. Node status entries naturally expire via the
-            // existing 2-minute timeout sweep.
+            // stop reporting.
             state.node_connections.close_group(id).await;
+            // v1.2.13: and drop its node records. They were left to the stale
+            // sweep, which was fine while that ran after 2 minutes; since 1.2.5
+            // it keeps offline rows for 24 hours, so a deleted group's nodes
+            // stayed on the node-status page as "Group N" for a day.
+            // Best-effort: the group is already gone, and a row that survives
+            // a failure here can still be removed by hand.
+            if let Err(e) =
+                crate::service::traffic::remove_group_status(state.db.as_ref(), id).await
+            {
+                tracing::warn!(
+                    "delete_group {}: removing its node records failed: {}",
+                    id,
+                    e
+                );
+            }
             state
                 .node_connections
                 .broadcast_all(r#"{"type":"config_changed"}"#)
