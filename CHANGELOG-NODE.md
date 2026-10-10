@@ -11,7 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
-## [Unreleased]
+## [1.2.7] - 2026-10-10
+
+Runs against any current panel (still protocol version 4). The node now
+reports its CPU model and core count, which panel 1.2.13+ shows in the node
+detail drawer; older panels ignore them. Nothing else changed, so there is no
+need to hurry: upgrade when convenient.
 
 ### Added
 

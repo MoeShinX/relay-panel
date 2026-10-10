@@ -8,7 +8,14 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
-## [Unreleased]
+## [1.2.13] - 2026-10-10
+
+Ships alongside `node-v1.2.7`; neither requires the other, and the config
+protocol is unchanged at version 4. No schema change.
+
+Upgrading: "Update now" on the dashboard, or `git pull --quiet && ./deploy.sh`.
+The CPU model in the node detail drawer needs the node on `node-v1.2.7` too;
+everything else here is the panel alone.
 
 ### Added
 
@@ -34,7 +41,7 @@ independent `v*` / `node-v*` tracks since this release).
   password-change cards, and the rule dialog's target address, fit a narrow
   screen. A long site name stays on one line in the phone header (with an
   ellipsis) and within two lines in the menu drawer. Desktop layouts are
-  unchanged apart from the fix below.
+  unchanged apart from the fixes below.
 
 ### Fixed
 
@@ -54,6 +61,7 @@ independent `v*` / `node-v*` tracks since this release).
   table that still does not fit scrolls inside itself instead of widening the
   page. Row heights are unchanged, and on a wide screen the tables look as
   before.
+
 - **A long site name no longer spills over the desktop sidebar menu.** It
   wrapped as far down as it needed — 59 characters stood 91px tall in the
   56px brand block, and six lines once the sidebar was collapsed. It now
@@ -62,8 +70,6 @@ independent `v*` / `node-v*` tracks since this release).
   The collapsed sidebar shows the name at 13px, so the default RelayPanel,
   which was wider than its 80px, now fits too. The name length limit stays
   at 64 characters: the login page and the browser tab show it in full.
-
----
 
 ## [1.2.12] - 2026-10-04
 
