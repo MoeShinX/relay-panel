@@ -1,4 +1,5 @@
 mod config;
+mod cpuinfo;
 mod diagnose;
 mod forwarder;
 mod poller;

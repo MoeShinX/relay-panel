@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import type { NodeDisplayRow } from '../../api/types';
+import { I18nContext } from '../../i18n/context';
+import { zhCN } from '../../i18n/zh-CN';
 
 // NodeDetailDrawer calls api.delete on the admin "delete status" action, so the
 // client must be mocked before importing the component.
@@ -41,5 +43,38 @@ describe('NodeDetailDrawer desensitization', () => {
     expect(screen.queryByText('nodeStatusDelete')).not.toBeInTheDocument();
     // safe metrics are still rendered (sanity: the drawer did open)
     expect(screen.getByText('nodeVersion')).toBeInTheDocument();
+  });
+});
+
+// ── v1.2.13: the CPU model row (node-v1.2.7+ reports model + core count) ──
+describe('NodeDetailDrawer CPU model', () => {
+  // Real Chinese strings, so the "{n} 核" template is exercised too.
+  const zh = { t: (k: keyof typeof zhCN) => zhCN[k], lang: 'zh-CN' as const, setLang: () => {} };
+  const renderZh = (row: NodeDisplayRow, isAdmin = true) =>
+    render(
+      <I18nContext.Provider value={zh}>
+        <NodeDetailDrawer row={row} open onClose={vi.fn()} isAdmin={isAdmin} panelProtocol={2} />
+      </I18nContext.Provider>,
+    );
+  const cpuRow = () => screen.getByText('CPU 型号').closest('tr') as HTMLElement;
+
+  it('shows the model and the core count', () => {
+    renderZh({ ...baseRow, cpu_model: 'AMD EPYC 7B13', cpu_cores: 4 });
+    expect(within(cpuRow()).getByText('AMD EPYC 7B13 · 4 核')).toBeInTheDocument();
+  });
+
+  it('shows whichever half is known', () => {
+    renderZh({ ...baseRow, cpu_cores: 4 });
+    expect(within(cpuRow()).getByText('4 核')).toBeInTheDocument();
+  });
+
+  it('shows a dash for an older node that reports neither', () => {
+    renderZh(baseRow);
+    expect(within(cpuRow()).getByText('-')).toBeInTheDocument();
+  });
+
+  it('adds no empty row to the user view', () => {
+    renderZh(baseRow, false);
+    expect(screen.queryByText('CPU 型号')).not.toBeInTheDocument();
   });
 });

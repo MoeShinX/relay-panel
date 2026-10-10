@@ -364,6 +364,8 @@ export const enUS: Dict = {
   bootTraffic: 'Cumulative since boot',
   diskOfTotal: '{used} / {total}',
   nodeVersion: 'Node Version',
+  cpuModel: 'CPU Model',
+  cpuCores: '{n} cores',
   nodeUpgrade: 'Update',
   nodeUpgradeTip: 'Upgrade to v{v}',
   nodeUpgradeLatest: 'Up to date',
