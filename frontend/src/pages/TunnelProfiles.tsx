@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import api from '../api/client';
 import type { ApiEnvelope, TunnelProfile } from '../api/types';
 import { useI18n } from '../i18n/context';
+import { useTableScroll } from '../hooks/useIsMobile';
 
 /** Form values for create/edit. transport/tls_mode/ws_path/host_header/sni. */
 interface ProfileValues {
@@ -16,6 +17,7 @@ interface ProfileValues {
 }
 
 export default function TunnelProfiles() {
+  const tableScroll = useTableScroll();
   const { t } = useI18n();
   const [profiles, setProfiles] = useState<TunnelProfile[]>([]);
   const [loading, setLoading] = useState(false);
@@ -144,7 +146,7 @@ export default function TunnelProfiles() {
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>{t('addTunnelProfile')}</Button>
         </Space>
       </div>
-      <Table dataSource={profiles} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 20 }} />
+      <Table dataSource={profiles} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 20 }} scroll={tableScroll} />
 
       <Modal title={t('addTunnelProfile')} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={() => createForm.submit()} okText={t('create')} cancelText={t('cancel')}>
         <Form form={createForm} onFinish={handleCreate} layout="vertical">

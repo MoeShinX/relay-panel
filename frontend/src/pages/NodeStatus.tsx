@@ -5,6 +5,7 @@ import api from '../api/client';
 import type { ApiEnvelope, NodeStatus, SharedNodeSummary, NodeDisplayRow, NodeLiveRate } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { useAuth } from '../auth/useAuth';
+import { useIsMobile } from '../hooks/useIsMobile';
 import { NodeGroupSection } from '../components/nodes/NodeGroupSection';
 import { NodeDetailDrawer } from '../components/nodes/NodeDetailDrawer';
 import { stableGroupedRows } from '../components/nodes/sort';
@@ -28,17 +29,6 @@ interface VersionInfo {
    *  "unknown / check failed" state instead of a green "up to date" or an
    *  upgrade button. */
   node_version_check_failed?: boolean;
-}
-
-/** Hook: is the viewport mobile-width? Re-evaluates on resize. */
-function useIsMobile(breakpoint = 768): boolean {
-  const [mobile, setMobile] = useState(() => window.innerWidth < breakpoint);
-  useEffect(() => {
-    const onResize = () => setMobile(window.innerWidth < breakpoint);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, [breakpoint]);
-  return mobile;
 }
 
 /**

@@ -7,6 +7,7 @@ import api from '../api/client';
 import type { ApiEnvelope, ForwardRule, DeviceGroup, User, UserSelf, RuleTargetInput, DiagnoseResponse, NodeDiagnoseStatus, DiagnoseTargetResult, SharedGroupSummary, RestartResponse } from '../api/types';
 import { MIN_AUTO_RESTART_MINUTES } from '../api/types';
 import { useI18n } from '../i18n/context';
+import { useTableScroll } from '../hooks/useIsMobile';
 import { formatBytes } from '../utils/format';
 import { useAuth } from '../auth/useAuth';
 import { asValidatedEntry, buildExportJSON, exportFileLabel, parseDest, ruleTargets, validateImportEntry } from '../utils/rulesIO';
@@ -911,8 +912,9 @@ const IMPORT_DEFAULTS = {
                 style={{ marginBottom: 8 }}
               >
                 {/* Wide enough for a full IPv6 literal (up to 39 chars) — 180px
-                    truncated them mid-address. */}
-                <Input placeholder={t('targetAddress')} style={{ width: 320, maxWidth: 320 }} />
+                    truncated them mid-address. On a phone the dialog is
+                    narrower than that, so it gives way to the screen. */}
+                <Input placeholder={t('targetAddress')} style={{ width: 'min(320px, 100vw - 100px)' }} />
               </Form.Item>
               <Form.Item
                 {...field}
@@ -1256,6 +1258,7 @@ const IMPORT_DEFAULTS = {
  *  admin-only (tooltip for troubleshooting); a regular user sees just the
  *  label. Same shape across all four statuses; the status tag + details differ. */
 function DiagnoseNodeRow({ node, t, isAdmin }: { node: NodeDiagnoseStatus; t: (k: string) => string; isAdmin: boolean }) {
+  const tableScroll = useTableScroll();
   const label = `${node.group_name || '-'} · ${node.public_ip || t('diagnoseIpMissing')}`;
   const labelText = <Text strong>{label}</Text>;
   // node_id is internal — only an admin gets the troubleshooting tooltip.
@@ -1287,7 +1290,7 @@ function DiagnoseNodeRow({ node, t, isAdmin }: { node: NodeDiagnoseStatus; t: (k
         )}
       </Space>
       {node.status === 'result' && node.results.length > 0 && (
-        <Table<DiagnoseTargetResult> size="small" pagination={false} style={{ marginTop: 8 }}
+        <Table<DiagnoseTargetResult> size="small" pagination={false} style={{ marginTop: 8 }} scroll={tableScroll}
           dataSource={node.results} rowKey="address"
           columns={[
             { title: t('diagnoseTarget'), dataIndex: 'address', key: 'address', render: (v: string) => <span className="rp-mono">{v}</span> },

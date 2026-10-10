@@ -6,6 +6,7 @@ import dayjs, { type Dayjs } from 'dayjs';
 import api from '../api/client';
 import type { ApiEnvelope, User, Plan } from '../api/types';
 import { useI18n } from '../i18n/context';
+import { useTableScroll } from '../hooks/useIsMobile';
 import { formatBytes } from '../utils/format';
 import { makePasswordValidator } from '../utils/password';
 import { useAuth } from '../auth/useAuth';
@@ -49,6 +50,7 @@ interface ResetFormValues {
 }
 
 export default function Users() {
+  const tableScroll = useTableScroll();
   const { t } = useI18n();
   const navigate = useNavigate();
   const [users, setUsers] = useState<User[]>([]);
@@ -352,9 +354,16 @@ export default function Users() {
       ),
     },
     {
-      title: t('action'), key: 'action', width: 210,
+      // v1.2.13: no fixed width, and the buttons wrap. Up to five of them on one
+      // line made this column 389px and pushed the page wider than a 1366px
+      // laptop. Now the table gives the column a full line where there is
+      // room and folds the buttons only where the window is narrow; with a
+      // fixed width they would wrap at that width even on a wide screen. The
+      // minimum keeps a fold to two lines (three buttons, then two) rather
+      // than one button per line.
+      title: t('action'), key: 'action',
       render: (_: unknown, u: User) => (
-        <Space size="small">
+        <Space size="small" wrap style={{ minWidth: 230 }}>
           <Button icon={<EditOutlined />} size="small" type="text" onClick={() => openEdit(u)}>{t('edit')}</Button>
           <Popconfirm title={t('resetTrafficConfirm')} onConfirm={() => handleResetTraffic(u.id)}>
             <Button icon={<UndoOutlined />} size="small" type="text">{t('resetTraffic')}</Button>
@@ -405,7 +414,7 @@ export default function Users() {
           <Button icon={<ReloadOutlined />} onClick={load}>{t('refresh')}</Button>
         </Space>
       </div>
-      <Table dataSource={filteredUsers} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 20 }} />
+      <Table dataSource={filteredUsers} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 20 }} scroll={tableScroll} />
 
       <Modal
         title={editing ? `${t('editUser')}: ${editing.username}` : t('editUser')}

@@ -20,6 +20,22 @@ independent `v*` / `node-v*` tracks since this release).
   often the host's CPU, sometimes just "QEMU Virtual CPU". Admin view only, as
   the user view has no such data.
 
+### Changed
+
+- **The panel fits a phone.** Below 768px wide the sider is gone — even
+  collapsed it kept an 80px icon strip, a fifth of a phone screen — and the
+  menu slides in from a button in the header. The header keeps the
+  announcements bell and folds language, password, GitHub and logout into one
+  menu; before, it ran off the screen. Page titles no longer shrink to one
+  character per line beside their buttons (the buttons wrap below), card
+  headers wrap their controls under the title, the dashboard's three stat
+  cards stay in one row, and every table scrolls inside itself instead of
+  widening the whole page. The login, registration and forced
+  password-change cards, and the rule dialog's target address, fit a narrow
+  screen. A long site name stays on one line in the phone header (with an
+  ellipsis) and within two lines in the menu drawer. Desktop layouts are
+  unchanged apart from the fix below.
+
 ### Fixed
 
 - **Deleting a device group removes its nodes from the node-status page, and
@@ -29,6 +45,23 @@ independent `v*` / `node-v*` tracks since this release).
   record not found": it looked the group up before removing the record.
   Deleting a group now removes its nodes' records at once, and removing a
   record no longer needs its group to exist.
+
+- **The users and device-groups pages fit a laptop screen.** At 1366px the
+  users page, and at 1280px the device-groups page, were wider than the
+  window and scrolled sideways as a whole, because their action buttons sat
+  on one line (up to five for a user). The buttons now fold onto a second
+  line where the window is narrow and stay on one where there is room, and a
+  table that still does not fit scrolls inside itself instead of widening the
+  page. Row heights are unchanged, and on a wide screen the tables look as
+  before.
+- **A long site name no longer spills over the desktop sidebar menu.** It
+  wrapped as far down as it needed — 59 characters stood 91px tall in the
+  56px brand block, and six lines once the sidebar was collapsed. It now
+  keeps to two lines and ends in an ellipsis, with the full name on hover;
+  the site settings hint says how much fits (about 20 Chinese characters).
+  The collapsed sidebar shows the name at 13px, so the default RelayPanel,
+  which was wider than its 80px, now fits too. The name length limit stays
+  at 64 characters: the login page and the browser tab show it in full.
 
 ---
 

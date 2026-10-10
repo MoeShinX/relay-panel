@@ -80,6 +80,11 @@ export default function Register() {
     <div style={{
       display: 'flex', justifyContent: 'center', alignItems: 'center',
       minHeight: '100vh', background: 'var(--rp-bg)',
+      // A gutter on phones; the top leaves room for the language switch. The
+      // same at the bottom, and inside the 100vh (border-box), so the card
+      // stays exactly centred on a desktop with no scrollbar.
+      padding: '56px 16px',
+      boxSizing: 'border-box',
     }}>
       <div style={{ position: 'absolute', top: 20, right: 24 }}>
         <Segmented
@@ -92,7 +97,7 @@ export default function Register() {
           ]}
         />
       </div>
-      <Card style={{ width: 380, boxShadow: 'var(--rp-shadow)' }}>
+      <Card style={{ width: '100%', maxWidth: 380, boxShadow: 'var(--rp-shadow)' }}>
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
           <Title level={3} style={{ margin: 0, fontWeight: 600 }}>{t('registerTitle')}</Title>
           <Text type="secondary" style={{ fontSize: 13 }}>{t('subtitle')}</Text>
