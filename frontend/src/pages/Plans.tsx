@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import api from '../api/client';
 import type { ApiEnvelope, Plan, DeviceGroup } from '../api/types';
 import { useI18n } from '../i18n/context';
+import { useTableScroll } from '../hooks/useIsMobile';
 import { formatBytes } from '../utils/format';
 import AllOrders from '../components/AllOrders';
 
@@ -23,6 +24,7 @@ const gbToBytes = (gb: number): number => Math.round((gb || 0) * BYTES_PER_GB);
  * plan_id still references the plan.
  */
 export default function Plans() {
+  const tableScroll = useTableScroll();
   const { t } = useI18n();
   const [plans, setPlans] = useState<Plan[]>([]);
   const [groups, setGroups] = useState<DeviceGroup[]>([]);
@@ -196,7 +198,7 @@ export default function Plans() {
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>{t('addPlan')}</Button>
         </Space>
       </div>
-      <Table dataSource={plans} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 20 }} />
+      <Table dataSource={plans} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 20 }} scroll={tableScroll} />
 
       {/* v1.2.4: the operator's view of every purchase. Below the plan
           table because it is a consequence of it — you set the prices here,

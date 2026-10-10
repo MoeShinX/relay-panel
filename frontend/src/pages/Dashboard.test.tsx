@@ -92,8 +92,9 @@ describe('Dashboard group aggregation', () => {
     renderDashboard();
     await flush();
 
-    // the first table body row is clickable
-    const row = document.querySelector('.ant-table-tbody tr');
+    // the first table body row is clickable. `.ant-table-row` skips the hidden
+    // measure row antd puts first in the body of a horizontally scrolling table.
+    const row = document.querySelector('.ant-table-tbody tr.ant-table-row');
     expect(row).not.toBeNull();
     await act(async () => {
       row!.dispatchEvent(new MouseEvent('click', { bubbles: true }));

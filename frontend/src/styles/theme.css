@@ -182,14 +182,20 @@ html, body, #root {
   color: var(--rp-text);
   margin: 0 0 16px 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
 
+/* Title left, actions right. When the row is too narrow the actions drop
+   below the title, instead of the title being squeezed to one character per
+   line beside them. */
 .rp-page-header {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
+  gap: 8px 12px;
   margin-bottom: 16px;
 }
 
@@ -263,4 +269,51 @@ html, body, #root {
 .rp-rule-form .ant-form-item-control-input-content .ant-input-number-group-wrapper {
   width: 100%;
   max-width: 252px;
+}
+
+/* ---- Phones (below 768px, where MainLayout swaps the sider for a drawer) ---- */
+@media (max-width: 767px) {
+  :root {
+    --rp-content-padding: 12px;
+  }
+
+  /* The title gets the first row to itself; the actions go under it and wrap
+     among themselves rather than running off the screen. */
+  .rp-page-header .rp-page-title {
+    flex-basis: 100%;
+    margin-bottom: 0;
+  }
+  .rp-page-header > .ant-space {
+    flex-wrap: wrap;
+  }
+
+  /* Three stat cards still share a row on a phone: tighter padding and a
+     smaller figure keep a four-character label on one line. */
+  .rp-stat-card .ant-card-body {
+    padding: 12px;
+  }
+  .rp-stat-card .ant-statistic-content {
+    font-size: 22px;
+  }
+
+  /* A card's title and its header controls (range switches, a rule picker, a
+     plan's description) share one row; on a phone the controls squeezed the
+     title down to an ellipsis. Let the controls wrap under the title instead.
+     Scoped under the content area so the selectors outrank antd's own
+     (`.ant-card .ant-card-head .ant-card-head-title`), which load later. */
+  .ant-layout-content .ant-card .ant-card-head {
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+  .ant-layout-content .ant-card .ant-card-head-wrapper {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .ant-layout-content .ant-card .ant-card-head .ant-card-head-title {
+    flex: 1 0 auto;
+    max-width: 100%;
+  }
+  .ant-layout-content .ant-card .ant-card-head .ant-card-extra {
+    margin-inline-start: 0;
+  }
 }

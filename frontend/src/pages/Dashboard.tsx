@@ -13,6 +13,7 @@ import TrafficChart from '../components/TrafficChart';
 import NodeMetricsChart from '../components/NodeMetricsChart';
 import { formatBps, formatBytes } from '../utils/format';
 import { PanelUpdateButton } from '../components/PanelUpdateButton';
+import { useIsMobile, useTableScroll } from '../hooks/useIsMobile';
 
 const { Text } = Typography;
 
@@ -41,6 +42,8 @@ const DEPLOY_DOC_URL = 'https://github.com/MoeShinX/relay-panel/blob/main/README
 export default function Dashboard() {
   const { t } = useI18n();
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
+  const tableScroll = useTableScroll();
   const [stats, setStats] = useState({ users: 0, rules: 0, groups: 0 });
   // v1.2.0: kept whole (not just the count) for the traffic chart's drill-down.
   const [ruleList, setRuleList] = useState<ForwardRule[]>([]);
@@ -315,7 +318,7 @@ export default function Dashboard() {
           </Button>
         </Tooltip>
       </div>
-      <Row gutter={16} style={{ marginBottom: 20 }}>
+      <Row gutter={isMobile ? 8 : 16} style={{ marginBottom: 20 }}>
         <Col span={8}>
           <Card className="rp-stat-card"><Statistic title={t('users')} value={stats.users} prefix={<UserOutlined style={{ color: 'var(--rp-primary)' }} />} /></Card>
         </Col>
@@ -345,6 +348,7 @@ export default function Dashboard() {
               rowKey="group_id"
               pagination={false}
               size="small"
+              scroll={tableScroll}
               onRow={() => ({ onClick: () => navigate('/nodes'), style: { cursor: 'pointer' } })}
             />
         }
