@@ -11,7 +11,7 @@
 
 use socket2::{Domain, Protocol as S2Protocol, Socket, Type};
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpSocket, TcpStream, UdpSocket};
@@ -345,20 +345,33 @@ pub(super) async fn resolve_cached(target: &str) -> std::io::Result<Vec<SocketAd
 /// harmless (best-effort — a failure to set never fails the bind).
 const UDP_SOCKET_BUFFER_BYTES: usize = 4 * 1024 * 1024;
 
-/// Bind a UDP socket for outbound traffic. When `source_ipv4` is set,
-/// binds to `{src}:0`; otherwise binds to `0.0.0.0:0` (system auto).
+/// Bind a UDP socket for outbound traffic to `target`, in the target's address
+/// family. An IPv4 target binds `{src}:0` when `source_ipv4` is set, otherwise
+/// `0.0.0.0:0` (system auto). An IPv6 target binds `[::]:0`: the IPv4 source
+/// cannot apply to it, as with TCP (see `tcp_connect_bound`).
+///
+/// node-v1.2.8: every outbound UDP socket used to be IPv4, so a session could
+/// never reach an IPv6 target — nor a domain whose first address is IPv6. TCP
+/// has always dialled either family.
 pub async fn udp_outbound_socket(
+    target: SocketAddr,
     source_ipv4: Option<Ipv4Addr>,
 ) -> Result<UdpSocket, OutboundError> {
-    let bind_addr: SocketAddr = match source_ipv4 {
-        Some(src) => SocketAddr::V4(SocketAddrV4::new(src, 0)),
-        None => "0.0.0.0:0".parse().unwrap(),
+    let (domain, bind_addr): (Domain, SocketAddr) = match (target, source_ipv4) {
+        (SocketAddr::V6(_), _) => (
+            Domain::IPV6,
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+        ),
+        (SocketAddr::V4(_), Some(src)) => (Domain::IPV4, SocketAddr::V4(SocketAddrV4::new(src, 0))),
+        (SocketAddr::V4(_), None) => (
+            Domain::IPV4,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+        ),
     };
     // v1.0.9: build via socket2 so we can enlarge the send/recv buffers before
-    // the socket goes live. (IPv4 outbound only — unchanged from the previous
-    // 0.0.0.0/src bind.)
-    let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(S2Protocol::UDP))
-        .map_err(OutboundError::Bind)?;
+    // the socket goes live.
+    let sock =
+        Socket::new(domain, Type::DGRAM, Some(S2Protocol::UDP)).map_err(OutboundError::Bind)?;
     sock.set_nonblocking(true).map_err(OutboundError::Bind)?;
     let _ = sock.set_recv_buffer_size(UDP_SOCKET_BUFFER_BYTES);
     let _ = sock.set_send_buffer_size(UDP_SOCKET_BUFFER_BYTES);
@@ -664,10 +677,15 @@ mod tests {
         assert!(ra.is_ok() && rb.is_ok());
     }
 
+    /// Any IPv4 target: the outbound family follows the target, not the port.
+    fn v4_target() -> SocketAddr {
+        "127.0.0.1:9".parse().unwrap()
+    }
+
     #[tokio::test]
     async fn udp_outbound_socket_binds_explicit_source() {
         // #7: an explicit source IPv4 must produce a socket bound to {src}:0.
-        let sock = udp_outbound_socket(Some(Ipv4Addr::LOCALHOST))
+        let sock = udp_outbound_socket(v4_target(), Some(Ipv4Addr::LOCALHOST))
             .await
             .expect("udp source bind must succeed");
         let local = sock.local_addr().unwrap();
@@ -678,13 +696,41 @@ mod tests {
     #[tokio::test]
     async fn udp_outbound_socket_auto_binds_wildcard() {
         // #8: no source → bind 0.0.0.0:0 (system auto), backward compatible.
-        let sock = udp_outbound_socket(None)
+        let sock = udp_outbound_socket(v4_target(), None)
             .await
             .expect("udp auto bind must succeed");
         assert_eq!(
             sock.local_addr().unwrap().ip(),
             IpAddr::V4(Ipv4Addr::UNSPECIFIED)
         );
+    }
+
+    /// node-v1.2.8: an IPv6 target gets an IPv6 socket — with or without an
+    /// IPv4 source, which cannot apply to it — and a datagram makes the round
+    /// trip. The IPv4-only socket could not even connect to it.
+    #[tokio::test]
+    async fn udp_outbound_socket_reaches_an_ipv6_target() {
+        let Ok(echo) = UdpSocket::bind("[::1]:0").await else {
+            eprintln!("skipped: no IPv6 loopback on this host");
+            return;
+        };
+        let target = echo.local_addr().unwrap();
+        for source in [None, Some(Ipv4Addr::LOCALHOST)] {
+            let sock = udp_outbound_socket(target, source)
+                .await
+                .expect("an IPv6 target must get a socket");
+            assert!(sock.local_addr().unwrap().is_ipv6(), "source {source:?}");
+            sock.connect(target)
+                .await
+                .expect("connect to the IPv6 target");
+            sock.send(b"ping").await.unwrap();
+            let mut buf = [0u8; 16];
+            let (n, from) = echo.recv_from(&mut buf).await.unwrap();
+            assert_eq!(&buf[..n], b"ping");
+            echo.send_to(b"pong", from).await.unwrap();
+            let n = sock.recv(&mut buf).await.unwrap();
+            assert_eq!(&buf[..n], b"pong");
+        }
     }
 
     #[test]

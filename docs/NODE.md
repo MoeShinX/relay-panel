@@ -205,6 +205,12 @@ misconfigured value (invalid IP, unknown NIC, non-local IP) is a **fatal
 startup error** — the node refuses to boot rather than silently sending
 traffic out the wrong interface.
 
+**IPv6 targets** — a target may be an IPv6 address (or a domain with IPv6
+addresses) whatever family the client arrived on, so an IPv4 entry can front
+an IPv6-only line. The source settings above are IPv4 and do not apply to an
+IPv6 target: the OS picks its source. UDP to IPv6 targets needs node-v1.2.8
+or later; TCP has always worked.
+
 
 ---
 

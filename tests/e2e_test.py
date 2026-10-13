@@ -52,6 +52,12 @@ TCP_ECHO_PORT = 8888
 TCPUDP_LISTEN_PORT = 20001   # one rule, both TCP and UDP
 DIRECT_TCP_PORT = 20002      # direct mode (no outbound group)
 
+# node-v1.2.8: clients reach the node over IPv4, the target listens on ::1
+TCP6_LISTEN_PORT = 20003
+UDP6_LISTEN_PORT = 20004
+TCP6_ECHO_PORT = 8889
+UDP6_ECHO_PORT = 9998
+
 
 # ---------- echo servers ----------
 class TCPHandler(socketserver.BaseRequestHandler):
@@ -76,6 +82,30 @@ def start_echo_servers():
     threading.Thread(target=tcp.serve_forever, daemon=True).start()
     threading.Thread(target=udp.serve_forever, daemon=True).start()
     print(f"[echo] TCP :{TCP_ECHO_PORT}  UDP :{UDP_ECHO_PORT}")
+    return tcp, udp
+
+
+class TCP6Server(socketserver.ThreadingTCPServer):
+    address_family = socket.AF_INET6
+    allow_reuse_address = True
+
+
+class UDP6Server(socketserver.ThreadingUDPServer):
+    address_family = socket.AF_INET6
+    allow_reuse_address = True
+
+
+def start_echo_servers_v6():
+    """Echo servers on ::1, or None where the host has no IPv6 loopback."""
+    try:
+        tcp = TCP6Server(("::1", TCP6_ECHO_PORT), TCPHandler)
+        udp = UDP6Server(("::1", UDP6_ECHO_PORT), UDPHandler)
+    except OSError as e:
+        print(f"[echo] no IPv6 loopback: {e}")
+        return None
+    threading.Thread(target=tcp.serve_forever, daemon=True).start()
+    threading.Thread(target=udp.serve_forever, daemon=True).start()
+    print(f"[echo] TCP [::1]:{TCP6_ECHO_PORT}  UDP [::1]:{UDP6_ECHO_PORT}")
     return tcp, udp
 
 
@@ -128,9 +158,9 @@ def tcp_roundtrip(port, payload):
         return got
 
 
-def udp_roundtrip(port, payload):
+def udp_roundtrip(port, payload, timeout=5):
     us = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    us.settimeout(5)
+    us.settimeout(timeout)
     us.sendto(payload, ("127.0.0.1", port))
     resp, _ = us.recvfrom(8192)
     us.close()
@@ -382,6 +412,42 @@ def main():
         direct_resp = tcp_roundtrip(DIRECT_TCP_PORT, b"direct-mode-test\n")
         assert direct_resp == b"direct-mode-test\n", f"Direct mode TCP echo mismatch: {direct_resp}"
         print(f"[ok] direct mode: TCP forwarded on port {DIRECT_TCP_PORT} (no outbound group)")
+
+        # 10b. IPv6 targets (node-v1.2.8): a client that reaches the node over
+        #      IPv4, a target that has only IPv6 — an IPv6-only line reached
+        #      from an IPv4 address. TCP always dialled either family; UDP sent
+        #      from an IPv4-only socket and could never reach the target.
+        #      The CI runner has an IPv6 loopback, so there this must run.
+        if start_echo_servers_v6() is None:
+            assert sys.platform == "win32", "Linux CI must have an IPv6 loopback"
+            print("[skip] IPv6 targets: no IPv6 loopback on this host")
+        else:
+            for name, proto, listen, target in (
+                ("tcp6-rule", "tcp", TCP6_LISTEN_PORT, TCP6_ECHO_PORT),
+                ("udp6-rule", "udp", UDP6_LISTEN_PORT, UDP6_ECHO_PORT),
+            ):
+                created = api("POST", "/rules", admin_token, {
+                    "name": name, "listen_port": listen,
+                    "protocol": proto, "device_group_in": in_g1_id,
+                    "forward_mode": "direct",
+                    "target_addr": "::1", "target_port": target,
+                })
+                assert created["code"] == 0, f"{name} creation failed: {created}"
+            assert wait_for_port("127.0.0.1", TCP6_LISTEN_PORT), "tcp6-rule listener not up"
+            got = tcp_roundtrip(TCP6_LISTEN_PORT, b"tcp-to-ipv6\n")
+            assert got == b"tcp-to-ipv6\n", f"TCP to an IPv6 target: got {got!r}"
+            # The UDP listener opens with the same config pull as the TCP one,
+            # but give it a moment rather than lose the first datagram.
+            udp6 = None
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                try:
+                    udp6 = udp_roundtrip(UDP6_LISTEN_PORT, b"udp-to-ipv6", timeout=2)
+                    break
+                except socket.timeout:
+                    pass
+            assert udp6 == b"udp-to-ipv6", f"UDP to an IPv6 target: got {udp6!r}"
+            print("[ok] IPv4 client -> IPv6 target: TCP and UDP forwarded")
 
         # 11. Auto port assignment: create rule without listen_port
         auto_rule = api("POST", "/rules", admin_token, {

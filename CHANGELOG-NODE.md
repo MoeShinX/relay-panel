@@ -11,6 +11,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **UDP rules can forward to an IPv6 target.** Every outbound UDP socket was
+  IPv4, so a session to an IPv6 address — or to a domain whose first address
+  is IPv6 — could never connect, and the log said only "no reachable target".
+  An IPv4-only entry in front of an IPv6-only line therefore carried TCP but
+  not UDP. The session socket now follows the target's address family. An
+  IPv6 target ignores `OUTBOUND_BIND_IPV4` / `OUTBOUND_INTERFACE`, as TCP
+  always has. On a host without IPv6 such a target counts as unreachable, so
+  a rule with an IPv4 standby fails over to it.
+
 ## [1.2.7] - 2026-10-10
 
 Runs against any current panel (still protocol version 4). The node now

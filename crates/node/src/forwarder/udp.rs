@@ -28,6 +28,7 @@ use tokio::sync::oneshot;
 use tokio::time;
 
 use super::limiter::RateLimit;
+use super::outbound::OutboundError;
 use super::selector::TargetSelector;
 use crate::reporter::{ConnectionTracker, TrafficCounter, UDP_SESSION_TIMEOUT};
 
@@ -295,38 +296,43 @@ pub async fn serve_udp_listener(
                 note_session_refused(port);
                 continue;
             };
-            // New session: bind an ephemeral outbound socket + pick/connect the
-            // target, all WITHOUT holding any map guard.
+            // New session: pick a target and give the session an ephemeral
+            // outbound socket connected to it, all WITHOUT holding any map
+            // guard. Targets are tried in selector order, resolving lazily: a
+            // healthy primary costs one DNS lookup. UDP affinity is still per
+            // NEW session, and a connect failure falls through to a healthy
+            // standby.
             //
-            // The bind happens ONCE, here, and deliberately not inside the
-            // per-target attempt below. Binding is a purely local operation —
-            // it fails when OUTBOUND_BIND_IPV4 names an address this host no
-            // longer has, which says nothing about any target's health.
-            // Attempting it per candidate would report that local fault to the
-            // circuit breaker once per target and trip all of them, and would
-            // replace this precise diagnostic with a message blaming the
-            // targets.
-            let outbound = match super::outbound::udp_outbound_socket(source_ipv4).await {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!("UDP port {}: failed to bind outbound: {}", port, e);
-                    continue;
-                }
-            };
-            // Try each target in selector order, resolving lazily: a healthy
-            // primary costs one DNS lookup, as before. UDP affinity is still
-            // per NEW session, but unlike the former first-result path a
-            // connect failure can now fall through to a healthy standby.
-            let Some(target) =
-                connect_udp_target(&targets, &selector, port, |addr| outbound.connect(addr)).await
+            // node-v1.2.8: the socket is bound per attempt, in the family of
+            // the address the target resolved to. It used to be one IPv4
+            // socket bound up front, which could never reach an IPv6 target.
+            //
+            // A bind for an IPv4 target fails only when OUTBOUND_BIND_IPV4
+            // names an address this host no longer has: a local fault that
+            // says nothing about any target's health. It ends the attempt
+            // unreported (see AttemptError::Local) — reported per target it
+            // would trip all of them, and the log would blame the targets. An
+            // IPv6 socket that cannot be had means this host has no IPv6, so
+            // that target really is unreachable from here; reporting it lets
+            // the rule fail over to an IPv4 standby.
+            let Some((target, sock)) =
+                connect_udp_target(&targets, &selector, port, |addr| async move {
+                    let sock = super::outbound::udp_outbound_socket(addr, source_ipv4)
+                        .await
+                        .map_err(|e| match addr {
+                            SocketAddr::V4(_) => AttemptError::Local(e),
+                            SocketAddr::V6(_) => {
+                                AttemptError::Target(std::io::Error::other(e.to_string()))
+                            }
+                        })?;
+                    sock.connect(addr).await?;
+                    Ok(sock)
+                })
+                .await
             else {
-                tracing::warn!("UDP port {}: no reachable target for session", port);
                 continue;
             };
-            let outbound = Arc::new(SessionSocket {
-                sock: outbound,
-                _slot: slot,
-            });
+            let outbound = Arc::new(SessionSocket { sock, _slot: slot });
 
             // Publish via the entry API (per-shard lock, sync — no .await while
             // the guard is held). Double-check for a concurrent datagram from the
@@ -483,9 +489,10 @@ impl ReplyRelay {
 /// the 60s idle timeout, after which new datagrams open a fresh session against
 /// the current IP.)
 ///
-/// Connect `outbound` to the first target, in selector order, that both
-/// resolves and accepts the connect. Returns the address the socket is now
-/// pinned to, or None when every target failed.
+/// Connect to the first target, in selector order, that both resolves and
+/// accepts the connect: `connect` opens a socket for the resolved address and
+/// connects it. Returns that address and the socket, or None — logged here —
+/// when every target failed or a local fault stopped the attempt.
 ///
 /// Resolution is LAZY — a target is only looked up when its turn comes. This
 /// runs on the listener's receive loop for every new session, so resolving all
@@ -497,15 +504,15 @@ impl ReplyRelay {
 /// success clears that target's failure state. Note this only ever observes
 /// LOCAL connect results: UDP is connectionless, so `connect` merely fixes the
 /// peer and does a route lookup — it cannot tell whether the far side is alive.
-async fn connect_udp_target<F, Fut>(
+async fn connect_udp_target<F, Fut, S>(
     targets: &[String],
     selector: &TargetSelector,
     port: u16,
     mut connect: F,
-) -> Option<SocketAddr>
+) -> Option<(SocketAddr, S)>
 where
     F: FnMut(SocketAddr) -> Fut,
-    Fut: Future<Output = std::io::Result<()>>,
+    Fut: Future<Output = Result<S, AttemptError>>,
 {
     for idx in selector.order() {
         let Some(t) = targets.get(idx) else { continue };
@@ -523,17 +530,38 @@ where
             }
         };
         match connect(addr).await {
-            Ok(()) => {
+            Ok(sock) => {
                 selector.report(idx, true);
-                return Some(addr);
+                return Some((addr, sock));
             }
-            Err(e) => {
+            Err(AttemptError::Target(e)) => {
                 selector.report(idx, false);
                 tracing::debug!("UDP port {}: target {} connect failed: {}", port, addr, e);
             }
+            Err(AttemptError::Local(e)) => {
+                tracing::warn!("UDP port {}: failed to bind outbound: {}", port, e);
+                return None;
+            }
         }
     }
+    tracing::warn!("UDP port {}: no reachable target for session", port);
     None
+}
+
+/// Why one target attempt gave a new session no socket.
+enum AttemptError {
+    /// This target cannot be reached from here: reported to the circuit
+    /// breaker, and the next target is tried.
+    Target(std::io::Error),
+    /// A fault on this host that every target would hit alike. Not the
+    /// target's: not reported, and no other target is tried.
+    Local(OutboundError),
+}
+
+impl From<std::io::Error> for AttemptError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Target(e)
+    }
 }
 
 /// Classify whether a `recv_from` error is worth retrying (mirrors the TCP
@@ -564,8 +592,13 @@ mod tests {
 
     /// A connect that always succeeds — used to assert selection order without
     /// touching the network.
-    async fn always_ok(_: SocketAddr) -> std::io::Result<()> {
+    async fn always_ok(_: SocketAddr) -> Result<(), AttemptError> {
         Ok(())
+    }
+
+    /// The chosen address alone, for tests whose sockets are `()`.
+    fn addr_of(got: Option<(SocketAddr, ())>) -> Option<SocketAddr> {
+        got.map(|(addr, ())| addr)
     }
 
     /// Failover order picks the first (primary) target and resolves it.
@@ -574,7 +607,7 @@ mod tests {
         let targets = vec!["127.0.0.1:9".to_string(), "127.0.0.2:9".to_string()];
         let selector = TargetSelector::new(LoadBalanceStrategy::Failover, 2);
         let got = connect_udp_target(&targets, &selector, 5000, always_ok).await;
-        assert_eq!(got, Some("127.0.0.1:9".parse().unwrap()));
+        assert_eq!(addr_of(got), Some("127.0.0.1:9".parse().unwrap()));
     }
 
     /// Round-robin advances the shared cursor across successive new sessions,
@@ -583,10 +616,10 @@ mod tests {
     async fn connect_udp_target_follows_round_robin() {
         let targets = vec!["127.0.0.1:9".to_string(), "127.0.0.2:9".to_string()];
         let selector = TargetSelector::new(LoadBalanceStrategy::RoundRobin, 2);
-        let a = connect_udp_target(&targets, &selector, 5000, always_ok)
+        let (a, ()) = connect_udp_target(&targets, &selector, 5000, always_ok)
             .await
             .unwrap();
-        let b = connect_udp_target(&targets, &selector, 5000, always_ok)
+        let (b, ()) = connect_udp_target(&targets, &selector, 5000, always_ok)
             .await
             .unwrap();
         assert_eq!(a, "127.0.0.1:9".parse().unwrap());
@@ -600,7 +633,7 @@ mod tests {
         let targets = vec!["nocolon-no-port".to_string(), "127.0.0.1:9".to_string()];
         let selector = TargetSelector::new(LoadBalanceStrategy::Failover, 2);
         let got = connect_udp_target(&targets, &selector, 5000, always_ok).await;
-        assert_eq!(got, Some("127.0.0.1:9".parse().unwrap()));
+        assert_eq!(addr_of(got), Some("127.0.0.1:9".parse().unwrap()));
     }
 
     /// A failed connect must fall through to the next target in selector order
@@ -613,14 +646,72 @@ mod tests {
 
         let chosen = connect_udp_target(&targets, &selector, 5000, |target| async move {
             if target == primary {
-                Err(std::io::Error::other("primary connect failed"))
+                Err(std::io::Error::other("primary connect failed").into())
             } else {
                 Ok(())
             }
         })
         .await;
 
-        assert_eq!(chosen, Some("127.0.0.2:9".parse().unwrap()));
+        assert_eq!(addr_of(chosen), Some("127.0.0.2:9".parse().unwrap()));
+    }
+
+    /// A local fault (the IPv4 source address is gone) is not the target's:
+    /// the attempt stops there, untried standbys are left alone, and the
+    /// breaker hears nothing — so the primary is still first next time.
+    #[tokio::test]
+    async fn connect_udp_target_stops_on_a_local_fault() {
+        let targets = vec!["127.0.0.1:9".to_string(), "127.0.0.2:9".to_string()];
+        let selector = TargetSelector::new(LoadBalanceStrategy::Failover, 2);
+        let attempted = std::cell::Cell::new(0usize);
+        for _ in 0..10 {
+            let got = connect_udp_target(&targets, &selector, 5000, |_| {
+                attempted.set(attempted.get() + 1);
+                async move {
+                    Err::<(), _>(AttemptError::Local(OutboundError::Bind(
+                        std::io::Error::other("source address gone"),
+                    )))
+                }
+            })
+            .await;
+            assert!(got.is_none());
+        }
+        assert_eq!(attempted.get(), 10, "the standby must not be attempted");
+        assert_eq!(
+            selector.order().first(),
+            Some(&0),
+            "the primary must not be tripped"
+        );
+    }
+
+    /// node-v1.2.8: a session to an IPv6 target, end to end through the real
+    /// connect closure's socket choice — the datagram arrives and the reply
+    /// comes back on the same socket.
+    #[tokio::test]
+    async fn connect_udp_target_reaches_an_ipv6_target() {
+        let Ok(echo) = UdpSocket::bind("[::1]:0").await else {
+            eprintln!("skipped: no IPv6 loopback on this host");
+            return;
+        };
+        let targets = vec![echo.local_addr().unwrap().to_string()];
+        let selector = TargetSelector::new(LoadBalanceStrategy::Failover, 1);
+        let (addr, sock) = connect_udp_target(&targets, &selector, 5000, |addr| async move {
+            let sock = super::super::outbound::udp_outbound_socket(addr, Some(Ipv4Addr::LOCALHOST))
+                .await
+                .map_err(|e| AttemptError::Target(std::io::Error::other(e.to_string())))?;
+            sock.connect(addr).await?;
+            Ok(sock)
+        })
+        .await
+        .expect("the IPv6 target must be reachable");
+        assert!(addr.is_ipv6());
+        sock.send(b"ping").await.unwrap();
+        let mut buf = [0u8; 16];
+        let (n, from) = echo.recv_from(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"ping");
+        echo.send_to(b"pong", from).await.unwrap();
+        let n = sock.recv(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"pong");
     }
 
     /// Targets are resolved LAZILY: a healthy primary must not cost a lookup
@@ -636,7 +727,7 @@ mod tests {
             async move { Ok(()) }
         })
         .await;
-        assert_eq!(got, Some("127.0.0.1:9".parse().unwrap()));
+        assert_eq!(addr_of(got), Some("127.0.0.1:9".parse().unwrap()));
         assert_eq!(
             attempted.get(),
             1,
@@ -890,8 +981,6 @@ mod tests {
     async fn connect_udp_target_none_when_no_target_exists() {
         let targets: Vec<String> = vec![];
         let selector = TargetSelector::new(LoadBalanceStrategy::RoundRobin, 0);
-        assert!(connect_udp_target(&targets, &selector, 5000, always_ok)
-            .await
-            .is_none());
+        assert!(addr_of(connect_udp_target(&targets, &selector, 5000, always_ok).await).is_none());
     }
 }
