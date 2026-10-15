@@ -8,6 +8,26 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **The rules table fits a laptop screen.** Its action column was a fixed
+  260px holding six buttons on one line, so at 1440px the table outgrew the
+  window: the owner column was squeezed to one letter per line and the
+  delete button went off screen. The buttons now fold onto a second line,
+  three to a line, only where the window is narrow, and stay on one line
+  where there is room; a table that still does not fit scrolls inside itself.
+
+- **The 24-hour charts no longer fold the newest hour onto the oldest.**
+  The window started at now − 24h, which is 25 hourly buckets, and the first
+  and the last share an "HH:00" label: on the dashboard every node's CPU,
+  memory or connections line jumped from the right edge back to the left,
+  and the traffic chart put two different hours under one label.
+  The 24-hour view now holds exactly 24 hours, the current one included.
+
+---
+
 ## [1.2.13] - 2026-10-10
 
 Ships alongside `node-v1.2.7`; neither requires the other, and the config
