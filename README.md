@@ -40,6 +40,39 @@
 
 ---
 
+## 🖼️ 界面预览
+
+<table>
+  <tr>
+    <th width="50%">仪表盘</th>
+    <th width="50%">节点状态</th>
+  </tr>
+  <tr>
+    <td><a href="docs/screenshots/zh/dashboard.png"><img src="docs/screenshots/zh/dashboard.png" alt="仪表盘" /></a></td>
+    <td><a href="docs/screenshots/zh/nodes.png"><img src="docs/screenshots/zh/nodes.png" alt="节点状态" /></a></td>
+  </tr>
+  <tr>
+    <th width="50%">转发规则</th>
+    <th width="50%">用户管理</th>
+  </tr>
+  <tr>
+    <td><a href="docs/screenshots/zh/rules.png"><img src="docs/screenshots/zh/rules.png" alt="转发规则" /></a></td>
+    <td><a href="docs/screenshots/zh/users.png"><img src="docs/screenshots/zh/users.png" alt="用户管理" /></a></td>
+  </tr>
+  <tr>
+    <th width="50%">套餐商店</th>
+    <th width="50%">套餐管理</th>
+  </tr>
+  <tr>
+    <td><a href="docs/screenshots/zh/shop.png"><img src="docs/screenshots/zh/shop.png" alt="套餐商店" /></a></td>
+    <td><a href="docs/screenshots/zh/plans.png"><img src="docs/screenshots/zh/plans.png" alt="套餐管理" /></a></td>
+  </tr>
+</table>
+
+<sub>截图中的线路、用户和地址都是演示用的虚构数据。点击图片查看大图。</sub>
+
+---
+
 ## 🚀 快速开始
 
 **一条命令部署：**
