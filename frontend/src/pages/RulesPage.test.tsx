@@ -198,7 +198,7 @@ describe('row actions name their rule', () => {
     const space = screen.getByRole('button', { name: 'edit hk-web' }).closest('.ant-space') as HTMLElement;
     expect(space.style.flexWrap).toBe('wrap');
     // no column is pinned to the old 260px (col order shifts with responsive columns)
-    const widths = [...container.querySelectorAll('.ant-table colgroup col')].map((c) => (c as HTMLElement).style.width);
+    const widths = Array.from(container.querySelectorAll('.ant-table colgroup col')).map((c) => (c as HTMLElement).style.width);
     expect(widths).not.toContain('260px');
     expect((container.querySelector('.ant-table table') as HTMLElement).style.width).not.toBe('1200px');
   });
