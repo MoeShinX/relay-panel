@@ -188,6 +188,21 @@ describe('row actions name their rule', () => {
     expect(screen.getByRole('button', { name: 'resume hk-web' })).toBeInTheDocument();
   });
 
+  // v1.2.14: six buttons on one line in a fixed 260px column overflowed it —
+  // at 1440px the owner column was squeezed to a letter per line and delete
+  // went off screen. The buttons fold now, and the table no longer insists
+  // on 1200px.
+  it('lets the six actions fold instead of widening the table', async () => {
+    const { container } = renderPage();
+    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
+    const space = screen.getByRole('button', { name: 'edit hk-web' }).closest('.ant-space') as HTMLElement;
+    expect(space.style.flexWrap).toBe('wrap');
+    // no column is pinned to the old 260px (col order shifts with responsive columns)
+    const widths = [...container.querySelectorAll('.ant-table colgroup col')].map((c) => (c as HTMLElement).style.width);
+    expect(widths).not.toContain('260px');
+    expect((container.querySelector('.ant-table table') as HTMLElement).style.width).not.toBe('1200px');
+  });
+
   it('labels the two filter controls', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
