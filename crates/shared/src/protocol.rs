@@ -577,6 +577,13 @@ pub struct StatusReport {
     pub cpu_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_cores: Option<u32>,
+    /// node-v1.2.8: physical memory in bytes, total and in use — the two
+    /// figures `mem_usage` is the ratio of — so the panel can show
+    /// "1.6 GB / 8 GB" beside the percentage. Older nodes send neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mem_total: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mem_used: Option<u64>,
 }
 
 /// One listener bind failure reported by a node. Carries enough context for the

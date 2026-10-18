@@ -4,9 +4,9 @@ import { CloudDownloadOutlined, CheckCircleOutlined, CloudServerOutlined, Delete
 import type { Tfn } from './types';
 import type { NodeDisplayRow } from '../../api/types';
 import { NodeResourceBar, NodeDiskBar } from './NodeResourceBar';
-import { formatBps, formatBytes, formatUptime, formatPercent } from '../../utils/format';
+import { formatBps, formatBytes, formatUptime } from '../../utils/format';
 import { versionRelation, versionTagColor } from '../../utils/version';
-import { NetworkCell, cpuTooltip, wsDownTag } from './shared';
+import { NetworkCell, cpuTooltip, memTooltip, wsDownTag } from './shared';
 import { resolveNodeUpgrade } from './upgrade';
 import { nodeDesktopColumnWidths } from './tableLayout';
 
@@ -127,7 +127,7 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
     },
     {
       title: t('mem'), key: 'mem', width: nodeDesktopColumnWidths.mem,
-      render: (_: unknown, r: NodeDisplayRow) => <NodeResourceBar value={r.mem} tooltip={`${t('mem')}: ${formatPercent(r.mem)}`} />,
+      render: (_: unknown, r: NodeDisplayRow) => <NodeResourceBar value={r.mem} tooltip={memTooltip(r, t)} />,
     },
     {
       title: t('disk'), key: 'disk', width: nodeDesktopColumnWidths.disk,

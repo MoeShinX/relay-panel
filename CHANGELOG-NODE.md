@@ -11,6 +11,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **The node reports its memory in bytes**, total and in use (the two
+  figures the percentage it already sends is the ratio of), for the panel's
+  tooltip and detail drawer (panel 1.2.14+; older panels ignore them).
+
+---
+
 ## [1.2.7] - 2026-10-10
 
 Runs against any current panel (still protocol version 4). The node now

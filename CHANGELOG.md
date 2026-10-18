@@ -8,6 +8,18 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Node memory in bytes, not just a percentage.** The memory bar's tooltip
+  adds used / total (e.g. "17.29 GB / 31.38 GB") under the percentage, on the
+  desktop table and the phone list alike, and the node detail drawer shows
+  "55.1% (17.29 GB / 31.38 GB)" as the disk row always has. Nodes on
+  `node-v1.2.8` or later report it; older ones keep the percentage alone.
+
+---
+
 ## [1.2.13] - 2026-10-10
 
 Ships alongside `node-v1.2.7`; neither requires the other, and the config

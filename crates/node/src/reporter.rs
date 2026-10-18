@@ -930,6 +930,8 @@ fn rate_between(prev: (u64, u64, Instant), now: (u64, u64, Instant)) -> Option<(
 struct MetricsSnapshot {
     cpu: f32,
     mem_pct: f32,
+    mem_total: u64,
+    mem_used: u64,
     disk_total: Option<u64>,
     disk_used: Option<u64>,
     disk_usage_percent: Option<f32>,
@@ -1021,7 +1023,7 @@ impl NodeMetrics {
     /// call) + cumulative NIC totals + cached public IP.
     async fn snapshot(&self) -> MetricsSnapshot {
         // --- CPU + memory + system uptime ---
-        let (cpu, mem_pct, system_uptime) = {
+        let (cpu, mem_pct, mem_total, mem_used, system_uptime) = {
             let mut s = self.sys.lock().await;
             s.refresh_cpu_usage();
             s.refresh_memory();
@@ -1038,7 +1040,13 @@ impl NodeMetrics {
             // than via sysinfo, whose uptime API changed across 0.30/0.32 and
             // is unreliable to depend on. Falls back to 0 if unreadable.
             let system_uptime = read_system_uptime_secs();
-            (cpu as f32, mem_pct as f32, system_uptime)
+            (
+                cpu as f32,
+                mem_pct as f32,
+                mem_total,
+                mem_used,
+                system_uptime,
+            )
         };
 
         // --- Primary disk (root partition `/`) ---
@@ -1139,6 +1147,8 @@ impl NodeMetrics {
         MetricsSnapshot {
             cpu,
             mem_pct,
+            mem_total,
+            mem_used,
             disk_total,
             disk_used,
             disk_usage_percent,
@@ -1213,6 +1223,10 @@ pub async fn report_status(
         // node-v1.2.7: what CPU this is, for the panel's detail drawer.
         cpu_model: crate::cpuinfo::cpu_info().model.clone(),
         cpu_cores: crate::cpuinfo::cpu_info().cores,
+        // node-v1.2.8: memory in bytes beside the percentage. Nothing is sent
+        // when the total could not be read (it would only say "0 B / 0 B").
+        mem_total: (snap.mem_total > 0).then_some(snap.mem_total),
+        mem_used: (snap.mem_total > 0).then_some(snap.mem_used),
     };
 
     // debug, not info: this runs every poll cycle (default 10s). Keeping it

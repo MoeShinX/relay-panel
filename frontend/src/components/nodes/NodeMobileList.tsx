@@ -4,7 +4,7 @@ import { CloudDownloadOutlined, CheckCircleOutlined, CloudServerOutlined } from 
 import type { Tfn } from './types';
 import type { NodeDisplayRow } from '../../api/types';
 import { NodeResourceBar } from './NodeResourceBar';
-import { NetworkCell, cpuTooltip, statusTag } from './shared';
+import { NetworkCell, cpuTooltip, memTooltip, statusTag } from './shared';
 import { formatBps, formatUptime } from '../../utils/format';
 import { versionRelation, versionTagColor } from '../../utils/version';
 import { resolveNodeUpgrade, type NodeUpgradeState } from './upgrade';
@@ -98,7 +98,7 @@ export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', no
               </div>
               <div style={{ flex: 1 }}>
                 <Text type="secondary" style={{ fontSize: 11 }}>{t('mem')}</Text>
-                <NodeResourceBar value={r.mem} tooltip={`${t('mem')}: ${r.mem ?? '-'}%`} />
+                <NodeResourceBar value={r.mem} tooltip={memTooltip(r, t)} />
               </div>
               <div style={{ flex: 1 }}>
                 <Text type="secondary" style={{ fontSize: 11 }}>{t('disk')}</Text>
