@@ -368,6 +368,7 @@ export const enUS: Dict = {
   nodeVersion: 'Node Version',
   cpuModel: 'CPU Model',
   cpuCores: '{n} cores',
+  onlineNodesOfTotal: 'Online nodes {online}/{total}',
   nodeUpgrade: 'Update',
   nodeUpgradeTip: 'Upgrade to v{v}',
   nodeUpgradeLatest: 'Up to date',

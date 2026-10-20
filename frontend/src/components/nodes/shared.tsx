@@ -40,6 +40,19 @@ export function memTooltip(r: NodeDisplayRow, t: Tfn): ReactNode {
   return <>{t('mem')}: {formatPercent(r.mem)}{bytes && <><br />{bytes}</>}</>;
 }
 
+/** Online/total (placeholder rows excluded) and the summed live ↑↓ of the
+ *  ONLINE nodes among `rows`: one group's header, or the whole page's. */
+export function rateSummary(rows: NodeDisplayRow[]) {
+  const real = rows.filter((r) => r.node_id);
+  const onlineRows = real.filter((r) => r.online);
+  return {
+    total: real.length,
+    online: onlineRows.length,
+    up: onlineRows.reduce((s, r) => s + (r.upload_bps || 0), 0),
+    down: onlineRows.reduce((s, r) => s + (r.download_bps || 0), 0),
+  };
+}
+
 /** Dual-stack network cell — IPv4 line + IPv6 line. Each line shows the
  *  CountryFlag pill (SVG, no Emoji) followed by the IP. No country name and
  *  no regionUnknown text: unknown regions render "--". */

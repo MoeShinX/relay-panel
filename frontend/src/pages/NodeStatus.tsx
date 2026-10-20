@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Spin, Result, Empty, Modal, message } from 'antd';
-import { LineChartOutlined } from '@ant-design/icons';
+import { Spin, Result, Empty, Modal, message, Typography } from 'antd';
+import { LineChartOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
 import api from '../api/client';
 import type { ApiEnvelope, NodeStatus, SharedNodeSummary, NodeDisplayRow, NodeLiveRate } from '../api/types';
 import { useI18n } from '../i18n/context';
@@ -9,6 +9,8 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import { NodeGroupSection } from '../components/nodes/NodeGroupSection';
 import { NodeDetailDrawer } from '../components/nodes/NodeDetailDrawer';
 import { stableGroupedRows } from '../components/nodes/sort';
+import { rateSummary } from '../components/nodes/shared';
+import { formatBps } from '../utils/format';
 
 type AnyNodeRow = NodeDisplayRow;
 
@@ -187,6 +189,9 @@ export default function NodeStatus() {
     });
   }, [baseRows, liveRates]);
   const groups = useMemo(() => (rows ? stableGroupedRows(rows) : null), [rows]);
+  // v1.2.14: every group's header sums its own online nodes; this is the same
+  // sum over all of them, for the page header.
+  const all = useMemo(() => (rows ? rateSummary(rows) : null), [rows]);
   // The drawer follows the node, not the snapshot taken when it was opened, so
   // its figures (the live rate included) keep updating while it stays open.
   const detailCurrent = detailRow
@@ -240,7 +245,16 @@ export default function NodeStatus() {
 
   return (
     <>
-      <h2 className="rp-page-title"><LineChartOutlined /> {title}</h2>
+      <div className="rp-page-header">
+        <h2 className="rp-page-title"><LineChartOutlined /> {title}</h2>
+        {all && all.total > 0 && (
+          <Typography.Text type="secondary" style={{ fontSize: 13 }} data-testid="all-nodes-rate">
+            {t('onlineNodesOfTotal').replace('{online}', String(all.online)).replace('{total}', String(all.total))}
+            {' · '}
+            <ArrowUpOutlined /> {formatBps(all.up)} <ArrowDownOutlined /> {formatBps(all.down)}
+          </Typography.Text>
+        )}
+      </div>
       {groups.map(([gid, groupRows]) => (
         <NodeGroupSection
           key={gid}
