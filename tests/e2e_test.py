@@ -292,6 +292,17 @@ def main():
         print(f"[ok] live rate pushed over WS: up={live[0]['upload_bps']}B/s "
               f"down={live[0]['download_bps']}B/s")
 
+        # 3c. Memory in bytes (panel 1.2.14 / node 1.2.8): the real node's
+        #     status carries the total and the amount in use, and they agree
+        #     with the percentage it has always sent.
+        status = next(r for r in api("GET", "/nodes", admin_token)["data"]
+                      if r.get("group_id") == in_g1_id)
+        total, used = status.get("mem_total"), status.get("mem_used")
+        assert total and total > 0, f"no memory total in the node status: {status}"
+        assert used is not None and used <= total, f"bad memory in use: {used} of {total}"
+        assert abs(used / total * 100 - status["mem"]) < 5,             f"bytes {used}/{total} disagree with mem={status['mem']}%"
+        print(f"[ok] node memory: {used}B of {total}B ({status['mem']:.1f}%)")
+
         # 4. Verify the v0.4.0 protocol gate: a request WITHOUT the
         #    X-Config-Protocol-Version header must be rejected with 426
         #    (Upgrade Required), NOT return config. This is the gate that

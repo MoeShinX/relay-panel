@@ -6,7 +6,7 @@ import { useI18n } from '../../i18n/context';
 import { CountryFlag } from './CountryFlag';
 import type { ApiEnvelope, NodeDisplayRow } from '../../api/types';
 import api from '../../api/client';
-import { cpuSummary, wsDownTag } from './shared';
+import { cpuSummary, memSummary, wsDownTag } from './shared';
 
 interface Props {
   row: NodeDisplayRow | null;
@@ -81,7 +81,9 @@ export function NodeDetailDrawer({ row, open, onClose, isAdmin, panelProtocol, o
           {(isAdmin || row.cpu_model || row.cpu_cores) && (
             <Descriptions.Item label={t('cpuModel')}>{cpuSummary(row, t('cpuCores')) ?? '-'}</Descriptions.Item>
           )}
-          <Descriptions.Item label={t('mem')}>{formatPercent(row.mem)}</Descriptions.Item>
+          <Descriptions.Item label={t('mem')}>
+            {formatPercent(row.mem)}{memSummary(row) && ` (${memSummary(row)})`}
+          </Descriptions.Item>
           <Descriptions.Item label={t('disk')}>
             {row.disk_usage_percent == null && row.disk_used == null
               ? '-'

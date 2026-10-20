@@ -221,6 +221,15 @@ pub async fn report_traffic(
 /// well under 64 characters).
 const MAX_DISPLAY_TEXT: usize = 128;
 
+/// v1.2.14: a node's memory in bytes as (total, used), or None unless both are
+/// present, the total is non-zero and the amount in use does not exceed it.
+fn mem_bytes(total: Option<u64>, used: Option<u64>) -> Option<(u64, u64)> {
+    match (total, used) {
+        (Some(t), Some(u)) if t > 0 && u <= t => Some((t, u)),
+        _ => None,
+    }
+}
+
 /// A node-reported string made fit to show: whitespace runs collapsed,
 /// control characters dropped, capped at [`MAX_DISPLAY_TEXT`] characters.
 /// None when nothing is left.
@@ -326,6 +335,11 @@ pub async fn report_status(
             // is cleaned and capped before it is stored.
             "cpu_model": req.cpu_model.as_deref().and_then(display_text),
             "cpu_cores": req.cpu_cores.filter(|n| *n > 0),
+            // v1.2.14: memory in bytes (node-v1.2.8+) for the tooltip and the
+            // detail drawer. Kept only as a pair that makes sense — a total,
+            // and no more in use than that.
+            "mem_total": mem_bytes(req.mem_total, req.mem_used).map(|(t, _)| t),
+            "mem_used": mem_bytes(req.mem_total, req.mem_used).map(|(_, u)| u),
         });
         // Status persistence is best-effort: the original used .ok() to swallow
         // any DB error so a transient failure never broke the report cycle.
@@ -755,6 +769,8 @@ mod tests {
             install_method: None,
             cpu_model: None,
             cpu_cores: None,
+            mem_total: None,
+            mem_used: None,
         };
         let Json(resp) = report_status(State(state.clone()), h, Json(req)).await;
         assert_eq!(resp.code, 401, "missing token → business 401, not HTTP 401");
@@ -847,6 +863,8 @@ mod tests {
             install_method: Some("systemd".into()),
             cpu_model: None,
             cpu_cores: None,
+            mem_total: None,
+            mem_used: None,
         };
         let Json(resp) =
             report_status(State(state.clone()), auth_headers("tok-A"), Json(req)).await;
@@ -921,6 +939,50 @@ mod tests {
         let raw = state.db.get("node_status:10:n1").await.unwrap().unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert!(v["cpu_model"].is_null() && v["cpu_cores"].is_null());
+        assert!(v["mem_total"].is_null() && v["mem_used"].is_null());
+    }
+
+    /// v1.2.14: memory in bytes (node-v1.2.8+) reaches the stored status as a
+    /// pair, and a pair that cannot be right is dropped rather than shown.
+    #[tokio::test]
+    async fn report_status_stores_memory_in_bytes() {
+        use relay_shared::protocol::StatusReport;
+        let (state, _pool) = seeded_state().await;
+        let send = |mem: serde_json::Value| {
+            let state = state.clone();
+            async move {
+                let mut body = serde_json::json!({
+                    "cpu_usage": 0.0, "mem_usage": 20.9, "active_connections": 0,
+                    "uptime_secs": 0, "node_id": "n1",
+                });
+                body.as_object_mut()
+                    .unwrap()
+                    .extend(mem.as_object().unwrap().clone());
+                let req: StatusReport = serde_json::from_value(body).unwrap();
+                let Json(resp) =
+                    report_status(State(state.clone()), auth_headers("tok-A"), Json(req)).await;
+                assert_eq!(resp.code, 0, "{}", resp.message);
+                let raw = state.db.get("node_status:10:n1").await.unwrap().unwrap();
+                serde_json::from_str::<serde_json::Value>(&raw).unwrap()
+            }
+        };
+
+        let gib = 1u64 << 30;
+        let v = send(serde_json::json!({ "mem_total": 8 * gib, "mem_used": gib })).await;
+        assert_eq!(v["mem_total"], 8 * gib);
+        assert_eq!(v["mem_used"], gib);
+
+        for nonsense in [
+            serde_json::json!({ "mem_total": 0, "mem_used": 0 }),
+            serde_json::json!({ "mem_total": gib, "mem_used": 2 * gib }),
+            serde_json::json!({ "mem_total": gib }),
+        ] {
+            let v = send(nonsense.clone()).await;
+            assert!(
+                v["mem_total"].is_null() && v["mem_used"].is_null(),
+                "{nonsense} must not be stored"
+            );
+        }
     }
 
     /// v1.2.12: a node re-sends a batch whose acknowledgement it lost. The
