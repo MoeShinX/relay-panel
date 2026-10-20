@@ -136,6 +136,23 @@ pub struct TrafficHistoryResponse {
     pub buckets: Vec<crate::db::repo::TrafficHistoryBucket>,
 }
 
+/// The first hour a chart window covers, as stored (`%Y-%m-%d %H:00:00` UTC).
+///
+/// v1.2.14: the 24-hour view is exactly 24 hourly buckets, the current one
+/// included. It used to start at now − 24h, which is 25: the first and the
+/// last bucket share an "HH:00" label, so the charts put the current hour on
+/// top of the one a day earlier — every node line jumped back across the
+/// chart, and the traffic chart put two hours under one label. The day views
+/// keep now − N days: they fold hours into days client-side.
+fn window_since(days: i64, now: chrono::DateTime<chrono::Utc>) -> String {
+    let start = if days == 1 {
+        now - chrono::Duration::hours(23)
+    } else {
+        now - chrono::Duration::days(days)
+    };
+    start.format("%Y-%m-%d %H:00:00").to_string()
+}
+
 /// GET /api/v1/stats/traffic?range=1d|7d|30d[&rule_id=N]
 ///
 /// Owner-scoped: a regular user's query is FORCED to `uid = caller` regardless
@@ -165,9 +182,7 @@ pub async fn get_traffic_history(
             });
         }
     };
-    let since = (chrono::Utc::now() - chrono::Duration::days(days))
-        .format("%Y-%m-%d %H:00:00")
-        .to_string();
+    let since = window_since(days, chrono::Utc::now());
     // The scope decision, in one place: admin = unrestricted, everyone else =
     // pinned to their own uid. The repo layer trusts this argument.
     let uid = if user.admin { None } else { Some(user.user_id) };
@@ -231,9 +246,7 @@ pub async fn get_node_metrics(
             });
         }
     };
-    let since = (chrono::Utc::now() - chrono::Duration::days(days))
-        .format("%Y-%m-%d %H:00:00")
-        .to_string();
+    let since = window_since(days, chrono::Utc::now());
 
     match state.db.query_node_metrics(&since, false).await {
         Ok(buckets) => Json(ApiResponse::success(NodeMetricsResponse {
@@ -897,7 +910,26 @@ mod upgrade_result_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_status_key;
+    use super::{parse_status_key, window_since};
+    use chrono::TimeZone;
+
+    /// The 24-hour view must hold exactly 24 hourly buckets, the current one
+    /// included: 25 gave two buckets one "HH:00" label and the charts folded
+    /// them onto each other.
+    #[test]
+    fn a_day_window_is_twenty_four_hours_including_this_one() {
+        let now = chrono::Utc
+            .with_ymd_and_hms(2026, 10, 15, 12, 34, 56)
+            .unwrap();
+        let since = window_since(1, now);
+        assert_eq!(since, "2026-10-14 13:00:00");
+        let first = chrono::NaiveDateTime::parse_from_str(&since, "%Y-%m-%d %H:%M:%S").unwrap();
+        let current = now.naive_utc().date().and_hms_opt(12, 0, 0).unwrap();
+        assert_eq!((current - first).num_hours() + 1, 24);
+        // the day views are unchanged
+        assert_eq!(window_since(7, now), "2026-10-08 12:00:00");
+        assert_eq!(window_since(30, now), "2026-09-15 12:00:00");
+    }
 
     /// The v0.3.0 per-node key must parse into (group_id, Some(node_id)). This
     /// is what lets two nodes sharing one group token keep separate status rows
