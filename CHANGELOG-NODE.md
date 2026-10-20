@@ -11,7 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
-## [Unreleased]
+## [1.2.8] - 2026-10-20
+
+Runs against any current panel (still protocol version 4). Worth taking on
+nodes whose rules forward UDP to an IPv6 target, which only now works. The
+node also reports its memory in bytes, which panel 1.2.14+ shows; older
+panels ignore it.
 
 ### Added
 
@@ -29,8 +34,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   IPv6 target ignores `OUTBOUND_BIND_IPV4` / `OUTBOUND_INTERFACE`, as TCP
   always has. On a host without IPv6 such a target counts as unreachable, so
   a rule with an IPv4 standby fails over to it.
-
----
 
 ## [1.2.7] - 2026-10-10
 
