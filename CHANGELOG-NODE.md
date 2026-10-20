@@ -13,6 +13,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **The node reports its memory in bytes**, total and in use (the two
+  figures the percentage it already sends is the ratio of), for the panel's
+  tooltip and detail drawer (panel 1.2.14+; older panels ignore them).
+
 ### Fixed
 
 - **UDP rules can forward to an IPv6 target.** Every outbound UDP socket was
@@ -23,6 +29,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   IPv6 target ignores `OUTBOUND_BIND_IPV4` / `OUTBOUND_INTERFACE`, as TCP
   always has. On a host without IPv6 such a target counts as unreachable, so
   a rule with an IPv4 standby fails over to it.
+
+---
 
 ## [1.2.7] - 2026-10-10
 

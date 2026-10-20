@@ -459,6 +459,9 @@ export interface NodeStatus {
   /** v1.2.13 (node-v1.2.7+): logical CPU count. */
   cpu_cores?: number | null;
   mem: number;
+  /** v1.2.14 (node-v1.2.8+): physical memory in bytes. Missing on older nodes. */
+  mem_total?: number | null;
+  mem_used?: number | null;
   connections: number;
   /** v0.3.2: SYSTEM uptime (since OS boot). Was process uptime before v0.3.2. */
   uptime: number;
@@ -700,6 +703,9 @@ export interface NodeDisplayRow {
   cpu_model?: string | null;
   cpu_cores?: number | null;
   mem?: number | null;
+  /** v1.2.14 (admin /nodes, node-v1.2.8+): physical memory in bytes. */
+  mem_total?: number | null;
+  mem_used?: number | null;
   uptime?: number | null;
   process_uptime?: number | null;
   last_seen?: string | null;

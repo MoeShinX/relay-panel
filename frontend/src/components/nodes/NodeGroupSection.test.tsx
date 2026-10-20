@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Tfn } from './types';
 import type { NodeDisplayRow } from '../../api/types';
-import { cpuSummary, statusTag } from './shared';
+import { cpuSummary, memSummary, statusTag } from './shared';
 import { NodeGroupSection } from './NodeGroupSection';
 import { nodeDesktopColumnWidths } from './tableLayout';
 
@@ -244,5 +244,40 @@ describe('CPU model in the CPU tooltip', () => {
     await userEvent.setup().hover(container.querySelector('.ant-progress') as HTMLElement);
     const tip = await screen.findByText(/CPU: 3\.2%/);
     expect(tip.textContent).toBe('CPU: 3.2%');
+  });
+});
+
+// v1.2.14: the memory tooltip said only "内存: 20.9%" — how much memory that
+// is took a trip to the machine. node-v1.2.8 reports the bytes.
+describe('memory in bytes in the memory tooltip', () => {
+  const GB = 1024 ** 3;
+  const section = (r: NodeDisplayRow, isMobile: boolean) =>
+    render(
+      <NodeGroupSection rows={[r]} panelProtocol={0} latestNodeVersion="1.1.0" nodeVersionCheckFailed={false} isMobile={isMobile} t={((k: string) => k) as unknown as Tfn} openDetail={vi.fn()} />,
+    );
+  const memBar = (c: HTMLElement) => c.querySelectorAll('.ant-progress')[1] as HTMLElement;
+
+  it('summarises used / total, or nothing for an older node', () => {
+    expect(memSummary(row({ mem_total: 8 * GB, mem_used: GB }))).toBe('1.00 GB / 8.00 GB');
+    expect(memSummary(row({}))).toBeNull();
+  });
+
+  for (const isMobile of [false, true]) {
+    it(`shows used / total under the usage on hover (${isMobile ? 'mobile' : 'desktop'})`, async () => {
+      const { container } = section(
+        row({ online: true, cpu: 3.2, mem: 12.5, mem_total: 8 * GB, mem_used: GB }),
+        isMobile,
+      );
+      await userEvent.setup().hover(memBar(container));
+      const tip = await screen.findByText(/1\.00 GB \/ 8\.00 GB/);
+      expect(tip.textContent).toContain('mem: 12.5%');
+    });
+  }
+
+  it('shows only the usage for an older node', async () => {
+    const { container } = section(row({ online: true, cpu: 3.2, mem: 12.5 }), false);
+    await userEvent.setup().hover(memBar(container));
+    const tip = await screen.findByText(/mem: 12\.5%/);
+    expect(tip.textContent).toBe('mem: 12.5%');
   });
 });

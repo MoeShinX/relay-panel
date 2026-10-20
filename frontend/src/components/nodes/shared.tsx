@@ -4,7 +4,7 @@ import { Tag, Tooltip, Typography } from 'antd';
 import type { Tfn } from './types';
 import type { NodeDisplayRow } from '../../api/types';
 import { CountryFlag } from './CountryFlag';
-import { formatPercent } from '../../utils/format';
+import { formatBytes, formatPercent } from '../../utils/format';
 
 const { Text } = Typography;
 
@@ -24,6 +24,20 @@ export function cpuSummary(r: NodeDisplayRow, coresLabel: string): string | null
 export function cpuTooltip(r: NodeDisplayRow, t: Tfn): ReactNode {
   const model = cpuSummary(r, t('cpuCores'));
   return <>CPU: {formatPercent(r.cpu)}{model && <><br />{model}</>}</>;
+}
+
+/** v1.2.14: "1.67 GB / 8.00 GB" (node-v1.2.8+), null when the node does not
+ *  report memory in bytes (older nodes). */
+export function memSummary(r: NodeDisplayRow): string | null {
+  if (!r.mem_total) return null;
+  return `${formatBytes(r.mem_used)} / ${formatBytes(r.mem_total)}`;
+}
+
+/** The memory bar's tooltip: usage, then used / total on a second line when
+ *  the node reports it. */
+export function memTooltip(r: NodeDisplayRow, t: Tfn): ReactNode {
+  const bytes = memSummary(r);
+  return <>{t('mem')}: {formatPercent(r.mem)}{bytes && <><br />{bytes}</>}</>;
 }
 
 /** Dual-stack network cell — IPv4 line + IPv6 line. Each line shows the

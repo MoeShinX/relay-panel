@@ -77,4 +77,18 @@ describe('NodeDetailDrawer CPU model', () => {
     renderZh(baseRow, false);
     expect(screen.queryByText('CPU 型号')).not.toBeInTheDocument();
   });
+
+  // v1.2.14 (node-v1.2.8+): memory in bytes beside the percentage, as the
+  // disk row has always shown; an older node keeps the percentage alone.
+  it('shows memory used / total beside the percentage', () => {
+    renderZh({ ...baseRow, mem: 12.5, mem_total: 8 * 1024 ** 3, mem_used: 1024 ** 3 });
+    const memRow = screen.getByText('内存').closest('tr') as HTMLElement;
+    expect(within(memRow).getByText('12.5% (1.00 GB / 8.00 GB)')).toBeInTheDocument();
+  });
+
+  it('keeps the percentage alone for an older node', () => {
+    renderZh({ ...baseRow, mem: 12.5 });
+    const memRow = screen.getByText('内存').closest('tr') as HTMLElement;
+    expect(within(memRow).getByText('12.5%')).toBeInTheDocument();
+  });
 });
