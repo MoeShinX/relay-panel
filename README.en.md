@@ -41,6 +41,39 @@ Full feature reference and user docs: **[relaypanel.dev](https://relaypanel.dev)
 
 ---
 
+## 🖼️ Screenshots
+
+<table>
+  <tr>
+    <th width="50%">Dashboard</th>
+    <th width="50%">Node Status</th>
+  </tr>
+  <tr>
+    <td><a href="docs/screenshots/en/dashboard.png"><img src="docs/screenshots/en/dashboard.png" alt="Dashboard" /></a></td>
+    <td><a href="docs/screenshots/en/nodes.png"><img src="docs/screenshots/en/nodes.png" alt="Node Status" /></a></td>
+  </tr>
+  <tr>
+    <th width="50%">Forward Rules</th>
+    <th width="50%">Users</th>
+  </tr>
+  <tr>
+    <td><a href="docs/screenshots/en/rules.png"><img src="docs/screenshots/en/rules.png" alt="Forward Rules" /></a></td>
+    <td><a href="docs/screenshots/en/users.png"><img src="docs/screenshots/en/users.png" alt="Users" /></a></td>
+  </tr>
+  <tr>
+    <th width="50%">Shop</th>
+    <th width="50%">Plans</th>
+  </tr>
+  <tr>
+    <td><a href="docs/screenshots/en/shop.png"><img src="docs/screenshots/en/shop.png" alt="Shop" /></a></td>
+    <td><a href="docs/screenshots/en/plans.png"><img src="docs/screenshots/en/plans.png" alt="Plans" /></a></td>
+  </tr>
+</table>
+
+<sub>Lines, users and addresses in the screenshots are made-up demo data. Click an image for full size.</sub>
+
+---
+
 ## 🚀 Quick start
 
 **One command deploy:**
