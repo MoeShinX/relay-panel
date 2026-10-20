@@ -245,7 +245,7 @@ export default function NodeStatus() {
 
   return (
     <>
-      <div className="rp-page-header">
+      <div className="rp-page-header rp-page-header-sticky">
         <h2 className="rp-page-title"><LineChartOutlined /> {title}</h2>
         {all && all.total > 0 && (
           <Typography.Text type="secondary" style={{ fontSize: 13 }} data-testid="all-nodes-rate">

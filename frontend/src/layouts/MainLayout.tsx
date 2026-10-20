@@ -208,7 +208,13 @@ export default function MainLayout() {
           breakpoint="lg"
           width={220}
           onCollapse={(collapsed) => setSiderCollapsed(collapsed)}
-          style={{ background: 'var(--rp-sidebar-bg)' }}
+          // v1.2.14: the sider stays put while the page scrolls (a long node
+          // list used to carry the menu off screen). A menu taller than the
+          // window scrolls inside it.
+          style={{
+            background: 'var(--rp-sidebar-bg)',
+            position: 'sticky', top: 0, height: '100vh', overflow: 'auto',
+          }}
         >
           {brandBlock(siderCollapsed)}
           {menu}
@@ -216,6 +222,10 @@ export default function MainLayout() {
       )}
       <Layout>
         <Header style={{
+          // v1.2.14: the header bar stays at the top while the page scrolls.
+          // Above antd's fixed table columns (z-index 15), which would
+          // otherwise scroll over it; below its popups and drawers (1000+).
+          position: 'sticky', top: 0, zIndex: 100,
           background: '#fff', height: 'var(--rp-header-height)',
           padding: isMobile ? '0 8px 0 4px' : '0 24px', lineHeight: 'var(--rp-header-height)',
           display: 'flex', justifyContent: isMobile ? 'space-between' : 'flex-end', alignItems: 'center',

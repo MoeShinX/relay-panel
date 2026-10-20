@@ -39,6 +39,20 @@ beforeEach(() => {
 });
 
 describe('MainLayout on a desktop', () => {
+  // v1.2.14: scrolling a long page (Node Status) carried the menu and the
+  // header bar away. Both stay; the header sits above antd's fixed table
+  // columns (z-index 15), which otherwise scrolled over it.
+  it('keeps the sider and the header bar in place while the page scrolls', () => {
+    mockIsMobile.mockReturnValue(false);
+    const { container } = renderAt();
+    const sider = container.querySelector('.ant-layout-sider') as HTMLElement;
+    expect(sider.style.position).toBe('sticky');
+    expect(sider.style.height).toBe('100vh');
+    const header = container.querySelector('.ant-layout-header') as HTMLElement;
+    expect(header.style.position).toBe('sticky');
+    expect(Number(header.style.zIndex)).toBeGreaterThan(15);
+  });
+
   it('keeps the sider and the labelled header controls', () => {
     mockIsMobile.mockReturnValue(false);
     const { container } = renderAt();

@@ -8,6 +8,19 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **The menu and the header bar stay put while a page scrolls.** Scrolling a
+  long page — Node Status with many nodes — carried the sidebar and the
+  header bar off screen with it; now only the page content moves. A menu
+  taller than the window scrolls on its own. On Node Status the title and
+  every online node's total rate stay pinned under the header bar as well
+  (desktop only: on a phone they wrap to two lines, too much to pin).
+
+---
+
 ## [1.2.14] - 2026-10-20
 
 Ships alongside `node-v1.2.8`; neither requires the other, and the config
