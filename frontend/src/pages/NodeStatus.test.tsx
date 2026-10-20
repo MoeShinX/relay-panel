@@ -394,6 +394,44 @@ describe('NodeStatus live rate', () => {
   });
 });
 
+// v1.2.14: each group header sums its own online nodes; the page header now
+// sums every group's, so the whole fleet's throughput is one glance.
+describe('NodeStatus total rate of every online node', () => {
+  const nodes = [
+    { ...adminNode, node_id: 'n1', upload_bps: 1_000, download_bps: 2_000 },
+    { ...adminNode, node_id: 'n2', online: false, upload_bps: 50_000, download_bps: 50_000 },
+    { ...adminNode, group_id: 2, group_name: 'grp-2', node_id: 'm1', upload_bps: 3_000, download_bps: 4_000 },
+  ];
+  const serve = (rows: object[], live: unknown[] = []) => {
+    mockUseAuth.mockReturnValue({ isAdmin: true });
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/nodes') return Promise.resolve(ok(rows));
+      if (url === '/system/version') return Promise.resolve(version);
+      if (url === '/nodes/live-rates') return Promise.resolve(ok(live));
+      return Promise.reject(new Error(`unexpected ${url}`));
+    });
+  };
+
+  it('sums the online nodes of every group and counts them, leaving offline ones out', async () => {
+    serve(nodes);
+    render(<NodeStatus />);
+    await flush();
+    const total = screen.getByTestId('all-nodes-rate').textContent ?? '';
+    expect(total).toContain(formatBps(4_000));
+    expect(total).toContain(formatBps(6_000));
+    expect(total).not.toContain(formatBps(54_000));
+  });
+
+  it('follows the pushed live rates, as the group headers do', async () => {
+    serve(nodes, [{ group_id: 1, node_id: 'n1', upload_bps: 10_000, download_bps: 20_000 }]);
+    render(<NodeStatus />);
+    await flush();
+    const total = screen.getByTestId('all-nodes-rate').textContent ?? '';
+    expect(total).toContain(formatBps(13_000));
+    expect(total).toContain(formatBps(24_000));
+  });
+});
+
 describe('NodeStatus control channel', () => {
   const serveAdmin = (node: object) => {
     mockUseAuth.mockReturnValue({ isAdmin: true });

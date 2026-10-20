@@ -18,6 +18,13 @@ independent `v*` / `node-v*` tracks since this release).
   "55.1% (17.29 GB / 31.38 GB)" as the disk row always has. Nodes on
   `node-v1.2.8` or later report it; older ones keep the percentage alone.
 
+
+- **Node Status shows the combined rate of every online node.** Each group
+  header already summed its own online nodes; the page header now does the
+  same over all of them, beside the title: "Online nodes 6/6 · ↑ 64.89 MB/s
+  ↓ 206.29 MB/s". It follows the live rates like the group headers, and
+  offline nodes are left out. On a phone it sits under the title.
+
 ### Fixed
 
 - **The rules table fits a laptop screen.** Its action column was a fixed

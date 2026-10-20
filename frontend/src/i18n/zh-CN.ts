@@ -365,6 +365,7 @@ export const zhCN = {
   nodeVersion: '节点版本',
   cpuModel: 'CPU 型号',
   cpuCores: '{n} 核',
+  onlineNodesOfTotal: '在线节点 {online}/{total}',
   nodeUpgrade: '节点更新',
   nodeUpgradeTip: '升级到 v{v}',
   nodeUpgradeLatest: '已是最新',
