@@ -55,6 +55,7 @@ function downloadText(filename: string, text: string) {
 
 export default function Rules() {
   const { t } = useI18n();
+  const tableScroll = useTableScroll();
   const { isAdmin, user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   // v0.4.20: admin can manage another user's rules via /rules?owner_uid=X.
@@ -722,7 +723,14 @@ const IMPORT_DEFAULTS = {
     },
     { title: t('traffic'), dataIndex: 'traffic_used', key: 'traffic_used', render: (v: number) => formatBytes(v) },
     {
-      title: t('action'), key: 'action', width: 260,
+      // v1.2.14: no fixed width, and the buttons wrap, as on the users page.
+      // Six buttons on one line in a 260px column overflowed it: the table
+      // grew past a 1440px window, the owner column was squeezed to one
+      // letter per line, and delete went off screen. Now the column gets a
+      // full line where there is room and folds the buttons, three to a line,
+      // only where the window is narrow. The minimum is the wider English
+      // half (Diagnose, Restart, Delete: 244px) — less folds it to three lines.
+      title: t('action'), key: 'action',
       // v1.2.7: every action carries an accessible name that names its RULE.
       // The visible text alone ("编辑") is identical on every row, so tabbing
       // this table with a screen reader announced the same word once per rule
@@ -730,7 +738,7 @@ const IMPORT_DEFAULTS = {
       // want to press on faith. The visible label stays short; only the
       // accessible name is qualified.
       render: (_: unknown, r: ForwardRule) => (
-        <Space>
+        <Space size="small" wrap style={{ minWidth: 250 }}>
           <Button
             size="small" type="text"
             icon={r.paused ? <PlayCircleOutlined /> : <PauseCircleOutlined />}
@@ -1075,7 +1083,7 @@ const IMPORT_DEFAULTS = {
       <Table
         rowSelection={{ selectedRowKeys, onChange: (keys) => setSelectedRowKeys(keys as number[]) }}
         dataSource={visibleRules} columns={columns} rowKey="id" loading={loading}
-        pagination={{ pageSize: 20 }} scroll={{ x: 1200 }}
+        pagination={{ pageSize: 20 }} scroll={tableScroll}
       />
 
       <Modal title={t('addRule')} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={() => createForm.submit()} okText={t('create')} cancelText={t('cancel')} width={620}>
