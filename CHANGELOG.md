@@ -8,6 +8,18 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Node Status shows the combined rate of every online node.** Each group
+  header already summed its own online nodes; the page header now does the
+  same over all of them, beside the title: "Online nodes 6/6 · ↑ 64.89 MB/s
+  ↓ 206.29 MB/s". It follows the live rates like the group headers, and
+  offline nodes are left out. On a phone it sits under the title.
+
+---
+
 ## [1.2.13] - 2026-10-10
 
 Ships alongside `node-v1.2.7`; neither requires the other, and the config

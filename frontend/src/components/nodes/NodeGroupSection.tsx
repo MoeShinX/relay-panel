@@ -6,6 +6,7 @@ import type { Tfn } from './types';
 import { NodeDesktopTable } from './NodeDesktopTable';
 import { NodeMobileList } from './NodeMobileList';
 import { formatBps } from '../../utils/format';
+import { rateSummary } from './shared';
 
 const { Text } = Typography;
 
@@ -25,25 +26,12 @@ interface Props {
   onDelete?: (row: NodeDisplayRow) => void;
 }
 
-/** Per-group summary: online/total (placeholders excluded) + aggregate live
- *  upload/download across ONLINE nodes only. */
-function groupSummary(rows: NodeDisplayRow[]) {
-  const real = rows.filter((r) => r.node_id);
-  const onlineRows = real.filter((r) => r.online);
-  return {
-    total: real.length,
-    online: onlineRows.length,
-    up: onlineRows.reduce((s, r) => s + (r.upload_bps || 0), 0),
-    down: onlineRows.reduce((s, r) => s + (r.download_bps || 0), 0),
-  };
-}
-
 /** One group block: header bar (name · ID · online/total · aggregate ↑↓) +
  *  either a desktop table or mobile list. Collapsible. A group with only a
  *  placeholder row shows "no node reporting". */
 export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeVersionCheckFailed, isMobile, t, openDetail, onUpgrade, onDelete }: Props) {
   const head = rows[0];
-  const { total, online, up, down } = groupSummary(rows);
+  const { total, online, up, down } = rateSummary(rows);
   const region = head.region;
   const lineType = head.line_type;
   const onlyPlaceholder = rows.length === 1 && !head.node_id;
