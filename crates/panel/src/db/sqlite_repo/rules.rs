@@ -901,6 +901,20 @@ impl RuleRepository for SqliteRepository {
         Ok(result.rows_affected())
     }
 
+    async fn reset_rule_traffic(&self, id: i64, scope: &ResourceScope) -> Result<u64, DbError> {
+        let result = match scope.owner_id() {
+            None => sqlx::query("UPDATE forward_rules SET traffic_used = 0 WHERE id = ?").bind(id),
+            Some(uid) => {
+                sqlx::query("UPDATE forward_rules SET traffic_used = 0 WHERE id = ? AND uid = ?")
+                    .bind(id)
+                    .bind(uid)
+            }
+        }
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     async fn delete_rules_by_uid(&self, uid: i64) -> Result<u64, DbError> {
         let result = sqlx::query("DELETE FROM forward_rules WHERE uid = ?")
             .bind(uid)

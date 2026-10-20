@@ -112,9 +112,9 @@ mod tests {
     use super::{change_password, reset_user_password, ResetPasswordRequest};
     use super::{
         create_group, create_rule, create_user, delete_group, delete_rule, delete_user, err,
-        get_me, get_registration_settings, list_groups, list_rules, reset_user_traffic,
-        update_group, update_registration_settings, update_rule, update_user, ApiResponse,
-        ChangePasswordRequest, CreateUserRequest, ListRulesQuery,
+        get_me, get_registration_settings, list_groups, list_rules, reset_rule_traffic,
+        reset_user_traffic, update_group, update_registration_settings, update_rule, update_user,
+        ApiResponse, ChangePasswordRequest, CreateUserRequest, ListRulesQuery,
     };
     use crate::api::auth::{register, registration_status};
     use crate::api::middleware::{AdminOnly, AuthUser};
@@ -1370,6 +1370,89 @@ mod tests {
         )
         .await;
         assert_eq!(resp.data.unwrap().len(), 2);
+    }
+
+    /// v1.2.15: resetting a rule's traffic zeroes that rule's counter only —
+    /// never the owner's quota, which is counted separately — and is
+    /// owner-scoped: a user cannot touch someone else's rule, an admin can.
+    #[tokio::test]
+    async fn reset_rule_traffic_zeroes_the_rule_only_and_is_owner_scoped() {
+        let (state, pool) = test_state().await;
+        add_user(&pool, 2, "alice", false).await;
+        add_user(&pool, 3, "bob", false).await;
+        add_group(&pool, 10, 2, "alice-in").await;
+        add_group(&pool, 11, 3, "bob-in").await;
+        add_rule(&pool, 100, 2, 10, 20000, 0).await;
+        add_rule(&pool, 101, 3, 11, 20001, 0).await;
+        sqlx::query("UPDATE forward_rules SET traffic_used = 5000")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE users SET traffic_used = 7000 WHERE id IN (2, 3)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let rule_used = |id: i64| {
+            let pool = pool.clone();
+            async move {
+                let (v,): (i64,) =
+                    sqlx::query_as("SELECT traffic_used FROM forward_rules WHERE id = ?")
+                        .bind(id)
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                v
+            }
+        };
+
+        // The update itself is scoped too, not only the handler's lookup in
+        // front of it: Alice's scope reaches none of Bob's rules, and only the
+        // one rule asked for.
+        use crate::db::repo::{ResourceScope, RuleRepository};
+        let n =
+            RuleRepository::reset_rule_traffic(state.db.as_ref(), 101, &ResourceScope::Owner(2))
+                .await
+                .unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(rule_used(101).await, 5000);
+
+        // Alice cannot reset Bob's rule: 404, and it keeps its traffic.
+        let Json(resp) = reset_rule_traffic(auth(2, false), State(state.clone()), Path(101)).await;
+        assert_eq!(resp.code, 404);
+        assert_eq!(rule_used(101).await, 5000);
+
+        // Alice resets her own rule: that rule is zeroed — not her other one —
+        // and her quota is not.
+        add_rule(&pool, 102, 2, 10, 20002, 0).await;
+        sqlx::query("UPDATE forward_rules SET traffic_used = 5000 WHERE id = 102")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let Json(resp) = reset_rule_traffic(auth(2, false), State(state.clone()), Path(100)).await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+        assert_eq!(rule_used(100).await, 0);
+        assert_eq!(rule_used(102).await, 5000, "only the rule asked for");
+        let (alice_used,): (i64,) = sqlx::query_as("SELECT traffic_used FROM users WHERE id = 2")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(alice_used, 7000, "the owner's quota must not move");
+        let (audits,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'reset_rule_traffic' AND target_id = '100'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(audits, 1);
+
+        // An admin may reset anyone's rule.
+        let Json(resp) = reset_rule_traffic(auth(1, true), State(state.clone()), Path(101)).await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+        assert_eq!(rule_used(101).await, 0);
+
+        // A rule that does not exist is a 404, not a silent success.
+        let Json(resp) = reset_rule_traffic(auth(1, true), State(state.clone()), Path(999)).await;
+        assert_eq!(resp.code, 404);
     }
 
     /// A failed repository read must never be rendered as an empty successful

@@ -153,6 +153,12 @@ pub fn routes() -> Router<AppState> {
             "/rules/{id}/restart",
             axum::routing::post(restart::restart_rule),
         )
+        // v1.2.15: zero one rule's own traffic counter (not the owner's quota).
+        // Owner-scoped; batch reset is the frontend calling this per rule.
+        .route(
+            "/rules/{id}/reset-traffic",
+            axum::routing::post(admin::reset_rule_traffic),
+        )
         // v0.4.12: device groups are admin-only shared infrastructure again.
         // Writes use the AdminOnly guard; the service layer operates with
         // ResourceScope::All rather than owner-scoped mutations.
