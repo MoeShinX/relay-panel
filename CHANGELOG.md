@@ -8,7 +8,15 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
-## [Unreleased]
+## [1.2.14] - 2026-10-20
+
+Ships alongside `node-v1.2.8`; neither requires the other, and the config
+protocol is unchanged at version 4. No schema change.
+
+Upgrading: "Update now" on the dashboard, or `git pull --quiet && ./deploy.sh`.
+Memory in bytes needs the node on `node-v1.2.8` too, and so does UDP
+forwarding to an IPv6 target (see the node changelog); everything else here
+is the panel alone.
 
 ### Added
 
@@ -17,7 +25,6 @@ independent `v*` / `node-v*` tracks since this release).
   desktop table and the phone list alike, and the node detail drawer shows
   "55.1% (17.29 GB / 31.38 GB)" as the disk row always has. Nodes on
   `node-v1.2.8` or later report it; older ones keep the percentage alone.
-
 
 - **Node Status shows the combined rate of every online node.** Each group
   header already summed its own online nodes; the page header now does the
@@ -40,8 +47,6 @@ independent `v*` / `node-v*` tracks since this release).
   memory or connections line jumped from the right edge back to the left,
   and the traffic chart put two different hours under one label.
   The 24-hour view now holds exactly 24 hours, the current one included.
-
----
 
 ## [1.2.13] - 2026-10-10
 
