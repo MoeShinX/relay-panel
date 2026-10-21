@@ -4,6 +4,8 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+use relay_shared::protocol::{ProxyProtocolConfig, ProxyProtocolVersion};
+
 use super::gate::RuleGate;
 use super::limiter::RateLimit;
 use super::selector::TargetSelector;
@@ -14,6 +16,11 @@ use crate::reporter::{ConnectionTracker, TrafficCounter};
 /// unthrottled warn! here would itself become the outage (disk + CPU) that the
 /// cap exists to prevent.
 const CAP_WARN_INTERVAL: Duration = Duration::from_secs(60);
+
+/// node-v1.2.9: how long a rule accepting PROXY protocol waits for the
+/// previous hop's header. The hop sends it the moment it connects, so this
+/// only ever runs out on a client that reached the port directly.
+const PROXY_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// v1.0.4: serve an ALREADY-BOUND TcpListener. Binding happens in the manager
 /// (synchronously, so errors surface immediately and per-family success is
@@ -33,6 +40,7 @@ pub async fn serve_tcp_listener(
     rule_id: i64,
     source_ipv4: Option<Ipv4Addr>,
     gate: RuleGate,
+    proxy_protocol: Arc<ProxyProtocolConfig>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listen_addr = listener
         .local_addr()
@@ -97,6 +105,7 @@ pub async fn serve_tcp_listener(
                 let counter = counter.clone();
                 let connections = connections.clone();
                 let mut gate = gate.clone();
+                let proxy_protocol = proxy_protocol.clone();
 
                 tokio::spawn(async move {
                     // RAII guard: increments the active-TCP count on create,
@@ -130,6 +139,7 @@ pub async fn serve_tcp_listener(
                             counter,
                             rule_id,
                             source_ipv4,
+                            &proxy_protocol,
                         ) => {
                             if let Err(e) = r {
                                 tracing::debug!("TCP connection error: {}", e);
@@ -180,7 +190,7 @@ fn is_transient_accept_error(e: &std::io::Error) -> bool {
 
 #[allow(clippy::too_many_arguments)]
 async fn handle_tcp_connection(
-    inbound: TcpStream,
+    mut inbound: TcpStream,
     client_addr: SocketAddr,
     targets: Vec<String>,
     selector: Arc<TargetSelector>,
@@ -188,7 +198,55 @@ async fn handle_tcp_connection(
     counter: Arc<TrafficCounter>,
     rule_id: i64,
     source_ipv4: Option<Ipv4Addr>,
+    proxy_protocol: &ProxyProtocolConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // node-v1.2.9: who the connection is really from, and where it was really
+    // headed. Normally the socket's own peer and local addresses; behind
+    // another relay hop that sends PROXY protocol, the ones in its header.
+    let local_addr = inbound.local_addr()?;
+    let (real_client, real_dst, leftover) = if proxy_protocol.accept {
+        if !super::proxy_protocol::peer_trusted(client_addr.ip(), &proxy_protocol.trusted) {
+            tracing::warn!(
+                "TCP rule {}: {} is not a trusted PROXY protocol source; closing",
+                rule_id,
+                client_addr
+            );
+            return Err("untrusted PROXY protocol source".into());
+        }
+        match tokio::time::timeout(
+            PROXY_HEADER_TIMEOUT,
+            super::proxy_protocol::read_header(&mut inbound),
+        )
+        .await
+        {
+            Ok(Ok(h)) => (
+                h.src.unwrap_or(client_addr),
+                h.dst.unwrap_or(local_addr),
+                h.leftover,
+            ),
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    "TCP rule {}: no valid PROXY header from {}: {}; closing",
+                    rule_id,
+                    client_addr,
+                    e
+                );
+                return Err(e.into());
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "TCP rule {}: no PROXY header from {} within {}s; closing",
+                    rule_id,
+                    client_addr,
+                    PROXY_HEADER_TIMEOUT.as_secs()
+                );
+                return Err("PROXY header timed out".into());
+            }
+        }
+    } else {
+        (client_addr, local_addr, Vec::new())
+    };
+
     // v0.4.6: pick targets per the rule's load-balancing strategy. The selector
     // returns the ordered indices to attempt; we connect to the first reachable.
     //
@@ -246,7 +304,15 @@ async fn handle_tcp_connection(
         }
     };
 
-    tracing::debug!("TCP: {} -> {}", client_addr, outbound.peer_addr()?);
+    tracing::debug!("TCP: {} -> {}", real_client, outbound.peer_addr()?);
+
+    // node-v1.2.9: the header first, before any client byte. Not billed: it is
+    // the relay's own control data, a few dozen bytes per connection.
+    let mut outbound = outbound;
+    if proxy_protocol.send != ProxyProtocolVersion::Off {
+        let header = super::proxy_protocol::encode(proxy_protocol.send, real_client, real_dst);
+        outbound.write_all(&header).await?;
+    }
 
     // v1.0.8: ZERO-COPY fast path. An UNLIMITED rule on Linux is forwarded with
     // splice(2) — bytes move inside the kernel via a pipe and are never copied
@@ -262,6 +328,15 @@ async fn handle_tcp_connection(
     // submitted once at close, which meant a persistent connection moved
     // unlimited traffic without ever touching its owner's quota.
     let bytes = counter.handle(rule_id).await;
+
+    // node-v1.2.9: client bytes that arrived in the same read as the previous
+    // hop's PROXY header. They are the client's first data: forwarded ahead of
+    // the copy below, throttled and billed like the rest.
+    if !leftover.is_empty() {
+        rate_limit.acquire_upload(leftover.len() as u64).await;
+        outbound.write_all(&leftover).await?;
+        bytes.add_upload(leftover.len() as u64);
+    }
 
     #[cfg(target_os = "linux")]
     if matches!(rate_limit, RateLimit::Unlimited) {
@@ -385,6 +460,7 @@ mod tests {
             1,
             None,
             runtime.gate(None),
+            Arc::new(ProxyProtocolConfig::default()),
         ));
         // Keep the runtime alive for the duration of the test: dropping it would
         // cancel the connection we are about to make.
@@ -434,6 +510,157 @@ mod tests {
         assert_counts_before_close(RateLimit::new(Some(100_000_000), Some(100_000_000)), 8).await;
     }
 
+    // ── node-v1.2.9: PROXY protocol through real relays ──
+
+    /// A relay on 127.0.0.1 forwarding to `target` with these PROXY settings.
+    /// Returns its address; the runtime is leaked for the test's lifetime.
+    async fn spawn_relay(target: SocketAddr, pp: ProxyProtocolConfig, rule_id: i64) -> SocketAddr {
+        let listener =
+            super::super::outbound::bind_tcp_listener(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
+                .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let runtime = Box::leak(Box::new(crate::forwarder::gate::RuleRuntime::new()));
+        tokio::spawn(serve_tcp_listener(
+            listener,
+            vec![target.to_string()],
+            Arc::new(TargetSelector::new(LoadBalanceStrategy::First, 1)),
+            RateLimit::Unlimited,
+            Arc::new(TrafficCounter::new()),
+            Arc::new(ConnectionTracker::new()),
+            rule_id,
+            None,
+            runtime.gate(None),
+            Arc::new(pp),
+        ));
+        addr
+    }
+
+    /// A target that reads until it has `want` bytes (or the peer closes) and
+    /// sends them all back, PROXY header included, so the client sees exactly
+    /// what reached the target. Counts the connections it accepts.
+    async fn recording_target(want: usize) -> (SocketAddr, Arc<std::sync::atomic::AtomicUsize>) {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = accepted.clone();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = l.accept().await {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut got = Vec::new();
+                    let mut b = [0u8; 512];
+                    while got.len() < want {
+                        match s.read(&mut b).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => got.extend_from_slice(&b[..n]),
+                        }
+                    }
+                    let _ = s.write_all(&got).await;
+                });
+            }
+        });
+        (addr, accepted)
+    }
+
+    fn pp(send: ProxyProtocolVersion, accept: bool, trusted: &[&str]) -> ProxyProtocolConfig {
+        ProxyProtocolConfig {
+            send,
+            accept,
+            trusted: trusted.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// Client → relay A (sends v2) → relay B (accepts, sends v1) → target.
+    /// The target's header names the CLIENT and the address it dialled on A —
+    /// not relay A — and the client's data follows it intact.
+    #[tokio::test]
+    async fn a_chain_carries_the_client_address_to_the_last_target() {
+        let payload = b"hello through two hops";
+        // v1 line for 127.0.0.1 is at most 56 bytes; ask for header + payload.
+        let (target, _) = recording_target(40 + payload.len()).await;
+        let b = spawn_relay(
+            target,
+            pp(ProxyProtocolVersion::V1, true, &["127.0.0.0/8"]),
+            91,
+        )
+        .await;
+        let a = spawn_relay(b, pp(ProxyProtocolVersion::V2, false, &[]), 92).await;
+
+        let mut client = TcpStream::connect(a).await.unwrap();
+        let me = client.local_addr().unwrap();
+        client.write_all(payload).await.unwrap();
+        let mut got = Vec::new();
+        let mut buf = [0u8; 512];
+        let want = format!(
+            "PROXY TCP4 127.0.0.1 127.0.0.1 {} {}\r\n",
+            me.port(),
+            a.port()
+        );
+        while got.len() < want.len() + payload.len() {
+            let n = tokio::time::timeout(Duration::from_secs(5), client.read(&mut buf))
+                .await
+                .expect("the chain must answer")
+                .unwrap();
+            if n == 0 {
+                break;
+            }
+            got.extend_from_slice(&buf[..n]);
+        }
+        let mut expected = want.into_bytes();
+        expected.extend_from_slice(payload);
+        assert_eq!(
+            String::from_utf8_lossy(&got),
+            String::from_utf8_lossy(&expected)
+        );
+    }
+
+    /// A rule that accepts PROXY protocol faces relay nodes: a client that
+    /// reaches it directly, without a header, is closed and never forwarded.
+    #[tokio::test]
+    async fn a_connection_without_a_header_is_not_forwarded() {
+        let (target, accepted) = recording_target(1).await;
+        let b = spawn_relay(target, pp(ProxyProtocolVersion::Off, true, &[]), 93).await;
+        let mut client = TcpStream::connect(b).await.unwrap();
+        client
+            .write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+            .await
+            .unwrap();
+        let mut buf = [0u8; 64];
+        let n = tokio::time::timeout(Duration::from_secs(5), client.read(&mut buf))
+            .await
+            .expect("the relay must close the connection")
+            .unwrap_or(0);
+        assert_eq!(n, 0);
+        assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// With trusted sources set, a peer outside them is closed even when it
+    /// sends a well-formed header claiming to be someone else.
+    #[tokio::test]
+    async fn an_untrusted_peer_cannot_claim_an_address() {
+        let (target, accepted) = recording_target(1).await;
+        let b = spawn_relay(
+            target,
+            pp(ProxyProtocolVersion::V1, true, &["10.0.0.0/8"]),
+            94,
+        )
+        .await;
+        let mut client = TcpStream::connect(b).await.unwrap();
+        let forged = crate::forwarder::proxy_protocol::encode(
+            ProxyProtocolVersion::V1,
+            "198.51.100.66:1234".parse().unwrap(),
+            b,
+        );
+        client.write_all(&forged).await.unwrap();
+        let mut buf = [0u8; 64];
+        let n = tokio::time::timeout(Duration::from_secs(5), client.read(&mut buf))
+            .await
+            .expect("the relay must close the connection")
+            .unwrap_or(0);
+        assert_eq!(n, 0);
+        assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
     async fn assert_counts_before_close(rate_limit: RateLimit, rule_id: i64) {
         let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let target_addr = target.local_addr().unwrap();
@@ -465,6 +692,7 @@ mod tests {
             rule_id,
             None,
             runtime.gate(None),
+            Arc::new(ProxyProtocolConfig::default()),
         ));
         let _runtime = runtime;
 
@@ -542,6 +770,7 @@ mod tests {
             1,
             None,
             runtime.gate(Some(2)),
+            Arc::new(ProxyProtocolConfig::default()),
         ));
         let _runtime = runtime;
 

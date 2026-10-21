@@ -9,7 +9,8 @@
 use crate::db::error::DbError;
 use crate::db::repo::{GroupRepository, ProfileScope, Repository, ResourceScope, RuleUpdate};
 use relay_shared::protocol::{
-    CreateRuleRequest, GroupType, Protocol, PublicTransport, RuleTargetRequest, UpdateRuleRequest,
+    CreateRuleRequest, GroupType, Protocol, ProxyProtocolVersion, PublicTransport,
+    RuleTargetRequest, UpdateRuleRequest,
 };
 
 /// v0.4.20: forward_mode is locked to "direct" at the API boundary
@@ -326,6 +327,97 @@ async fn validate_owner_outbound_group(
     }
 }
 
+/// v1.2.15: check a rule's PROXY protocol settings and normalize them for
+/// storage. Off needs no checks. On, it must be a TCP rule on the raw
+/// transport, every trusted source must be an IP or CIDR, and — when
+/// `check_nodes` — every node in the inbound group must run node-v1.2.9+:
+/// an older node would ignore the setting, sending no header to a target
+/// that expects one (or passing the previous hop's header on as data), and
+/// every connection through it would break.
+#[allow(clippy::too_many_arguments)]
+pub async fn validate_proxy_protocol(
+    db: &dyn Repository,
+    protocol: &str,
+    node_transport: &str,
+    device_group_in: i64,
+    send: ProxyProtocolVersion,
+    accept: bool,
+    trusted: &str,
+    check_nodes: bool,
+) -> Result<crate::db::repo::RuleProxyProtocol, CreateRuleError> {
+    if send == ProxyProtocolVersion::Off && !accept {
+        return Ok(crate::db::repo::RuleProxyProtocol::default());
+    }
+    if protocol == "udp" {
+        return Err(CreateRuleError::BadRequest(
+            "PROXY protocol 只用于 TCP，UDP 规则不能开启".into(),
+        ));
+    }
+    if node_transport != "raw" {
+        return Err(CreateRuleError::BadRequest(
+            "PROXY protocol 只支持直连（raw）传输".into(),
+        ));
+    }
+    let mut sources = Vec::new();
+    if accept {
+        for entry in trusted
+            .split([',', '，', ' ', '\n', '\r', '\t'])
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if !is_ip_or_cidr(entry) {
+                return Err(CreateRuleError::BadRequest(format!(
+                    "信任来源格式不对：{entry}（要写 IP 或 CIDR，如 203.0.113.7 或 10.0.0.0/8）"
+                )));
+            }
+            sources.push(entry.to_string());
+        }
+    }
+    if check_nodes {
+        let prefix = format!("node_status:{}:", device_group_in);
+        let rows = db
+            .scan_prefix(&prefix)
+            .await
+            .map_err(CreateRuleError::Database)?;
+        let mut old = Vec::new();
+        for (key, value) in rows {
+            let v: serde_json::Value = serde_json::from_str(&value).unwrap_or_default();
+            let version = v.get("node_version").and_then(|x| x.as_str());
+            if !relay_shared::protocol::node_supports_proxy_protocol(version) {
+                let label = v
+                    .get("public_ipv4")
+                    .and_then(|x| x.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| key.trim_start_matches(&prefix).chars().take(8).collect());
+                old.push(format!("{} ({})", label, version.unwrap_or("?")));
+            }
+        }
+        if !old.is_empty() {
+            return Err(CreateRuleError::BadRequest(format!(
+                "入口分组里有节点不支持 PROXY protocol，请先升级到 node-v1.2.9 或更新：{}",
+                old.join(", ")
+            )));
+        }
+    }
+    Ok(crate::db::repo::RuleProxyProtocol {
+        send: send.to_db_str().to_string(),
+        accept,
+        trusted: sources.join(","),
+    })
+}
+
+fn is_ip_or_cidr(s: &str) -> bool {
+    match s.split_once('/') {
+        None => s.parse::<std::net::IpAddr>().is_ok(),
+        Some((ip, bits)) => match (ip.parse::<std::net::IpAddr>(), bits.parse::<u8>()) {
+            (Ok(std::net::IpAddr::V4(_)), Ok(b)) => b <= 32,
+            (Ok(std::net::IpAddr::V6(_)), Ok(b)) => b <= 128,
+            _ => false,
+        },
+    }
+}
+
 pub async fn create_rule(
     db: &dyn Repository,
     caller_user_id: i64,
@@ -478,6 +570,18 @@ pub async fn create_rule(
     let up_mbps = req.upload_limit_mbps.unwrap_or(0).max(0);
     let down_mbps = req.download_limit_mbps.unwrap_or(0).max(0);
 
+    let proxy_protocol = validate_proxy_protocol(
+        db,
+        protocol_str,
+        node_str,
+        req.device_group_in,
+        req.proxy_protocol_send,
+        req.proxy_protocol_accept,
+        &req.proxy_protocol_trusted,
+        true,
+    )
+    .await?;
+
     let mut attempt = 0u32;
     let max_attempts = if req.listen_port.is_some() { 1 } else { 8 };
     let mut last_port: Option<u16> = req.listen_port;
@@ -527,6 +631,7 @@ pub async fn create_rule(
                 // the transaction; an admin (for anyone) is not, as the API
                 // does not check it either.
                 !caller_admin,
+                &proxy_protocol,
             )
             .await
         {
@@ -681,7 +786,10 @@ pub async fn update_rule(
         || req.max_connections.is_some()
         || req.auto_restart_minutes.is_some()
         || req.tunnel_profile_id.is_some()
-        || req.paused.is_some();
+        || req.paused.is_some()
+        || req.proxy_protocol_send.is_some()
+        || req.proxy_protocol_accept.is_some()
+        || req.proxy_protocol_trusted.is_some();
     if !has_field {
         return Err(UpdateRuleError::BadRequest("No fields to update".into()));
     }
@@ -854,6 +962,55 @@ pub async fn update_rule(
     // omitted direction keeps its limit — it used to be written as 0 (no
     // limit), so an API client setting only the upload cap switched the
     // download cap off.
+    // v1.2.15: PROXY protocol, checked against what the rule will be after
+    // this edit (a protocol, transport or group change can make a setting
+    // that was fine invalid). The node gate runs when the setting is turned
+    // on or changed, or the rule moves to another group.
+    let pp_touched = req.proxy_protocol_send.is_some()
+        || req.proxy_protocol_accept.is_some()
+        || req.proxy_protocol_trusted.is_some();
+    let proxy_protocol = if pp_touched
+        || req.protocol.is_some()
+        || req.public_transport.is_some()
+        || req.device_group_in.is_some()
+    {
+        let eff_protocol = req
+            .protocol
+            .as_ref()
+            .map(protocol_to_str)
+            .unwrap_or(existing.protocol.as_str());
+        let eff_transport = req
+            .public_transport
+            .map(|t| t.derive_node_transport().to_db_str())
+            .unwrap_or(existing.node_transport.as_str());
+        let eff_group = req.device_group_in.unwrap_or(existing.device_group_in);
+        let eff_send = req
+            .proxy_protocol_send
+            .unwrap_or_else(|| ProxyProtocolVersion::from_db_str(&existing.proxy_protocol_send));
+        let eff_accept = req
+            .proxy_protocol_accept
+            .unwrap_or(existing.proxy_protocol_accept);
+        let eff_trusted = req
+            .proxy_protocol_trusted
+            .as_deref()
+            .unwrap_or(existing.proxy_protocol_trusted.as_str());
+        let checked = validate_proxy_protocol(
+            db,
+            eff_protocol,
+            eff_transport,
+            eff_group,
+            eff_send,
+            eff_accept,
+            eff_trusted,
+            pp_touched || req.device_group_in.is_some(),
+        )
+        .await
+        .map_err(map_create_rule_validation_error)?;
+        Some(checked)
+    } else {
+        None
+    };
+
     let update = RuleUpdate {
         name: req.name.as_deref(),
         listen_port: req.listen_port.map(|p| p as i32),
@@ -875,6 +1032,9 @@ pub async fn update_rule(
         download_limit_mbps: req.download_limit_mbps.map(|v| v.max(0)),
         max_connections,
         auto_restart_minutes,
+        proxy_protocol_send: proxy_protocol.as_ref().map(|p| p.send.as_str()),
+        proxy_protocol_accept: proxy_protocol.as_ref().map(|p| p.accept),
+        proxy_protocol_trusted: proxy_protocol.as_ref().map(|p| p.trusted.as_str()),
         tunnel_profile_id: req.tunnel_profile_id,
         // An owner editing their own rule (an Owner scope) is re-checked
         // against their device-group authorization inside the transaction;

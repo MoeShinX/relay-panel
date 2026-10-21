@@ -186,11 +186,86 @@ pub struct ListenerConfig {
     /// `#[serde(default)]` so a v1.1.x node still deserializes a v1.2 config.
     #[serde(default)]
     pub max_connections: Option<u32>,
+    /// node-v1.2.9: PROXY protocol on this rule's TCP connections — the header
+    /// sent to the target, and/or the one expected from the previous hop.
+    /// Skipped on the wire when off, so a config without it is unchanged; an
+    /// older node ignores the key, which is why the panel refuses to turn it
+    /// on for a group that has such a node.
+    #[serde(default, skip_serializing_if = "ProxyProtocolConfig::is_off")]
+    pub proxy_protocol: ProxyProtocolConfig,
     // v0.4.7: the placeholder `speed_limit` / `ip_limit` wire fields were
     // removed. They were always None and no node ever read them. The DB columns
     // on users/plans are kept (deprecated) to avoid a pointless migration, but
     // the ListenerConfig wire struct no longer carries them. CONFIG_PROTOCOL_VERSION
     // bumps 3→4 so a v0.4.6 node (which still expects these fields) is gated.
+}
+
+/// v1.2.15: the PROXY protocol header version a node sends to a rule's target.
+/// v1 is a text line, v2 a binary header; which one depends on what the target
+/// accepts (nginx and Caddy take both, Xray takes both, HAProxy both).
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ProxyProtocolVersion {
+    #[default]
+    Off,
+    V1,
+    V2,
+}
+
+impl ProxyProtocolVersion {
+    pub fn from_db_str(s: &str) -> Self {
+        match s {
+            "v1" => Self::V1,
+            "v2" => Self::V2,
+            _ => Self::Off,
+        }
+    }
+
+    pub fn to_db_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::V1 => "v1",
+            Self::V2 => "v2",
+        }
+    }
+}
+
+/// v1.2.15: a rule's PROXY protocol settings as the node receives them.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct ProxyProtocolConfig {
+    /// Header to send to the target once connected.
+    #[serde(default)]
+    pub send: ProxyProtocolVersion,
+    /// Expect a header (v1 or v2) at the start of every inbound connection,
+    /// from the previous relay hop; the real client address is taken from it
+    /// and the header is not forwarded. A connection without one is closed.
+    #[serde(default)]
+    pub accept: bool,
+    /// When accepting: the peers (IPs or CIDRs) allowed to send a header.
+    /// Empty = any peer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trusted: Vec<String>,
+}
+
+impl ProxyProtocolConfig {
+    pub fn is_off(&self) -> bool {
+        self.send == ProxyProtocolVersion::Off && !self.accept
+    }
+
+    /// From a rule's stored columns. `trusted` is the comma/space separated
+    /// list the panel validated on save.
+    pub fn from_rule(send: &str, accept: bool, trusted: &str) -> Self {
+        Self {
+            send: ProxyProtocolVersion::from_db_str(send),
+            accept,
+            trusted: trusted
+                .split([',', ' ', '\n'])
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect(),
+        }
+    }
 }
 
 /// v0.4.6: convert a rule-level Mbps cap to bytes/sec for the node.
@@ -264,6 +339,17 @@ pub fn build_listeners_for_rule(
                 Some(rule.max_connections as u32)
             } else {
                 None
+            },
+            // v1.2.15: TCP only — the UDP half of a tcp_udp rule carries none,
+            // so its fingerprint does not change when the setting does.
+            proxy_protocol: if proto == Protocol::Tcp {
+                ProxyProtocolConfig::from_rule(
+                    &rule.proxy_protocol_send,
+                    rule.proxy_protocol_accept,
+                    &rule.proxy_protocol_trusted,
+                )
+            } else {
+                ProxyProtocolConfig::default()
             },
         })
         .collect()
@@ -863,6 +949,19 @@ impl RestartRuleMessage {
 /// Missing/malformed version → unsupported (same conservative stance as the
 /// diagnose gates above).
 pub fn node_supports_restart_rule(version: Option<&str>) -> bool {
+    node_version_at_least(version, (1, 2, 0))
+}
+
+/// v1.2.15: whether a node handles PROXY protocol (node-v1.2.9+). An older
+/// node ignores the setting: it would send no header to a target expecting
+/// one, and pass a previous hop's header on as data — both break the
+/// connection. So the panel refuses to turn it on for a group with such a node.
+pub fn node_supports_proxy_protocol(version: Option<&str>) -> bool {
+    node_version_at_least(version, (1, 2, 9))
+}
+
+/// Missing/malformed version → false (the conservative answer for a gate).
+fn node_version_at_least(version: Option<&str>, min: (u32, u32, u32)) -> bool {
     let Some(v) = version else {
         return false;
     };
@@ -871,7 +970,7 @@ pub fn node_supports_restart_rule(version: Option<&str>) -> bool {
     let major: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
     let minor: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
     let patch: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    (major, minor, patch) >= (1, 2, 0)
+    (major, minor, patch) >= min
 }
 
 /// Outcome of probing ONE target from the node (TCP-only since v0.4.9).
@@ -1042,6 +1141,17 @@ pub struct CreateRuleRequest {
     /// config). None/omitted = legacy behavior (use public_transport/ws_path).
     #[serde(default)]
     pub tunnel_profile_id: Option<i64>,
+    /// v1.2.15: PROXY protocol header sent to the target (TCP only). Off when
+    /// omitted.
+    #[serde(default)]
+    pub proxy_protocol_send: ProxyProtocolVersion,
+    /// v1.2.15: expect a PROXY protocol header from the previous relay hop.
+    #[serde(default)]
+    pub proxy_protocol_accept: bool,
+    /// v1.2.15: IPs/CIDRs allowed to send that header (comma, space or new
+    /// line separated). Empty = any.
+    #[serde(default)]
+    pub proxy_protocol_trusted: String,
 }
 
 fn default_forward_mode() -> String {
@@ -1104,6 +1214,13 @@ pub struct UpdateRuleRequest {
     /// current. A non-zero value below `MIN_AUTO_RESTART_MINUTES` is rejected.
     #[serde(default)]
     pub auto_restart_minutes: Option<i32>,
+    /// v1.2.15: PROXY protocol. Each omitted field keeps its current value.
+    #[serde(default)]
+    pub proxy_protocol_send: Option<ProxyProtocolVersion>,
+    #[serde(default)]
+    pub proxy_protocol_accept: Option<bool>,
+    #[serde(default)]
+    pub proxy_protocol_trusted: Option<String>,
 }
 
 // Missing field uses Default (None); an explicit JSON null means clear the
@@ -1430,6 +1547,9 @@ mod tests {
             download_limit_mbps: 0,
             max_connections: 0,
             auto_restart_minutes: 0,
+            proxy_protocol_send: "off".into(),
+            proxy_protocol_accept: false,
+            proxy_protocol_trusted: String::new(),
             config: "{}".into(),
             traffic_used: 0,
             status: "active".into(),
@@ -1592,6 +1712,63 @@ mod tests {
         assert!(node_supports_restart_rule(Some("1.2.0-rc1")));
         assert!(node_supports_restart_rule(Some("1.3.0")));
         assert!(node_supports_restart_rule(Some("2.0.0")));
+    }
+
+    /// v1.2.15: PROXY protocol reaches the TCP listener only, and a rule with
+    /// it off produces exactly the config it did before (the key is absent).
+    #[test]
+    fn proxy_protocol_reaches_the_tcp_listener_only_and_is_absent_when_off() {
+        let mut r = rule(1, "tcp_udp", "raw");
+
+        let ls = build_listeners_for_rule(&r, vec!["1.2.3.4:80".into()]);
+        for l in &ls {
+            assert!(l.proxy_protocol.is_off());
+            let json = serde_json::to_value(l).unwrap();
+            assert!(
+                json.get("proxy_protocol").is_none(),
+                "off must not be on the wire"
+            );
+        }
+
+        r.proxy_protocol_send = "v2".into();
+        r.proxy_protocol_accept = true;
+        r.proxy_protocol_trusted = "10.0.0.1, 192.168.0.0/16
+2001:db8::/32"
+            .into();
+        let ls = build_listeners_for_rule(&r, vec!["1.2.3.4:80".into()]);
+        let tcp = ls.iter().find(|l| l.protocol == Protocol::Tcp).unwrap();
+        let udp = ls.iter().find(|l| l.protocol == Protocol::Udp).unwrap();
+        assert_eq!(tcp.proxy_protocol.send, ProxyProtocolVersion::V2);
+        assert!(tcp.proxy_protocol.accept);
+        assert_eq!(
+            tcp.proxy_protocol.trusted,
+            vec!["10.0.0.1", "192.168.0.0/16", "2001:db8::/32"]
+        );
+        assert!(udp.proxy_protocol.is_off(), "UDP carries no PROXY header");
+        let json = serde_json::to_value(tcp).unwrap();
+        assert_eq!(json["proxy_protocol"]["send"], "v2");
+    }
+
+    /// A config from an older panel (no key) still parses, as "off".
+    #[test]
+    fn a_listener_without_proxy_protocol_parses_as_off() {
+        let l: ListenerConfig = serde_json::from_value(serde_json::json!({
+            "rule_id": 1, "port": 80, "protocol": "tcp", "targets": ["1.2.3.4:80"]
+        }))
+        .unwrap();
+        assert!(l.proxy_protocol.is_off());
+    }
+
+    #[test]
+    fn proxy_protocol_needs_node_1_2_9() {
+        assert!(!node_supports_proxy_protocol(None));
+        assert!(!node_supports_proxy_protocol(Some("1.2.8")));
+        assert!(node_supports_proxy_protocol(Some("1.2.9")));
+        assert!(node_supports_proxy_protocol(Some("1.3.0")));
+        assert!(!node_supports_proxy_protocol(Some("garbage")));
+        // the restart gate is unchanged by the refactor
+        assert!(node_supports_restart_rule(Some("1.2.0")));
+        assert!(!node_supports_restart_rule(Some("1.1.9")));
     }
 
     /// A rule's `max_connections` reaches the wire, and 0 means "no cap" rather

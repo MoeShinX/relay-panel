@@ -112,10 +112,30 @@ pub struct ForwardRule {
     /// the safety valve into an outage.
     #[serde(default)]
     pub auto_restart_minutes: i32,
+    /// v1.2.15: PROXY protocol header sent to the target: "off" | "v1" | "v2".
+    /// TCP only. Off by default; the target must be set up to expect it.
+    #[serde(default = "default_proxy_protocol_send")]
+    #[sqlx(default)]
+    pub proxy_protocol_send: String,
+    /// v1.2.15: expect a PROXY protocol header from the previous hop (another
+    /// relay node in front of this one), take the real client address from
+    /// it and strip it before forwarding. TCP only.
+    #[serde(default)]
+    #[sqlx(default)]
+    pub proxy_protocol_accept: bool,
+    /// v1.2.15: when accepting, the sources (IPs or CIDRs, comma separated)
+    /// allowed to send a header. Empty = any source.
+    #[serde(default)]
+    #[sqlx(default)]
+    pub proxy_protocol_trusted: String,
     pub config: String,
     pub traffic_used: i64,
     pub status: String,
     pub created_at: String,
+}
+
+fn default_proxy_protocol_send() -> String {
+    "off".to_string()
 }
 
 /// v1.2.0: floor for `auto_restart_minutes` when it is enabled (non-zero).

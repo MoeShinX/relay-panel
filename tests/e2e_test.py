@@ -58,6 +58,11 @@ UDP6_LISTEN_PORT = 20004
 TCP6_ECHO_PORT = 8889
 UDP6_ECHO_PORT = 9998
 
+# panel 1.2.15 / node 1.2.9: PROXY protocol through two rules on one node
+PP_A_PORT = 20005      # sends v2 to PP_B_PORT
+PP_B_PORT = 20006      # accepts it, sends v1 to the header-echo target
+PP_TARGET_PORT = 8890  # answers with the header line it received, then the data
+
 
 # ---------- echo servers ----------
 class TCPHandler(socketserver.BaseRequestHandler):
@@ -93,6 +98,32 @@ class TCP6Server(socketserver.ThreadingTCPServer):
 class UDP6Server(socketserver.ThreadingUDPServer):
     address_family = socket.AF_INET6
     allow_reuse_address = True
+
+
+class PPHeaderEcho(socketserver.BaseRequestHandler):
+    """Reply with everything up to and including the first CRLF (the PROXY v1
+    line the relay sent), then echo the rest."""
+    def handle(self):
+        data = b""
+        while b"\r\n" not in data:
+            chunk = self.request.recv(1024)
+            if not chunk:
+                return
+            data += chunk
+        self.request.sendall(data)
+        while True:
+            chunk = self.request.recv(1024)
+            if not chunk:
+                break
+            self.request.sendall(chunk)
+
+
+def start_pp_target():
+    srv = socketserver.ThreadingTCPServer(("127.0.0.1", PP_TARGET_PORT), PPHeaderEcho)
+    srv.allow_reuse_address = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    print(f"[echo] PROXY header target :{PP_TARGET_PORT}")
+    return srv
 
 
 def start_echo_servers_v6():
@@ -257,6 +288,24 @@ def main():
         })
         assert udp_resp["code"] == 0, f"udp-rule creation failed: {udp_resp}"
 
+        # 2b. PROXY protocol chain (panel 1.2.15 / node 1.2.9). Created before
+        #     the node starts: the panel refuses PROXY protocol for a group
+        #     whose nodes it knows to be older than 1.2.9, and the node built
+        #     here reports its own version.
+        start_pp_target()
+        for name, port, target_port, extra in (
+            ("pp-b", PP_B_PORT, PP_TARGET_PORT, {
+                "proxy_protocol_accept": True, "proxy_protocol_trusted": "127.0.0.1",
+                "proxy_protocol_send": "v1"}),
+            ("pp-a", PP_A_PORT, PP_B_PORT, {"proxy_protocol_send": "v2"}),
+        ):
+            r = api("POST", "/rules", admin_token, {
+                "name": name, "listen_port": port, "protocol": "tcp",
+                "device_group_in": in_g1_id, "forward_mode": "direct",
+                "target_addr": "127.0.0.1", "target_port": target_port, **extra,
+            })
+            assert r["code"] == 0, f"{name} creation failed: {r}"
+
         rules = {r["name"]: r for r in api("GET", "/rules", admin_token)["data"]}
         tcp_rule_id = rules["tcp-rule"]["id"]
         udp_rule_id = rules["udp-rule"]["id"]
@@ -336,6 +385,26 @@ def main():
         resp = udp_roundtrip(UDP_LISTEN_PORT, udp_payload)
         assert resp == udp_payload, "UDP echo mismatch"
         print(f"[ok] UDP forwarded {len(udp_payload)} bytes round-trip")
+
+        # 5b. The chain carries the client: rule A sends v2 to rule B, which
+        #     reads it and sends v1 to the target. The target must see THIS
+        #     client and the port it dialled on rule A — not the node itself.
+        assert wait_for_port("127.0.0.1", PP_A_PORT), "pp-a listener not up"
+        with socket.create_connection(("127.0.0.1", PP_A_PORT), timeout=5) as s:
+            me = s.getsockname()
+            s.sendall(b"pp-payload")
+            want = f"PROXY TCP4 127.0.0.1 127.0.0.1 {me[1]} {PP_A_PORT}\r\n".encode() + b"pp-payload"
+            got = b""
+            try:
+                while len(got) < len(want):
+                    chunk = s.recv(1024)
+                    if not chunk:
+                        break
+                    got += chunk
+            except socket.timeout:
+                pass
+        assert got == want, f"PROXY chain: got {got!r}, want {want!r}"
+        print(f"[ok] PROXY protocol chain: target saw client port {me[1]} via two hops")
 
         # 6. Wait for node to report, then check forward_rules + users traffic.
         time.sleep(6)
