@@ -412,6 +412,14 @@ describe('NodeStatus total rate of every online node', () => {
     });
   };
 
+  it('pins the title and the total under the header bar', async () => {
+    serve(nodes);
+    render(<NodeStatus />);
+    await flush();
+    expect(screen.getByTestId('all-nodes-rate').closest('.rp-page-header')?.className)
+      .toContain('rp-page-header-sticky');
+  });
+
   it('sums the online nodes of every group and counts them, leaving offline ones out', async () => {
     serve(nodes);
     render(<NodeStatus />);

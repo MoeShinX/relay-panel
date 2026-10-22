@@ -199,6 +199,23 @@ html, body, #root {
   margin-bottom: 16px;
 }
 
+/* v1.2.14: a page header that stays under the header bar while the page
+   scrolls (Node Status: the title and every online node's total rate). It
+   takes the page background so the content scrolls out of sight beneath it,
+   and padding in place of margin so nothing shows through the gap. Desktop
+   only: on a phone the title and the total wrap to two lines, too much to
+   pin over a small screen. */
+@media (min-width: 768px) {
+  .rp-page-header.rp-page-header-sticky {
+    position: sticky;
+    top: var(--rp-header-height);
+    z-index: 99; /* over fixed table columns (15), under the header bar */
+    background: var(--rp-bg);
+    margin: calc(-1 * var(--rp-content-padding)) 0 0;
+    padding: var(--rp-content-padding) 0 16px;
+  }
+}
+
 .rp-stat-card {
   border-radius: var(--rp-radius);
   border: 1px solid var(--rp-border);
