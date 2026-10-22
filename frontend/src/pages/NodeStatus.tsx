@@ -12,6 +12,7 @@ import { stableGroupedRows } from '../components/nodes/sort';
 import { rateSummary } from '../components/nodes/shared';
 import { upgradableNodes } from '../components/nodes/upgrade';
 import { UpgradeAllButton } from '../components/nodes/UpgradeAllButton';
+import { UpgradeSlot } from '../components/nodes/UpgradeSlot';
 import { formatBps } from '../utils/format';
 
 type AnyNodeRow = NodeDisplayRow;
@@ -193,6 +194,10 @@ export default function NodeStatus() {
   const groups = useMemo(() => (rows ? stableGroupedRows(rows) : null), [rows]);
   // v1.2.16: "upgrade all" — every node the per-node button would accept, across
   // all groups (same eligibility ladder). Admin only.
+  // Where the icon is lined up: it sits in the page header row, over the first
+  // visible group table's 节点更新 column.
+  const pageHeaderRef = useRef<HTMLDivElement>(null);
+  const groupsRef = useRef<HTMLDivElement>(null);
   const upgradableAll = useMemo(
     () => (isAdmin && rows ? upgradableNodes(rows, latestNodeVersion, panelProtocol, nodeVersionCheckFailed) : []),
     [isAdmin, rows, latestNodeVersion, panelProtocol, nodeVersionCheckFailed],
@@ -253,41 +258,47 @@ export default function NodeStatus() {
 
   return (
     <>
-      <div className="rp-page-header rp-page-header-sticky">
-        <h2 className="rp-page-title"><LineChartOutlined /> {title}</h2>
+      <div ref={pageHeaderRef} className="rp-page-header rp-page-header-sticky">
+        <h2 className="rp-page-title" data-upgrade-obstacle=""><LineChartOutlined /> {title}</h2>
         <Space wrap size={[12, 8]}>
           {all && all.total > 0 && (
-            <Typography.Text type="secondary" style={{ fontSize: 13 }} data-testid="all-nodes-rate">
+            <Typography.Text type="secondary" style={{ fontSize: 13 }} data-testid="all-nodes-rate" data-upgrade-obstacle="">
               {t('onlineNodesOfTotal').replace('{online}', String(all.online)).replace('{total}', String(all.total))}
               {' · '}
               <ArrowUpOutlined /> {formatBps(all.up)} <ArrowDownOutlined /> {formatBps(all.down)}
             </Typography.Text>
           )}
-          <UpgradeAllButton
-            nodes={upgradableAll}
-            latestNodeVersion={latestNodeVersion}
-            labelKey="upgradeAll"
-            t={t}
-            onDone={refresh}
-            testId="upgrade-all"
-          />
+          {upgradableAll.length > 0 && (
+            <UpgradeSlot rowRef={pageHeaderRef} tablesRef={groupsRef}>
+              <UpgradeAllButton
+                nodes={upgradableAll}
+                latestNodeVersion={latestNodeVersion}
+                labelKey="upgradeAll"
+                t={t}
+                onDone={refresh}
+                testId="upgrade-all"
+              />
+            </UpgradeSlot>
+          )}
         </Space>
       </div>
-      {groups.map(([gid, groupRows]) => (
-        <NodeGroupSection
-          key={gid}
-          rows={groupRows}
-          panelProtocol={panelProtocol}
-          latestNodeVersion={latestNodeVersion}
-          nodeVersionCheckFailed={nodeVersionCheckFailed}
-          isMobile={isMobile}
-          t={t}
-          openDetail={setDetailRow}
-          onUpgrade={isAdmin ? handleUpgrade : undefined}
-          onDelete={isAdmin ? handleDelete : undefined}
-          onBatchUpgraded={isAdmin ? refresh : undefined}
-        />
-      ))}
+      <div ref={groupsRef}>
+        {groups.map(([gid, groupRows]) => (
+          <NodeGroupSection
+            key={gid}
+            rows={groupRows}
+            panelProtocol={panelProtocol}
+            latestNodeVersion={latestNodeVersion}
+            nodeVersionCheckFailed={nodeVersionCheckFailed}
+            isMobile={isMobile}
+            t={t}
+            openDetail={setDetailRow}
+            onUpgrade={isAdmin ? handleUpgrade : undefined}
+            onDelete={isAdmin ? handleDelete : undefined}
+            onBatchUpgraded={isAdmin ? refresh : undefined}
+          />
+        ))}
+      </div>
       <NodeDetailDrawer
         row={detailCurrent}
         open={detailRow !== null}

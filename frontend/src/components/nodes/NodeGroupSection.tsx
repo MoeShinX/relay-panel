@@ -1,4 +1,5 @@
  
+import { useRef } from 'react';
 import { Tag, Typography, Collapse } from 'antd';
 import { ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
 import type { NodeDisplayRow } from '../../api/types';
@@ -9,6 +10,7 @@ import { formatBps } from '../../utils/format';
 import { rateSummary } from './shared';
 import { upgradableNodes } from './upgrade';
 import { UpgradeAllButton } from './UpgradeAllButton';
+import { UpgradeSlot } from './UpgradeSlot';
 
 const { Text } = Typography;
 
@@ -46,23 +48,32 @@ export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeV
     ? upgradableNodes(rows, latestNodeVersion, panelProtocol, nodeVersionCheckFailed)
     : [];
 
+  // The icon is lined up over the table's 节点更新 column (UpgradeSlot) and must
+  // not land on anything marked data-upgrade-obstacle.
+  const sectionRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
+
   const header = (
-    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-      <Text strong>{head.group_name || '-'}</Text>
-      <Text type="secondary" style={{ fontSize: 12 }}>ID: {head.group_id}</Text>
-      {region ? <Tag>{region}</Tag> : null}
-      {lineType ? <Tag color="blue">{lineType}</Tag> : null}
-      <Tag color={online > 0 ? 'green' : undefined}>{online}/{total}</Tag>
+    <div ref={headerRef} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+      <Text strong data-upgrade-obstacle="">{head.group_name || '-'}</Text>
+      <Text type="secondary" style={{ fontSize: 12 }} data-upgrade-obstacle="">ID: {head.group_id}</Text>
+      {region ? <Tag data-upgrade-obstacle="">{region}</Tag> : null}
+      {lineType ? <Tag color="blue" data-upgrade-obstacle="">{lineType}</Tag> : null}
+      <Tag color={online > 0 ? 'green' : undefined} data-upgrade-obstacle="">{online}/{total}</Tag>
       <span style={{ marginLeft: 'auto', display: 'inline-flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-        <UpgradeAllButton
-          nodes={upgradable}
-          latestNodeVersion={latestNodeVersion}
-          labelKey="upgradeGroup"
-          t={t}
-          onDone={onBatchUpgraded}
-          testId={`upgrade-group-${head.group_id}`}
-        />
-        <span className="rp-mono">
+        {upgradable.length > 0 && (
+          <UpgradeSlot rowRef={headerRef} tablesRef={sectionRef}>
+            <UpgradeAllButton
+              nodes={upgradable}
+              latestNodeVersion={latestNodeVersion}
+              labelKey="upgradeGroup"
+              t={t}
+              onDone={onBatchUpgraded}
+              testId={`upgrade-group-${head.group_id}`}
+            />
+          </UpgradeSlot>
+        )}
+        <span className="rp-mono" data-upgrade-obstacle="">
           <Text type="secondary" style={{ fontSize: 12 }}>
             <ArrowUpOutlined /> {formatBps(up)} <ArrowDownOutlined /> {formatBps(down)}
           </Text>
@@ -92,10 +103,12 @@ export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeV
   );
 
   return (
-    <Collapse
-      defaultActiveKey={['1']}
-      style={{ marginBottom: 16 }}
-      items={[{ key: '1', label: header, children: body }]}
-    />
+    <div ref={sectionRef}>
+      <Collapse
+        defaultActiveKey={['1']}
+        style={{ marginBottom: 16 }}
+        items={[{ key: '1', label: header, children: body }]}
+      />
+    </div>
   );
 }

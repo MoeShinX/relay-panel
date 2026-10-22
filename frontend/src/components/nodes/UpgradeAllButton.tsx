@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Button, Modal, message } from 'antd';
+import { Button, Modal, Tooltip, message } from 'antd';
 import { CloudDownloadOutlined } from '@ant-design/icons';
 import api from '../../api/client';
 import type { ApiEnvelope } from '../../api/client';
@@ -16,7 +16,8 @@ interface Props {
    *  component never re-decides eligibility. Renders nothing when empty. */
   nodes: NodeDisplayRow[];
   latestNodeVersion: string;
-  /** The label template, with `{n}` for the node count (upgradeAll / upgradeGroup). */
+  /** The label template, with `{n}` for the node count (upgradeAll / upgradeGroup).
+   *  Shown as the tooltip and the aria-label: the button itself is icon-only. */
   labelKey: 'upgradeAll' | 'upgradeGroup';
   t: Tfn;
   /** Called once the batch has been dispatched (success or not), to refresh. */
@@ -138,19 +139,23 @@ export function UpgradeAllButton({ nodes, latestNodeVersion, labelKey, t, onDone
     });
   };
 
+  const label = t(labelKey).replace('{n}', String(nodes.length));
   return (
-    <Button
-      size="small"
-      type="primary"
-      icon={<CloudDownloadOutlined />}
-      loading={loading}
-      data-testid={testId}
-      // The group button sits inside a Collapse header: a click (or Enter /
-      // Space on the focused button) must not bubble up and fold the group.
-      onClick={(e) => { e.stopPropagation(); confirm(); }}
-      onKeyDown={(e) => e.stopPropagation()}
-    >
-      {t(labelKey).replace('{n}', String(nodes.length))}
-    </Button>
+    <Tooltip title={label}>
+      <Button
+        size="small"
+        type="primary"
+        // The very icon of the per-node upgrade button (NodeDesktopTable and
+        // the mobile list), so the three read as one family.
+        icon={<CloudDownloadOutlined />}
+        aria-label={label}
+        loading={loading}
+        data-testid={testId}
+        // The group button sits inside a Collapse header: a click (or Enter /
+        // Space on the focused button) must not bubble up and fold the group.
+        onClick={(e) => { e.stopPropagation(); confirm(); }}
+        onKeyDown={(e) => e.stopPropagation()}
+      />
+    </Tooltip>
   );
 }

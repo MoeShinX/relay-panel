@@ -62,7 +62,23 @@ afterEach(() => {
 describe('group "upgrade this group" button', () => {
   it('counts only the nodes the per-node button would accept', () => {
     renderGroup(mixed);
-    expect(screen.getByTestId('upgrade-group-1')).toHaveTextContent('升级本组 (2)');
+    expect(screen.getByTestId('upgrade-group-1')).toHaveAccessibleName('升级本组（2 台）');
+  });
+
+  it('is icon-only: the same icon as the per-node button, and no visible label', () => {
+    renderGroup(mixed);
+    const btn = screen.getByTestId('upgrade-group-1');
+    expect(btn.querySelector('[data-icon="cloud-download"]')).not.toBeNull();
+    expect(btn.textContent).toBe('');
+    // The per-node buttons in the table carry that very icon too.
+    expect(document.querySelectorAll('.ant-table [data-icon="cloud-download"]').length).toBeGreaterThan(0);
+  });
+
+  it('shows the label as a tooltip', async () => {
+    const user = userEvent.setup();
+    renderGroup(mixed);
+    await user.hover(screen.getByTestId('upgrade-group-1'));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('升级本组（2 台）');
   });
 
   it('is absent when nothing in the group can be upgraded', () => {

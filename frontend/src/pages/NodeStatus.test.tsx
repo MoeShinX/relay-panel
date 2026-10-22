@@ -510,9 +510,9 @@ describe('NodeStatus one-click upgrade', () => {
     serve(true);
     renderPage();
     await flush();
-    expect(screen.getByTestId('upgrade-all')).toHaveTextContent('全部升级 (3)');
-    expect(screen.getByTestId('upgrade-group-1')).toHaveTextContent('升级本组 (2)');
-    expect(screen.getByTestId('upgrade-group-2')).toHaveTextContent('升级本组 (1)');
+    expect(screen.getByTestId('upgrade-all')).toHaveAccessibleName('全部升级（3 台）');
+    expect(screen.getByTestId('upgrade-group-1')).toHaveAccessibleName('升级本组（2 台）');
+    expect(screen.getByTestId('upgrade-group-2')).toHaveAccessibleName('升级本组（1 台）');
     // grp-3's only node is already current: no button for it.
     expect(screen.queryByTestId('upgrade-group-3')).not.toBeInTheDocument();
   });

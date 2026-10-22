@@ -9,6 +9,7 @@ import { versionRelation, versionTagColor } from '../../utils/version';
 import { NetworkCell, cpuTooltip, memTooltip, wsDownTag } from './shared';
 import { resolveNodeUpgrade } from './upgrade';
 import { nodeDesktopColumnWidths } from './tableLayout';
+import { UPGRADE_COL_CLASS } from './upgradeAlign';
 
 interface Props {
   rows: NodeDisplayRow[];
@@ -76,6 +77,9 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
     // priority over version status.
     ...(onUpgrade ? [{
       title: t('nodeUpgrade'), key: 'upgrade', width: nodeDesktopColumnWidths.nodeUpgrade,
+      // Centred, so the icon's centre is the column's centre: the upgrade-all
+      // and upgrade-group icons above are lined up on it (see UpgradeSlot).
+      align: 'center' as const, className: UPGRADE_COL_CLASS,
       render: (_: unknown, r: NodeDisplayRow) => {
         const { state } = resolveNodeUpgrade(r, latestNodeVersion, panelProtocol, nodeVersionCheckFailed);
         switch (state) {
