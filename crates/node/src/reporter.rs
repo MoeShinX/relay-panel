@@ -2,7 +2,7 @@ use crate::config::NodeConfig;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use relay_shared::protocol::{
-    ApiResponse, ListenerError, StatusReport, TrafficEntry, TrafficReport,
+    ApiResponse, DiskUsage, ListenerError, StatusReport, TrafficEntry, TrafficReport,
 };
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -936,6 +936,8 @@ struct MetricsSnapshot {
     disk_used: Option<u64>,
     disk_usage_percent: Option<f32>,
     disk_mount: Option<String>,
+    /// Every local disk (root first); empty when none could be listed.
+    disk_list: Vec<DiskUsage>,
     upload_bps: Option<u64>,
     download_bps: Option<u64>,
     boot_upload_bytes: Option<u64>,
@@ -1083,6 +1085,26 @@ impl NodeMetrics {
             }
         };
 
+        // --- Every local disk, for the hover list and the detail drawer ---
+        // `statvfs` can stall on a failing disk, so it runs off the async
+        // threads and under a deadline; a miss only means no list this time.
+        let disk_list = match tokio::time::timeout(
+            Duration::from_secs(3),
+            tokio::task::spawn_blocking(crate::disks::collect_disks),
+        )
+        .await
+        {
+            Ok(Ok(list)) => list,
+            Ok(Err(e)) => {
+                tracing::debug!("disk list: collector failed: {e}");
+                Vec::new()
+            }
+            Err(_) => {
+                tracing::debug!("disk list: timed out");
+                Vec::new()
+            }
+        };
+
         // --- Network: real-time rate + cumulative, for the SELECTED NIC only ---
         // v0.4.6: sample_networks returns the selected interface's total_*
         // (since-boot cumulative). The cumulative field is that value directly;
@@ -1153,6 +1175,7 @@ impl NodeMetrics {
             disk_used,
             disk_usage_percent,
             disk_mount,
+            disk_list,
             upload_bps,
             download_bps,
             boot_upload_bytes,
@@ -1227,6 +1250,8 @@ pub async fn report_status(
         // when the total could not be read (it would only say "0 B / 0 B").
         mem_total: (snap.mem_total > 0).then_some(snap.mem_total),
         mem_used: (snap.mem_total > 0).then_some(snap.mem_used),
+        // After node-v1.2.9: every local disk, not just `/`.
+        disks: snap.disk_list,
     };
 
     // debug, not info: this runs every poll cycle (default 10s). Keeping it

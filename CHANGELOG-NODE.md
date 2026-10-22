@@ -11,6 +11,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+Runs against any current panel (still protocol version 4). Panel 1.2.15 and
+later show the extra disks; an older panel ignores them and shows the system
+disk as before.
+
+### Added
+
+- **Reports every local disk, not just `/`.** The node reads
+  `/proc/self/mountinfo` and lists the real disk filesystems — ext2/3/4, xfs,
+  btrfs, zfs, f2fs, jfs, reiserfs, bcachefs, ntfs/ntfs3, exfat (and ntfs-3g on
+  a block device), and vfat outside `/boot` — with their size and use, `/`
+  first. tmpfs, overlay, squashfs, network and FUSE mounts, read-only loop
+  images and anything under `/boot` are left out; a disk mounted twice (bind
+  mounts, btrfs subvolumes, ZFS datasets of one pool) is listed once, under
+  its shortest mount path; at most 16 are sent. The existing system-disk
+  figures are unchanged. A node in Docker only sees the container's mounts.
+
 ## [1.2.9] - 2026-10-22
 
 Runs against any current panel (still protocol version 4). Needed for PROXY

@@ -438,6 +438,14 @@ export interface ListenerError {
   error: string;
 }
 
+/** One disk filesystem in a node's status (nodes after node-v1.2.9). */
+export interface NodeDisk {
+  mount: string;
+  fs_type: string;
+  total: number;
+  used: number;
+}
+
 export interface NodeStatus {
   group_id: number;
   /** Per-node identity. Null/undefined for legacy single-node status rows. */
@@ -490,6 +498,9 @@ export interface NodeStatus {
   disk_used?: number | null;
   disk_usage_percent?: number | null;
   disk_mount?: string | null;
+  /** Every local disk the node lists, root first (nodes after node-v1.2.9).
+   *  Empty/missing on older nodes, which report only the primary disk above. */
+  disks?: NodeDisk[] | null;
   upload_bps?: number | null;
   download_bps?: number | null;
   boot_upload_bytes?: number | null;
@@ -726,6 +737,8 @@ export interface NodeDisplayRow {
   disk_used?: number | null;
   disk_usage_percent?: number | null;
   disk_mount?: string | null;
+  /** Every local disk (admin /nodes, nodes after node-v1.2.9). */
+  disks?: NodeDisk[] | null;
   upload_bps?: number | null;
   download_bps?: number | null;
   boot_upload_bytes?: number | null;

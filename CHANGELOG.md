@@ -8,6 +8,21 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+Needs a node newer than `node-v1.2.9` to show more than the system disk; with
+older nodes everything looks as it did. The config protocol is unchanged.
+
+### Added
+
+- **Nodes with several disks show all of them.** The Primary Disk bar is still
+  the system disk (`/`), but hovering it now lists every disk the node has —
+  mount point, filesystem, used / total and usage — on the desktop table and
+  the phone list, and the node detail drawer lists them too. A node with one
+  disk, or an older node that reports only the system disk, looks exactly as
+  before. Panel side: the node's status carries a `disks` list (at most 16
+  disks; entries that cannot be right are dropped).
+
 ## [1.2.15] - 2026-10-22
 
 Ships alongside `node-v1.2.9`. The config protocol is unchanged at version 4.

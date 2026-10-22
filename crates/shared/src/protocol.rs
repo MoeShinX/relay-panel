@@ -670,6 +670,25 @@ pub struct StatusReport {
     pub mem_total: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mem_used: Option<u64>,
+    /// After node-v1.2.9: every local disk filesystem the node can see (root
+    /// first), so the panel can list them all beside the primary disk above.
+    /// Additive optional field — does NOT bump CONFIG_PROTOCOL_VERSION. Older
+    /// nodes send none (the panel shows the primary disk alone); older panels
+    /// ignore it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disks: Vec<DiskUsage>,
+}
+
+/// One mounted disk filesystem in a [`StatusReport`]: bytes, not a percentage,
+/// so the panel works usage out the same way for every disk.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiskUsage {
+    /// Mount point, e.g. "/" or "/data".
+    pub mount: String,
+    /// Filesystem type as the kernel names it, e.g. "ext4", "xfs".
+    pub fs_type: String,
+    pub total: u64,
+    pub used: u64,
 }
 
 /// One listener bind failure reported by a node. Carries enough context for the
@@ -1869,5 +1888,27 @@ mod tests {
         let back: NodeRateMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(back.msg_type, NodeRateMessage::TYPE);
         assert_eq!((back.upload_bps, back.download_bps), (3_650_000, 128_930));
+    }
+
+    /// `disks` is additive: a report from an older node (none) still parses,
+    /// and a report with none is not sent with an empty list an older panel
+    /// would have to tolerate.
+    #[test]
+    fn status_report_disks_is_optional_on_the_wire() {
+        let base = r#"{"cpu_usage":1.0,"mem_usage":2.0,"active_connections":0,"uptime_secs":5}"#;
+        let old: StatusReport = serde_json::from_str(base).unwrap();
+        assert!(old.disks.is_empty());
+        assert!(!serde_json::to_string(&old).unwrap().contains("disks"));
+
+        let mut with = old;
+        with.disks = vec![DiskUsage {
+            mount: "/data".into(),
+            fs_type: "xfs".into(),
+            total: 100,
+            used: 40,
+        }];
+        let json = serde_json::to_string(&with).unwrap();
+        let back: StatusReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.disks, with.disks);
     }
 }
