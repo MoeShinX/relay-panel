@@ -16,7 +16,10 @@ independent `v*` / `node-v*` tracks since this release).
   hours.** A node that goes quiet stays listed, greyed out as offline, until
   you remove it with the delete button on that page or delete its device
   group. Nothing ages a row out any more, so a decommissioned node's row now
-  has to be removed by hand. Panel only; the node binary needs no upgrade.
+  has to be removed by hand. If repeated offline alerts are turned on, they
+  keep coming for such a node until it is removed (they used to stop when
+  the row was swept a day later). Panel only; the node binary needs no
+  upgrade.
 
 ---
 

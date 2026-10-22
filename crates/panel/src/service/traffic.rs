@@ -1,8 +1,8 @@
 //! Node traffic + status-key service logic.
 //!
 //! Extracted from `api/node.rs` so the business rules (traffic-report overflow
-//! pre-check + batch-result interpretation, legacy status-key cleanup) live behind the `Repository` trait and are unit-testable
-//! without the HTTP layer. The handlers keep only the node-compat wire format
+//! pre-check + batch-result interpretation, legacy status-key cleanup) live
+//! behind the `Repository` trait and are unit-testable without the HTTP layer. The handlers keep only the node-compat wire format
 //! (business `code` in the JSON body, GeoIP fire-and-forget, status JSON
 //! assembly).
 
