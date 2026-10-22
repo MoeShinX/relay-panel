@@ -86,6 +86,12 @@ export interface ForwardRule {
   /** v1.2.0: restart the rule every N minutes to shed connections (0 = off).
    *  Non-zero values are floored at MIN_AUTO_RESTART_MINUTES by the API. */
   auto_restart_minutes?: number;
+  /** v1.2.15: PROXY protocol header sent to the target (TCP only). */
+  proxy_protocol_send?: 'off' | 'v1' | 'v2';
+  /** v1.2.15: expect a PROXY protocol header from the previous relay hop. */
+  proxy_protocol_accept?: boolean;
+  /** v1.2.15: IPs/CIDRs allowed to send that header, comma separated; empty = any. */
+  proxy_protocol_trusted?: string;
   config: string;
   traffic_used: number;
   status: string;

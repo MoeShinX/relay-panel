@@ -214,6 +214,51 @@ or later; TCP has always worked.
 
 ---
 
+## PROXY protocol (passing the real client IP to the target)
+
+Through a relay, the target sees every connection coming from the node. With PROXY protocol on, the node writes one short header to the target when it connects, naming the real client's IP and port, so the target can log, rate-limit and ban by the real address. Needs node-v1.2.9 or later; TCP only.
+
+Two independent options on a rule's Forward tab:
+
+- **PROXY protocol to target** (off / v1 / v2): send the header once connected. The target must be set up to read it or the connection fails, which is why it is off by default.
+- **Accept PROXY header from previous hop**: turn on when another relay node sits in front of this rule and sends the header. The node reads the real client IP from it and does not forward the header; a connection without one is closed. Put the previous hop's IP in **Trusted sources**, or anyone who reaches the port directly can claim any client IP.
+
+**Node behind node**: the entry rule sends, the middle node's rule accepts and sends, and the final target reads it — the target sees the original client's IP.
+
+Setting up the target (replace `NODE_IP` with the IP of the node that forwards to it, and trust only those sources):
+
+```nginx
+# nginx: add proxy_protocol to listen, then take the real IP from it
+server {
+    listen 443 ssl proxy_protocol;
+    set_real_ip_from NODE_IP;
+    real_ip_header proxy_protocol;
+}
+```
+
+```caddyfile
+# Caddy: a listener wrapper in the global options; proxy_protocol goes before tls
+{
+    servers {
+        listener_wrappers {
+            proxy_protocol {
+                allow NODE_IP/32
+            }
+            tls
+        }
+    }
+}
+```
+
+```json
+// Xray: turn on acceptProxyProtocol in that inbound's streamSettings
+"streamSettings": {
+  "sockopt": { "acceptProxyProtocol": true }
+}
+```
+
+All three accept both v1 and v2; v2 is binary and a little smaller. The panel checks the node versions in the rule's inbound group and refuses to turn it on while any node there is older than 1.2.9 (an older node ignores the setting, which breaks every connection).
+
 ## Verify it's working
 
 After install:

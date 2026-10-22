@@ -429,6 +429,7 @@ impl RuleRepository for PgRepository {
         download_limit_mbps: i32,
         tunnel_profile_id: Option<i64>,
         check_owner_authorization: bool,
+        proxy_protocol: &crate::db::repo::RuleProxyProtocol,
     ) -> Result<Option<i64>, DbError> {
         // v1.2: atomic create. Same advisory-xact-lock + user-row FOR UPDATE +
         // conflict pre-check + quota-guarded INSERT shape as
@@ -589,6 +590,24 @@ impl RuleRepository for PgRepository {
             );
         }
 
+        // v1.2.15: PROXY protocol, written only when on (the column defaults
+        // are off), in the same transaction as the rule.
+        if *proxy_protocol != crate::db::repo::RuleProxyProtocol::default() {
+            try_!(
+                tx,
+                sqlx::query(
+                    "UPDATE forward_rules SET proxy_protocol_send = $1, proxy_protocol_accept = $2, \
+                     proxy_protocol_trusted = $3 WHERE id = $4",
+                )
+                .bind(&proxy_protocol.send)
+                .bind(proxy_protocol.accept)
+                .bind(&proxy_protocol.trusted)
+                .bind(rule_id)
+                .execute(&mut *tx)
+                .await
+            );
+        }
+
         if upload_limit_mbps != 0 || download_limit_mbps != 0 {
             try_!(
                 tx,
@@ -733,6 +752,15 @@ impl RuleRepository for PgRepository {
         }
         if u.tunnel_profile_id.is_some() {
             sets.push("tunnel_profile_id = ");
+        }
+        if u.proxy_protocol_send.is_some() {
+            sets.push("proxy_protocol_send = ");
+        }
+        if u.proxy_protocol_accept.is_some() {
+            sets.push("proxy_protocol_accept = ");
+        }
+        if u.proxy_protocol_trusted.is_some() {
+            sets.push("proxy_protocol_trusted = ");
         }
         if sets.is_empty() && u.targets.is_none() {
             return Ok(0);
@@ -902,6 +930,15 @@ impl RuleRepository for PgRepository {
                 q = q.bind(v);
             }
             if let Some(v) = u.tunnel_profile_id {
+                q = q.bind(v);
+            }
+            if let Some(v) = u.proxy_protocol_send {
+                q = q.bind(v);
+            }
+            if let Some(v) = u.proxy_protocol_accept {
+                q = q.bind(v);
+            }
+            if let Some(v) = u.proxy_protocol_trusted {
                 q = q.bind(v);
             }
             q.bind(id).execute(&mut *tx).await?;

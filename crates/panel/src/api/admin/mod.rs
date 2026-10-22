@@ -1336,6 +1336,9 @@ mod tests {
             upload_limit_mbps: None,
             download_limit_mbps: None,
             tunnel_profile_id: None,
+            proxy_protocol_send: Default::default(),
+            proxy_protocol_accept: false,
+            proxy_protocol_trusted: String::new(),
         }
     }
 
@@ -1566,6 +1569,190 @@ mod tests {
             owner.0, 2,
             "forged owner_uid must be ignored; alice owns it"
         );
+    }
+
+    // ── v1.2.15: PROXY protocol ──
+
+    async fn pp_row(pool: &sqlx::SqlitePool, name: &str) -> (String, bool, String) {
+        sqlx::query_as(
+            "SELECT proxy_protocol_send, proxy_protocol_accept, proxy_protocol_trusted \
+             FROM forward_rules WHERE name = ?",
+        )
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn node_at(state: &AppState, group: i64, node: &str, version: &str) {
+        state
+            .db
+            .set(
+                &format!("node_status:{group}:{node}"),
+                &serde_json::json!({ "node_version": version, "public_ipv4": "203.0.113.9" })
+                    .to_string(),
+            )
+            .await
+            .unwrap();
+    }
+
+    /// A TCP rule's PROXY protocol settings are stored — the trusted list
+    /// normalized — and reach the node's config for the TCP listener.
+    #[tokio::test]
+    async fn proxy_protocol_is_stored_and_reaches_the_node_config() {
+        use relay_shared::protocol::ProxyProtocolVersion;
+        let (state, pool) = test_state().await;
+        add_group(&pool, 10, 1, "in").await;
+        node_at(&state, 10, "n1", "1.2.9").await;
+        let mut req = rule_req("pp", 20000, 10, None);
+        req.proxy_protocol_send = ProxyProtocolVersion::V2;
+        req.proxy_protocol_accept = true;
+        req.proxy_protocol_trusted = " 203.0.113.7，10.0.0.0/8\n2001:db8::/32 ".into();
+        let Json(resp) = create_rule(auth(1, true), State(state.clone()), Json(req)).await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+        assert_eq!(
+            pp_row(&pool, "pp").await,
+            (
+                "v2".into(),
+                true,
+                "203.0.113.7,10.0.0.0/8,2001:db8::/32".into()
+            )
+        );
+
+        let cfg = crate::service::node_config::build_node_config(state.db.as_ref(), 10)
+            .await
+            .unwrap();
+        let l = &cfg.listeners[0];
+        assert_eq!(l.proxy_protocol.send, ProxyProtocolVersion::V2);
+        assert!(l.proxy_protocol.accept);
+        assert_eq!(
+            l.proxy_protocol.trusted,
+            vec!["203.0.113.7", "10.0.0.0/8", "2001:db8::/32"]
+        );
+    }
+
+    /// Refused where it cannot work: a UDP rule, a malformed trusted source,
+    /// and a group with a node older than node-v1.2.9 (it would ignore the
+    /// setting and break every connection). Nothing is created.
+    #[tokio::test]
+    async fn proxy_protocol_is_refused_where_it_cannot_work() {
+        use relay_shared::protocol::ProxyProtocolVersion;
+        let (state, pool) = test_state().await;
+        add_group(&pool, 10, 1, "in").await;
+
+        let mut udp = rule_req("udp", 20001, 10, None);
+        udp.protocol = Protocol::Udp;
+        udp.proxy_protocol_send = ProxyProtocolVersion::V1;
+        let Json(resp) = create_rule(auth(1, true), State(state.clone()), Json(udp)).await;
+        assert_eq!(resp.code, 400, "{}", resp.message);
+        assert!(resp.message.contains("TCP"), "{}", resp.message);
+
+        let mut bad = rule_req("bad", 20002, 10, None);
+        bad.proxy_protocol_accept = true;
+        bad.proxy_protocol_trusted = "10.0.0.1, 10.0.0.0/33".into();
+        let Json(resp) = create_rule(auth(1, true), State(state.clone()), Json(bad)).await;
+        assert_eq!(resp.code, 400);
+        assert!(resp.message.contains("10.0.0.0/33"), "{}", resp.message);
+
+        node_at(&state, 10, "old", "1.2.8").await;
+        let gated = || {
+            let mut r = rule_req("gated", 20003, 10, None);
+            r.proxy_protocol_send = ProxyProtocolVersion::V1;
+            r
+        };
+        let Json(resp) = create_rule(auth(1, true), State(state.clone()), Json(gated())).await;
+        assert_eq!(resp.code, 400);
+        // node_at writes no last_seen, so this node reads as offline: it is
+        // marked, and the message says retired nodes can be deleted.
+        assert!(
+            resp.message.contains("203.0.113.9 (1.2.8, 离线)"),
+            "{}",
+            resp.message
+        );
+        assert!(resp.message.contains("节点状态页删除"), "{}", resp.message);
+
+        // A node that is reporting right now is named without the marker or
+        // the hint.
+        state
+            .db
+            .set(
+                "node_status:10:old",
+                &serde_json::json!({
+                    "node_version": "1.2.8",
+                    "public_ipv4": "203.0.113.9",
+                    "last_seen": chrono::Utc::now().to_rfc3339(),
+                })
+                .to_string(),
+            )
+            .await
+            .unwrap();
+        let Json(resp) = create_rule(auth(1, true), State(state.clone()), Json(gated())).await;
+        assert_eq!(resp.code, 400);
+        assert!(
+            resp.message.contains("203.0.113.9 (1.2.8)"),
+            "{}",
+            resp.message
+        );
+        assert!(!resp.message.contains("节点状态页删除"), "{}", resp.message);
+
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM forward_rules")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 0, "a refused rule must not be created");
+
+        // Once the node is upgraded the same rule goes through.
+        node_at(&state, 10, "old", "1.2.9").await;
+        let Json(resp) = create_rule(auth(1, true), State(state.clone()), Json(gated())).await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+    }
+
+    /// An edit is checked against the rule it leaves behind: switching a rule
+    /// with PROXY protocol on to UDP is refused; turning it off first works;
+    /// turning it on with an old node in the group is refused.
+    #[tokio::test]
+    async fn proxy_protocol_edits_are_checked_against_the_resulting_rule() {
+        use relay_shared::protocol::ProxyProtocolVersion;
+        let (state, pool) = test_state().await;
+        add_group(&pool, 10, 1, "in").await;
+        let mut req = rule_req("e", 20000, 10, None);
+        req.proxy_protocol_send = ProxyProtocolVersion::V1;
+        let Json(resp) = create_rule(auth(1, true), State(state.clone()), Json(req)).await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+        let (id,): (i64,) = sqlx::query_as("SELECT id FROM forward_rules WHERE name = 'e'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let edit = |body: serde_json::Value| {
+            let state = state.clone();
+            async move {
+                let Json(resp) = update_rule(
+                    auth(1, true),
+                    State(state),
+                    Path(id),
+                    Json(serde_json::from_value(body).unwrap()),
+                )
+                .await;
+                resp
+            }
+        };
+
+        let resp = edit(serde_json::json!({ "protocol": "udp" })).await;
+        assert_eq!(resp.code, 400, "{}", resp.message);
+        assert_eq!(pp_row(&pool, "e").await.0, "v1");
+
+        let resp = edit(serde_json::json!({ "proxy_protocol_send": "off" })).await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+        assert_eq!(pp_row(&pool, "e").await.0, "off");
+
+        node_at(&state, 10, "old", "1.2.8").await;
+        let resp = edit(serde_json::json!({ "proxy_protocol_accept": true })).await;
+        assert_eq!(resp.code, 400, "{}", resp.message);
+        assert!(!pp_row(&pool, "e").await.1);
+
+        // An unrelated edit does not trip the node check.
+        let resp = edit(serde_json::json!({ "name": "renamed" })).await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
     }
 
     /// An admin MAY create a rule on behalf of another user via owner_uid.
@@ -2309,6 +2496,9 @@ mod tests {
             upload_limit_mbps: None,
             download_limit_mbps: None,
             tunnel_profile_id: profile_id,
+            proxy_protocol_send: Default::default(),
+            proxy_protocol_accept: false,
+            proxy_protocol_trusted: String::new(),
         }
     }
 

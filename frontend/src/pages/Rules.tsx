@@ -341,6 +341,9 @@ export default function Rules() {
       download_limit_mbps: r.download_limit_mbps ?? 0,
       max_connections: r.max_connections ?? 0,
       auto_restart_minutes: r.auto_restart_minutes ?? 0,
+      proxy_protocol_send: r.proxy_protocol_send ?? 'off',
+      proxy_protocol_accept: r.proxy_protocol_accept ?? false,
+      proxy_protocol_trusted: r.proxy_protocol_trusted ?? '',
     });
     setEditOpen(true);
   };
@@ -362,6 +365,11 @@ export default function Rules() {
       // v1.2.0: max_connections / auto_restart_minutes are NOT carried over —
       // they're edit-only (the create path can't store them), so the copy starts
       // uncapped and the user sets them via Edit if wanted.
+      // v1.2.15: PROXY protocol is part of how the rule talks to its target,
+      // and the create path stores it, so a copy keeps it.
+      proxy_protocol_send: r.proxy_protocol_send ?? 'off',
+      proxy_protocol_accept: r.proxy_protocol_accept ?? false,
+      proxy_protocol_trusted: r.proxy_protocol_trusted ?? '',
     });
     setCreateOpen(true);
   };
@@ -463,6 +471,9 @@ const IMPORT_DEFAULTS = {
     download_limit_mbps?: number;
     max_connections?: number;
     auto_restart_minutes?: number;
+    proxy_protocol_send?: string;
+    proxy_protocol_accept?: boolean;
+    proxy_protocol_trusted?: string;
   }) => {
     if (!editing) return;
     const payload: Record<string, unknown> = {};
@@ -499,6 +510,16 @@ const IMPORT_DEFAULTS = {
     if (newMaxConn !== (editing.max_connections ?? 0) || newAutoRestart !== (editing.auto_restart_minutes ?? 0)) {
       payload.max_connections = newMaxConn;
       payload.auto_restart_minutes = newAutoRestart;
+    }
+    // v1.2.15: only what changed; the API keeps an omitted field as it is.
+    if (values.proxy_protocol_send !== undefined && values.proxy_protocol_send !== (editing.proxy_protocol_send ?? 'off')) {
+      payload.proxy_protocol_send = values.proxy_protocol_send;
+    }
+    if (values.proxy_protocol_accept !== undefined && values.proxy_protocol_accept !== (editing.proxy_protocol_accept ?? false)) {
+      payload.proxy_protocol_accept = values.proxy_protocol_accept;
+    }
+    if (values.proxy_protocol_trusted !== undefined && values.proxy_protocol_trusted.trim() !== (editing.proxy_protocol_trusted ?? '')) {
+      payload.proxy_protocol_trusted = values.proxy_protocol_trusted.trim();
     }
     if (Object.keys(payload).length === 0) { setEditOpen(false); return; }
     try {
@@ -725,6 +746,16 @@ const IMPORT_DEFAULTS = {
       render: (p: string, r: ForwardRule) => (
         <Space size={4}>
           {protoTags(p)}
+          {r.proxy_protocol_send && r.proxy_protocol_send !== 'off' && (
+            <Tooltip title={t('ppSendHint')}>
+              <Tag color="geekblue">{t('ppTagSend').replace('{v}', r.proxy_protocol_send)}</Tag>
+            </Tooltip>
+          )}
+          {r.proxy_protocol_accept && (
+            <Tooltip title={t('ppAcceptHint')}>
+              <Tag color="geekblue">{t('ppTagAccept')}</Tag>
+            </Tooltip>
+          )}
           {r.paused && <Tag color="red">{t('paused')}</Tag>}
           {!r.paused && ruleOverQuota(r) && (
             <Tooltip title={t('quotaExhaustedHint')}>
@@ -1205,6 +1236,7 @@ const IMPORT_DEFAULTS = {
                     <Form.Item name="download_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('downloadLimit')} addonAfter="Mbps" style={{ width: '100%' }} placeholder="0" /></Form.Item>
                   </Space>
                 </Form.Item>
+                <ProxyProtocolFields proto={createProto} t={t} />
                 {/* v1.2.0: the connection cap / auto-restart controls are
                     deliberately EDIT-ONLY. The atomic create transaction
                     (create_rule_with_guard) doesn't carry them, so offering them
@@ -1261,6 +1293,7 @@ const IMPORT_DEFAULTS = {
                     <Form.Item name="download_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('downloadLimit')} addonAfter="Mbps" style={{ width: '100%' }} placeholder="0" /></Form.Item>
                   </Space>
                 </Form.Item>
+                <ProxyProtocolFields proto={editProto} t={t} />
                 {renderConnectionControls(editProto)}
               </>),
             },
@@ -1439,6 +1472,49 @@ function BulkTargetsButton({ t }: { t: (k: string) => string }) {
           placeholder={'1.2.3.4:443\nexample.com:8443\n[2001:db8::1]:443'} aria-label={t('bulkAddTargets')} />
         <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>{t('bulkAddTargetsHint')}</Text>
       </Modal>
+    </>
+  );
+}
+
+/** v1.2.15: a rule's PROXY protocol settings, in the create and edit forms.
+ *  TCP only: on a UDP rule the controls are disabled and say why. The trusted
+ *  sources only matter when accepting, so that box appears with the switch. */
+function ProxyProtocolFields({ proto, t }: { proto?: string; t: (k: string) => string }) {
+  const form = Form.useFormInstance();
+  const accept = Form.useWatch('proxy_protocol_accept', form);
+  const udpOnly = proto === 'udp';
+  return (
+    <>
+      <Form.Item
+        name="proxy_protocol_send"
+        label={t('ppSend')}
+        extra={udpOnly ? t('ppUdpUnsupported') : t('ppSendHint')}
+        initialValue="off"
+      >
+        <Select
+          disabled={udpOnly}
+          style={{ maxWidth: 252 }}
+          options={[
+            { value: 'off', label: t('ppOff') },
+            { value: 'v1', label: t('ppV1') },
+            { value: 'v2', label: t('ppV2') },
+          ]}
+        />
+      </Form.Item>
+      <Form.Item
+        name="proxy_protocol_accept"
+        label={t('ppAccept')}
+        extra={t('ppAcceptHint')}
+        valuePropName="checked"
+        initialValue={false}
+      >
+        <Switch disabled={udpOnly} />
+      </Form.Item>
+      {accept && !udpOnly && (
+        <Form.Item name="proxy_protocol_trusted" label={t('ppTrusted')} extra={t('ppTrustedHint')} initialValue="">
+          <Input placeholder="203.0.113.7, 10.0.0.0/8" />
+        </Form.Item>
+      )}
     </>
   );
 }

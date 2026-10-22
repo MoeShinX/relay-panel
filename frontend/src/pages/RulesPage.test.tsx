@@ -3,9 +3,9 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 
-const { mockGet, mockPost } = vi.hoisted(() => ({ mockGet: vi.fn(), mockPost: vi.fn() }));
+const { mockGet, mockPost, mockPut } = vi.hoisted(() => ({ mockGet: vi.fn(), mockPost: vi.fn(), mockPut: vi.fn() }));
 vi.mock('../api/client', () => ({
-  default: { get: mockGet, post: mockPost, put: vi.fn(), delete: vi.fn() },
+  default: { get: mockGet, post: mockPost, put: mockPut, delete: vi.fn() },
 }));
 const { mockUseAuth } = vi.hoisted(() => ({ mockUseAuth: vi.fn() }));
 vi.mock('../auth/useAuth', () => ({ useAuth: mockUseAuth }));
@@ -367,5 +367,52 @@ describe('target address entry', () => {
     await waitFor(() => expect(hostInputs()).toHaveLength(3));
     expect(hostInputs().map((i) => i.value)).toEqual(['1.2.3.4', 'example.com', '2001:db8::1']);
     expect(portInputs().map((i) => i.value)).toEqual(['443', '8443', '53']);
+  });
+});
+
+// ── v1.2.15: PROXY protocol on a rule ──
+describe('PROXY protocol', () => {
+  const openEdit = async (name: string) => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: `edit ${name}` }));
+    await user.click(await screen.findByRole('tab', { name: 'tabForward' }));
+    return user;
+  };
+
+  it('tags the rules that send or accept it', async () => {
+    routes({
+      rules: ok([rule({ proxy_protocol_send: 'v2', proxy_protocol_accept: true }), rule({ id: 2, name: 'plain', listen_port: 10002 })]),
+      groups: ok([group()]),
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
+    expect(screen.getAllByText('ppTagSend')).toHaveLength(1);
+    expect(screen.getAllByText('ppTagAccept')).toHaveLength(1);
+  });
+
+  it('sends only what changed when it is turned on in an edit', async () => {
+    mockPut.mockReset();
+    mockPut.mockResolvedValue(ok(null));
+    const user = await openEdit('hk-web');
+    await user.click(screen.getByLabelText('ppSend'));
+    await user.click(await screen.findByTitle('ppV1'));
+    await user.click(screen.getByRole('button', { name: /save/ }));
+    await waitFor(() => expect(mockPut).toHaveBeenCalled());
+    expect(mockPut).toHaveBeenCalledWith('/rules/1', { proxy_protocol_send: 'v1' });
+  });
+
+  it('asks for trusted sources only once accepting is on', async () => {
+    const user = await openEdit('hk-web');
+    expect(screen.queryByPlaceholderText('203.0.113.7, 10.0.0.0/8')).toBeNull();
+    await user.click(screen.getByRole('switch', { name: 'ppAccept' }));
+    expect(await screen.findByPlaceholderText('203.0.113.7, 10.0.0.0/8')).toBeInTheDocument();
+  });
+
+  it('is disabled on a UDP rule, and says why', async () => {
+    routes({ rules: ok([rule({ protocol: 'udp' })]), groups: ok([group()]) });
+    await openEdit('hk-web');
+    expect(screen.getByRole('switch', { name: 'ppAccept' })).toBeDisabled();
+    expect(screen.getByText('ppUdpUnsupported')).toBeInTheDocument();
   });
 });

@@ -860,6 +860,7 @@ async fn pg_rule_create_full_cross_group_no_crosstalk() {
             0,
             None,
             false,
+            &crate::db::repo::RuleProxyProtocol::default(),
         )
         .await
         .unwrap()
@@ -904,6 +905,7 @@ async fn pg_rule_create_full_cross_group_no_crosstalk() {
             100,
             None,
             false,
+            &crate::db::repo::RuleProxyProtocol::default(),
         )
         .await
         .unwrap()
@@ -982,6 +984,7 @@ async fn pg_rule_create_full_rollback_on_target_failure() {
             0,
             None,
             false,
+            &crate::db::repo::RuleProxyProtocol::default(),
         )
         .await;
     assert!(err.is_err(), "the bad target must fail the whole call");
@@ -1036,6 +1039,7 @@ async fn pg_rule_create_full_quota_exhausted_returns_none() {
             0,
             None,
             false,
+            &crate::db::repo::RuleProxyProtocol::default(),
         )
         .await
         .unwrap()
@@ -1068,6 +1072,7 @@ async fn pg_rule_create_full_quota_exhausted_returns_none() {
             0,
             None,
             false,
+            &crate::db::repo::RuleProxyProtocol::default(),
         )
         .await
         .unwrap(),
@@ -5881,6 +5886,7 @@ async fn pg_create_for_user_2(
         0,
         None,
         check_owner_authorization,
+        &crate::db::repo::RuleProxyProtocol::default(),
     )
     .await
 }

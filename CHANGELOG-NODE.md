@@ -11,6 +11,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **PROXY protocol (v1 and v2), per rule, TCP only** (panel 1.2.15+). With
+  "send" on, the node writes the header to the target before any client
+  byte: the real client and the address it dialled. With "accept" on, the
+  node reads a header (v1 or v2, assembled across reads, at most 5 s) from
+  the start of each inbound connection, from a trusted source when sources
+  are set, takes the client from it, and forwards only what follows; a
+  connection without a valid header is closed and never reaches the target.
+  Client bytes that arrived with the header are forwarded first and billed
+  as usual; the header itself is not billed. Mixed address families go out
+  as IPv6 with the IPv4 side mapped. Changing the setting restarts the
+  rule's listener without dropping live connections.
+
+---
+
 ## [1.2.8] - 2026-10-20
 
 Runs against any current panel (still protocol version 4). Worth taking on

@@ -7,7 +7,8 @@ use super::udp;
 use super::ws;
 use crate::reporter::{ConnectionTracker, TrafficCounter};
 use relay_shared::protocol::{
-    ListenerConfig, ListenerError, LoadBalanceStrategy, NodeConfigResponse, NodeTransport, Protocol,
+    ListenerConfig, ListenerError, LoadBalanceStrategy, NodeConfigResponse, NodeTransport,
+    Protocol, ProxyProtocolConfig,
 };
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -73,6 +74,10 @@ struct ListenerFingerprint {
     /// existing connections keep running and the new cap governs admissions
     /// from that point on. A lowered cap takes effect by attrition.
     max_connections: Option<u32>,
+    /// node-v1.2.9: PROXY protocol send/accept/trusted. The accept loop hands
+    /// these to every connection it spawns, so a change restarts the listener
+    /// (live connections are not dropped, as with the cap above).
+    proxy_protocol: ProxyProtocolConfig,
 }
 
 impl ListenerFingerprint {
@@ -86,6 +91,7 @@ impl ListenerFingerprint {
             upload_limit_bps: l.upload_limit_bps,
             download_limit_bps: l.download_limit_bps,
             max_connections: l.max_connections,
+            proxy_protocol: l.proxy_protocol.clone(),
         }
     }
 }
@@ -541,19 +547,21 @@ impl ForwarderManager {
                         .or_default()
                         .gate(listener.max_connections);
                     let gate6 = gate4.clone();
+                    let pp = Arc::new(listener.proxy_protocol.clone());
                     tokio::spawn(async move {
                         type SrvResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
-                        let (tgt4, sel4, rl4, ctr4, cn4) = (
+                        let (tgt4, sel4, rl4, ctr4, cn4, pp4) = (
                             tgt.clone(),
                             sel.clone(),
                             rl.clone(),
                             ctr.clone(),
                             cn.clone(),
+                            pp.clone(),
                         );
                         let v4_fut = async move {
                             if let Some(l) = v4_listener {
                                 tcp::serve_tcp_listener(
-                                    l, tgt4, sel4, rl4, ctr4, cn4, rid, ipv4_src, gate4,
+                                    l, tgt4, sel4, rl4, ctr4, cn4, rid, ipv4_src, gate4, pp4,
                                 )
                                 .await
                             } else {
@@ -563,7 +571,7 @@ impl ForwarderManager {
                         let v6_fut = async move {
                             if let Some(l) = v6_listener {
                                 tcp::serve_tcp_listener(
-                                    l, tgt, sel, rl, ctr, cn, rid, ipv4_src, gate6,
+                                    l, tgt, sel, rl, ctr, cn, rid, ipv4_src, gate6, pp,
                                 )
                                 .await
                             } else {
@@ -903,6 +911,7 @@ mod tests {
                 upload_limit_bps: None,
                 download_limit_bps: None,
                 max_connections: None,
+                proxy_protocol: Default::default(),
             }],
         }
     }
@@ -926,6 +935,7 @@ mod tests {
                 upload_limit_bps: None,
                 download_limit_bps: None,
                 max_connections: None,
+                proxy_protocol: Default::default(),
             }],
         }
     }
@@ -1247,6 +1257,7 @@ mod tests {
                     upload_limit_bps: None,
                     download_limit_bps: None,
                     max_connections: None,
+                    proxy_protocol: Default::default(),
                 },
                 ListenerConfig {
                     rule_id: 2,
@@ -1259,6 +1270,7 @@ mod tests {
                     upload_limit_bps: None,
                     download_limit_bps: None,
                     max_connections: None,
+                    proxy_protocol: Default::default(),
                 },
             ],
         };
@@ -1327,6 +1339,7 @@ mod tests {
                     upload_limit_bps: None,
                     download_limit_bps: None,
                     max_connections: None,
+                    proxy_protocol: Default::default(),
                 },
                 ListenerConfig {
                     rule_id: 2,
@@ -1339,6 +1352,7 @@ mod tests {
                     upload_limit_bps: None,
                     download_limit_bps: None,
                     max_connections: None,
+                    proxy_protocol: Default::default(),
                 },
             ],
         };
@@ -1460,6 +1474,7 @@ mod tests {
                 upload_limit_bps: None,
                 download_limit_bps: None,
                 max_connections: None,
+                proxy_protocol: Default::default(),
             }],
         };
         mgr.apply_config(&mk(LoadBalanceStrategy::First)).await;
@@ -1493,6 +1508,7 @@ mod tests {
                 upload_limit_bps: None,
                 download_limit_bps: None,
                 max_connections: None,
+                proxy_protocol: Default::default(),
             }],
         };
         mgr.apply_config(&mk(NodeTransport::Raw)).await;
@@ -1556,6 +1572,7 @@ mod tests {
                     upload_limit_bps: None,
                     download_limit_bps: None,
                     max_connections: None,
+                    proxy_protocol: Default::default(),
                 },
                 ListenerConfig {
                     rule_id: 2,
@@ -1568,6 +1585,7 @@ mod tests {
                     upload_limit_bps: None,
                     download_limit_bps: None,
                     max_connections: None,
+                    proxy_protocol: Default::default(),
                 },
             ],
         };
@@ -1589,6 +1607,7 @@ mod tests {
                     upload_limit_bps: None,
                     download_limit_bps: None,
                     max_connections: None,
+                    proxy_protocol: Default::default(),
                 },
                 ListenerConfig {
                     rule_id: 2,
@@ -1601,6 +1620,7 @@ mod tests {
                     upload_limit_bps: None,
                     download_limit_bps: None,
                     max_connections: None,
+                    proxy_protocol: Default::default(),
                 },
             ],
         };
@@ -1656,6 +1676,7 @@ mod tests {
                     upload_limit_bps: None,
                     download_limit_bps: None,
                     max_connections: None,
+                    proxy_protocol: ProxyProtocolConfig::default(),
                 },
             },
         );
@@ -1716,6 +1737,7 @@ mod tests {
                     upload_limit_bps: None,
                     download_limit_bps: None,
                     max_connections: None,
+                    proxy_protocol: ProxyProtocolConfig::default(),
                 },
             },
         );
@@ -1732,6 +1754,7 @@ mod tests {
                     upload_limit_bps: None,
                     download_limit_bps: None,
                     max_connections: None,
+                    proxy_protocol: ProxyProtocolConfig::default(),
                 },
             },
         );
@@ -1771,6 +1794,7 @@ mod tests {
                     upload_limit_bps: None,
                     download_limit_bps: None,
                     max_connections: None,
+                    proxy_protocol: ProxyProtocolConfig::default(),
                 },
             },
         );
@@ -1867,6 +1891,7 @@ mod tests {
                     upload_limit_bps: None,
                     download_limit_bps: None,
                     max_connections: None,
+                    proxy_protocol: Default::default(),
                 },
                 ListenerConfig {
                     rule_id: 1,
@@ -1879,6 +1904,7 @@ mod tests {
                     upload_limit_bps: None,
                     download_limit_bps: None,
                     max_connections: None,
+                    proxy_protocol: Default::default(),
                 },
             ],
         };
@@ -1899,6 +1925,7 @@ mod tests {
                 upload_limit_bps: None,
                 download_limit_bps: None,
                 max_connections: None,
+                proxy_protocol: Default::default(),
             }],
         };
         mgr.apply_config(&tcp_cfg).await;

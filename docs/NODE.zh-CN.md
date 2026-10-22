@@ -166,6 +166,51 @@ systemctl status relay-node   # 应显示 active (running)
 
 ---
 
+## PROXY protocol（把真实用户 IP 传给目标）
+
+经过中转，目标服务器看到的来访 IP 都是节点的 IP。规则开启 PROXY protocol 后，节点连上目标会先发一行头，写明真实用户的 IP 和端口，目标读到后就能按真实 IP 记日志、限速、封禁。需要 node-v1.2.9 或更新；只对 TCP 生效。
+
+规则的「转发」页里有两个独立的选项：
+
+- **PROXY protocol 发送**（关闭 / v1 / v2）：连上目标后先发头。目标必须开启接收，否则连接会出错，所以默认关闭。
+- **接收上一跳的 PROXY 头**：这条规则前面还有一个中转节点、并且那条规则开了「发送」时打开。节点从头里读出真实用户 IP、去掉这个头再往下转；不带头的连接直接断开。建议在「信任来源」里填上一跳节点的 IP，否则任何人都能直连这个端口冒充别的来源 IP。
+
+**节点套节点**：入口规则开「发送」，中间节点的规则开「接收」+「发送」，最后的目标开启接收，最终目标看到的就是最初那个用户的 IP。
+
+目标端怎么开启接收（`节点IP` 换成转发到它的节点 IP，只信任这些来源）：
+
+```nginx
+# nginx：在 listen 上加 proxy_protocol，再用它的地址作为真实 IP
+server {
+    listen 443 ssl proxy_protocol;
+    set_real_ip_from 节点IP;
+    real_ip_header proxy_protocol;
+}
+```
+
+```caddyfile
+# Caddy：全局选项里加 listener_wrappers，proxy_protocol 要放在 tls 前面
+{
+    servers {
+        listener_wrappers {
+            proxy_protocol {
+                allow 节点IP/32
+            }
+            tls
+        }
+    }
+}
+```
+
+```json
+// Xray：在对应 inbound 的 streamSettings 里打开 acceptProxyProtocol
+"streamSettings": {
+  "sockopt": { "acceptProxyProtocol": true }
+}
+```
+
+v1 和 v2 上面三个程序都支持，选哪个都可以；v2 是二进制格式，稍微省一点。面板会检查入口分组里的节点版本，有低于 1.2.9 的节点时不让开启（旧节点不认识这个设置，开了反而会让连接全部出错）。
+
 ## 验证是否正常
 
 安装后：
