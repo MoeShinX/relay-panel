@@ -197,8 +197,8 @@ html, body, #root {
   align-items: center;
   gap: 8px 12px;
   margin-bottom: 16px;
-}
-
+}
+
 /* v1.2.14: a page header that stays under the header bar while the page
    scrolls (Node Status: the title and every online node's total rate). It
    takes the page background so the content scrolls out of sight beneath it,
