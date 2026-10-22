@@ -11,7 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
-## [Unreleased]
+## [1.2.9] - 2026-10-22
+
+Runs against any current panel (still protocol version 4). Needed for PROXY
+protocol, which panel 1.2.15+ refuses to turn on for a group until every node
+in it runs this release; nodes that do not use it lose nothing by waiting.
 
 ### Added
 
@@ -26,8 +30,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   as usual; the header itself is not billed. Mixed address families go out
   as IPv6 with the IPv4 side mapped. Changing the setting restarts the
   rule's listener without dropping live connections.
-
----
 
 ## [1.2.8] - 2026-10-20
 

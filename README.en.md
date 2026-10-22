@@ -28,7 +28,7 @@
 
 ## ✨ Features
 
-- 🔀 **Forwarding rules** — TCP/UDP multi-target forwarding, failover / round-robin balancing, circuit breaker with auto-recovery, domain targets that follow DDNS
+- 🔀 **Forwarding rules** — TCP/UDP multi-target forwarding, failover / round-robin balancing, circuit breaker with auto-recovery, domain targets that follow DDNS; PROXY protocol passes the real client IP to the target, through chained nodes too
 - 🚦 **Connection control** — per-rule concurrent-connection cap; restart one rule, a batch, or on a schedule — dropping old connections and rebuilding listeners
 - 🛒 **Plans & billing** — self-service plan purchase and redeem-code top-ups; charged as `(upload + download) × line rate`; one plan per user, renewals stack and switching replaces
 - 📊 **Traffic visibility** — per-rule and per-user metering, with 1 / 7 / 30-day charts stacked by line so you can see which one is consuming the quota
