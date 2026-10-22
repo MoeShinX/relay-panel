@@ -144,9 +144,9 @@ export function UpgradeAllButton({ nodes, latestNodeVersion, labelKey, t, onDone
     <Tooltip title={label}>
       <Button
         size="small"
-        type="primary"
-        // The very icon of the per-node upgrade button (NodeDesktopTable and
-        // the mobile list), so the three read as one family.
+        type="link"
+        // The very button of the per-node upgrade (NodeDesktopTable): same
+        // type, size and icon, so the three read as one family.
         icon={<CloudDownloadOutlined />}
         aria-label={label}
         loading={loading}
