@@ -177,6 +177,12 @@ CREATE TABLE IF NOT EXISTS forward_rules (
     -- v1.2.0: restart the rule every N minutes to shed accumulated connections.
     -- 0 = off. The API rejects non-zero values below MIN_AUTO_RESTART_MINUTES.
     auto_restart_minutes INTEGER NOT NULL DEFAULT 0,
+    -- v1.2.15: PROXY protocol, TCP only. send: 'off' | 'v1' | 'v2' (header to
+    -- the target); accept: expect one from the previous relay hop; trusted:
+    -- comma-separated IPs/CIDRs allowed to send it (empty = any).
+    proxy_protocol_send TEXT NOT NULL DEFAULT 'off',
+    proxy_protocol_accept INTEGER NOT NULL DEFAULT 0,
+    proxy_protocol_trusted TEXT NOT NULL DEFAULT '',
     config TEXT NOT NULL DEFAULT '{}',
     traffic_used INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'active',
@@ -1836,6 +1842,32 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
     .await?;
     tracing::info!("Migration 45: traffic_batches table present");
 
+    // ── Migration 46: v1.2.15 PROXY protocol ──
+    // All three default to "off": an upgraded panel sends no header and expects
+    // none until the operator turns it on for a rule.
+    add_column_if_missing(
+        pool,
+        "forward_rules",
+        "proxy_protocol_send",
+        "TEXT NOT NULL DEFAULT 'off'",
+    )
+    .await?;
+    add_column_if_missing(
+        pool,
+        "forward_rules",
+        "proxy_protocol_accept",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    .await?;
+    add_column_if_missing(
+        pool,
+        "forward_rules",
+        "proxy_protocol_trusted",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    .await?;
+    tracing::info!("Migration 46: forward_rules PROXY protocol columns present");
+
     Ok(())
 }
 
@@ -1927,6 +1959,49 @@ mod tests {
             "expected column {}.{} to exist after migration",
             table, column
         );
+    }
+
+    /// v1.2.15 Migration 46: the PROXY protocol columns exist, and a rule
+    /// written without them — every rule from before this version — comes out
+    /// OFF. Anything else would make an upgraded panel start sending headers
+    /// to targets that do not expect them.
+    #[tokio::test]
+    async fn migration_46_leaves_existing_rules_without_proxy_protocol() {
+        let pool = fresh_pool().await;
+        for col in [
+            "proxy_protocol_send",
+            "proxy_protocol_accept",
+            "proxy_protocol_trusted",
+        ] {
+            assert_column(&pool, "forward_rules", col).await;
+        }
+        sqlx::query("INSERT INTO users (id, username, password) VALUES (1, 'u', 'h') ON CONFLICT DO NOTHING")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO device_groups (id, name, group_type, token, uid) \
+             VALUES (1, 'g', 'in', 'tok', 1) ON CONFLICT DO NOTHING",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO forward_rules (name, uid, listen_port, device_group_in, \
+             target_addr, target_port) VALUES ('legacy', 1, 10001, 1, '1.2.3.4', 80)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        run_migrations(&pool).await.expect("re-run migrations");
+        let row: (String, bool, String) = sqlx::query_as(
+            "SELECT proxy_protocol_send, proxy_protocol_accept, proxy_protocol_trusted \
+             FROM forward_rules WHERE name = 'legacy'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row, ("off".into(), false, String::new()));
     }
 
     /// Migration 38 must reach BOTH a fresh database (via SCHEMA_SQL) and an

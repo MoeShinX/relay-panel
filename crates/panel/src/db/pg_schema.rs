@@ -141,6 +141,10 @@ CREATE TABLE IF NOT EXISTS forward_rules (
     max_connections INTEGER NOT NULL DEFAULT 0,
     -- v1.2.0: restart the rule every N minutes to shed connections. 0 = off.
     auto_restart_minutes INTEGER NOT NULL DEFAULT 0,
+    -- v1.2.15: PROXY protocol (TCP only); see the SQLite SCHEMA_SQL comment.
+    proxy_protocol_send TEXT NOT NULL DEFAULT 'off',
+    proxy_protocol_accept BOOLEAN NOT NULL DEFAULT FALSE,
+    proxy_protocol_trusted TEXT NOT NULL DEFAULT '',
     config TEXT NOT NULL DEFAULT '{}',
     traffic_used BIGINT NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'active',
@@ -391,7 +395,7 @@ INSERT INTO schema_version (version) VALUES (1) ON CONFLICT (version) DO NOTHING
 /// The schema revision this build's baseline `PG_SCHEMA_SQL` represents. When a
 /// future release adds a column/table, bump this and add a matching arm in
 /// `run_pg_migrations`. `apply_pg_schema` seeds `schema_version` with revision 1.
-pub const PG_SCHEMA_VERSION: i32 = 28;
+pub const PG_SCHEMA_VERSION: i32 = 29;
 
 /// Apply PG_SCHEMA_SQL to a pool. PostgreSQL's prepared-statement protocol
 /// rejects multi-statement strings ("cannot insert multiple commands into a
@@ -1491,6 +1495,26 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         .await?;
         tx.commit().await?;
         tracing::info!("PG migration 28: traffic_batches table present");
+    }
+
+    // v1.2.15 revision 29: PROXY protocol columns. Mirrors SQLite Migration 46;
+    // all default to off.
+    if current < 29 {
+        let mut tx = pool.begin().await?;
+        for ddl in [
+            "ALTER TABLE forward_rules ADD COLUMN IF NOT EXISTS proxy_protocol_send TEXT NOT NULL DEFAULT 'off'",
+            "ALTER TABLE forward_rules ADD COLUMN IF NOT EXISTS proxy_protocol_accept BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE forward_rules ADD COLUMN IF NOT EXISTS proxy_protocol_trusted TEXT NOT NULL DEFAULT ''",
+        ] {
+            sqlx::query(ddl).execute(&mut *tx).await?;
+        }
+        sqlx::query(
+            "INSERT INTO schema_version (version) VALUES (29) ON CONFLICT (version) DO NOTHING",
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        tracing::info!("PG migration 29: forward_rules PROXY protocol columns present");
     }
 
     Ok(())

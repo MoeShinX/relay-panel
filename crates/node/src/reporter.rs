@@ -1743,6 +1743,7 @@ mod tests {
                 upload_limit_bps: None,
                 download_limit_bps: None,
                 max_connections: None,
+                proxy_protocol: Default::default(),
             })
             .collect();
         let cfg = NodeConfigResponse { listeners };

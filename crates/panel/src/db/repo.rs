@@ -63,6 +63,27 @@ impl ResourceScope {
     }
 }
 
+/// v1.2.15: a rule's PROXY protocol settings as stored (see
+/// `ForwardRule::proxy_protocol_*`). The default is off.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleProxyProtocol {
+    /// "off" | "v1" | "v2"
+    pub send: String,
+    pub accept: bool,
+    /// Comma-separated IPs/CIDRs, already validated; empty = any.
+    pub trusted: String,
+}
+
+impl Default for RuleProxyProtocol {
+    fn default() -> Self {
+        Self {
+            send: "off".into(),
+            accept: false,
+            trusted: String::new(),
+        }
+    }
+}
+
 /// v1.2.12: one rule edit, for [`RuleRepository::update_rule_full`]. `None`
 /// leaves a field as it is; for the nullable columns, `Some(None)` clears it.
 #[derive(Debug, Default, Clone, Copy)]
@@ -93,6 +114,10 @@ pub struct RuleUpdate<'a> {
     pub max_connections: Option<i32>,
     pub auto_restart_minutes: Option<i32>,
     pub tunnel_profile_id: Option<Option<i64>>,
+    /// v1.2.15: PROXY protocol. `None` leaves each as it is.
+    pub proxy_protocol_send: Option<&'a str>,
+    pub proxy_protocol_accept: Option<bool>,
+    pub proxy_protocol_trusted: Option<&'a str>,
     /// Re-check, inside the transaction, that the owner may use the rule's
     /// inbound group when the edit resumes it or moves it to another group.
     /// Set for an owner editing their own rule; an admin's edit skips it, as
@@ -445,6 +470,7 @@ pub trait RuleRepository: Send + Sync {
         download_limit_mbps: i32,
         tunnel_profile_id: Option<i64>,
         check_owner_authorization: bool,
+        proxy_protocol: &RuleProxyProtocol,
     ) -> Result<Option<i64>, DbError>;
     /// Find (protocol, public_transport) for effective-combo validation, scoped.
     async fn find_transport_by_id(

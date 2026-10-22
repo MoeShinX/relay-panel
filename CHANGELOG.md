@@ -27,6 +27,23 @@ independent `v*` / `node-v*` tracks since this release).
   is recorded in the audit log. `POST /api/v1/rules/{id}/reset-traffic`.
 - **The rules table sorts by traffic**, across every page.
 
+
+- **PROXY protocol: pass the real client IP to the target.** Two per-rule
+  options on the Forward tab, both off by default and TCP only. **Send** (v1
+  or v2) makes the node write a PROXY header to the target once connected,
+  naming the real client, so nginx, Caddy, Xray or HAProxy set up to read it
+  log and limit by the real address. **Accept** is for a rule behind another
+  relay node that sends the header: the node takes the client address from
+  it and does not forward it, and closes connections without one; **trusted
+  sources** (IPs/CIDRs) limit who may send it. A middle node that accepts and
+  sends carries the original client through a chain. The rule list tags
+  rules that use it. The panel refuses it on UDP rules, on non-raw
+  transports, and while any node in the rule's inbound group is older than
+  node-v1.2.9 — an older node ignores the setting and every connection
+  through it would break. Schema: SQLite migration 46 / PostgreSQL revision
+  29 (three columns on forward_rules, all off for existing rules). See
+  docs/NODE.md for setting up the targets.
+
 ### Changed
 
 - **The menu and the header bar stay put while a page scrolls.** Scrolling a
