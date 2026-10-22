@@ -533,6 +533,10 @@ pub trait RuleRepository: Send + Sync {
     ) -> Result<Option<(i64, i64)>, DbError>;
     /// Delete rule by id, scoped. Returns rows affected.
     async fn delete_rule(&self, id: i64, scope: &ResourceScope) -> Result<u64, DbError>;
+    /// v1.2.15: zero one rule's own traffic counter, scoped. Returns rows
+    /// affected. Only the rule's statistic: the owner's quota
+    /// (`users.traffic_used`) and the traffic history are separate and stay.
+    async fn reset_rule_traffic(&self, id: i64, scope: &ResourceScope) -> Result<u64, DbError>;
     /// Delete all rules for a user (cascade cleanup).
     async fn delete_rules_by_uid(&self, uid: i64) -> Result<u64, DbError>;
     /// List active rules for config build (the JOIN+filter query).

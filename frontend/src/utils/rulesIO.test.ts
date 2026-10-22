@@ -3,6 +3,7 @@ import {
   asValidatedEntry,
   buildExportJSON,
   exportFileLabel,
+  mergeBulkTargets,
   parseDest,
   ruleTargets,
   validateImportEntry,
@@ -332,5 +333,49 @@ describe('exportFileLabel', () => {
   it('is empty when nothing usable is left, and capped at 40', () => {
     expect(exportFileLabel(' /:* ')).toBe('');
     expect(exportFileLabel('x'.repeat(60))).toHaveLength(40);
+  });
+});
+
+// v1.2.15: pasting many targets at once into the rule form.
+describe('mergeBulkTargets', () => {
+  const blank = [{ host: '', port: undefined, enabled: true }];
+
+  it('replaces the blank first row with the pasted targets, in order', () => {
+    const r = mergeBulkTargets(blank, '1.2.3.4:443\nexample.com:8443\n[2001:db8::1]:53');
+    expect(r.invalid).toEqual([]);
+    expect(r.added).toBe(3);
+    expect(r.targets).toEqual([
+      { host: '1.2.3.4', port: 443, enabled: true },
+      { host: 'example.com', port: 8443, enabled: true },
+      { host: '2001:db8::1', port: 53, enabled: true },
+    ]);
+  });
+
+  it('takes spaces, commas and semicolons as separators too', () => {
+    const r = mergeBulkTargets(blank, '1.1.1.1:53, 8.8.8.8:53；9.9.9.9:53  1.0.0.1:53');
+    expect(r.targets.map((t) => t.host)).toEqual(['1.1.1.1', '8.8.8.8', '9.9.9.9', '1.0.0.1']);
+  });
+
+  it('keeps the targets already there and skips duplicates, pasted or existing', () => {
+    const current = [{ host: 'Example.com', port: 443, enabled: false }];
+    const r = mergeBulkTargets(current, 'example.com:443\n2.2.2.2:80\n2.2.2.2:80');
+    expect(r.added).toBe(1);
+    expect(r.skipped).toBe(2);
+    expect(r.targets).toEqual([
+      { host: 'Example.com', port: 443, enabled: false },
+      { host: '2.2.2.2', port: 80, enabled: true },
+    ]);
+  });
+
+  it('applies nothing when any entry is malformed, and names them', () => {
+    const current = [{ host: '1.2.3.4', port: 443, enabled: true }];
+    const r = mergeBulkTargets(current, '2.2.2.2:80\nexample.com\n3.3.3.3:99999\n2001:db8::1');
+    expect(r.invalid).toEqual(['example.com', '3.3.3.3:99999', '2001:db8::1']);
+    expect(r.targets).toBe(current);
+    expect(r.added).toBe(0);
+  });
+
+  it('leaves one blank row when there is nothing at all', () => {
+    expect(mergeBulkTargets(blank, '   ').targets).toEqual([{ host: '', port: undefined, enabled: true }]);
   });
 });

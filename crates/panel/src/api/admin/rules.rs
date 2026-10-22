@@ -183,6 +183,51 @@ pub async fn update_rule(
     }
 }
 
+/// POST /api/v1/rules/{id}/reset-traffic — v1.2.15: zero one rule's own
+/// traffic counter. Owner-scoped like delete: an admin may reset any rule, a
+/// user only their own.
+///
+/// This is the per-rule statistic only. The owner's quota
+/// (`users.traffic_used`) is counted separately, not summed from rules, so
+/// billing is untouched; so is the traffic history behind the charts. Zeroing
+/// a user's quota stays the admin's "reset traffic" on the user, which also
+/// zeroes all of that user's rules. Batch reset is the frontend calling this
+/// per rule, like batch pause/resume and restart.
+pub async fn reset_rule_traffic(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Json<ApiResponse<()>> {
+    let scope = user.resource_scope();
+    let rule_name = match state.db.find_rule_by_id(id, &scope).await {
+        Ok(Some(r)) => r.name,
+        Ok(None) => return Json(err(404, "规则不存在")),
+        Err(e) => {
+            tracing::error!("reset_rule_traffic {}: find_rule_by_id failed: {}", id, e);
+            return Json(err(500, "数据库错误"));
+        }
+    };
+    match state.db.reset_rule_traffic(id, &scope).await {
+        Ok(0) => Json(err(404, "规则不存在")),
+        Ok(_) => {
+            crate::service::audit::record(
+                &state,
+                Some(user.user_id),
+                "reset_rule_traffic",
+                "rule",
+                id,
+                &rule_name,
+            )
+            .await;
+            Json(ApiResponse::success(()))
+        }
+        Err(e) => {
+            tracing::error!("reset_rule_traffic {}: update failed: {}", id, e);
+            Json(err(500, "数据库错误"))
+        }
+    }
+}
+
 pub async fn delete_rule(
     user: AuthUser,
     State(state): State<AppState>,

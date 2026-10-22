@@ -84,6 +84,57 @@ export function parseDest(d: string): { host: string; port: number } | null {
   return { host, port };
 }
 
+/** One target row in the rule form, as the form holds it (a fresh row has an
+ *  empty host and no port yet). */
+export interface TargetRow {
+  host: string;
+  port?: number | null;
+  enabled?: boolean;
+}
+
+/**
+ * v1.2.15: merge pasted targets into the rule form's target rows. `text` holds
+ * `host:port` / `[ipv6]:port` entries separated by new lines, spaces, commas or
+ * semicolons. Rows still blank (a fresh form's first row) give way to the
+ * pasted ones; an entry already present — or pasted twice — is skipped.
+ * Nothing is merged when any entry is malformed: `invalid` lists them, so the
+ * user fixes the paste instead of finding half of it applied.
+ */
+export function mergeBulkTargets(
+  current: TargetRow[],
+  text: string,
+): { targets: TargetRow[]; added: number; skipped: number; invalid: string[] } {
+  const entries = text.split(/[\s,，;；]+/).map((s) => s.trim()).filter(Boolean);
+  const invalid: string[] = [];
+  const parsed: { host: string; port: number }[] = [];
+  for (const e of entries) {
+    const d = parseDest(e);
+    if (d) parsed.push(d);
+    else invalid.push(e);
+  }
+  if (invalid.length > 0) return { targets: current, added: 0, skipped: 0, invalid };
+
+  const kept = current.filter((r) => (r.host ?? '').trim() !== '' || r.port != null);
+  const key = (host: string, port: number) => `${host.toLowerCase()}|${port}`;
+  const seen = new Set(kept.filter((r) => r.port != null).map((r) => key(r.host.trim(), Number(r.port))));
+  const out = [...kept];
+  let added = 0;
+  let skipped = 0;
+  for (const d of parsed) {
+    const k = key(d.host, d.port);
+    if (seen.has(k)) { skipped += 1; continue; }
+    seen.add(k);
+    out.push({ host: d.host, port: d.port, enabled: true });
+    added += 1;
+  }
+  return {
+    targets: out.length > 0 ? out : [{ host: '', port: undefined, enabled: true }],
+    added,
+    skipped,
+    invalid,
+  };
+}
+
 /** The loose entry shape the import box accepts (every field optional, validated
  *  by validateImportEntry before use). */
 export interface ImportEntry {

@@ -3,9 +3,9 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 
-const { mockGet } = vi.hoisted(() => ({ mockGet: vi.fn() }));
+const { mockGet, mockPost } = vi.hoisted(() => ({ mockGet: vi.fn(), mockPost: vi.fn() }));
 vi.mock('../api/client', () => ({
-  default: { get: mockGet, post: vi.fn(), put: vi.fn(), delete: vi.fn() },
+  default: { get: mockGet, post: mockPost, put: vi.fn(), delete: vi.fn() },
 }));
 const { mockUseAuth } = vi.hoisted(() => ({ mockUseAuth: vi.fn() }));
 vi.mock('../auth/useAuth', () => ({ useAuth: mockUseAuth }));
@@ -255,5 +255,117 @@ describe('exporting the filtered rules', () => {
     await user.hover(screen.getByRole('button', { name: /exportImport/ }));
     expect(await screen.findByText('exportAll')).toBeInTheDocument();
     expect(screen.queryByText('exportFiltered')).toBeNull();
+  });
+});
+
+// ── v1.2.15: user feedback — page size, sorting, batch traffic reset,
+// host:port targets and bulk-added targets.
+describe('rules table: page size and sorting', () => {
+  const many = (n: number) =>
+    Array.from({ length: n }, (_, i) => rule({ id: i + 1, name: `r${i + 1}`, listen_port: 10001 + i, traffic_used: (i % 7) * 1000 }));
+
+  beforeEach(() => {
+    try { localStorage.removeItem('relaypanel_rules_page_size'); } catch { /* jsdom */ }
+  });
+
+  it('shows the remembered page size instead of a fixed 20', async () => {
+    localStorage.setItem('relaypanel_rules_page_size', '50');
+    routes({ rules: ok(many(30)), groups: ok([group()]) });
+    const { container } = renderPage();
+    await waitFor(() => expect(screen.getByText('r1')).toBeInTheDocument());
+    expect(container.querySelectorAll('tr.ant-table-row')).toHaveLength(30);
+  });
+
+  it('changes the page size from the size picker, up to 500, and remembers it', async () => {
+    routes({ rules: ok(many(30)), groups: ok([group()]) });
+    const user = userEvent.setup();
+    const { container } = renderPage();
+    await waitFor(() => expect(screen.getByText('r1')).toBeInTheDocument());
+    expect(container.querySelectorAll('tr.ant-table-row')).toHaveLength(20);
+
+    await user.click(container.querySelector('.ant-pagination-options .ant-select') as HTMLElement);
+    expect(await screen.findByTitle(/500/)).toBeInTheDocument();
+    await user.click(await screen.findByTitle(/100/));
+    await waitFor(() => expect(container.querySelectorAll('tr.ant-table-row')).toHaveLength(30));
+    expect(localStorage.getItem('relaypanel_rules_page_size')).toBe('100');
+  });
+
+  it('sorts by traffic across every page, not just the visible one', async () => {
+    // r26 is on page 2 until sorted
+    const rules = many(30).map((r) => (r.id === 26 ? { ...r, traffic_used: 9_000_000 } : r));
+    routes({ rules: ok(rules), groups: ok([group()]) });
+    const user = userEvent.setup();
+    const { container } = renderPage();
+    await waitFor(() => expect(screen.getByText('r1')).toBeInTheDocument());
+    const trafficHeader = Array.from(container.querySelectorAll('.ant-table-thead th'))
+      .find((th) => th.textContent?.trim() === 'traffic') as HTMLElement;
+    await user.click(trafficHeader); // ascending
+    await user.click(trafficHeader); // descending
+    const firstRow = container.querySelector('tr.ant-table-row') as HTMLElement;
+    expect(firstRow.textContent).toContain('r26');
+  });
+});
+
+describe('batch traffic reset', () => {
+  it('resets each selected rule once, then reloads the list', async () => {
+    mockPost.mockReset();
+    mockPost.mockResolvedValue(ok(null));
+    const user = userEvent.setup();
+    const { container } = renderPage();
+    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
+    const getsBefore = mockGet.mock.calls.filter((c) => String(c[0]).startsWith('/rules')).length;
+
+    const boxes = container.querySelectorAll('tr.ant-table-row input[type="checkbox"]');
+    await user.click(boxes[0] as HTMLElement);
+    await user.click(boxes[1] as HTMLElement);
+    await user.click(screen.getByRole('button', { name: /batchResetTraffic/ }));
+    await user.click(await screen.findByRole('button', { name: /OK|确/ }));
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(2));
+    expect(mockPost).toHaveBeenCalledWith('/rules/1/reset-traffic', {});
+    expect(mockPost).toHaveBeenCalledWith('/rules/2/reset-traffic', {});
+    await waitFor(() =>
+      expect(mockGet.mock.calls.filter((c) => String(c[0]).startsWith('/rules')).length).toBeGreaterThan(getsBefore),
+    );
+  });
+});
+
+describe('target address entry', () => {
+  const openCreate = async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: /addRule/ }));
+    await user.click(await screen.findByRole('tab', { name: 'tabForward' }));
+    return user;
+  };
+  const hostInputs = () => screen.getAllByPlaceholderText('targetAddressOrDest') as HTMLInputElement[];
+  const portInputs = () => screen.getAllByPlaceholderText('targetPort') as HTMLInputElement[];
+
+  it('splits address:port typed into the host box', async () => {
+    const user = await openCreate();
+    await user.type(hostInputs()[0], 'example.com:8443');
+    await user.tab();
+    await waitFor(() => expect(hostInputs()[0].value).toBe('example.com'));
+    expect(portInputs()[0].value).toBe('8443');
+  });
+
+  it('leaves a bare IPv6 address alone', async () => {
+    const user = await openCreate();
+    await user.type(hostInputs()[0], '2001:db8::1');
+    await user.tab();
+    expect(hostInputs()[0].value).toBe('2001:db8::1');
+    expect(portInputs()[0].value).toBe('');
+  });
+
+  it('adds many targets from one paste', async () => {
+    const user = await openCreate();
+    await user.click(screen.getByRole('button', { name: /bulkAddTargets/ }));
+    const box = await screen.findByLabelText('bulkAddTargets');
+    await user.click(box);
+    await user.paste('1.2.3.4:443\nexample.com:8443\n[2001:db8::1]:53');
+    await user.click(screen.getByRole('button', { name: 'add' }));
+    await waitFor(() => expect(hostInputs()).toHaveLength(3));
+    expect(hostInputs().map((i) => i.value)).toEqual(['1.2.3.4', 'example.com', '2001:db8::1']);
+    expect(portInputs().map((i) => i.value)).toEqual(['443', '8443', '53']);
   });
 });
