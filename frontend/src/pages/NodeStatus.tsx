@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Spin, Result, Empty, Modal, message, Typography } from 'antd';
+import { Spin, Result, Empty, Modal, message, Typography, Space } from 'antd';
 import { LineChartOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
 import api from '../api/client';
 import type { ApiEnvelope, NodeStatus, SharedNodeSummary, NodeDisplayRow, NodeLiveRate } from '../api/types';
@@ -10,6 +10,8 @@ import { NodeGroupSection } from '../components/nodes/NodeGroupSection';
 import { NodeDetailDrawer } from '../components/nodes/NodeDetailDrawer';
 import { stableGroupedRows } from '../components/nodes/sort';
 import { rateSummary } from '../components/nodes/shared';
+import { upgradableNodes } from '../components/nodes/upgrade';
+import { UpgradeAllButton } from '../components/nodes/UpgradeAllButton';
 import { formatBps } from '../utils/format';
 
 type AnyNodeRow = NodeDisplayRow;
@@ -189,6 +191,12 @@ export default function NodeStatus() {
     });
   }, [baseRows, liveRates]);
   const groups = useMemo(() => (rows ? stableGroupedRows(rows) : null), [rows]);
+  // v1.2.16: "upgrade all" — every node the per-node button would accept, across
+  // all groups (same eligibility ladder). Admin only.
+  const upgradableAll = useMemo(
+    () => (isAdmin && rows ? upgradableNodes(rows, latestNodeVersion, panelProtocol, nodeVersionCheckFailed) : []),
+    [isAdmin, rows, latestNodeVersion, panelProtocol, nodeVersionCheckFailed],
+  );
   // v1.2.14: every group's header sums its own online nodes; this is the same
   // sum over all of them, for the page header.
   const all = useMemo(() => (rows ? rateSummary(rows) : null), [rows]);
@@ -247,13 +255,23 @@ export default function NodeStatus() {
     <>
       <div className="rp-page-header rp-page-header-sticky">
         <h2 className="rp-page-title"><LineChartOutlined /> {title}</h2>
-        {all && all.total > 0 && (
-          <Typography.Text type="secondary" style={{ fontSize: 13 }} data-testid="all-nodes-rate">
-            {t('onlineNodesOfTotal').replace('{online}', String(all.online)).replace('{total}', String(all.total))}
-            {' · '}
-            <ArrowUpOutlined /> {formatBps(all.up)} <ArrowDownOutlined /> {formatBps(all.down)}
-          </Typography.Text>
-        )}
+        <Space wrap size={[12, 8]}>
+          {all && all.total > 0 && (
+            <Typography.Text type="secondary" style={{ fontSize: 13 }} data-testid="all-nodes-rate">
+              {t('onlineNodesOfTotal').replace('{online}', String(all.online)).replace('{total}', String(all.total))}
+              {' · '}
+              <ArrowUpOutlined /> {formatBps(all.up)} <ArrowDownOutlined /> {formatBps(all.down)}
+            </Typography.Text>
+          )}
+          <UpgradeAllButton
+            nodes={upgradableAll}
+            latestNodeVersion={latestNodeVersion}
+            labelKey="upgradeAll"
+            t={t}
+            onDone={refresh}
+            testId="upgrade-all"
+          />
+        </Space>
       </div>
       {groups.map(([gid, groupRows]) => (
         <NodeGroupSection
@@ -267,6 +285,7 @@ export default function NodeStatus() {
           openDetail={setDetailRow}
           onUpgrade={isAdmin ? handleUpgrade : undefined}
           onDelete={isAdmin ? handleDelete : undefined}
+          onBatchUpgraded={isAdmin ? refresh : undefined}
         />
       ))}
       <NodeDetailDrawer

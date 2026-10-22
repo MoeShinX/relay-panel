@@ -1,12 +1,13 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent } from '@testing-library/react';
+import { Modal, message } from 'antd';
 
 // Mock the api client + auth hook before importing the page under test.
-const { mockGet } = vi.hoisted(() => ({ mockGet: vi.fn() }));
+const { mockGet, mockPost } = vi.hoisted(() => ({ mockGet: vi.fn(), mockPost: vi.fn() }));
 const { mockUseAuth } = vi.hoisted(() => ({ mockUseAuth: vi.fn() }));
 
 vi.mock('../api/client', () => ({
-  default: { get: mockGet, delete: vi.fn() },
+  default: { get: mockGet, post: mockPost, delete: vi.fn() },
 }));
 vi.mock('../auth/useAuth', () => ({ useAuth: mockUseAuth }));
 
@@ -14,6 +15,8 @@ import NodeStatus from './NodeStatus';
 import { stableGroupedRows, compareNodeRows } from '../components/nodes/sort';
 import type { NodeDisplayRow } from '../api/types';
 import { formatBps } from '../utils/format';
+import { I18nContext } from '../i18n/context';
+import { zhCN } from '../i18n/zh-CN';
 
 const ok = <T,>(data: T) => ({ code: 0, message: 'ok', data });
 
@@ -43,6 +46,7 @@ const version = {
 
 beforeEach(() => {
   mockGet.mockReset();
+  mockPost.mockReset();
   mockUseAuth.mockReset();
   vi.useFakeTimers();
 });
@@ -468,3 +472,120 @@ describe('NodeStatus control channel', () => {
   });
 });
 
+
+// v1.2.16: "upgrade all" at the top of the page and "upgrade this group" on each
+// group header. Both go through the per-node endpoint, once per upgradable node.
+describe('NodeStatus one-click upgrade', () => {
+  const realT = {
+    t: (key: keyof typeof zhCN) => zhCN[key] as string,
+    lang: 'zh-CN' as const,
+    setLang: () => {},
+  };
+  const behind = { online: true, install_method: 'systemd', ws_connected: true, node_version: '1.0.0' };
+  const fleet = [
+    { ...adminNode, ...behind, node_id: 'a1', public_ipv4: '10.0.0.1' },
+    { ...adminNode, ...behind, node_id: 'a2', public_ipv4: '10.0.0.2' },
+    { ...adminNode, ...behind, group_id: 2, group_name: 'grp-2', node_id: 'b1', public_ipv4: '10.0.1.1' },
+    { ...adminNode, ...behind, group_id: 2, group_name: 'grp-2', node_id: 'b2', public_ipv4: '10.0.1.2', online: false },
+    { ...adminNode, ...behind, group_id: 3, group_name: 'grp-3', node_id: 'c1', public_ipv4: '10.0.2.1', node_version: '1.1.0' },
+  ];
+  const serve = (isAdmin: boolean, rows: object[] = fleet, ver: object = version) => {
+    mockUseAuth.mockReturnValue({ isAdmin });
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/nodes' || url === '/nodes/shared') return Promise.resolve(ok(rows));
+      if (url === '/system/version') return Promise.resolve(ver);
+      if (url === '/nodes/live-rates') return Promise.resolve(ok([]));
+      return Promise.reject(new Error(`unexpected ${url}`));
+    });
+  };
+  const renderPage = () =>
+    render(<I18nContext.Provider value={realT}><NodeStatus /></I18nContext.Provider>);
+
+  afterEach(() => {
+    Modal.destroyAll();
+    message.destroy();
+  });
+
+  it('counts the upgradable nodes of every group at the top, and of each group on its header', async () => {
+    serve(true);
+    renderPage();
+    await flush();
+    expect(screen.getByTestId('upgrade-all')).toHaveTextContent('全部升级 (3)');
+    expect(screen.getByTestId('upgrade-group-1')).toHaveTextContent('升级本组 (2)');
+    expect(screen.getByTestId('upgrade-group-2')).toHaveTextContent('升级本组 (1)');
+    // grp-3's only node is already current: no button for it.
+    expect(screen.queryByTestId('upgrade-group-3')).not.toBeInTheDocument();
+  });
+
+  it('upgrades every upgradable node across groups with one confirmation', async () => {
+    serve(true);
+    mockPost.mockImplementation(() => Promise.resolve(ok(null)));
+    renderPage();
+    await flush();
+    fireEvent.click(screen.getByTestId('upgrade-all'));
+    await flush(300);
+    expect(document.querySelector('.ant-modal-confirm-title')).toHaveTextContent('升级 3 台节点');
+    expect(mockPost).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('确认升级'));
+    await flush(300);
+    expect(mockPost.mock.calls.map((c) => c[0]).sort()).toEqual([
+      '/nodes/1/upgrade/a1', '/nodes/1/upgrade/a2', '/nodes/2/upgrade/b1',
+    ]);
+    expect(screen.getByText(/已向 3 台节点下发升级/)).toBeInTheDocument();
+  });
+
+  it('a group button upgrades only that group', async () => {
+    serve(true);
+    mockPost.mockImplementation(() => Promise.resolve(ok(null)));
+    renderPage();
+    await flush();
+    fireEvent.click(screen.getByTestId('upgrade-group-2'));
+    await flush(300);
+    fireEvent.click(screen.getByText('确认升级'));
+    await flush(300);
+    expect(mockPost.mock.calls.map((c) => c[0])).toEqual(['/nodes/2/upgrade/b1']);
+  });
+
+  it('says how many failed, and refreshes the list afterwards', async () => {
+    serve(true);
+    mockPost.mockImplementation((url: string) =>
+      url.endsWith('/b1')
+        ? Promise.resolve({ code: 409, message: '节点当前无 WS 控制通道', data: null })
+        : Promise.resolve(ok(null)));
+    renderPage();
+    await flush();
+    const loadsBefore = mockGet.mock.calls.filter((c) => c[0] === '/nodes').length;
+    fireEvent.click(screen.getByTestId('upgrade-all'));
+    await flush(300);
+    fireEvent.click(screen.getByText('确认升级'));
+    await flush(300);
+    expect(screen.getByText(/成功 2 台，失败 1 台/)).toBeInTheDocument();
+    expect(screen.getByText('10.0.1.1：节点当前无 WS 控制通道')).toBeInTheDocument();
+    expect(mockGet.mock.calls.filter((c) => c[0] === '/nodes').length).toBeGreaterThan(loadsBefore);
+  });
+
+  it('is not offered when nothing can be upgraded', async () => {
+    serve(true, [fleet[3], fleet[4]]);
+    renderPage();
+    await flush();
+    expect(screen.queryByTestId('upgrade-all')).not.toBeInTheDocument();
+  });
+
+  it('is not offered while the latest node version is unknown or its check failed', async () => {
+    serve(true, fleet, { ...version, latest_node_version: '', node_version_check_failed: true });
+    renderPage();
+    await flush();
+    expect(screen.getByText('admin-grp')).toBeInTheDocument();
+    expect(screen.queryByTestId('upgrade-all')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('upgrade-group-1')).not.toBeInTheDocument();
+  });
+
+  it('is invisible to a regular user', async () => {
+    serve(false, fleet.map((r) => ({ ...r, install_method: undefined })));
+    renderPage();
+    await flush();
+    expect(screen.getByText('admin-grp')).toBeInTheDocument();
+    expect(screen.queryByTestId('upgrade-all')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('upgrade-group-1')).not.toBeInTheDocument();
+  });
+});

@@ -8,6 +8,19 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **One-click upgrade for many nodes at once.** The Node Status page has
+  "Upgrade all (N)" at the top and "Upgrade group (N)" on each group's header
+  (admin only). They upgrade every node that the per-node button would: online,
+  installed under systemd and behind the latest node release. All of them are
+  told at the same time, so those nodes restart together: connections being
+  forwarded drop within 5 seconds, and the nodes of one group go down together
+  for a few seconds. A confirmation lists the nodes first. Panel only; the node
+  binary needs no upgrade.
+
 ## [1.2.15] - 2026-10-22
 
 Ships alongside `node-v1.2.9`. The config protocol is unchanged at version 4.
