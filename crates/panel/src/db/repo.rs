@@ -642,6 +642,12 @@ pub trait GroupRepository: Send + Sync {
     async fn count_rules_by_group(&self, id: i64) -> Result<i64, DbError>;
     async fn delete_group(&self, id: i64, scope: &ResourceScope) -> Result<u64, DbError>;
     async fn delete_groups_by_uid(&self, uid: i64) -> Result<u64, DbError>;
+    /// Set the panel-wide display order: the groups in `ids` get sort_order
+    /// 1..=n in that order, and any group not listed follows them, keeping its
+    /// current relative order. One transaction: an unknown id returns
+    /// `DbError::NotFound` and nothing changes. `ids` must have no duplicates
+    /// (the service layer checks).
+    async fn reorder_groups(&self, ids: &[i64]) -> Result<(), DbError>;
     /// v1.0.8: list all inbound device groups (group_type = 'in'). Used by the
     /// purchase flow to compute the authorized set when grant_all_groups=true
     /// — in that mode the user gains access to every inbound group, so rules
@@ -651,9 +657,20 @@ pub trait GroupRepository: Send + Sync {
     /// the account page's "可用线路" and the shop's plan-grant hint). Unlike
     /// `list_shared_groups`, this is NOT filtered by ownership/authorization —
     /// callers already know the ids are safe to show to the caller (their own
-    /// authorized set, or a plan's grant set). Order is not guaranteed; callers
-    /// that need it presented in `ids` order should sort client-side.
+    /// authorized set, or a plan's grant set). Returned in the panel's group
+    /// display order (`sort_order`, then id), not in `ids` order.
     async fn list_group_names_by_ids(&self, ids: &[i64]) -> Result<Vec<String>, DbError>;
+}
+
+/// The ids in `current` (already in display order) that `listed` leaves out,
+/// in that same order. Shared by both backends' `reorder_groups`.
+pub(crate) fn unlisted_ids(current: &[(i64,)], listed: &[i64]) -> Vec<i64> {
+    let listed: std::collections::HashSet<i64> = listed.iter().copied().collect();
+    current
+        .iter()
+        .map(|(id,)| *id)
+        .filter(|id| !listed.contains(id))
+        .collect()
 }
 
 // ── v1.0.7: per-user device-group authorization ──

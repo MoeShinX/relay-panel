@@ -88,6 +88,16 @@ describe('aggregateNodesByGroup — ordering', () => {
     const out = aggregateNodesByGroup([node(2), node(1)]);
     expect(out.map((g) => g.group_id)).toEqual([1, 2]);
   });
+
+  it('follows the panel-wide group order when the rows carry one', () => {
+    const out = aggregateNodesByGroup([
+      node(1, { group_sort_order: 3 }),
+      node(2, { group_sort_order: 1 }),
+      node(3, { group_sort_order: 2 }),
+      node(4), // no known order: last
+    ]);
+    expect(out.map((g) => g.group_id)).toEqual([2, 3, 1, 4]);
+  });
 });
 
 describe('aggregateNodesByGroup — live rate & connections (online only)', () => {

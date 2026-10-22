@@ -3372,4 +3372,191 @@ mod tests {
         assert_eq!(resp.code, 404, "{}", resp.message);
         assert!(has_status(&state, "node_status:1:node-a").await);
     }
+
+    // ── PUT /groups/order ──
+
+    /// Send `PUT /groups/order` through the real router, as the given user.
+    /// Returns the HTTP status and, when the body is the JSON envelope, its code.
+    async fn put_group_order(
+        state: &AppState,
+        user_id: i64,
+        admin: bool,
+        body: serde_json::Value,
+    ) -> (axum::http::StatusCode, Option<i64>) {
+        use tower::ServiceExt;
+        let claims = crate::api::middleware::Claims {
+            sub: user_id,
+            admin,
+            token_version: 0,
+            exp: chrono::Utc::now().timestamp() as usize + 3600,
+        };
+        let token = jsonwebtoken::encode(
+            &jsonwebtoken::Header::default(),
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(state.config.jwt_secret.as_bytes()),
+        )
+        .unwrap();
+        let req = axum::http::Request::builder()
+            .method("PUT")
+            .uri("/groups/order")
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        let resp = crate::api::routes()
+            .with_state(state.clone())
+            .oneshot(req)
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let code = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .and_then(|v| v["code"].as_i64());
+        (status, code)
+    }
+
+    async fn listed_group_ids(state: &AppState) -> Vec<i64> {
+        use crate::db::repo::ResourceScope;
+        state
+            .db
+            .list_groups(&ResourceScope::All)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|g| g.id)
+            .collect()
+    }
+
+    /// The admin sets the order; every listing follows and it is audited.
+    #[tokio::test]
+    async fn an_admin_can_reorder_groups_and_it_is_audited() {
+        let (state, pool) = test_state().await;
+        add_user(&pool, 2, "admin2", true).await;
+        add_group(&pool, 1, 1, "alpha").await;
+        add_group(&pool, 2, 1, "beta").await;
+        add_group(&pool, 3, 1, "gamma").await;
+
+        let (status, code) =
+            put_group_order(&state, 2, true, serde_json::json!({ "ids": [3, 1, 2] })).await;
+        assert_eq!(status, axum::http::StatusCode::OK);
+        assert_eq!(code, Some(0));
+        assert_eq!(listed_group_ids(&state).await, vec![3, 1, 2]);
+
+        let rows = state.db.query_audit_log(None, 50, 0).await.unwrap();
+        let entry = rows
+            .iter()
+            .find(|e| e.action == "reorder_groups")
+            .expect("a reorder must be audited");
+        assert_eq!(entry.detail, "gamma > alpha > beta");
+        assert_eq!(entry.actor_name, "admin2");
+    }
+
+    /// An id that is not a group, a repeated id and an empty list are all
+    /// refused with 400, and the order is left alone.
+    #[tokio::test]
+    async fn reordering_with_unknown_repeated_or_no_ids_is_refused() {
+        let (state, pool) = test_state().await;
+        add_group(&pool, 1, 1, "alpha").await;
+        add_group(&pool, 2, 1, "beta").await;
+
+        for ids in [
+            serde_json::json!([2, 99, 1]),
+            serde_json::json!([2, 2, 1]),
+            serde_json::json!([]),
+        ] {
+            let (_, code) =
+                put_group_order(&state, 1, true, serde_json::json!({ "ids": ids })).await;
+            assert_eq!(code, Some(400), "ids {ids}");
+            assert_eq!(listed_group_ids(&state).await, vec![1, 2], "ids {ids}");
+        }
+        let rows = state.db.query_audit_log(None, 50, 0).await.unwrap();
+        assert!(
+            rows.iter().all(|e| e.action != "reorder_groups"),
+            "a refused reorder must not be audited"
+        );
+    }
+
+    /// A regular user cannot change the order: HTTP 403, nothing changes.
+    #[tokio::test]
+    async fn a_non_admin_cannot_reorder_groups() {
+        let (state, pool) = test_state().await;
+        add_user(&pool, 2, "alice", false).await;
+        add_group(&pool, 1, 1, "alpha").await;
+        add_group(&pool, 2, 1, "beta").await;
+
+        let (status, _) =
+            put_group_order(&state, 2, false, serde_json::json!({ "ids": [2, 1] })).await;
+        assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+        assert_eq!(listed_group_ids(&state).await, vec![1, 2]);
+        let rows = state.db.query_audit_log(None, 50, 0).await.unwrap();
+        assert!(rows.iter().all(|e| e.action != "reorder_groups"));
+    }
+
+    /// A group created through the API goes last, also after a reorder.
+    #[tokio::test]
+    async fn a_group_created_after_a_reorder_is_listed_last() {
+        let (state, pool) = test_state().await;
+        add_group(&pool, 1, 1, "alpha").await;
+        add_group(&pool, 2, 1, "beta").await;
+        let (_, code) =
+            put_group_order(&state, 1, true, serde_json::json!({ "ids": [2, 1] })).await;
+        assert_eq!(code, Some(0));
+
+        let Json(resp) = create_group(
+            AdminOnly { user_id: 1 },
+            State(state.clone()),
+            Json(CreateGroupRequest {
+                name: "late".into(),
+                group_type: GroupType::In,
+                connect_host: "1.2.3.4".into(),
+                port_range: "20000-30000".into(),
+                owner_uid: None,
+                rate: None,
+                hidden: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+        let new_id = resp.data.unwrap().id;
+        assert_eq!(listed_group_ids(&state).await, vec![2, 1, new_id]);
+    }
+
+    /// /nodes (admin) stamps each row with its group's display order, so the page
+    /// can list the groups in the order the admin arranged.
+    #[tokio::test]
+    async fn admin_node_rows_carry_the_group_sort_order() {
+        let (state, pool) = test_state().await;
+        add_group(&pool, 1, 1, "alpha").await;
+        add_group(&pool, 2, 1, "beta").await;
+        put_status(&state, "node_status:1:node-a").await;
+        put_status(&state, "node_status:2:node-b").await;
+        let (_, code) =
+            put_group_order(&state, 1, true, serde_json::json!({ "ids": [2, 1] })).await;
+        assert_eq!(code, Some(0));
+
+        let Json(resp) = crate::api::stats::get_node_status(
+            AuthUser {
+                user_id: 1,
+                admin: true,
+            },
+            State(state.clone()),
+        )
+        .await;
+        let mut order: Vec<(i64, i64)> = resp
+            .data
+            .unwrap()
+            .iter()
+            .map(|r| {
+                (
+                    r["group_id"].as_i64().unwrap(),
+                    r["group_sort_order"].as_i64().unwrap(),
+                )
+            })
+            .collect();
+        order.sort();
+        assert_eq!(order, vec![(1, 2), (2, 1)]);
+    }
 }

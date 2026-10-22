@@ -1,0 +1,65 @@
+import type { ComponentProps, KeyboardEvent, MouseEvent } from 'react';
+import { HolderOutlined } from '@ant-design/icons';
+import { useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { NodeGroupSection } from './NodeGroupSection';
+
+type SectionProps = Omit<ComponentProps<typeof NodeGroupSection>, 'dragHandle'>;
+
+/** A node group the admin can drag to a new place in the group list. Only the
+ *  handle drags: the rest of the header keeps toggling the group open and shut. */
+export function SortableNodeGroupSection({ id, ...props }: SectionProps & { id: number }) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
+
+  // Groups slide up or down to make room; they never move sideways or stretch.
+  const style = {
+    transform: CSS.Transform.toString(
+      transform ? { ...transform, x: 0, scaleX: 1, scaleY: 1 } : null,
+    ),
+    transition,
+    position: 'relative' as const,
+    zIndex: isDragging ? 10 : undefined,
+    opacity: isDragging ? 0.85 : undefined,
+  };
+
+  const label = props.t('dragToReorderGroup');
+  const handle = (
+    <span
+      ref={setActivatorNodeRef}
+      {...attributes}
+      {...listeners}
+      aria-label={label}
+      title={label}
+      data-testid={`group-drag-handle-${id}`}
+      // The header folds the group on a click and on Enter; the handle must not.
+      // A click here is just the end of a drag or a stray press.
+      onClick={(e: MouseEvent) => e.stopPropagation()}
+      onKeyDown={(e: KeyboardEvent<HTMLSpanElement>) => {
+        // Space picks the group up (see the sensor in NodeStatus). Do NOT stop
+        // its propagation: while a group is held, the arrow keys and the Space
+        // that drops it are handled on `document`, and React stops a native
+        // event from getting there when a handler stops it. Enter does nothing
+        // on the handle, so keep it from reaching the header's fold toggle.
+        listeners?.onKeyDown?.(e);
+        if (e.key === 'Enter') e.stopPropagation();
+      }}
+      style={{ cursor: 'grab', touchAction: 'none', color: 'var(--ant-color-text-tertiary, #999)' }}
+    >
+      <HolderOutlined />
+    </span>
+  );
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <NodeGroupSection {...props} dragHandle={handle} />
+    </div>
+  );
+}
