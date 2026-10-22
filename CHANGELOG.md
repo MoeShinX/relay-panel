@@ -10,6 +10,23 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Added
+
+- **Targets can be typed as `address:port`, and added many at once.** The
+  address box of a rule target takes `1.2.3.4:443`, `example.com:8443` or
+  `[2001:db8::1]:443` and splits it into the address and port boxes when it
+  loses focus; a bare IPv6 address is left alone. A new "Bulk add" takes one
+  `address:port` per line (or separated by spaces or commas): targets already
+  listed are skipped, and a paste with any malformed entry adds nothing and
+  names the bad ones.
+- **Reset the traffic of selected rules.** A batch action on the rules page
+  zeroes the selected rules' own traffic counters. Only the rules' statistic:
+  the owners' used quota, billing and the traffic charts do not move (a
+  user's quota is counted on its own; "reset traffic" on the user is still
+  the way to clear it). Admins can reset any rule, users their own; each reset
+  is recorded in the audit log. `POST /api/v1/rules/{id}/reset-traffic`.
+- **The rules table sorts by traffic**, across every page.
+
 ### Changed
 
 - **The menu and the header bar stay put while a page scrolls.** Scrolling a
@@ -18,6 +35,12 @@ independent `v*` / `node-v*` tracks since this release).
   taller than the window scrolls on its own. On Node Status the title and
   every online node's total rate stay pinned under the header bar as well
   (desktop only: on a phone they wrap to two lines, too much to pin).
+
+### Fixed
+
+- **Choosing 100 rules a page did nothing.** The page size was fixed at 20;
+  the size picker now works, offers 20 / 50 / 100 / 200 / 500, and the choice
+  is remembered.
 
 ---
 

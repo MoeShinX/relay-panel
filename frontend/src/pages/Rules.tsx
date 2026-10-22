@@ -10,7 +10,8 @@ import { useI18n } from '../i18n/context';
 import { useTableScroll } from '../hooks/useIsMobile';
 import { formatBytes } from '../utils/format';
 import { useAuth } from '../auth/useAuth';
-import { asValidatedEntry, buildExportJSON, exportFileLabel, parseDest, ruleTargets, validateImportEntry } from '../utils/rulesIO';
+import { asValidatedEntry, buildExportJSON, exportFileLabel, mergeBulkTargets, parseDest, ruleTargets, validateImportEntry } from '../utils/rulesIO';
+import type { TargetRow } from '../utils/rulesIO';
 
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -53,9 +54,29 @@ function downloadText(filename: string, text: string) {
   URL.revokeObjectURL(url);
 }
 
+/** v1.2.15: page sizes for the rules table, and where the choice is kept. */
+const RULE_PAGE_SIZES = [20, 50, 100, 200, 500];
+const RULE_PAGE_SIZE_KEY = 'relaypanel_rules_page_size';
+function storedRulePageSize(): number {
+  try {
+    const v = Number(localStorage.getItem(RULE_PAGE_SIZE_KEY));
+    return RULE_PAGE_SIZES.includes(v) ? v : 20;
+  } catch {
+    return 20;
+  }
+}
+
 export default function Rules() {
   const { t } = useI18n();
   const tableScroll = useTableScroll();
+  // v1.2.15: the table was given pageSize 20 as a fixed prop, so picking 100
+  // in the size changer did nothing. The size is state now (remembered), and
+  // up to 500 a page.
+  const [rulePageSize, setRulePageSize] = useState<number>(storedRulePageSize);
+  const changeRulePageSize = (size: number) => {
+    setRulePageSize(size);
+    try { localStorage.setItem(RULE_PAGE_SIZE_KEY, String(size)); } catch { /* private mode */ }
+  };
   const { isAdmin, user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   // v0.4.20: admin can manage another user's rules via /rules?owner_uid=X.
@@ -612,6 +633,29 @@ const IMPORT_DEFAULTS = {
     setSelectedRowKeys([]);
   };
 
+  /** v1.2.15: batch reset of the selected rules' own traffic counters, one
+   *  POST per rule like batch restart. Only the rules' statistic: the owners'
+   *  quota is counted separately and does not move. */
+  const handleBatchResetTraffic = async () => {
+    const ids = selectedRowKeys as number[];
+    if (ids.length === 0) return;
+    const results = await Promise.all(ids.map(async id => {
+      try {
+        const res = await api.post<unknown, ApiEnvelope<null>>(`/rules/${id}/reset-traffic`, {});
+        return res.code === 0;
+      } catch { return false; }
+    }));
+    const ok = results.filter(Boolean).length;
+    const fail = results.length - ok;
+    if (fail === 0) {
+      message.success(t('batchResetTrafficSuccess').replace('{count}', String(ok)));
+    } else {
+      message.warning(t('batchResetTrafficPartial').replace('{ok}', String(ok)).replace('{fail}', String(fail)));
+    }
+    setSelectedRowKeys([]);
+    load();
+  };
+
   /** v0.4.8: run a diagnosis for a rule. The panel fans the probe out to the
    *  rule's inbound-group nodes over WS and waits up to 8s for results. */
   const handleDiagnose = async (r: ForwardRule) => {
@@ -718,10 +762,17 @@ const IMPORT_DEFAULTS = {
       // owner often differ. Resolve the username from the rule's uid; fall back
       // to "#uid" when the user list isn't available.
       title: t('owner'), key: 'owner', width: 100,
+      // v1.2.15: never broken mid-name — the sort arrows on two other columns
+      // left this one narrow enough to split "admin" across three lines.
       render: (_: unknown, r: ForwardRule) =>
-        <Text>{userMap.get(r.uid) ?? `#${r.uid}`}</Text>,
+        <Text style={{ whiteSpace: 'nowrap' }}>{userMap.get(r.uid) ?? `#${r.uid}`}</Text>,
     },
-    { title: t('traffic'), dataIndex: 'traffic_used', key: 'traffic_used', render: (v: number) => formatBytes(v) },
+    // v1.2.15: sortable, across every page, so the heaviest rules can be found.
+    {
+      title: t('traffic'), dataIndex: 'traffic_used', key: 'traffic_used',
+      sorter: (a: ForwardRule, b: ForwardRule) => (a.traffic_used ?? 0) - (b.traffic_used ?? 0),
+      render: (v: number) => <span style={{ whiteSpace: 'nowrap' }}>{formatBytes(v)}</span>,
+    },
     {
       // v1.2.14: no fixed width, and the buttons wrap, as on the users page.
       // Six buttons on one line in a 260px column overflowed it: the table
@@ -922,7 +973,7 @@ const IMPORT_DEFAULTS = {
                 {/* Wide enough for a full IPv6 literal (up to 39 chars) — 180px
                     truncated them mid-address. On a phone the dialog is
                     narrower than that, so it gives way to the screen. */}
-                <Input placeholder={t('targetAddress')} style={{ width: 'min(320px, 100vw - 100px)' }} />
+                <TargetHostInput fieldName={field.name} placeholder={t('targetAddressOrDest')} />
               </Form.Item>
               <Form.Item
                 {...field}
@@ -957,7 +1008,10 @@ const IMPORT_DEFAULTS = {
               <Button size="small" danger icon={<DeleteOutlined />} aria-label={t('deleteTarget')} disabled={fields.length <= 1} onClick={() => remove(field.name)} />
             </Space>
           ))}
-          <Button size="small" icon={<PlusOutlined />} onClick={() => add({ host: '', port: undefined as unknown as number, enabled: true })}>{t('addTarget')}</Button>
+          <Space wrap>
+            <Button size="small" icon={<PlusOutlined />} onClick={() => add({ host: '', port: undefined as unknown as number, enabled: true })}>{t('addTarget')}</Button>
+            <BulkTargetsButton t={t} />
+          </Space>
         </Space>
       )}
     </Form.List>
@@ -1037,6 +1091,17 @@ const IMPORT_DEFAULTS = {
           )}
           {selectedRowKeys.length > 0 && (
             <Popconfirm
+              title={t('batchResetTrafficConfirm').replace('{count}', String(selectedRowKeys.length))}
+              description={t('batchResetTrafficDesc')}
+              onConfirm={handleBatchResetTraffic}
+            >
+              <Button>
+                {t('batchResetTraffic')} ({selectedRowKeys.length})
+              </Button>
+            </Popconfirm>
+          )}
+          {selectedRowKeys.length > 0 && (
+            <Popconfirm
               title={t('batchDeleteConfirm').replace('{count}', String(selectedRowKeys.length))}
               onConfirm={handleBatchDelete}
               okButtonProps={{ danger: true }}
@@ -1083,7 +1148,13 @@ const IMPORT_DEFAULTS = {
       <Table
         rowSelection={{ selectedRowKeys, onChange: (keys) => setSelectedRowKeys(keys as number[]) }}
         dataSource={visibleRules} columns={columns} rowKey="id" loading={loading}
-        pagination={{ pageSize: 20 }} scroll={tableScroll}
+        pagination={{
+          pageSize: rulePageSize,
+          pageSizeOptions: RULE_PAGE_SIZES,
+          showSizeChanger: true,
+          onChange: (_page, size) => { if (size !== rulePageSize) changeRulePageSize(size); },
+        }}
+        scroll={tableScroll}
       />
 
       <Modal title={t('addRule')} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={() => createForm.submit()} okText={t('create')} cancelText={t('cancel')} width={620}>
@@ -1316,4 +1387,58 @@ function ProbeOutcomeTag({ o, t }: { o: DiagnoseTargetResult['outcome']; t: (k: 
   if ('reachable' in o) return <Tag color="green">{t('diagnoseOutcomeReachable')} {o.reachable.elapsed_ms}ms</Tag>;
   if ('failed' in o) return <Tag color="red">{t('diagnoseOutcomeFailed')}: {o.failed.error}</Tag>;
   return <Tag>?</Tag>;
+}
+
+/** v1.2.15: the target host box also takes `host:port`. "1.2.3.4:443",
+ *  "example.com:8443" or "[2001:db8::1]:443" splits on blur into the host and
+ *  port boxes of the same row. A bare IPv6 address is left alone — the dest
+ *  grammar needs brackets around one before a port. */
+function TargetHostInput({ fieldName, value, onChange, placeholder }: {
+  fieldName: number;
+  value?: string;
+  onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  placeholder?: string;
+}) {
+  const form = Form.useFormInstance();
+  const split = () => {
+    const parsed = parseDest((value ?? '').trim());
+    if (!parsed) return;
+    form.setFieldValue(['targets', fieldName, 'host'], parsed.host);
+    form.setFieldValue(['targets', fieldName, 'port'], parsed.port);
+    form.validateFields([['targets', fieldName, 'port']]).catch(() => {});
+  };
+  return (
+    <Input value={value} onChange={onChange} onBlur={split} placeholder={placeholder}
+      style={{ width: 'min(320px, 100vw - 100px)' }} />
+  );
+}
+
+/** v1.2.15: paste many targets at once instead of one "add target" per row. */
+function BulkTargetsButton({ t }: { t: (k: string) => string }) {
+  const form = Form.useFormInstance();
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState('');
+  const apply = () => {
+    const current = (form.getFieldValue('targets') ?? []) as TargetRow[];
+    const r = mergeBulkTargets(current, text);
+    if (r.invalid.length > 0) {
+      message.error(t('bulkTargetsInvalid').replace('{entries}', r.invalid.slice(0, 5).join(', ')));
+      return;
+    }
+    form.setFieldValue('targets', r.targets);
+    message.success(t('bulkTargetsAdded').replace('{added}', String(r.added)).replace('{skipped}', String(r.skipped)));
+    setOpen(false);
+    setText('');
+  };
+  return (
+    <>
+      <Button size="small" icon={<PlusOutlined />} onClick={() => setOpen(true)}>{t('bulkAddTargets')}</Button>
+      <Modal title={t('bulkAddTargets')} open={open} onOk={apply} onCancel={() => setOpen(false)}
+        okText={t('add')} cancelText={t('cancel')} destroyOnHidden>
+        <Input.TextArea rows={8} value={text} onChange={(e) => setText(e.target.value)}
+          placeholder={'1.2.3.4:443\nexample.com:8443\n[2001:db8::1]:443'} aria-label={t('bulkAddTargets')} />
+        <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>{t('bulkAddTargetsHint')}</Text>
+      </Modal>
+    </>
+  );
 }
