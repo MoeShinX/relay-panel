@@ -1579,11 +1579,38 @@ mod tests {
         };
         let Json(resp) = create_rule(auth(1, true), State(state.clone()), Json(gated())).await;
         assert_eq!(resp.code, 400);
+        // node_at writes no last_seen, so this node reads as offline: it is
+        // marked, and the message says retired nodes can be deleted.
+        assert!(
+            resp.message.contains("203.0.113.9 (1.2.8, 离线)"),
+            "{}",
+            resp.message
+        );
+        assert!(resp.message.contains("节点状态页删除"), "{}", resp.message);
+
+        // A node that is reporting right now is named without the marker or
+        // the hint.
+        state
+            .db
+            .set(
+                "node_status:10:old",
+                &serde_json::json!({
+                    "node_version": "1.2.8",
+                    "public_ipv4": "203.0.113.9",
+                    "last_seen": chrono::Utc::now().to_rfc3339(),
+                })
+                .to_string(),
+            )
+            .await
+            .unwrap();
+        let Json(resp) = create_rule(auth(1, true), State(state.clone()), Json(gated())).await;
+        assert_eq!(resp.code, 400);
         assert!(
             resp.message.contains("203.0.113.9 (1.2.8)"),
             "{}",
             resp.message
         );
+        assert!(!resp.message.contains("节点状态页删除"), "{}", resp.message);
 
         let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM forward_rules")
             .fetch_one(&pool)

@@ -379,7 +379,9 @@ pub async fn validate_proxy_protocol(
             .scan_prefix(&prefix)
             .await
             .map_err(CreateRuleError::Database)?;
+        let now = chrono::Utc::now();
         let mut old = Vec::new();
+        let mut any_offline = false;
         for (key, value) in rows {
             let v: serde_json::Value = serde_json::from_str(&value).unwrap_or_default();
             let version = v.get("node_version").and_then(|x| x.as_str());
@@ -390,13 +392,27 @@ pub async fn validate_proxy_protocol(
                     .filter(|s| !s.is_empty())
                     .map(str::to_string)
                     .unwrap_or_else(|| key.trim_start_matches(&prefix).chars().take(8).collect());
-                old.push(format!("{} ({})", label, version.unwrap_or("?")));
+                // Offline rows count too (the node may come back still old),
+                // and they are never swept, so a retired node keeps blocking
+                // this until it is deleted — say which ones those are.
+                if crate::api::stats::status_is_online(&value, now) {
+                    old.push(format!("{} ({})", label, version.unwrap_or("?")));
+                } else {
+                    any_offline = true;
+                    old.push(format!("{} ({}, 离线)", label, version.unwrap_or("?")));
+                }
             }
         }
         if !old.is_empty() {
+            let hint = if any_offline {
+                "；已经不用的离线节点可以在节点状态页删除"
+            } else {
+                ""
+            };
             return Err(CreateRuleError::BadRequest(format!(
-                "入口分组里有节点不支持 PROXY protocol，请先升级到 node-v1.2.9 或更新：{}",
-                old.join(", ")
+                "入口分组里有节点不支持 PROXY protocol，请先升级到 node-v1.2.9 或更新：{}{}",
+                old.join(", "),
+                hint
             )));
         }
     }
