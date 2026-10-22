@@ -203,10 +203,9 @@ pub async fn delete_group(
             // v1.0.4: close WS connections for the deleted group so nodes
             // stop reporting.
             state.node_connections.close_group(id).await;
-            // v1.2.13: and drop its node records. They were left to the stale
-            // sweep, which was fine while that ran after 2 minutes; since 1.2.5
-            // it keeps offline rows for 24 hours, so a deleted group's nodes
-            // stayed on the node-status page as "Group N" for a day.
+            // v1.2.13: and drop its node records. Offline rows are never aged
+            // out, so without this a deleted group's nodes would stay on the
+            // node-status page as "Group N" until removed by hand.
             // Best-effort: the group is already gone, and a row that survives
             // a failure here can still be removed by hand.
             if let Err(e) =

@@ -27,7 +27,6 @@ independent `v*` / `node-v*` tracks since this release).
   is recorded in the audit log. `POST /api/v1/rules/{id}/reset-traffic`.
 - **The rules table sorts by traffic**, across every page.
 
-
 - **PROXY protocol: pass the real client IP to the target.** Two per-rule
   options on the Forward tab, both off by default and TCP only. **Send** (v1
   or v2) makes the node write a PROXY header to the target once connected,
@@ -52,6 +51,15 @@ independent `v*` / `node-v*` tracks since this release).
   taller than the window scrolls on its own. On Node Status the title and
   every online node's total rate stay pinned under the header bar as well
   (desktop only: on a phone they wrap to two lines, too much to pin).
+
+- **Offline nodes are no longer removed from the Node Status page after 24
+  hours.** A node that goes quiet stays listed, greyed out as offline, until
+  you remove it with the delete button on that page or delete its device
+  group. Nothing ages a row out any more, so a decommissioned node's row now
+  has to be removed by hand. If repeated offline alerts are turned on, they
+  keep coming for such a node until it is removed (they used to stop when
+  the row was swept a day later). Panel only; the node binary needs no
+  upgrade.
 
 ### Fixed
 
