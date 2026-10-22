@@ -164,15 +164,6 @@ pub async fn list_shared_node_summary(
         return Json(ApiResponse::success(vec![]));
     }
 
-    // v0.4.12 PR1: prune stale status rows BEFORE scanning, mirroring the admin
-    // node-status read path. Without this, a group whose every node stopped
-    // reporting could linger as a ghost "0/1" until some other code path swept
-    // it. Best-effort: a sweep error is logged but does not fail the request
-    // (the aggregation's online check still gives a correct online count).
-    if let Err(e) = crate::service::traffic::sweep_stale_status(state.db.as_ref()).await {
-        tracing::warn!("list_shared_node_summary: sweep_stale_status failed: {}", e);
-    }
-
     // Scan all node_status rows once and aggregate by group. A DB error here is
     // surfaced (not swallowed) so the frontend shows a load failure.
     let rows: Vec<(String, String)> = match state.db.scan_prefix("node_status:").await {
@@ -390,7 +381,7 @@ mod tests {
         let rows = vec![
             row("node_status:5:a", 5, now),   // online
             row("node_status:5:b", 10, now),  // online
-            row("node_status:5:c", 600, now), // offline (stale but not swept here)
+            row("node_status:5:c", 600, now), // offline
         ];
         let out = aggregate_shared_node_summaries(groups, &rows, now);
         assert_eq!(out.len(), 3, "one row per node");

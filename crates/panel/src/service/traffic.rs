@@ -1,8 +1,7 @@
 //! Node traffic + status-key service logic.
 //!
 //! Extracted from `api/node.rs` so the business rules (traffic-report overflow
-//! pre-check + batch-result interpretation, legacy status-key cleanup, stale
-//! status sweep) live behind the `Repository` trait and are unit-testable
+//! pre-check + batch-result interpretation, legacy status-key cleanup) live behind the `Repository` trait and are unit-testable
 //! without the HTTP layer. The handlers keep only the node-compat wire format
 //! (business `code` in the JSON body, GeoIP fire-and-forget, status JSON
 //! assembly).
@@ -11,21 +10,6 @@ use crate::db::error::DbError;
 use crate::db::repo::TrafficEntryResult;
 use crate::db::Repository;
 use relay_shared::protocol::TrafficEntry;
-
-/// How long a node's status row outlives its last report.
-///
-/// v1.2.5: raised from 2 minutes to 24 hours. Two minutes meant a node that
-/// went down vanished from the list entirely, so the panel could not answer
-/// "which of my nodes is offline right now" — the row an operator needs to see
-/// during an outage is exactly the one that got deleted. It also made the
-/// offline state nearly unobservable: the node is painted offline after 30s of
-/// silence and gone 90s later.
-///
-/// A day is long enough to cover an outage and a night's sleep. Past that the
-/// row is swept, which is what makes a decommissioned node disappear on its own
-/// — and an admin who does not want to wait can remove it by hand from the node
-/// list.
-const STALE_STATUS_THRESHOLD_SECS: i64 = 24 * 60 * 60;
 
 /// Outcome of applying a node traffic report. The handler maps each variant to
 /// the node-compat wire response (business `code` in the JSON body).
@@ -168,39 +152,6 @@ pub async fn remove_group_status(db: &dyn Repository, group_id: i64) -> Result<u
     Ok(removed)
 }
 
-/// Remove node_status entries older than [`STALE_STATUS_THRESHOLD_SECS`].
-/// Parses last_seen from the stored JSON; entries without last_seen are left
-/// alone (conservative — don't delete what we can't age).
-///
-/// Also runs on READ (get_node_status), so ghost rows get cleaned even when no
-/// node in the group is still reporting.
-pub async fn sweep_stale_status(db: &dyn Repository) -> Result<(), DbError> {
-    let rows: Vec<(String, String)> = db.scan_prefix("node_status:").await?;
-    let now = chrono::Utc::now();
-    for (key, value) in &rows {
-        let stale = serde_json::from_str::<serde_json::Value>(value)
-            .ok()
-            .and_then(|v| {
-                v.get("last_seen")
-                    .and_then(|s| s.as_str())
-                    .map(|s| s.to_string())
-            })
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
-            .map(|t| {
-                (now - t.with_timezone(&chrono::Utc)).num_seconds() > STALE_STATUS_THRESHOLD_SECS
-            })
-            .unwrap_or(false);
-        if stale {
-            let _ = db
-                .delete(key)
-                .await
-                .map_err(|e| tracing::warn!("sweep_stale_status: kvs delete failed: {}", e));
-            tracing::debug!("swept stale node status {}", key);
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,7 +175,7 @@ mod tests {
     }
 
     /// Wrap a kvs-only pool in a SqliteRepository so the service-layer helpers
-    /// (cleanup_legacy_status / sweep_stale_status) can be exercised via the
+    /// (cleanup_legacy_status) can be exercised via the
     /// Repository trait the same way the production code does.
     fn repo(pool: &SqlitePool) -> SqliteRepository {
         SqliteRepository::new(pool.clone())
@@ -301,58 +252,31 @@ mod tests {
         // Just must not panic / error.
     }
 
-    /// Entries older than the threshold are swept; fresh ones are kept.
+    /// An offline node's row is never removed by age: it stays until an admin
+    /// deletes it (or its group). A report from another node must not touch it
+    /// either, and its last_seen stays readable so it shows as offline.
     #[tokio::test]
-    async fn stale_status_is_swept_fresh_kept() {
+    async fn long_offline_status_is_kept_and_still_offline() {
         let pool = kvs_pool().await;
-        // Comfortably past the 24h threshold; 15 minutes used to qualify when
-        // the threshold was 2 minutes.
-        let old = (chrono::Utc::now() - chrono::Duration::hours(30)).to_rfc3339();
+        let old = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
         let fresh = chrono::Utc::now().to_rfc3339();
         put_status(&pool, "node_status:1:old", Some("1.1.1.1"), &old).await;
         put_status(&pool, "node_status:1:new", Some("2.2.2.2"), &fresh).await;
-        sweep_stale_status(&repo(&pool)).await.unwrap();
+        // The only cleanup that runs on a report removes the reporting node's
+        // own legacy key; it must leave other nodes' rows alone.
+        cleanup_legacy_status(&repo(&pool), 1, "2.2.2.2").await;
         assert!(
-            !exists(&pool, "node_status:1:old").await,
-            "old entry must be swept"
+            exists(&pool, "node_status:1:old").await,
+            "a node offline for 30 days must still be listed"
         );
-        assert!(
-            exists(&pool, "node_status:1:new").await,
-            "fresh entry must be kept"
-        );
-    }
-
-    /// A node down for most of a day is still listed. This is the whole point of
-    /// the v1.2.5 change: during an outage the offline row is the one an
-    /// operator needs to see, and the old 2-minute threshold deleted it before
-    /// anyone could look.
-    #[tokio::test]
-    async fn node_offline_for_hours_is_still_listed() {
-        let pool = kvs_pool().await;
-        let hours_ago = (chrono::Utc::now() - chrono::Duration::hours(20)).to_rfc3339();
-        put_status(&pool, "node_status:1:down", Some("1.1.1.1"), &hours_ago).await;
-        sweep_stale_status(&repo(&pool)).await.unwrap();
-        assert!(
-            exists(&pool, "node_status:1:down").await,
-            "a node offline for 20h must still be visible"
-        );
-    }
-
-    /// Entries without last_seen are NOT swept (conservative — can't age what
-    /// we can't timestamp; better to leave a ghost than delete a live node
-    /// whose clock format we didn't understand).
-    #[tokio::test]
-    async fn status_without_last_seen_is_kept() {
-        let pool = kvs_pool().await;
-        sqlx::query("INSERT INTO kvs (key, value) VALUES ('node_status:2', '{}')")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sweep_stale_status(&repo(&pool)).await.unwrap();
-        assert!(
-            exists(&pool, "node_status:2").await,
-            "entry without last_seen must not be swept (conservative)"
-        );
+        assert!(exists(&pool, "node_status:1:new").await);
+        let (value,): (String,) =
+            sqlx::query_as("SELECT value FROM kvs WHERE key='node_status:1:old'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&value).unwrap();
+        assert_eq!(v["last_seen"].as_str().unwrap(), old, "last_seen untouched");
     }
 
     /// The overflow pre-check rejects an entry whose upload+download overflows

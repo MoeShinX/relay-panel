@@ -416,12 +416,6 @@ pub async fn report_status(
         }
     }
 
-    // ── v0.3.2: stale status sweep ──
-    // Also runs on READ (get_node_status), so ghost rows get cleaned even when
-    // no node in the group is still reporting. Threshold is 2 min (frontend
-    // marks offline at 30s; we keep the row a bit longer to ride out blips).
-    let _ = crate::service::traffic::sweep_stale_status(state.db.as_ref()).await;
-
     Json(ApiResponse::success(()))
 }
 

@@ -98,7 +98,7 @@ html, body, #root {
  * Every figure in it — CPU, speed, uptime, connections — is the LAST report,
  * not a live reading. Rendered identically to an online row, a wall of
  * healthy-looking numbers says the opposite of what is true, and since v1.2.5
- * these rows stay listed for 24h, so there are more of them to tell apart.
+ * these rows stay listed until removed by hand, so there can be many to tell apart.
  *
  * Grey, deliberately not faded: these are the readings from the moment the
  * node stopped, which is exactly what you look at when working out why. The

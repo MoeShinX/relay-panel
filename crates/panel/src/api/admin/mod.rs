@@ -2969,9 +2969,9 @@ mod tests {
     }
 
     // ── v1.2.13: node records of a deleted group ──
-    // Deleting a group left its nodes' status rows behind for the stale sweep,
-    // which keeps offline rows for 24 hours — and the remove button refused
-    // them, because it looked the (deleted) group up first.
+    // Deleting a group left its nodes' status rows behind — offline rows are
+    // never aged out — and the remove button refused them, because it looked
+    // the (deleted) group up first.
 
     async fn put_status(state: &AppState, key: &str) {
         state
@@ -3042,6 +3042,41 @@ mod tests {
         .await;
         assert_eq!(resp.code, 0, "{}", resp.message);
         assert!(!has_status(&state, "node_status:7:node-a").await);
+    }
+
+    /// Reading the node list must not age rows out: a node silent for 30 days
+    /// is still listed, painted offline, and only a manual delete removes it.
+    #[tokio::test]
+    async fn a_long_offline_node_stays_listed_as_offline() {
+        use crate::api::stats::get_node_status;
+
+        let (state, pool) = test_state().await;
+        add_group(&pool, 1, 1, "line").await;
+        let old = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+        state
+            .db
+            .set(
+                "node_status:1:node-a",
+                &format!(r#"{{"last_seen":"{old}","node_id":"node-a"}}"#),
+            )
+            .await
+            .unwrap();
+
+        for _ in 0..2 {
+            let Json(resp) = get_node_status(
+                crate::api::middleware::AuthUser {
+                    user_id: 1,
+                    admin: true,
+                },
+                State(state.clone()),
+            )
+            .await;
+            assert_eq!(resp.code, 0, "{}", resp.message);
+            let rows = resp.data.unwrap();
+            assert_eq!(rows.len(), 1, "the offline row must still be listed");
+            assert_eq!(rows[0]["online"], serde_json::json!(false));
+        }
+        assert!(has_status(&state, "node_status:1:node-a").await);
     }
 
     #[tokio::test]

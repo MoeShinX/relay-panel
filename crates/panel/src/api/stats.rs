@@ -269,12 +269,6 @@ pub async fn get_node_status(
     user: AuthUser,
     State(state): State<AppState>,
 ) -> Json<ApiResponse<Vec<serde_json::Value>>> {
-    // v0.3.2: sweep stale entries on READ too, not just on report. Previously
-    // sweep only ran when a node reported status — so if every node in a group
-    // went offline (no more reports), the ghost "离线" rows lingered forever.
-    // Now opening the node-status page cleans up entries older than 2 min.
-    let _ = crate::service::traffic::sweep_stale_status(state.db.as_ref()).await;
-
     // v0.4.10: node-status rows are keyed by group, so we owner-filter them via
     // the group's ownership. An admin (scope All) sees every group's nodes; a
     // regular user only sees status rows for groups they own. The scoped
@@ -385,8 +379,8 @@ pub async fn get_node_status(
 ///
 /// This does NOT uninstall or stop the node — it only deletes the panel's
 /// cached status row. If the node is still online and reporting, the record
-/// reappears on its next report. Use case: clear a stale/ghost entry that the
-/// auto-sweep hasn't caught, or remove a decommissioned node's leftover row.
+/// reappears on its next report. Offline rows are never removed automatically, so
+/// this is how a decommissioned node's leftover row goes.
 ///
 /// Admin-only since v0.4.12 (nodes are admin-managed), so there is no
 /// ownership to check. v1.2.13: nor does the group have to exist. A record can

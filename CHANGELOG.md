@@ -8,6 +8,18 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **Offline nodes are no longer removed from the Node Status page after 24
+  hours.** A node that goes quiet stays listed, greyed out as offline, until
+  you remove it with the delete button on that page or delete its device
+  group. Nothing ages a row out any more, so a decommissioned node's row now
+  has to be removed by hand. Panel only; the node binary needs no upgrade.
+
+---
+
 ## [1.2.14] - 2026-10-20
 
 Ships alongside `node-v1.2.8`; neither requires the other, and the config
