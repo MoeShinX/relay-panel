@@ -8,7 +8,16 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
-## [Unreleased]
+## [1.2.15] - 2026-10-22
+
+Ships alongside `node-v1.2.9`. The config protocol is unchanged at version 4.
+Schema: SQLite migration 46 / PostgreSQL revision 29, applied on start (three
+columns on `forward_rules`, off for every existing rule).
+
+Upgrading: "Update now" on the dashboard, or `git pull --quiet && ./deploy.sh`.
+PROXY protocol needs every node in the rule's inbound group on `node-v1.2.9`
+(the panel refuses it until they are); everything else here is the panel
+alone.
 
 ### Added
 
@@ -26,7 +35,6 @@ independent `v*` / `node-v*` tracks since this release).
   the way to clear it). Admins can reset any rule, users their own; each reset
   is recorded in the audit log. `POST /api/v1/rules/{id}/reset-traffic`.
 - **The rules table sorts by traffic**, across every page.
-
 - **PROXY protocol: pass the real client IP to the target.** Two per-rule
   options on the Forward tab, both off by default and TCP only. **Send** (v1
   or v2) makes the node write a PROXY header to the target once connected,
@@ -51,7 +59,6 @@ independent `v*` / `node-v*` tracks since this release).
   taller than the window scrolls on its own. On Node Status the title and
   every online node's total rate stay pinned under the header bar as well
   (desktop only: on a phone they wrap to two lines, too much to pin).
-
 - **Offline nodes are no longer removed from the Node Status page after 24
   hours.** A node that goes quiet stays listed, greyed out as offline, until
   you remove it with the delete button on that page or delete its device
@@ -66,8 +73,6 @@ independent `v*` / `node-v*` tracks since this release).
 - **Choosing 100 rules a page did nothing.** The page size was fixed at 20;
   the size picker now works, offers 20 / 50 / 100 / 200 / 500, and the choice
   is remembered.
-
----
 
 ## [1.2.14] - 2026-10-20
 
