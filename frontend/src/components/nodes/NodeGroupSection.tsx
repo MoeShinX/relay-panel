@@ -25,8 +25,6 @@ interface Props {
   isMobile: boolean;
   t: Tfn;
   openDetail: (row: NodeDisplayRow) => void;
-  /** v1.0.10: admin-only per-node upgrade trigger (desktop table only). */
-  onUpgrade?: (row: NodeDisplayRow) => void;
   onDelete?: (row: NodeDisplayRow) => void;
   /** v1.2.16: admin-only. When set, the header shows "upgrade this group (N)"
    *  for the group's upgradable nodes; called after the batch is dispatched so
@@ -37,7 +35,9 @@ interface Props {
 /** One group block: header bar (name · ID · online/total · aggregate ↑↓) +
  *  either a desktop table or mobile list. Collapsible. A group with only a
  *  placeholder row shows "no node reporting". */
-export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeVersionCheckFailed, isMobile, t, openDetail, onUpgrade, onDelete, onBatchUpgraded }: Props) {
+export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeVersionCheckFailed, isMobile, t, openDetail, onDelete, onBatchUpgraded }: Props) {
+  // The upgrade column / badge is the admin view, like the batch buttons.
+  const showUpgrade = !!onBatchUpgraded;
   const head = rows[0];
   const { total, online, up, down } = rateSummary(rows);
   const region = head.region;
@@ -95,11 +95,11 @@ export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeV
         nodeVersionCheckFailed={nodeVersionCheckFailed}
         t={t}
         openDetail={openDetail}
-        onUpgrade={onUpgrade}
+        showUpgrade={showUpgrade}
       />
     </div>
   ) : (
-    <NodeDesktopTable rows={rows} panelProtocol={panelProtocol} latestNodeVersion={latestNodeVersion} nodeVersionCheckFailed={nodeVersionCheckFailed} t={t} openDetail={openDetail} onUpgrade={onUpgrade} onDelete={onDelete} />
+    <NodeDesktopTable rows={rows} panelProtocol={panelProtocol} latestNodeVersion={latestNodeVersion} nodeVersionCheckFailed={nodeVersionCheckFailed} t={t} openDetail={openDetail} showUpgrade={showUpgrade} onDelete={onDelete} />
   );
 
   return (

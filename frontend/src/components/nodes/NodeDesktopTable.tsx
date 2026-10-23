@@ -24,7 +24,9 @@ interface Props {
   /** v1.0.10: admin-only. When set, a "节点更新" column shows a per-node upgrade
    *  icon (active when the node is behind the latest node release). Absent for
    *  the regular-user view. */
-  onUpgrade?: (row: NodeDisplayRow) => void;
+  /** Admin view: show the upgrade column (each node's state; upgrading itself
+   *  is done from the group / page header buttons). */
+  showUpgrade?: boolean;
   /** v1.2.5: admin-only. Removes this node's status record. Offered ONLY for
    *  offline rows — deleting an online node's record achieves nothing, because
    *  the next report (within ~10s) recreates it. Absent for the user view. */
@@ -34,7 +36,7 @@ interface Props {
 /** Desktop table for one group's nodes. Both admin and user share the same
  *  columns — the permission difference is in the data source (admin reads
  *  /nodes, user reads /nodes/shared) and the detail drawer. */
-export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeVersionCheckFailed, t, openDetail, onUpgrade, onDelete }: Props) {
+export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeVersionCheckFailed, t, openDetail, showUpgrade, onDelete }: Props) {
   const labels = { d: t('uptimeDay'), h: t('uptimeHour'), m: t('uptimeMinute'), s: t('uptimeSecond') };
 
   const columns = [
@@ -70,12 +72,13 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
         return <Tag color={versionTagColor(rel)}>{label}</Tag>;
       },
     },
-    // v1.0.10: admin-only per-node upgrade icon. v1.2 (PR4+PR5 reconciled): the
+    // Admin-only upgrade column: a read-only state per node (upgrading is done
+    // from the group and page buttons). v1.2 (PR4+PR5 reconciled): the
     // eligibility ladder is shared with the mobile list via resolveNodeUpgrade
     // (PR4) AND compared against the latest NODE release with a failed-check
     // neutral state (PR5). Protocol-incompatible and a failed lookup both take
     // priority over version status.
-    ...(onUpgrade ? [{
+    ...(showUpgrade ? [{
       title: t('nodeUpgrade'), key: 'upgrade', width: nodeDesktopColumnWidths.nodeUpgrade,
       // Centred, so the icon's centre is the column's centre: the upgrade-all
       // and upgrade-group icons above are lined up on it (see UpgradeSlot).
@@ -98,15 +101,13 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
           case 'protocolIncompatible':
             return <Tag color="red">{t('protocolIncompatible')}</Tag>;
           case 'upgradeable':
+            // Behind and upgradable: only a marker. The upgrade itself is the
+            // group / "upgrade all" button, which counts this node.
             return (
               <Tooltip title={t('nodeUpgradeTip').replace('{v}', latestNodeVersion)}>
-                <Button
-                  size="small"
-                  type="link"
-                  icon={<CloudDownloadOutlined />}
-                  aria-label={t('nodeUpgrade')}
-                  onClick={() => onUpgrade(r)}
-                />
+                <span role="img" aria-label={t('nodeUpgradeTip').replace('{v}', latestNodeVersion)}>
+                  <CloudDownloadOutlined style={{ color: 'var(--ant-color-primary, #6366f1)' }} />
+                </span>
               </Tooltip>
             );
           case 'noControlChannel':

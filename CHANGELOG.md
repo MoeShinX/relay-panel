@@ -21,6 +21,14 @@ independent `v*` / `node-v*` tracks since this release).
   for a few seconds. A confirmation lists the nodes first. Panel only; the node
   binary needs no upgrade.
 
+### Changed
+
+- **The per-node upgrade button is gone from Node Status.** Upgrading is
+  done with "Upgrade group" and "Upgrade all". The Node update column stays
+  as a read-only state: a blue marker on a node that is behind and can be
+  upgraded, a green check when it is current, and the same hints as before
+  for Docker, manual and offline nodes.
+
 ## [1.2.15] - 2026-10-22
 
 Ships alongside `node-v1.2.9`. The config protocol is unchanged at version 4.

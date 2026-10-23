@@ -38,7 +38,6 @@ const renderGroup = (rows: NodeDisplayRow[], onBatchUpgraded: (() => void) | nul
       isMobile={false}
       t={t}
       openDetail={vi.fn()}
-      onUpgrade={vi.fn()}
       onBatchUpgraded={onBatchUpgraded ?? undefined}
     />,
   );
@@ -94,7 +93,7 @@ describe('group "upgrade this group" button', () => {
   it('is absent while the node-version check has failed', () => {
     render(
       <NodeGroupSection rows={mixed} panelProtocol={0} latestNodeVersion="" nodeVersionCheckFailed={true}
-        isMobile={false} t={t} openDetail={vi.fn()} onUpgrade={vi.fn()} onBatchUpgraded={vi.fn()} />,
+        isMobile={false} t={t} openDetail={vi.fn()} onBatchUpgraded={vi.fn()} />,
     );
     expect(screen.queryByTestId('upgrade-group-1')).not.toBeInTheDocument();
   });

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Spin, Result, Empty, Modal, message, Typography, Space } from 'antd';
+import { Spin, Result, Empty, message, Typography, Space } from 'antd';
 import { LineChartOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
 import api from '../api/client';
 import type { ApiEnvelope, NodeStatus, SharedNodeSummary, NodeDisplayRow, NodeLiveRate } from '../api/types';
@@ -159,28 +159,6 @@ export default function NodeStatus() {
     return () => clearInterval(ti);
   }, []);
 
-  // v1.0.10: admin triggers a directed node self-upgrade. Confirm first (the
-  // node restarts, so its forwarding blips for a few seconds).
-  const handleUpgrade = (row: AnyNodeRow) => {
-    if (!row.node_id) return;
-    Modal.confirm({
-      title: t('nodeUpgradeConfirmTitle'),
-      content: t('nodeUpgradeConfirm').replace('{v}', latestNodeVersion || 'latest'),
-      okText: t('nodeUpgradeOk'),
-      cancelText: t('cancel'),
-      onOk: async () => {
-        try {
-          const res = await api.post<unknown, ApiEnvelope<null>>(
-            `/nodes/${row.group_id}/upgrade/${row.node_id}`,
-            {},
-          );
-          if (res.code !== 0) { message.error(res.message); return; }
-          message.success(t('nodeUpgradeSent'));
-        } catch { message.error(t('nodeUpgradeFailed')); }
-      },
-    });
-  };
-
   const baseRows: AnyNodeRow[] | null = isAdmin ? adminRows : userRows;
   // Overlay the pushed rate on online nodes that have one. The group header
   // sums row rates, so it picks the live figures up with no change of its own.
@@ -293,7 +271,6 @@ export default function NodeStatus() {
             isMobile={isMobile}
             t={t}
             openDetail={setDetailRow}
-            onUpgrade={isAdmin ? handleUpgrade : undefined}
             onDelete={isAdmin ? handleDelete : undefined}
             onBatchUpgraded={isAdmin ? refresh : undefined}
           />
