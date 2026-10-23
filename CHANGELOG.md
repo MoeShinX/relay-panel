@@ -10,19 +10,22 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+## [1.2.16] - 2026-10-24
+
+Ships alongside `node-v1.2.10`. The config protocol is unchanged at version 4.
 Schema: SQLite migration 47 / PostgreSQL revision 30, applied on start (one
 column on `device_groups`; every existing group gets 0, so the order stays as it
 was, by id).
 
-
-Needs a node newer than `node-v1.2.9` to show more than the system disk; with
-older nodes everything looks as it did. The config protocol is unchanged.
+Upgrading: "Update now" on the dashboard, or `git pull --quiet && ./deploy.sh`.
+Showing more than the system disk needs the node on `node-v1.2.10`; with older
+nodes everything looks as it did. Everything else here is the panel alone.
 
 ### Added
 
 - **Drag the device groups into the order you want.** On the Node Status page
-  an admin can now drag a group by the handle at the left of its header (or
-  pick it up with the keyboard) and drop it where it should go; the groups in
+  an admin can now drag a group by its header (or pick it up with the
+  keyboard from the handle at its left) and drop it where it should go; the groups in
   between shift down or up by one. The order is kept in the panel, so it is the
   same on every browser and device, and it applies wherever groups are listed:
   Node Status (admin and user views), Device Groups, the entry/exit group
@@ -50,8 +53,8 @@ older nodes everything looks as it did. The config protocol is unchanged.
 
 - **One-click upgrade for many nodes at once.** The Node Status page has
   "Upgrade all (N)" at the top and "Upgrade group (N)" on each group's header
-  (admin only). They upgrade every node that the per-node button would: online,
-  installed under systemd and behind the latest node release. All of them are
+  (admin only). They upgrade every node that can be upgraded from the panel:
+  online, installed under systemd and behind the latest node release. All of them are
   told at the same time, so those nodes restart together: connections being
   forwarded drop within 5 seconds, and the nodes of one group go down together
   for a few seconds. A confirmation lists the nodes first. Panel only; the node
