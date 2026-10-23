@@ -27,7 +27,10 @@ disk as before.
   images and anything under `/boot` are left out; a disk mounted twice (bind
   mounts, btrfs subvolumes, ZFS datasets of one pool) is listed once, under
   its shortest mount path; at most 16 are sent. The existing system-disk
-  figures are unchanged. A node in Docker only sees the container's mounts.
+  figures are unchanged. A disk that hangs on being read cannot stall the
+  report or pile up threads: one collection runs at a time and reports carry
+  the last finished list meanwhile. A node in Docker only sees the container's
+  mounts.
 
 ## [1.2.9] - 2026-10-22
 

@@ -707,6 +707,9 @@ pub struct NodeMetrics {
     last_net: Mutex<HashMap<String, (u64, u64)>>,
     /// When the previous network sample was taken (for bps denominator).
     last_net_at: Mutex<Option<Instant>>,
+    /// Runs the per-disk `statvfs` collection one at a time (see
+    /// `DiskCollector`) and remembers its last result across snapshots.
+    disk_collector: crate::disks::DiskCollector,
     /// v0.4.15: public egress IPs detected independently per address family.
     /// `public_ipv4` doubles as the legacy `public_ip` for backward-compat
     /// (older panels read `public_ip`). `public_ipv6` is None when the node
@@ -736,6 +739,7 @@ impl NodeMetrics {
             network_interface: RwLock::new(selected),
             last_net: Mutex::new(HashMap::new()),
             last_net_at: Mutex::new(None),
+            disk_collector: crate::disks::DiskCollector::default(),
             public_ipv4: RwLock::new(None),
             public_ipv6: RwLock::new(None),
         }
@@ -1088,22 +1092,12 @@ impl NodeMetrics {
         // --- Every local disk, for the hover list and the detail drawer ---
         // `statvfs` can stall on a failing disk, so it runs off the async
         // threads and under a deadline; a miss only means no list this time.
-        let disk_list = match tokio::time::timeout(
-            Duration::from_secs(3),
-            tokio::task::spawn_blocking(crate::disks::collect_disks),
-        )
-        .await
-        {
-            Ok(Ok(list)) => list,
-            Ok(Err(e)) => {
-                tracing::debug!("disk list: collector failed: {e}");
-                Vec::new()
-            }
-            Err(_) => {
-                tracing::debug!("disk list: timed out");
-                Vec::new()
-            }
-        };
+        // A hung disk would strand its thread for good, so only one collection
+        // ever runs; while it does, reports carry the last finished list.
+        let disk_list = self
+            .disk_collector
+            .collect(crate::disks::collect_disks, Duration::from_secs(3))
+            .await;
 
         // --- Network: real-time rate + cumulative, for the SELECTED NIC only ---
         // v0.4.6: sample_networks returns the selected interface's total_*

@@ -12,6 +12,9 @@
 
 use relay_shared::protocol::DiskUsage;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 /// Most disks reported. Machines with more than this are nearly always
 /// container or snapshot mounts rather than disks anyone wants listed.
@@ -219,6 +222,70 @@ pub fn collect_disks() -> Vec<DiskUsage> {
         platform::statvfs_usage,
         MAX_DISKS,
     )
+}
+
+/// Runs the (blocking) disk collection for the status reports without ever
+/// letting more than one run at once.
+///
+/// A `statvfs` on a failing disk can hang for good in uninterruptible sleep,
+/// and a timeout cannot cancel a blocking thread. So a collection that is
+/// still running is never joined by another: while it is, reports carry the
+/// last list it (or an earlier run) finished, and no new thread is started.
+/// Held for the node's lifetime; cheap to clone.
+#[derive(Clone, Default)]
+pub struct DiskCollector {
+    running: Arc<AtomicBool>,
+    last: Arc<Mutex<Vec<DiskUsage>>>,
+}
+
+/// Clears the running flag when the collection ends, by returning or by
+/// panicking.
+struct ClearOnDrop(Arc<AtomicBool>);
+
+impl Drop for ClearOnDrop {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+impl DiskCollector {
+    /// The disks for a report: run `collector` on a blocking thread and wait up
+    /// to `deadline` for it, unless a previous run is still going, in which
+    /// case nothing is started. Either way, when the answer is not in time the
+    /// last finished list is returned (empty before the first one).
+    pub async fn collect(
+        &self,
+        collector: impl FnOnce() -> Vec<DiskUsage> + Send + 'static,
+        deadline: Duration,
+    ) -> Vec<DiskUsage> {
+        if self
+            .running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            let guard = ClearOnDrop(self.running.clone());
+            let last = self.last.clone();
+            let job = tokio::task::spawn_blocking(move || {
+                let _guard = guard;
+                let list = collector();
+                *last.lock().unwrap_or_else(PoisonError::into_inner) = list;
+            });
+            match tokio::time::timeout(deadline, job).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => tracing::debug!("disk list: collector failed: {e}"),
+                Err(_) => tracing::debug!("disk list: still collecting after {deadline:?}"),
+            }
+        }
+        self.last
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    #[cfg(test)]
+    fn is_running(&self) -> bool {
+        self.running.load(Ordering::Acquire)
+    }
 }
 
 /// No `statvfs` to ask off Linux (and no /proc/self/mountinfo to need it).
@@ -557,6 +624,120 @@ mod tests {
     #[test]
     fn nothing_to_report_is_an_empty_list() {
         assert!(pick_disks("", |_| true, |_| Some((1, 1)), MAX_DISKS).is_empty());
+    }
+
+    fn one_disk(mount: &str) -> Vec<DiskUsage> {
+        vec![DiskUsage {
+            mount: mount.into(),
+            fs_type: "ext4".into(),
+            total: 10,
+            used: 1,
+        }]
+    }
+
+    /// A collector stuck on a hung disk is never joined by another: however
+    /// many reports come, it was started once, and each report returns by its
+    /// deadline with the last list (empty here) instead of waiting or piling
+    /// up threads.
+    #[tokio::test]
+    async fn a_hung_collection_is_not_started_again() {
+        use std::sync::atomic::AtomicUsize;
+        let collector = DiskCollector::default();
+        let started = Arc::new(AtomicUsize::new(0));
+        let (release, hold) = std::sync::mpsc::channel::<()>();
+        let s = started.clone();
+        // The first report gives up waiting at its deadline, with nothing yet.
+        let first = collector
+            .collect(
+                move || {
+                    s.fetch_add(1, Ordering::SeqCst);
+                    let _ = hold.recv();
+                    one_disk("/first")
+                },
+                Duration::from_millis(100),
+            )
+            .await;
+        assert!(first.is_empty());
+        assert!(collector.is_running());
+
+        let began = std::time::Instant::now();
+        for _ in 0..20 {
+            let s = started.clone();
+            let got = collector
+                .collect(
+                    move || {
+                        s.fetch_add(1, Ordering::SeqCst);
+                        one_disk("/again")
+                    },
+                    Duration::from_secs(5),
+                )
+                .await;
+            assert!(got.is_empty());
+        }
+        assert!(
+            began.elapsed() < Duration::from_secs(2),
+            "later reports must not wait on the hung collection"
+        );
+        assert_eq!(started.load(Ordering::SeqCst), 1, "started exactly once");
+
+        // Released, it finishes and frees the way for the next run, which
+        // returns fresh data.
+        release.send(()).unwrap();
+        for _ in 0..200 {
+            if !collector.is_running() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(!collector.is_running());
+        let got = collector
+            .collect(|| one_disk("/fresh"), Duration::from_secs(5))
+            .await;
+        assert_eq!(got, one_disk("/fresh"));
+        assert_eq!(started.load(Ordering::SeqCst), 1);
+    }
+
+    /// While a run is still going, a report carries the list the last finished
+    /// run left, not nothing.
+    #[tokio::test]
+    async fn a_report_during_a_slow_run_carries_the_last_finished_list() {
+        let collector = DiskCollector::default();
+        let got = collector
+            .collect(|| one_disk("/done"), Duration::from_secs(5))
+            .await;
+        assert_eq!(got, one_disk("/done"));
+
+        let (release, hold) = std::sync::mpsc::channel::<()>();
+        let slow = collector
+            .collect(
+                move || {
+                    let _ = hold.recv();
+                    one_disk("/slow")
+                },
+                Duration::from_millis(50),
+            )
+            .await;
+        assert_eq!(slow, one_disk("/done"), "timed out: the previous list");
+        let during = collector
+            .collect(|| one_disk("/never"), Duration::from_millis(50))
+            .await;
+        assert_eq!(during, one_disk("/done"));
+        release.send(()).unwrap();
+    }
+
+    /// A collector that panics still frees the way for the next run.
+    #[tokio::test]
+    async fn a_panicking_collection_clears_the_flag() {
+        let collector = DiskCollector::default();
+        let got = collector
+            .collect(|| panic!("statvfs went wrong"), Duration::from_secs(5))
+            .await;
+        assert!(got.is_empty());
+        assert!(!collector.is_running(), "the flag must be cleared");
+        let got = collector
+            .collect(|| one_disk("/ok"), Duration::from_secs(5))
+            .await;
+        assert_eq!(got, one_disk("/ok"));
     }
 
     /// On Linux the real thing runs. (A container's root is an overlay, which
