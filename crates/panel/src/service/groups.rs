@@ -141,6 +141,27 @@ pub async fn update_group(
     }
 }
 
+#[derive(Debug)]
+pub enum ReorderGroupsError {
+    /// Empty list, or the same id twice.
+    Invalid,
+    /// An id that is not a device group.
+    UnknownGroup,
+    Database(DbError),
+}
+
+/// Set the panel-wide group display order. See `GroupRepository::reorder_groups`.
+pub async fn reorder_groups(db: &dyn Repository, ids: &[i64]) -> Result<(), ReorderGroupsError> {
+    let distinct: std::collections::HashSet<i64> = ids.iter().copied().collect();
+    if ids.is_empty() || distinct.len() != ids.len() {
+        return Err(ReorderGroupsError::Invalid);
+    }
+    db.reorder_groups(ids).await.map_err(|e| match e {
+        DbError::NotFound => ReorderGroupsError::UnknownGroup,
+        other => ReorderGroupsError::Database(other),
+    })
+}
+
 /// v1.0.4: error returned when a group cannot be deleted because rules
 /// still reference it.
 #[derive(Debug)]

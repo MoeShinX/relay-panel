@@ -13,6 +13,8 @@
 {$RELAYPANEL_DOMAIN} {
     encode gzip zstd
 
+    header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
     # API + SPA served by the panel container on the Compose network
     reverse_proxy panel:18888
 }

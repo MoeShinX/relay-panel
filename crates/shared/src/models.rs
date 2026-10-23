@@ -214,6 +214,10 @@ pub struct DeviceGroup {
     /// lines). Admins are unaffected. Default false.
     #[serde(default)]
     pub hidden: bool,
+    /// Panel-wide display order (lower first; ties fall back to `id`). Set by
+    /// the admin dragging groups on the node-status page.
+    #[serde(default)]
+    pub sort_order: i32,
     pub created_at: String,
 }
 
@@ -235,6 +239,9 @@ pub struct SharedGroupSummary {
     /// while the rule dropdown / shop still list it. Default false.
     #[serde(default)]
     pub hidden: bool,
+    /// Panel-wide display order (see `DeviceGroup::sort_order`).
+    #[serde(default)]
+    pub sort_order: i32,
 }
 
 /// v0.4.13 PR2 / v0.4.14 PR1: per-NODE availability + load metrics for a shared
@@ -254,6 +261,10 @@ pub struct SharedGroupSummary {
 pub struct SharedNodeSummary {
     pub group_id: i64,
     pub group_name: String,
+    /// The group's panel-wide display order, so the page lists groups in the
+    /// order the admin arranged (ties fall back to `group_id`).
+    #[serde(default)]
+    pub group_sort_order: i32,
     pub connect_host: String,
     pub capabilities: String,
     pub region: Option<String>,

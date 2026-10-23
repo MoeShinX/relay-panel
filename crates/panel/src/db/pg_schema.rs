@@ -91,6 +91,9 @@ CREATE TABLE IF NOT EXISTS device_groups (
     rate DOUBLE PRECISION NOT NULL DEFAULT 1.0,
     -- v1.0.7: hide from regular users' shared views (mirrors SQLite Migration 36).
     hidden BOOLEAN NOT NULL DEFAULT FALSE,
+    -- v1.2.16: panel-wide display order (mirrors SQLite Migration 47). No index
+    -- here: the baseline runs before migrations on an older database.
+    sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
@@ -395,7 +398,7 @@ INSERT INTO schema_version (version) VALUES (1) ON CONFLICT (version) DO NOTHING
 /// The schema revision this build's baseline `PG_SCHEMA_SQL` represents. When a
 /// future release adds a column/table, bump this and add a matching arm in
 /// `run_pg_migrations`. `apply_pg_schema` seeds `schema_version` with revision 1.
-pub const PG_SCHEMA_VERSION: i32 = 29;
+pub const PG_SCHEMA_VERSION: i32 = 30;
 
 /// Apply PG_SCHEMA_SQL to a pool. PostgreSQL's prepared-statement protocol
 /// rejects multi-statement strings ("cannot insert multiple commands into a
@@ -1515,6 +1518,25 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         .await?;
         tx.commit().await?;
         tracing::info!("PG migration 29: forward_rules PROXY protocol columns present");
+    }
+
+    // Revision 30: panel-wide device-group display order. Mirrors SQLite
+    // Migration 47; existing groups get 0 and list by (sort_order, id), i.e.
+    // unchanged until an admin drags one.
+    if current < 30 {
+        let mut tx = pool.begin().await?;
+        sqlx::query(
+            "ALTER TABLE device_groups ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO schema_version (version) VALUES (30) ON CONFLICT (version) DO NOTHING",
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        tracing::info!("PG migration 30: device_groups.sort_order column present");
     }
 
     Ok(())

@@ -10,13 +10,85 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+Schema: SQLite migration 47 / PostgreSQL revision 30, applied on start (one
+column on `device_groups`; every existing group gets 0, so the order stays as it
+was, by id).
+
+### Added
+
+- **Drag the device groups into the order you want.** On the Node Status page
+  an admin can now drag a group by the handle at the left of its header (or
+  pick it up with the keyboard) and drop it where it should go; the groups in
+  between shift down or up by one. The order is kept in the panel, so it is the
+  same on every browser and device, and it applies wherever groups are listed:
+  Node Status (admin and user views), Device Groups, the entry/exit group
+  pickers on a rule, and a user's or plan's granted groups. Nodes inside a
+  group keep their automatic order. Regular users see the order but cannot
+  change it, and phones show the order without the handle. A new group goes to
+  the end. New admin endpoint `PUT /api/v1/groups/order`, recorded in the audit
+  log.
+
+- **Installing and updating the panel on servers in mainland China.** The
+  installer, `deploy.sh` and the dashboard's "Update now" now switch to
+  accelerated downloads on their own when GitHub or the registries are slow or
+  unreachable. Nothing to configure; servers that reach them fine behave as
+  before. The one-click update that brings this version in still runs the
+  previous updater, so on a server that cannot reach GitHub install this
+  version once by hand.
+
 ### Changed
+
+- **A regular user's rules can no longer point at the panel host itself.** A
+  rule whose owner is not an admin is refused (400) if any target is a
+  loopback, unspecified or link-local address, including the cloud metadata
+  address: `127.0.0.0/8`, `0.0.0.0/8`, `169.254.0.0/16`, `::1`, `::`,
+  `fe80::/10` (and their IPv4-mapped forms), `localhost` and `*.localhost`,
+  and the shorthand spellings the system resolver also accepts (`127.1`,
+  `2130706433`, `0x7f000001`, `0177.0.0.1`). Private ranges such as
+  `10.0.0.0/8` and `192.168.0.0/16` are still allowed. The check is by the
+  rule's owner, so an admin creating a rule for a regular user is held to it
+  too; admins' own rules are not restricted. It runs when a rule is created
+  (including import and copy) and when an edit changes a rule's targets;
+  existing rules keep working and other edits are not checked. A domain name
+  that resolves to such an address cannot be recognised by the panel.
+- **Admin rights follow the database, not the token.** The panel now reads a
+  user's current admin flag on every request, so removing someone's admin role
+  takes effect at once for tokens they already hold (before, it lasted until
+  the token expired or was revoked). Granting the role likewise needs no
+  re-login.
+
+- **The update check works where GitHub's API is blocked or rate limited.**
 
 - **Installing nodes on servers in mainland China.** The node install command
   shown in the panel now also works when GitHub is slow or unreachable, and is
   still one line to paste into bash. The installer and the node's one-click
   self-upgrade got the same treatment (see CHANGELOG-NODE.md). Nothing to
   configure; servers that reach GitHub fine behave as before.
+
+### Fixed
+
+- A rule's listen port of 0 is refused instead of letting the node pick a
+  random port the panel would not know about.
+
+### Security
+
+- **No fixed default admin password.** A fresh panel no longer starts with
+  `admin` / `admin123`, which was a working login for anyone who reached a new
+  install before its owner did. On the first boot the panel uses
+  `ADMIN_INITIAL_PASSWORD` if set, otherwise it generates a random password
+  and logs it once; `deploy.sh` shows it at the end of a first install. The
+  first login still asks for a new password. Existing panels are not
+  affected. Lost it: `relay-panel reset-admin-password`.
+- **Changing your password can no longer stall the panel.** The bcrypt work
+  of a password change (and of an admin resetting a user's password) runs on
+  the blocking pool under the same limits as login, and a user can try at
+  most 5 times a minute.
+- **Admin passwords are changed only with the current password.** The admin
+  "reset password" endpoint no longer accepts any admin account, the
+  caller's own included.
+- **Caddy mode sends HSTS**, so browsers stay on HTTPS.
+
+---
 
 ## [1.2.15] - 2026-10-22
 

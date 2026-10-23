@@ -114,7 +114,10 @@ async fn extract_auth_user(parts: &mut Parts, state: &AppState) -> Result<AuthUs
     //     before its 24h exp)
     //   - must_change_password → block every endpoint EXCEPT the password-change
     //     whitelist (see below), returning PasswordChangeRequired (403 + code)
-    let (banned, db_token_version, must_change_password) =
+    //   - the admin flag comes from this same row, NOT from the JWT claim, so
+    //     a demoted admin loses privileges immediately (and a promoted user
+    //     gains them without re-login). `claims.admin` is deliberately ignored.
+    let (banned, db_token_version, must_change_password, db_admin) =
         match state.db.find_auth_state_by_id(token_data.claims.sub).await {
             Ok(Some(auth_state)) => auth_state,
             Ok(None) => return Err(AuthError::Unauthorized), // user deleted
@@ -139,7 +142,7 @@ async fn extract_auth_user(parts: &mut Parts, state: &AppState) -> Result<AuthUs
 
     Ok(AuthUser {
         user_id: token_data.claims.sub,
-        admin: token_data.claims.admin,
+        admin: db_admin,
     })
 }
 

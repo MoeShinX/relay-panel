@@ -297,6 +297,16 @@ pub async fn get_node_status(
     // endpoint uses, so the admin /nodes board and the user /nodes/shared board
     // never disagree about who's online. The frontend must NOT recompute it.
     let now = chrono::Utc::now();
+    // The panel-wide group display order, read once. The page lists groups by
+    // it; a group missing here (its record outlived it) just sorts last.
+    let sort_orders: std::collections::HashMap<i64, i32> = match state.db.list_groups(&scope).await
+    {
+        Ok(groups) => groups.into_iter().map(|g| (g.id, g.sort_order)).collect(),
+        Err(e) => {
+            tracing::warn!("get_node_status: list_groups failed: {}", e);
+            Default::default()
+        }
+    };
     for (key, value) in &rows {
         let (group_id, node_id_from_key) = match parse_status_key(key) {
             Some(parsed) => parsed,
@@ -328,6 +338,9 @@ pub async fn get_node_status(
         status["group_id"] = serde_json::json!(group_id);
         status["group_name"] =
             serde_json::json!(group_name.unwrap_or_else(|| format!("Group {}", group_id)));
+        if let Some(order) = sort_orders.get(&group_id) {
+            status["group_sort_order"] = serde_json::json!(order);
+        }
         // Surface the node identity so the frontend can render multiple nodes
         // per group distinctly. Prefer the JSON field the node sent (canonical);
         // fall back to the key segment for older status rows that predate it.

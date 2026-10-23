@@ -8,8 +8,9 @@ use sqlx::PgConnection;
 impl DeviceGroupAuthRepository for PgRepository {
     async fn list_user_device_groups(&self, user_id: i64) -> Result<Vec<i64>, DbError> {
         let rows: Vec<(i64,)> = sqlx::query_as(
-            "SELECT device_group_id FROM user_device_groups \
-             WHERE user_id = $1 ORDER BY device_group_id",
+            "SELECT udg.device_group_id FROM user_device_groups udg \
+             JOIN device_groups dg ON dg.id = udg.device_group_id \
+             WHERE udg.user_id = $1 ORDER BY dg.sort_order, dg.id",
         )
         .bind(user_id)
         .fetch_all(&self.pool)
@@ -135,10 +136,11 @@ async fn authorized_ids(conn: &mut PgConnection, user_id: i64) -> Result<Vec<i64
         None => return Ok(Vec::new()),
     };
     if is_admin || all {
-        let all_in: Vec<(i64,)> =
-            sqlx::query_as("SELECT id FROM device_groups WHERE group_type = 'in' ORDER BY id")
-                .fetch_all(&mut *conn)
-                .await?;
+        let all_in: Vec<(i64,)> = sqlx::query_as(
+            "SELECT id FROM device_groups WHERE group_type = 'in' ORDER BY sort_order, id",
+        )
+        .fetch_all(&mut *conn)
+        .await?;
         return Ok(all_in.into_iter().map(|(id,)| id).collect());
     }
     // Otherwise only the user's explicit assignments (inbound groups only —
@@ -147,7 +149,7 @@ async fn authorized_ids(conn: &mut PgConnection, user_id: i64) -> Result<Vec<i64
         "SELECT dg.id FROM device_groups dg \
          JOIN user_device_groups udg ON udg.device_group_id = dg.id \
          WHERE udg.user_id = $1 AND dg.group_type = 'in' \
-         ORDER BY dg.id",
+         ORDER BY dg.sort_order, dg.id",
     )
     .bind(user_id)
     .fetch_all(&mut *conn)

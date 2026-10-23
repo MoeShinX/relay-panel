@@ -11,7 +11,8 @@
 # What it does:
 #   1. Checks Docker + docker compose are installed (installs via get.docker.com if not)
 #   2. Generates JWT_SECRET + PANEL_KEY into .env (skips if .env already exists)
-#   3. Pulls pre-built images from GHCR (or builds from source if BUILD_LOCAL=1)
+#   3. Pulls pre-built images from GHCR, falling back to mirror registries where
+#      GHCR / Docker Hub are slow or blocked (or builds from source if BUILD_LOCAL=1)
 #   4. docker compose up -d
 #   5. Waits for panel HTTP, then checks GET /api/v1/health (a real JSON health
 #      probe — requires HTTP 200 + application/json + status:"ok" + a version).
@@ -36,6 +37,16 @@ NC='\033[0m'
 info()  { echo -e "${GREEN}[INFO]${NC}  $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 fail()  { echo -e "${RED}[FAIL]${NC}  $*"; exit 1; }
+
+# Download acceleration: container images are pulled from ghcr.io / Docker Hub
+# first and, where those are slow or blocked, from mirror registries (see
+# scripts/mirror-lib.sh). Nothing to configure.
+if [ ! -f scripts/mirror-lib.sh ]; then
+    fail "scripts/mirror-lib.sh not found in ${REPO_DIR}. The repository may be incomplete; run: git -C ${REPO_DIR} status"
+fi
+rp_say() { info "$*"; }
+# shellcheck source=scripts/mirror-lib.sh
+. scripts/mirror-lib.sh
 
 # v1.2.11: install the host half of the panel's one-click update (see
 # scripts/panel-updater.sh). The panel only drops ./run/update-request; this
@@ -329,6 +340,14 @@ case "${RELAYPANEL_DB_MODE:-}" in
         else
             _PRE_COMPOSE="docker-compose.yaml"
         fi
+        # Fetch the image through the registry mirrors first, so that `up`
+        # below finds it locally instead of waiting on a slow registry.
+        _pg_image="$(docker compose -f "$_PRE_COMPOSE" --profile postgres config --images 2>/dev/null \
+            | grep -E '(^|/)postgres:' | head -n1 || true)"
+        if [ -n "$_pg_image" ] && ! rp_pull_image "$_pg_image"; then
+            warn "Could not pull ${_pg_image} from any registry; trying with whatever compose can do."
+        fi
+        unset _pg_image
         docker compose -f "$_PRE_COMPOSE" --profile postgres up -d postgres
 
         info "Waiting for PostgreSQL to become healthy ..."
@@ -350,6 +369,9 @@ case "${RELAYPANEL_DB_MODE:-}" in
         # We use a temporary postgres container on the same compose network
         # so the user doesn't need psql installed on the host.
         info "Verifying external PostgreSQL connectivity ..."
+        if ! rp_pull_image postgres:16-alpine; then
+            warn "Could not pull postgres:16-alpine from any registry; using a local copy if there is one."
+        fi
         if ! docker run --rm --network host \
             postgres:16-alpine \
             psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -c "SELECT 1" >/dev/null 2>&1; then
@@ -710,12 +732,23 @@ elif [ -f "$RELEASE_COMPOSE" ]; then
     # The exact image version comes from docker-compose.release.yaml (e.g.
     # ghcr.io/moeshinx/relay-panel-node:0.2.1), so bumping the tag there is
     # what rolls users forward.
-    info "Pulling pre-built panel image from GHCR ..."
+    info "Pulling pre-built images from GHCR (mirror registries are tried if it is slow or blocked) ..."
     COMPOSE_FILE="$RELEASE_COMPOSE"
     COMPOSE_FLAGS=""
-    if ! docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" pull; then
-        fail "Failed to pull images from GHCR. Check your internet connection, or build from source with: RELAYPANEL_BUILD_LOCAL=1 ./deploy.sh"
+    # Only the services the active profiles enable are pulled. An image that
+    # came from a mirror is tagged back to the name the compose file uses, so
+    # `up -d` below finds it locally. If the image list cannot be read (return
+    # 2), fall back to a plain `docker compose pull`.
+    pull_rc=0
+    rp_pull_compose_images -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" || pull_rc=$?
+    if [ "$pull_rc" -eq 2 ]; then
+        pull_rc=0
+        docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" pull || pull_rc=1
     fi
+    if [ "$pull_rc" -ne 0 ]; then
+        fail "Failed to pull images from GHCR or any mirror. Check your internet connection, or build from source with: RELAYPANEL_BUILD_LOCAL=1 ./deploy.sh"
+    fi
+    unset pull_rc
 else
     # Fallback: no release compose file, build from source
     warn "docker-compose.release.yaml not found - building from source ..."
@@ -873,14 +906,34 @@ case "$RELAYPANEL_WEB_MODE" in
 esac
 echo "  DB:      ${RELAYPANEL_DB_MODE:-sqlite}"
 echo "  Web:     $(web_mode_label "$RELAYPANEL_WEB_MODE")"
-# Security: we deliberately do NOT print the default admin/admin123 credentials
-# here, nor do we probe them (probing an unchanged default is a needless login
-# attempt that can trip rate-limiting; printing it trains users to ignore creds
-# in shell output). First-time installers are told once in the README to change
-# the password; upgrades use whatever password the admin already set.
-echo "  Login:   open the URL above and sign in"
-echo ""
-echo "  If this is a FIRST install, change the default admin password now."
+# There is no fixed default password. On its very first boot the panel picks a
+# random admin password (unless ADMIN_INITIAL_PASSWORD is set) and logs it once;
+# show it here so a first install does not send people digging through logs.
+# The line only exists in the log of the container that did the first boot, so
+# an upgrade (new container) shows nothing. We never probe a login.
+INITIAL_ADMIN_PASSWORD=""
+# Only on a first install: a re-run that keeps the same container would otherwise
+# print a password that may long since have been changed.
+if [ "$FRESH_INSTALL" = "1" ]; then
+    INITIAL_ADMIN_PASSWORD="$(docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" logs --no-color panel 2>/dev/null \
+        | sed 's/\x1b\[[0-9;]*m//g' \
+        | grep -o 'initial admin login: username `admin`, password `[^`]*`' \
+        | tail -n 1 \
+        | sed 's/.*password `\([^`]*\)`.*/\1/' || true)"
+fi
+if [ -n "$INITIAL_ADMIN_PASSWORD" ]; then
+    echo "  Login:   admin / ${INITIAL_ADMIN_PASSWORD}"
+    echo "           (initial password, valid until you change it — the first login asks you to)"
+else
+    # Upgrades land here, and so would a first install whose log no longer
+    # holds the line (rotated away, or ADMIN_INITIAL_PASSWORD was set).
+    echo "  Login:   open the URL above and sign in"
+    echo "           First install and no password shown? Set a new one with:"
+    # Through the entrypoint, like the panel itself: it fixes ownership of the
+    # data directory and drops to the panel user, so the reset never leaves
+    # root-owned database files behind.
+    echo "           docker compose -f $COMPOSE_FILE exec panel relaypanel-entrypoint ./relay-panel reset-admin-password"
+fi
 if [ "${RELAYPANEL_WITH_NODE:-0}" != "1" ]; then
     echo ""
     echo "  Only the panel is running. To forward traffic, install relay-node"

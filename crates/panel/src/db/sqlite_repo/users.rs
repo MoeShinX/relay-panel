@@ -48,9 +48,12 @@ impl UserRepository for SqliteRepository {
         Ok(row.map(|(b,)| b))
     }
 
-    async fn find_auth_state_by_id(&self, id: i64) -> Result<Option<(bool, i64, bool)>, DbError> {
-        let row: Option<(bool, i64, bool)> = sqlx::query_as(
-            "SELECT banned, token_version, must_change_password FROM users WHERE id = ?",
+    async fn find_auth_state_by_id(
+        &self,
+        id: i64,
+    ) -> Result<Option<(bool, i64, bool, bool)>, DbError> {
+        let row: Option<(bool, i64, bool, bool)> = sqlx::query_as(
+            "SELECT banned, token_version, must_change_password, admin FROM users WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
