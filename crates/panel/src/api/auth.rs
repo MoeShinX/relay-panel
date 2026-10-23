@@ -339,7 +339,7 @@ pub async fn registration_status(
 /// to show the security reminder banner.
 async fn default_password_change_required(db: &dyn crate::db::repo::Repository) -> bool {
     match db.find_auth_state_by_id(1).await {
-        Ok(Some((_banned, _version, must_change))) => must_change,
+        Ok(Some((_banned, _version, must_change, _admin))) => must_change,
         // User doesn't exist (fresh DB before seed) or DB error → no banner.
         _ => false,
     }

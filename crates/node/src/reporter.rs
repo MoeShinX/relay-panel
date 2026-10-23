@@ -2,7 +2,7 @@ use crate::config::NodeConfig;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use relay_shared::protocol::{
-    ApiResponse, ListenerError, StatusReport, TrafficEntry, TrafficReport,
+    ApiResponse, DiskUsage, ListenerError, StatusReport, TrafficEntry, TrafficReport,
 };
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -707,6 +707,9 @@ pub struct NodeMetrics {
     last_net: Mutex<HashMap<String, (u64, u64)>>,
     /// When the previous network sample was taken (for bps denominator).
     last_net_at: Mutex<Option<Instant>>,
+    /// Runs the per-disk `statvfs` collection one at a time (see
+    /// `DiskCollector`) and remembers its last result across snapshots.
+    disk_collector: crate::disks::DiskCollector,
     /// v0.4.15: public egress IPs detected independently per address family.
     /// `public_ipv4` doubles as the legacy `public_ip` for backward-compat
     /// (older panels read `public_ip`). `public_ipv6` is None when the node
@@ -736,6 +739,7 @@ impl NodeMetrics {
             network_interface: RwLock::new(selected),
             last_net: Mutex::new(HashMap::new()),
             last_net_at: Mutex::new(None),
+            disk_collector: crate::disks::DiskCollector::default(),
             public_ipv4: RwLock::new(None),
             public_ipv6: RwLock::new(None),
         }
@@ -936,6 +940,8 @@ struct MetricsSnapshot {
     disk_used: Option<u64>,
     disk_usage_percent: Option<f32>,
     disk_mount: Option<String>,
+    /// Every local disk (root first); empty when none could be listed.
+    disk_list: Vec<DiskUsage>,
     upload_bps: Option<u64>,
     download_bps: Option<u64>,
     boot_upload_bytes: Option<u64>,
@@ -1083,6 +1089,16 @@ impl NodeMetrics {
             }
         };
 
+        // --- Every local disk, for the hover list and the detail drawer ---
+        // `statvfs` can stall on a failing disk, so it runs off the async
+        // threads and under a deadline; a miss only means no list this time.
+        // A hung disk would strand its thread for good, so only one collection
+        // ever runs; while it does, reports carry the last finished list.
+        let disk_list = self
+            .disk_collector
+            .collect(crate::disks::collect_disks, Duration::from_secs(3))
+            .await;
+
         // --- Network: real-time rate + cumulative, for the SELECTED NIC only ---
         // v0.4.6: sample_networks returns the selected interface's total_*
         // (since-boot cumulative). The cumulative field is that value directly;
@@ -1153,6 +1169,7 @@ impl NodeMetrics {
             disk_used,
             disk_usage_percent,
             disk_mount,
+            disk_list,
             upload_bps,
             download_bps,
             boot_upload_bytes,
@@ -1227,6 +1244,8 @@ pub async fn report_status(
         // when the total could not be read (it would only say "0 B / 0 B").
         mem_total: (snap.mem_total > 0).then_some(snap.mem_total),
         mem_used: (snap.mem_total > 0).then_some(snap.mem_used),
+        // After node-v1.2.9: every local disk, not just `/`.
+        disks: snap.disk_list,
     };
 
     // debug, not info: this runs every poll cycle (default 10s). Keeping it

@@ -350,6 +350,8 @@ export const enUS: Dict = {
   diskUsage: 'Usage',
   networkInterface: 'Interface',
   noNodeReportingInGroup: 'No node is reporting on this line yet',
+  dragToReorderGroup: 'Drag to reorder groups',
+  reorderGroupsFailed: 'Could not save the group order; the previous order was restored',
   uptimeDay: 'd',
   uptimeHour: 'h',
   uptimeMinute: 'm',
@@ -770,6 +772,7 @@ export const enUS: Dict = {
   audit_delete_rule: 'Delete rule',
   audit_restart_rule: 'Restart rule',
   audit_delete_group: 'Delete group',
+  audit_reorder_groups: 'Reorder groups',
   audit_rotate_group_token: 'Rotate node token',
   // v1.2.8: "dispatched", not "done" — see the zh-CN note. The entry is written
   // when the command reaches the WS channel; the node can still fail to

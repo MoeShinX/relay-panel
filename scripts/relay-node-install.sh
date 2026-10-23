@@ -17,6 +17,17 @@
 #   RELAY_PROXY           Same as -p (e.g. socks5://127.0.0.1:10808)
 #   RELAY_NODE_BASE_URL   Custom download mirror base, e.g. https://download.example.com/relay-panel
 #                         The script will fetch {BASE_URL}/relay-node-linux-{arch}
+#                         When set it is the ONLY source (no GitHub, no accelerators).
+#
+# Download acceleration (default, when RELAY_NODE_BASE_URL is not set):
+#   Everything from GitHub is fetched directly first; if that cannot connect (5 s)
+#   or is too slow, the script moves on, in this order, to a trusted relay,
+#   then https://gh-proxy.com/ and https://ghfast.top/.
+#   Only direct GitHub and the trusted relay are trusted for the latest-version
+#   lookup and for the program's sha256 (GitHub's own .sha256 file, fetched
+#   BEFORE the program). gh-proxy.com and ghfast.top may only carry the program
+#   file, which must then match that sha256 exactly. If the sha256 cannot be
+#   obtained from a trusted source the install stops. Each switch is printed.
 #
 # Idempotent re-runs: downloading to a temp file and swapping atomically means
 # this script can be re-run to upgrade an already-running node. The running
@@ -124,7 +135,12 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Environment:"
             echo "  RELAY_PROXY           Same as -p"
-            echo "  RELAY_NODE_BASE_URL   Custom mirror for binary downloads"
+            echo "  RELAY_NODE_BASE_URL   Custom mirror for binary downloads (used alone: no GitHub, no accelerators)"
+            echo ""
+            echo "Downloads from GitHub try direct first, then a trusted mirror, gh-proxy.com and"
+            echo "ghfast.top in turn (5 s to connect; the program is dropped if under 50 KB/s for 15 s)."
+            echo "The sha256 and the latest version are only taken from GitHub itself (direct or"
+            echo "through the trusted mirror); gh-proxy.com and ghfast.top only carry the program file."
             exit 0
             ;;
         *)
@@ -170,33 +186,266 @@ BINARY="${INSTALL_DIR}/relay-node"
 # the atomic mv happens only after the service is stopped.
 TMP_BINARY="${BINARY}.tmp"
 
+# ---------- GitHub download acceleration ----------
+# GitHub is slow or blocked in some networks, so everything fetched from GitHub
+# is tried in this order, and the first source that works is used:
+#   1. direct                          (trusted)
+#   2. the trusted relay, "mirror"     (trusted)
+#   3. https://gh-proxy.com/           (public third party)
+#   4. https://ghfast.top/             (public third party)
+# A proxy URL is the proxy prefix followed by the full GitHub URL.
+#
+# Trust: the sha256 file and the latest-version lookup are taken ONLY from the
+# trusted sources (the first TRUSTED_MIRRORS entries), never from a public one
+# and never because "it served the program": a relay that supplies both the file
+# and its hash proves nothing. The sha256 is fetched FIRST; if no trusted source
+# gives it the install stops. The program may come from any source and must match
+# that sha256 exactly (a mismatch just moves on to the next source).
+#
+# Limits: 5 s to connect; small files (version, sha256) 10 s in all per source and
+# at most 1 MB; the program has no total time limit but is dropped for the next
+# source if it stays under 50 KB/s for 15 s, and is capped at 200 MB. Within one
+# run, once a source delivered the program it is tried first for the next one.
+# RELAY_NODE_BASE_URL (a mirror you run yourself) overrides all of this.
+GH_PREFIXES=("" "https://down.relaypanel.dev/" "https://gh-proxy.com/" "https://ghfast.top/")
+# What messages call each source (never a URL); same order as GH_PREFIXES.
+GH_LABELS=("direct" "mirror" "gh-proxy.com" "ghfast.top")
+# GH_PREFIXES[0 .. TRUSTED_MIRRORS-1] are the trusted ones.
+TRUSTED_MIRRORS=2
+# Index into GH_PREFIXES of the source that last delivered the program (-1 = none yet).
+PREFERRED_MIRROR=-1
+# Size caps passed to curl --max-filesize.
+MAX_BINARY_BYTES=209715200
+MAX_SMALL_BYTES=1048576
+# sha256 (lowercase hex) the program must match; set once the trusted sha256 is known.
+EXPECTED_SHA256=""
+
+# Short name of a source for messages (never a full URL).
+mirror_label() {
+    # $1 = index into GH_PREFIXES
+    echo "${GH_LABELS[$1]}"
+}
+
+# Indexes 0..n-1 in the order to try: the preferred one first, then the rest.
+mirror_order() {
+    # $1 = preferred index (-1 = none), $2 = count
+    local p="$1" n="$2" i
+    if [ "$p" -ge 0 ] && [ "$p" -lt "$n" ]; then
+        echo "$p"
+    else
+        p=-1
+    fi
+    for ((i = 0; i < n; i++)); do
+        if [ "$i" -ne "$p" ]; then
+            echo "$i"
+        fi
+    done
+    return 0
+}
+
+# Why a curl run failed, in a few words (no URLs).
+curl_failure_reason() {
+    # $1 = curl exit status, $2 = HTTP status curl reported
+    case "$1" in
+        6)  echo "cannot resolve host" ;;
+        7)  echo "cannot connect" ;;
+        22) echo "HTTP ${2:-error}" ;;
+        28) echo "too slow or timed out" ;;
+        63) echo "too large" ;;
+        35|51|52|53|54|58|59|60|77|83|90|91) echo "TLS/connection error" ;;
+        18|56) echo "connection broke while downloading" ;;
+        *)  echo "curl error $1" ;;
+    esac
+}
+
+# Content checks, so a 200 "blocked" page from a proxy counts as that source failing.
+valid_elf_file() {
+    # $1 = file. ELF magic 7f 45 4c 46.
+    local magic
+    magic="$(head -c 4 "$1" 2>/dev/null | od -A n -t x1 2>/dev/null | tr -d ' \n')"
+    [ "$magic" = "7f454c46" ]
+}
+valid_sha256_file() {
+    # $1 = file. First word must be 64 hex digits.
+    local h
+    h="$(awk '{ print $1; exit }' "$1" 2>/dev/null | tr -d '[:space:]')"
+    [ "${#h}" -eq 64 ] && [ -z "${h//[0-9A-Fa-f]/}" ]
+}
+
+# sha256 of a file as lowercase hex ("" when no tool is available).
+file_sha256() {
+    # $1 = file
+    local h=""
+    if command -v sha256sum >/dev/null 2>&1; then
+        h="$(sha256sum "$1" 2>/dev/null | awk '{ print $1 }')"
+    elif command -v shasum >/dev/null 2>&1; then
+        h="$(shasum -a 256 "$1" 2>/dev/null | awk '{ print $1 }')"
+    elif command -v sha256 >/dev/null 2>&1; then
+        h="$(sha256 "$1" 2>/dev/null | awk '{ print $1 }')"
+    fi
+    printf '%s' "$h" | tr '[:upper:]' '[:lower:]'
+}
+
+# The program: an ELF file that matches EXPECTED_SHA256 (when known).
+# Returns 1 for "not an ELF", 2 for "sha256 mismatch".
+valid_program_file() {
+    # $1 = file
+    local a
+    valid_elf_file "$1" || return 1
+    if [ -n "$EXPECTED_SHA256" ]; then
+        a="$(file_sha256 "$1")"
+        if [ -n "$a" ] && [ "$a" != "$EXPECTED_SHA256" ]; then
+            return 2
+        fi
+    fi
+    return 0
+}
+
+# Download a GitHub URL to a file through the source list.
+fetch_with_mirrors() {
+    # $1 = what (for messages), $2 = full GitHub URL, $3 = destination file,
+    # $4 = "small" | "large", $5 = validator function name.
+    #   small: TRUSTED sources only, list order (sha256, version text).
+    #   large: the program; every source (preferred one first) when EXPECTED_SHA256
+    #          is known, otherwise (SKIP_CHECKSUM) trusted sources only.
+    # Returns 0 on success; 1 when every source failed (dest removed).
+    local what="$1" url="$2" dest="$3" mode="$4" validator="$5"
+    local i label rc code why vrc order
+    local -a opts
+    if [ "$mode" = "large" ] && [ -n "$EXPECTED_SHA256" ]; then
+        order="$(mirror_order "$PREFERRED_MIRROR" "${#GH_PREFIXES[@]}")"
+    elif [ "$mode" = "large" ]; then
+        warn "${what}: no sha256 to check against; using GitHub itself only (no third-party accelerators)"
+        order="$(mirror_order -1 "$TRUSTED_MIRRORS")"
+    else
+        order="$(mirror_order -1 "$TRUSTED_MIRRORS")"
+    fi
+    for i in $order; do
+        label="$(mirror_label "$i")"
+        if [ "$mode" = "large" ]; then
+            opts=(--progress-bar --connect-timeout 5 --speed-limit 51200 --speed-time 15 --max-filesize "$MAX_BINARY_BYTES")
+        else
+            opts=(-s --connect-timeout 5 --max-time 10 --max-filesize "$MAX_SMALL_BYTES")
+        fi
+        rm -f "$dest"
+        rc=0
+        code="$(curl -fL "${opts[@]}" ${PROXY:+--proxy "$PROXY"} \
+            -o "$dest" -w '%{http_code}' "${GH_PREFIXES[$i]}${url}")" || rc=$?
+        if [ "$rc" -eq 0 ]; then
+            if [ ! -s "$dest" ]; then
+                why="empty response"
+            else
+                vrc=0
+                "$validator" "$dest" || vrc=$?
+                case "$vrc" in
+                    0)
+                        info "${what}: downloaded via ${label}"
+                        if [ "$mode" = "large" ]; then
+                            PREFERRED_MIRROR="$i"
+                        fi
+                        return 0
+                        ;;
+                    2) why="sha256 mismatch" ;;
+                    *) why="unexpected content" ;;
+                esac
+            fi
+        else
+            why="$(curl_failure_reason "$rc" "$code")"
+        fi
+        warn "${what}: ${label} failed (${why}); trying the next source"
+    done
+    rm -f "$dest"
+    return 1
+}
+
+# Small text via curl to stdout; empty output on any failure.
+curl_small_text() {
+    # $1 = URL
+    curl -fsSL --connect-timeout 5 --max-time 10 --max-filesize "$MAX_SMALL_BYTES" \
+        ${PROXY:+--proxy "$PROXY"} -H 'User-Agent: relay-node-install' "$1" 2>/dev/null || true
+}
+
+# Highest node-v* version in a GitHub releases JSON on stdin. jq is not assumed.
+node_version_from_releases() {
+    { grep -oE '"tag_name": ?"node-v[0-9]+\.[0-9]+\.[0-9]+[^"]*"' \
+        | sed -E 's/"tag_name": ?"node-v//; s/"$//' \
+        | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' \
+        | sort -rV \
+        | head -n1; } || true
+}
+
+# The [package] version of a Cargo.toml on stdin.
+node_version_from_cargo() {
+    { sed -n '/^\[package\]/,/^\[/{ /^version[[:space:]]*=/{ s/^[^"]*"\([^"]*\)".*/\1/p; q; } }' \
+        | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+        | head -n1; } || true
+}
+
+# Find the latest node version into LATEST_NODE (empty if every route failed).
+# Trusted sources only (a public accelerator could name any version):
+#   1. GitHub API, direct
+#   2. GitHub API through the trusted relay
+#   3. Cargo.toml on main (raw.githubusercontent.com), direct then the trusted relay
+resolve_node_version() {
+    local api="https://api.github.com/repos/${REPO}/releases?per_page=30"
+    local raw="https://raw.githubusercontent.com/${REPO}/main/crates/node/Cargo.toml"
+    local i label
+    LATEST_NODE="$(curl_small_text "$api" | node_version_from_releases)"
+    if [ -n "$LATEST_NODE" ]; then
+        info "Version lookup: GitHub API (direct)"
+        return 0
+    fi
+    warn "Version lookup: GitHub API (direct) failed; trying mirror"
+    LATEST_NODE="$(curl_small_text "${GH_PREFIXES[1]}${api}" | node_version_from_releases)"
+    if [ -n "$LATEST_NODE" ]; then
+        info "Version lookup: GitHub API via mirror"
+        return 0
+    fi
+    warn "Version lookup: GitHub API via mirror failed; reading Cargo.toml from the repo"
+    for ((i = 0; i < TRUSTED_MIRRORS; i++)); do
+        label="$(mirror_label "$i")"
+        LATEST_NODE="$(curl_small_text "${GH_PREFIXES[$i]}${raw}" | node_version_from_cargo)"
+        if [ -n "$LATEST_NODE" ]; then
+            info "Version lookup: repository Cargo.toml via ${label}"
+            return 0
+        fi
+        warn "Version lookup: Cargo.toml via ${label} failed"
+    done
+    return 0
+}
+
+# Download the program: RELAY_NODE_BASE_URL (your own mirror) alone if set,
+# otherwise GitHub through the source list.
+download_binary() {
+    # $1 = GitHub URL, $2 = custom mirror URL or "", $3 = destination file
+    if [ -n "$2" ]; then
+        curl "${CURL_OPTS[@]}" "$2" -o "$3"
+    else
+        fetch_with_mirrors "relay-node" "$1" "$3" large valid_program_file
+    fi
+}
+
+# Download the program's .sha256: from TRUSTED sources only (direct GitHub, then
+# the trusted relay). A custom mirror (RELAY_NODE_BASE_URL) may not serve one;
+# the caller treats that as a warning, not an error.
+fetch_checksum() {
+    # $1 = GitHub .sha256 URL, $2 = custom mirror .sha256 URL or "", $3 = destination file
+    if [ -n "$2" ]; then
+        curl -fsSL --connect-timeout 10 --max-time 30 --retry 2 --retry-delay 2 \
+            --retry-connrefused ${PROXY:+--proxy "$PROXY"} "$2" -o "$3"
+    else
+        fetch_with_mirrors "sha256" "$1" "$3" small valid_sha256_file
+    fi
+}
+
 # ---------- Resolve the install version ----------
 # v1.2: nodes release on their own node-v* track. By default install the LATEST
 # node-v* tag from GitHub; --version pins a specific one. The script NEVER
-# falls back to the panel version — if the node-version query fails it uses
+# falls back to the panel version — if every version lookup fails it uses
 # SCRIPT_VERSION (the version this script shipped with) and warns.
-resolve_node_version() {
-    # $1 = proxy arg ("" or "--proxy X"). Returns the bare version on stdout.
-    local proxy_args="$1"
-    local api_url="https://api.github.com/repos/${REPO}/releases?per_page=30"
-    local raw
-    # Query the releases list, find the highest node-v* tag, strip "node-v".
-    # jq is not assumed; use grep+sed+sort. Tolerate a missing jq / API hiccup.
-    raw=$(curl -fsSL --connect-timeout 10 --max-time 20 $proxy_args \
-          -H 'User-Agent: relay-node-install' "$api_url" 2>/dev/null \
-        | grep -oE '"tag_name": "node-v[0-9]+\.[0-9]+\.[0-9]+[^"]*"' \
-        | sed -E 's/"tag_name": "node-v//; s/"$//' \
-        | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' \
-        | sort -rV \
-        | head -n1 || true)
-    echo "$raw"
-}
-
 if [ -z "$TARGET_VERSION" ]; then
-    info "Querying GitHub for the latest node-v* release…"
-    PROXY_ARG=""
-    [ -n "$PROXY" ] && PROXY_ARG="--proxy $PROXY"
-    LATEST_NODE=$(resolve_node_version "$PROXY_ARG")
+    info "Looking up the latest node-v* release…"
+    resolve_node_version
     if [ -n "$LATEST_NODE" ]; then
         TARGET_VERSION="$LATEST_NODE"
         info "Latest node release: $TARGET_VERSION"
@@ -204,7 +453,7 @@ if [ -z "$TARGET_VERSION" ]; then
         # Query failed — do NOT guess the panel version. Fall back to the
         # version this script shipped with and warn.
         TARGET_VERSION="$SCRIPT_VERSION"
-        warn "Could not reach GitHub to find the latest node-v* release; falling back to bundled version $SCRIPT_VERSION. Use --version X.Y.Z to pin a specific version."
+        warn "Could not reach GitHub (directly or through any accelerator) to find the latest node-v* release; falling back to bundled version $SCRIPT_VERSION. Use --version X.Y.Z to pin a specific version."
     fi
 else
     info "Installing node version: $TARGET_VERSION (pinned via --version)"
@@ -237,7 +486,8 @@ if [ "$ALREADY_AT_VERSION" != "1" ]; then
 # v1.2: node binaries live under node-v{version} from 1.1.1 onward. Versions
 # 1.1.0 and earlier were published under the joint v{version} tag, so fall back
 # to that path for the known legacy range (mirrors the node's self-updater).
-# Default: GitHub Releases. Override with RELAY_NODE_BASE_URL for mirrors.
+# Default: GitHub Releases (with the accelerators above). Override with
+# RELAY_NODE_BASE_URL for a mirror of your own, which is then used alone.
 ASSET_NAME="relay-node-linux-${ARCH}"
 url_tag_prefix() {
     # $1 = bare version. Echo "node-v" or "v" (legacy fallback for <= 1.1.0).
@@ -254,18 +504,23 @@ url_tag_prefix() {
         echo "node-v"
     fi
 }
+GITHUB_URL=""
+CUSTOM_URL=""
 if [ -n "${RELAY_NODE_BASE_URL:-}" ]; then
-    DOWNLOAD_URL="${RELAY_NODE_BASE_URL}/${ASSET_NAME}"
+    CUSTOM_URL="${RELAY_NODE_BASE_URL}/${ASSET_NAME}"
+    DOWNLOAD_URL="$CUSTOM_URL"
     info "Using custom mirror: ${RELAY_NODE_BASE_URL}"
 else
     TAG_PREFIX=$(url_tag_prefix "$TARGET_VERSION")
-    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG_PREFIX}${TARGET_VERSION}/${ASSET_NAME}"
-    info "Download URL: $DOWNLOAD_URL"
+    GITHUB_URL="https://github.com/${REPO}/releases/download/${TAG_PREFIX}${TARGET_VERSION}/${ASSET_NAME}"
+    DOWNLOAD_URL="$GITHUB_URL"
+    info "Download URL: $DOWNLOAD_URL (direct first, then accelerators)"
 fi
 
 # ---------- Download binary to temp file ----------
-# curl flags: follow redirects, fail on HTTP error, show progress bar,
-# connect timeout 10s, total timeout 120s, retry 3x with 2s delay.
+# curl flags for a custom mirror (RELAY_NODE_BASE_URL): follow redirects, fail on
+# HTTP error, show progress bar, connect timeout 10s, total timeout 120s, retry
+# 3x with 2s delay. GitHub downloads use fetch_with_mirrors instead.
 CURL_OPTS=(-fL --progress-bar --connect-timeout 10 --max-time 120 --retry 3 --retry-delay 2 --retry-connrefused)
 if [ -n "$PROXY" ]; then
     info "Using proxy: $PROXY"
@@ -280,12 +535,41 @@ mkdir -p "$INSTALL_DIR"
 # a half-written file that passes the ELF check by accident.
 rm -f "$TMP_BINARY"
 
-if ! curl "${CURL_OPTS[@]}" "$DOWNLOAD_URL" -o "$TMP_BINARY"; then
+# GitHub path: get the sha256 FIRST, from GitHub itself (direct or
+# the trusted relay, never a third-party accelerator). Without it nothing is
+# downloaded: a program from a public accelerator could not be checked. Fails
+# closed; the only way past is the explicit SKIP_CHECKSUM=1, in which case the
+# program is taken from GitHub itself only.
+TMP_CHECKSUM="${TMP_BINARY}.sha256"
+rm -f "$TMP_CHECKSUM"
+EXPECTED_SHA256=""
+if [ -z "$CUSTOM_URL" ] && [ "${SKIP_CHECKSUM:-0}" != "1" ]; then
+    if ! fetch_checksum "${GITHUB_URL}.sha256" "" "$TMP_CHECKSUM"; then
+        rm -f "$TMP_CHECKSUM"
+        fail "Could not get the sha256 for release v${TARGET_VERSION} from GitHub itself
+(tried: $(mirror_label 0), $(mirror_label 1)). Nothing was downloaded or installed,
+because a program cannot be verified without it.
+
+Try one of:
+  1. Run the installer again in a few minutes
+  2. Use a proxy:     $0 -t <token> -u <url> -p socks5://127.0.0.1:10808
+  3. Use a mirror:    RELAY_NODE_BASE_URL=https://your-mirror.com $0 -t <token> -u <url>
+  4. Skip the check (NOT recommended; the program then comes from GitHub itself only):
+     SKIP_CHECKSUM=1 $0 -t <token> -u <url>
+
+The existing binary (if any) was NOT touched."
+    fi
+    EXPECTED_SHA256="$(awk '{ print $1; exit }' "$TMP_CHECKSUM" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+fi
+
+if ! download_binary "$GITHUB_URL" "$CUSTOM_URL" "$TMP_BINARY"; then
     rm -f "$TMP_BINARY"
     echo ""
     fail "Download failed. Possible causes:
-  - GitHub Releases is blocked or slow in your network
+  - GitHub Releases and every accelerator (mirror, gh-proxy.com,
+    ghfast.top) are blocked, unreachable or too slow from this network
   - Release v${TARGET_VERSION} does not have asset ${ASSET_NAME}
+  - Every copy offered did not match GitHub's sha256 (see the messages above)
   - Proxy is misconfigured (if you passed -p)
 
 Try one of:
@@ -314,14 +598,16 @@ fi
 #     may legitimately not mirror it). A mismatch is still a hard FAIL.
 if [ "${SKIP_CHECKSUM:-0}" != "1" ]; then
     CHECKSUM_URL="${DOWNLOAD_URL}.sha256"
-    TMP_CHECKSUM="${TMP_BINARY}.sha256"
     # v0.3.11: MUST use -L (follow redirects). GitHub Releases download URLs
     # 302-redirect to objects.githubusercontent.com; without -L, curl returns
     # exit 0 but downloads an EMPTY body (the 3xx response), so the checksum
     # file ends up 0 bytes and we falsely report "empty or malformed". Reuse
     # the same redirect/retry/proxy flags as the binary download for parity.
-    if curl -fsSL --connect-timeout 10 --max-time 30 --retry 2 --retry-delay 2 \
-        --retry-connrefused ${PROXY:+--proxy "$PROXY"} "$CHECKSUM_URL" -o "$TMP_CHECKSUM"; then
+    # On GitHub the .sha256 was already fetched above, from GitHub itself only
+    # (direct or the trusted relay), before the program was downloaded; the
+    # comparison below is the final gate. A custom mirror's checksum is fetched
+    # here, from the mirror only.
+    if [ -z "$CUSTOM_URL" ] || fetch_checksum "" "${CUSTOM_URL}.sha256" "$TMP_CHECKSUM"; then
         # v0.3.10: verify by DIRECT hash comparison rather than `sha256sum -c`.
         # The `-c` mode re-parses the filename from the checksum file, whose
         # behaviour varies across GNU coreutils / BusyBox / toybox (filename

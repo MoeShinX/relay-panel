@@ -136,7 +136,7 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
     },
     {
       title: t('disk'), key: 'disk', width: nodeDesktopColumnWidths.disk,
-      render: (_: unknown, r: NodeDisplayRow) => <NodeDiskBar usagePercent={r.disk_usage_percent} used={r.disk_used} total={r.disk_total} mount={r.disk_mount} t={t} />,
+      render: (_: unknown, r: NodeDisplayRow) => <NodeDiskBar usagePercent={r.disk_usage_percent} used={r.disk_used} total={r.disk_total} mount={r.disk_mount} disks={r.disks} t={t} />,
     },
     {
       title: `${t('uploadRate')}/${t('downloadRate')}`, key: 'rate', width: nodeDesktopColumnWidths.rate,

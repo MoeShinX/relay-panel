@@ -38,6 +38,9 @@ services:
       - PANEL_KEY=${PANEL_KEY:?PANEL_KEY must be set (see header comment in docker-compose.yaml)}
       # OPTIONAL — the public URL nodes should use to reach the panel.
       - PUBLIC_PANEL_URL=${PUBLIC_PANEL_URL:-}
+      # OPTIONAL — password for the first-boot `admin` account. Unset: a random
+      # one is generated and printed once in the panel log (docker compose logs panel).
+      - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD:-}
       # v0.4.19 — node-level GeoIP is now ON by default. The panel resolves
       # each node's public IP to a country flag via built-in providers
       # (primary ipinfo.io Lite → fallback ipwho.is). Failures degrade to

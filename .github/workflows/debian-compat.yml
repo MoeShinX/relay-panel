@@ -31,6 +31,7 @@ jobs:
           JWT_SECRET=$(openssl rand -hex 32)
           PANEL_KEY=$(openssl rand -hex 16)
           NODE_TOKEN=smoke-test-token
+          ADMIN_INITIAL_PASSWORD=admin123
           EOF
 
       - name: docker compose build

@@ -1,5 +1,5 @@
  
-import { useRef } from 'react';
+import { useRef, type HTMLAttributes, type ReactNode } from 'react';
 import { Tag, Typography, Collapse } from 'antd';
 import { ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
 import type { NodeDisplayRow } from '../../api/types';
@@ -26,6 +26,12 @@ interface Props {
   t: Tfn;
   openDetail: (row: NodeDisplayRow) => void;
   onDelete?: (row: NodeDisplayRow) => void;
+  /** Admin-only drag handle for reordering the groups, shown at the start of
+   *  the header. The caller supplies it (it needs the sortable context). */
+  dragHandle?: ReactNode;
+  /** Admin-only: spread on the whole header row so the group can be grabbed
+   *  anywhere on it (pointer drag). A plain click still folds the group. */
+  dragHeaderProps?: HTMLAttributes<HTMLDivElement>;
   /** v1.2.16: admin-only. When set, the header shows "upgrade this group (N)"
    *  for the group's upgradable nodes; called after the batch is dispatched so
    *  the page can refresh. Absent for the regular-user view. */
@@ -35,7 +41,7 @@ interface Props {
 /** One group block: header bar (name · ID · online/total · aggregate ↑↓) +
  *  either a desktop table or mobile list. Collapsible. A group with only a
  *  placeholder row shows "no node reporting". */
-export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeVersionCheckFailed, isMobile, t, openDetail, onDelete, onBatchUpgraded }: Props) {
+export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeVersionCheckFailed, isMobile, t, openDetail, onDelete, dragHandle, dragHeaderProps, onBatchUpgraded }: Props) {
   // The upgrade column / badge is the admin view, like the batch buttons.
   const showUpgrade = !!onBatchUpgraded;
   const head = rows[0];
@@ -54,7 +60,12 @@ export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeV
   const headerRef = useRef<HTMLDivElement>(null);
 
   const header = (
-    <div ref={headerRef} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+    <div
+      {...dragHeaderProps}
+      ref={headerRef}
+      style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, ...dragHeaderProps?.style }}
+    >
+      {dragHandle}
       <Text strong data-upgrade-obstacle="">{head.group_name || '-'}</Text>
       <Text type="secondary" style={{ fontSize: 12 }} data-upgrade-obstacle="">ID: {head.group_id}</Text>
       {region ? <Tag data-upgrade-obstacle="">{region}</Tag> : null}

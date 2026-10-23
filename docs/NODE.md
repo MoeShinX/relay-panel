@@ -137,6 +137,17 @@ sudo systemctl enable --now relay-node
 systemctl status relay-node   # should show active (running)
 ```
 
+### Download acceleration
+
+When GitHub is slow or unreachable from the server, the installer and the
+one-click self-upgrade switch to accelerated downloads on their own, and the
+install command shown in the panel does the same when it fetches the installer.
+There is nothing to configure; servers that reach GitHub fine behave as before.
+
+If an install or upgrade stops because no download source could be reached,
+retry a little later. `RELAY_NODE_BASE_URL` (your own download address) and
+`-p` / `RELAY_PROXY` keep working as before.
+
 ---
 
 ## Configuration
@@ -465,6 +476,12 @@ of inactivity. Generate real traffic and the count moves.
    WS / TLS Simple ingress was retired in node 1.0.8 — the node skips such
    listeners, and panel 1.2.9+ refuses to save them. For HTTPS on the panel's
    admin UI, use an external reverse proxy or the Compose Caddy profile.
+
+9. **Disks.** Besides the system disk (`/`), the node reports every real local
+   disk filesystem it finds in `/proc/self/mountinfo` (ext4, xfs, btrfs, zfs,
+   NTFS and the like — not tmpfs, overlay, network or FUSE mounts, or anything
+   under `/boot`), up to 16, so the panel can list them all. A node running in
+   Docker only sees the container's mounts, so the host's disks do not show.
 
 ---
 

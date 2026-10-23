@@ -211,7 +211,8 @@ def main():
     start_echo_servers()
 
     panel_env = dict(os.environ, LISTEN="127.0.0.1:18888", RUST_LOG="info",
-                     REGISTRATION_ENABLED="1")
+                     REGISTRATION_ENABLED="1",
+                     ADMIN_INITIAL_PASSWORD="admin123")
     panel = subprocess.Popen([PANEL_BIN], env=panel_env,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     node = None
@@ -351,6 +352,22 @@ def main():
         assert used is not None and used <= total, f"bad memory in use: {used} of {total}"
         assert abs(used / total * 100 - status["mem"]) < 5,             f"bytes {used}/{total} disagree with mem={status['mem']}%"
         print(f"[ok] node memory: {used}B of {total}B ({status['mem']:.1f}%)")
+
+        # 3d. Every disk (panel after 1.2.15 / node after 1.2.9): the real
+        #     node lists its local disks beside the primary-disk figures it
+        #     has always sent, root first, and the two agree about `/`. Only
+        #     Linux nodes can list them (they read /proc/self/mountinfo).
+        if sys.platform.startswith("linux"):
+            disks = status.get("disks") or []
+            root = next((d for d in disks if d["mount"] == "/"), None)
+            assert root, f"no / among the node's disks: {disks}"
+            assert disks[0] is root, f"/ must come first: {disks}"
+            assert root["total"] == status["disk_total"],                 f"disks / total {root['total']} != disk_total {status['disk_total']}"
+            # Read a moment apart, so the used figure may have moved a little.
+            assert abs(root["used"] - status["disk_used"]) <= root["total"] * 0.01,                 f"disks / used {root['used']} vs disk_used {status['disk_used']}"
+            for d in disks:
+                assert d["total"] > 0 and 0 <= d["used"] <= d["total"], d
+            print(f"[ok] node disks: {[(d['mount'], d['fs_type']) for d in disks]}")
 
         # 4. Verify the v0.4.0 protocol gate: a request WITHOUT the
         #    X-Config-Protocol-Version header must be rejected with 426

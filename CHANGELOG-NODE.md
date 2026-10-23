@@ -11,6 +11,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+Runs against any current panel (still protocol version 4). Panel 1.2.15 and
+later show the extra disks; an older panel ignores them and shows the system
+disk as before.
+
+### Added
+
+- **Reports every local disk, not just `/`.** The node reads
+  `/proc/self/mountinfo` and lists the real disk filesystems — ext2/3/4, xfs,
+  btrfs, zfs, f2fs, jfs, reiserfs, bcachefs, ntfs/ntfs3, exfat (and ntfs-3g on
+  a block device), and vfat outside `/boot` — with their size and use, `/`
+  first. tmpfs, overlay, squashfs, network and FUSE mounts, read-only loop
+  images and anything under `/boot` are left out; a disk mounted twice (bind
+  mounts, btrfs subvolumes, ZFS datasets of one pool) is listed once, under
+  its shortest mount path; at most 16 are sent. The existing system-disk
+  figures are unchanged. A disk that hangs on being read cannot stall the
+  report or pile up threads: one collection runs at a time and reports carry
+  the last finished list meanwhile. A node in Docker only sees the container's
+  mounts.
+
+### Changed
+
+- **Installing and upgrading nodes on servers in mainland China.** The node
+  installer and the one-click self-upgrade now switch to accelerated downloads
+  on their own when GitHub is slow or unreachable. Nothing to configure;
+  servers that reach GitHub fine behave as before.
+
+---
+
 ## [1.2.9] - 2026-10-22
 
 Runs against any current panel (still protocol version 4). Needed for PROXY

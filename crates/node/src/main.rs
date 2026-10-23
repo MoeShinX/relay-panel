@@ -1,6 +1,7 @@
 mod config;
 mod cpuinfo;
 mod diagnose;
+mod disks;
 mod forwarder;
 mod poller;
 mod reporter;

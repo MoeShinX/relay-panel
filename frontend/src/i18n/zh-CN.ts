@@ -347,6 +347,8 @@ export const zhCN = {
   diskUsage: '使用率',
   networkInterface: '统计网卡',
   noNodeReportingInGroup: '当前线路暂时没有节点上报',
+  dragToReorderGroup: '拖动调整分组顺序',
+  reorderGroupsFailed: '保存分组顺序失败，已恢复原顺序',
   uptimeDay: '天',
   uptimeHour: '小时',
   uptimeMinute: '分',
@@ -765,6 +767,7 @@ export const zhCN = {
   audit_delete_rule: '删除规则',
   audit_restart_rule: '重启规则',
   audit_delete_group: '删除分组',
+  audit_reorder_groups: '调整分组顺序',
   audit_rotate_group_token: '轮换节点密钥',
   // v1.2.8: 「下发」不是「已完成」。面板在把升级命令交给 WS 通道的那一刻就写
   // 审计；之后节点还要下载二进制、校验 sha256、备份、替换、重启，任何一步都可

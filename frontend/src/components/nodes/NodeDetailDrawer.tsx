@@ -7,6 +7,7 @@ import { CountryFlag } from './CountryFlag';
 import type { ApiEnvelope, NodeDisplayRow } from '../../api/types';
 import api from '../../api/client';
 import { cpuSummary, memSummary, wsDownTag } from './shared';
+import { DiskList, hasDiskList } from './NodeResourceBar';
 
 interface Props {
   row: NodeDisplayRow | null;
@@ -85,7 +86,9 @@ export function NodeDetailDrawer({ row, open, onClose, isAdmin, panelProtocol, o
             {formatPercent(row.mem)}{memSummary(row) && ` (${memSummary(row)})`}
           </Descriptions.Item>
           <Descriptions.Item label={t('disk')}>
-            {row.disk_usage_percent == null && row.disk_used == null
+            {hasDiskList(row.disks) ? (
+              <DiskList disks={row.disks} />
+            ) : row.disk_usage_percent == null && row.disk_used == null
               ? '-'
               : `${formatPercent(row.disk_usage_percent)} (${formatBytes(row.disk_used)}/${formatBytes(row.disk_total)})`}
           </Descriptions.Item>
