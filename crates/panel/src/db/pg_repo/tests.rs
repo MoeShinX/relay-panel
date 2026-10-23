@@ -6559,8 +6559,23 @@ async fn pg_group_order(db: &PgRepository) -> Vec<i64> {
         .collect()
 }
 
-/// Groups at the default sort_order list by id; reorder_groups sets 1..n and
-/// every listing follows; an unknown id changes nothing; unlisted groups follow.
+/// Every group at the default sort_order lists by id.
+#[tokio::test]
+async fn pg_groups_default_to_id_order() {
+    let Some(db) = repo("groups_default_order").await else {
+        return;
+    };
+    for gid in [3, 1, 2] {
+        pg_seed_group(&db, gid).await;
+    }
+    let groups = db.list_groups(&ResourceScope::All).await.unwrap();
+    assert!(groups.iter().all(|g| g.sort_order == 0));
+    assert_eq!(pg_group_order(&db).await, vec![1, 2, 3]);
+    cleanup(&db).await;
+}
+
+/// reorder_groups numbers the listed groups 1..n in the given order, and every
+/// listing that shows groups follows it.
 #[tokio::test]
 async fn pg_reorder_groups_sets_the_order_every_listing_follows() {
     let Some(db) = repo("reorder_groups").await else {
@@ -6573,14 +6588,6 @@ async fn pg_reorder_groups_sets_the_order_every_listing_follows() {
     for gid in [3, 1, 2, 4] {
         pg_seed_group(&db, gid).await;
     }
-    assert_eq!(pg_group_order(&db).await, vec![1, 2, 3, 4]);
-    assert!(db
-        .list_groups(&ResourceScope::All)
-        .await
-        .unwrap()
-        .iter()
-        .all(|g| g.sort_order == 0));
-
     db.reorder_groups(&[3, 1, 4, 2]).await.unwrap();
     assert_eq!(pg_group_order(&db).await, vec![3, 1, 4, 2]);
     let shared: Vec<i64> = db
@@ -6605,15 +6612,46 @@ async fn pg_reorder_groups_sets_the_order_every_listing_follows() {
         db.list_group_names_by_ids(&[1, 2, 3]).await.unwrap(),
         vec!["g3", "g1", "g2"]
     );
+    cleanup(&db).await;
+}
 
-    // Unknown id: error, and nothing changed.
-    let err = db.reorder_groups(&[2, 99]).await.unwrap_err();
+/// An unknown id is an error and changes nothing.
+#[tokio::test]
+async fn pg_reorder_groups_rejects_an_unknown_id_and_changes_nothing() {
+    let Some(db) = repo("reorder_unknown").await else {
+        return;
+    };
+    for gid in [1, 2, 3] {
+        pg_seed_group(&db, gid).await;
+    }
+    let err = db.reorder_groups(&[3, 99, 1]).await.unwrap_err();
     assert!(matches!(err, DbError::NotFound), "got {err:?}");
-    assert_eq!(pg_group_order(&db).await, vec![3, 1, 4, 2]);
+    assert_eq!(pg_group_order(&db).await, vec![1, 2, 3]);
+    let sort: Vec<i32> = db
+        .list_groups(&ResourceScope::All)
+        .await
+        .unwrap()
+        .iter()
+        .map(|g| g.sort_order)
+        .collect();
+    assert_eq!(sort, vec![0, 0, 0], "the transaction must roll back");
+    cleanup(&db).await;
+}
 
-    // Unlisted groups follow, in their existing relative order.
-    db.reorder_groups(&[2]).await.unwrap();
-    assert_eq!(pg_group_order(&db).await, vec![2, 3, 1, 4]);
+/// Groups left out of the list come after the listed ones, in their existing
+/// relative order.
+#[tokio::test]
+async fn pg_reorder_groups_puts_unlisted_groups_after_in_their_old_order() {
+    let Some(db) = repo("reorder_unlisted").await else {
+        return;
+    };
+    for gid in [1, 2, 3, 4, 5] {
+        pg_seed_group(&db, gid).await;
+    }
+    db.reorder_groups(&[5, 4]).await.unwrap();
+    assert_eq!(pg_group_order(&db).await, vec![5, 4, 1, 2, 3]);
+    db.reorder_groups(&[3]).await.unwrap();
+    assert_eq!(pg_group_order(&db).await, vec![3, 5, 4, 1, 2]);
     cleanup(&db).await;
 }
 
