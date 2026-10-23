@@ -57,6 +57,14 @@ older nodes everything looks as it did. The config protocol is unchanged.
   for a few seconds. A confirmation lists the nodes first. Panel only; the node
   binary needs no upgrade.
 
+- **Node Status shows the combined cumulative traffic of every machine.** The
+  line at the top of the page, next to the online count and the live rate,
+  now ends with the sum of every node's upload and download from the
+  Cumulative column (what each node's network card has carried since its last
+  boot; an offline node counts at its last reported figure). Hover for the
+  explanation. It is left out when no node reports the figures (older nodes).
+  Panel only.
+
 ### Changed
 
 - **A regular user's rules can no longer point at the panel host itself.** A

@@ -393,6 +393,8 @@ export const enUS: Dict = {
   cpuModel: 'CPU Model',
   cpuCores: '{n} cores',
   onlineNodesOfTotal: 'Online nodes {online}/{total}',
+  allNodesTraffic: 'Total',
+  allNodesTrafficTip: "The sum of every node's cumulative traffic: what each node's network card has carried since its last boot (an offline node counts at its last reported figure). A node's count restarts from zero when it reboots.",
   nodeUpgrade: 'Update',
   nodeUpgradeTip: 'Update available: v{v}. Use "Upgrade group" or "Upgrade all" above.',
   nodeUpgradeLatest: 'Up to date',

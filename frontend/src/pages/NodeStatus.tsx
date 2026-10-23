@@ -34,7 +34,7 @@ import { rateSummary } from '../components/nodes/shared';
 import { upgradableNodes } from '../components/nodes/upgrade';
 import { UpgradeAllButton } from '../components/nodes/UpgradeAllButton';
 import { UpgradeSlot } from '../components/nodes/UpgradeSlot';
-import { formatBps } from '../utils/format';
+import { formatBps, formatBytes } from '../utils/format';
 
 type AnyNodeRow = NodeDisplayRow;
 
@@ -329,6 +329,11 @@ export default function NodeStatus() {
               {t('onlineNodesOfTotal').replace('{online}', String(all.online)).replace('{total}', String(all.total))}
               {' · '}
               <ArrowUpOutlined /> {formatBps(all.up)} <ArrowDownOutlined /> {formatBps(all.down)}
+              {all.hasTotals && (
+                <span data-testid="all-nodes-traffic" title={t('allNodesTrafficTip')}>
+                  {' · '}{t('allNodesTraffic')} <ArrowUpOutlined /> {formatBytes(all.totalUp)} <ArrowDownOutlined /> {formatBytes(all.totalDown)}
+                </span>
+              )}
             </Typography.Text>
           )}
           {upgradableAll.length > 0 && (
