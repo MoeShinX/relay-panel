@@ -1,13 +1,15 @@
-import type { ComponentProps, KeyboardEvent, MouseEvent } from 'react';
+import type { ComponentProps, KeyboardEvent, MouseEvent, PointerEventHandler } from 'react';
 import { HolderOutlined } from '@ant-design/icons';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { NodeGroupSection } from './NodeGroupSection';
+import { useSuppressClickAfterDrag } from './useSuppressClickAfterDrag';
 
-type SectionProps = Omit<ComponentProps<typeof NodeGroupSection>, 'dragHandle'>;
+type SectionProps = Omit<ComponentProps<typeof NodeGroupSection>, 'dragHandle' | 'dragHeaderProps'>;
 
-/** A node group the admin can drag to a new place in the group list. Only the
- *  handle drags: the rest of the header keeps toggling the group open and shut. */
+/** A node group the admin can drag to a new place in the group list. The whole
+ *  header row is the grip (press and move a few pixels); a plain click on it
+ *  still folds or unfolds the group. The keyboard way in is the handle. */
 export function SortableNodeGroupSection({ id, ...props }: SectionProps & { id: number }) {
   const {
     attributes,
@@ -18,6 +20,8 @@ export function SortableNodeGroupSection({ id, ...props }: SectionProps & { id: 
     transition,
     isDragging,
   } = useSortable({ id });
+
+  const swallowClick = useSuppressClickAfterDrag(isDragging);
 
   // Groups slide up or down to make room; they never move sideways or stretch.
   const style = {
@@ -35,12 +39,12 @@ export function SortableNodeGroupSection({ id, ...props }: SectionProps & { id: 
     <span
       ref={setActivatorNodeRef}
       {...attributes}
-      {...listeners}
       aria-label={label}
       title={label}
       data-testid={`group-drag-handle-${id}`}
-      // The header folds the group on a click and on Enter; the handle must not.
-      // A click here is just the end of a drag or a stray press.
+      // Pointer drags start from the header row (see headerProps); the handle
+      // only adds the keyboard way in. The header folds the group on a click
+      // and on Enter; the handle must not: a click here is just a stray press.
       onClick={(e: MouseEvent) => e.stopPropagation()}
       onKeyDown={(e: KeyboardEvent<HTMLSpanElement>) => {
         // Space picks the group up (see the sensor in NodeStatus). Do NOT stop
@@ -57,9 +61,18 @@ export function SortableNodeGroupSection({ id, ...props }: SectionProps & { id: 
     </span>
   );
 
+  const headerProps = {
+    // dnd-kit types its listener map as plain functions.
+    onPointerDown: listeners?.onPointerDown as PointerEventHandler<HTMLDivElement> | undefined,
+    // The click that follows a drop must not fold the group.
+    onClick: (e: MouseEvent) => { if (swallowClick()) e.stopPropagation(); },
+    style: { cursor: isDragging ? 'grabbing' : 'grab', userSelect: 'none' as const },
+    'data-testid': `group-drag-header-${id}`,
+  };
+
   return (
     <div ref={setNodeRef} style={style}>
-      <NodeGroupSection {...props} dragHandle={handle} />
+      <NodeGroupSection {...props} dragHandle={handle} dragHeaderProps={headerProps} />
     </div>
   );
 }
