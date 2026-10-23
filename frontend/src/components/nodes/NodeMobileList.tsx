@@ -24,13 +24,14 @@ interface Props {
   /** v1.0.10/v1.2: admin-only per-node upgrade trigger. When set, each card
    *  shows the node version + an upgrade affordance mirroring the desktop
    *  ladder (PR4), compared against the latest NODE release (PR5). */
-  onUpgrade?: (row: NodeDisplayRow) => void;
+  /** Admin view: show each node's version and upgrade state. */
+  showUpgrade?: boolean;
 }
 
 /** Mobile-friendly compact list — one card per node. No wide table, no
  *  horizontal scroll. Shows: status + version + upgrade + network + speed +
  *  resource bars + uptime + a details button. */
-export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', nodeVersionCheckFailed = false, t, openDetail, onUpgrade }: Props) {
+export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', nodeVersionCheckFailed = false, t, openDetail, showUpgrade }: Props) {
   const labels = { d: t('uptimeDay'), h: t('uptimeHour'), m: t('uptimeMinute'), s: t('uptimeSecond') };
 
   return (
@@ -40,7 +41,7 @@ export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', no
         // v1.2 (PR4+PR5): the upgrade affordance mirrors the desktop ladder
         // (PR4) and compares against the latest NODE release (PR5), via the
         // shared resolveNodeUpgrade helper.
-        const { state: upgradeState } = onUpgrade
+        const { state: upgradeState } = showUpgrade
           ? resolveNodeUpgrade(r, latestNodeVersion, panelProtocol, nodeVersionCheckFailed)
           : { state: 'none' as NodeUpgradeState };
         return (
@@ -58,18 +59,17 @@ export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', no
                 {/* node version tag (only when the admin upgrade view is on).
                     When the node-version check failed, render the bare version
                     with no behind-arrow (we can't vouch for any colouring). */}
-                {onUpgrade && r.node_version ? (
+                {showUpgrade && r.node_version ? (
                   <Tag color={nodeVersionCheckFailed ? undefined : versionTagColor(versionRelation(r.node_version, latestNodeVersion))} className="rp-mono">
                     {`v${r.node_version}`}
                   </Tag>
                 ) : null}
                 {/* upgrade affordance — same ladder as desktop */}
-                {onUpgrade ? (
+                {showUpgrade ? (
                   <MobileUpgradeAffordance
                     state={upgradeState}
                     latestNodeVersion={latestNodeVersion}
                     t={t}
-                    onUpgrade={() => onUpgrade(r)}
                   />
                 ) : null}
                 <Button
@@ -115,19 +115,17 @@ export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', no
   );
 }
 
-/** The mobile upgrade affordance for one node — mirrors the desktop upgrade
- *  column's icon/tooltip ladder, but as a tappable 32×32 target (mobile tap
- *  sizing). */
+/** The mobile upgrade state for one node — mirrors the desktop upgrade
+ *  column's icon/tooltip ladder (read-only: upgrading is done from the group
+ *  and page buttons). */
 function MobileUpgradeAffordance({
   state,
   latestNodeVersion,
   t,
-  onUpgrade,
 }: {
   state: NodeUpgradeState;
   latestNodeVersion: string;
   t: Tfn;
-  onUpgrade: () => void;
 }) {
   // 32×32 minimum tap target (WCAG / mobile guidance).
   const tapStyle: React.CSSProperties = { minWidth: 32, minHeight: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 };
@@ -182,14 +180,9 @@ function MobileUpgradeAffordance({
     case 'upgradeable':
       return (
         <Tooltip title={t('nodeUpgradeTip').replace('{v}', latestNodeVersion)}>
-          <Button
-            size="small"
-            type="link"
-            icon={<CloudDownloadOutlined />}
-            aria-label={t('nodeUpgrade')}
-            style={tapStyle}
-            onClick={onUpgrade}
-          />
+          <span style={tapStyle} aria-label={t('nodeUpgradeTip').replace('{v}', latestNodeVersion)} role="img">
+            <CloudDownloadOutlined style={{ color: 'var(--ant-color-primary, #6366f1)' }} />
+          </span>
         </Tooltip>
       );
     case 'noControlChannel':

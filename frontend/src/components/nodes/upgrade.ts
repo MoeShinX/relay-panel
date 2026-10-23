@@ -77,3 +77,30 @@ export function resolveNodeUpgrade(
   return { state: row.ws_connected === false ? 'noControlChannel' : 'upgradeable' };
 }
 
+
+/**
+ * v1.2.16: whether one-click upgrade may be offered for this node — the single
+ * yes/no behind the per-node button AND the "upgrade all / upgrade group"
+ * buttons. It is exactly `resolveNodeUpgrade(...).state === 'upgradeable'`
+ * (online, systemd-managed, behind the latest node release, WS control channel
+ * up, protocol compatible, version check succeeded), so the batch can never
+ * offer a node the per-node button would not.
+ */
+export function canUpgradeNode(
+  row: NodeDisplayRow,
+  latestNodeVersion: string,
+  panelProtocol: number,
+  nodeVersionCheckFailed: boolean,
+): boolean {
+  return resolveNodeUpgrade(row, latestNodeVersion, panelProtocol, nodeVersionCheckFailed).state === 'upgradeable';
+}
+
+/** The rows of `rows` that `canUpgradeNode` accepts, in their original order. */
+export function upgradableNodes(
+  rows: NodeDisplayRow[],
+  latestNodeVersion: string,
+  panelProtocol: number,
+  nodeVersionCheckFailed: boolean,
+): NodeDisplayRow[] {
+  return rows.filter((r) => canUpgradeNode(r, latestNodeVersion, panelProtocol, nodeVersionCheckFailed));
+}

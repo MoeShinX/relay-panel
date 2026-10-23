@@ -328,7 +328,7 @@ process exits, and something starts the new one":
 
 | Install method | Node status page |
 | --- | --- |
-| **systemd** | Blue upgrade button; one-click when behind and online |
+| **systemd** | Blue marker; when behind and online it is included by "Upgrade group" / "Upgrade all" |
 | **Docker** | Amber "update the image" hint — pull the latest `relay-panel-node` image and recreate the container |
 | **Manual** (nohup / screen / running the binary directly) | Greyed out, "nothing restarts it after exit" |
 

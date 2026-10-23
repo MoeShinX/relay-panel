@@ -48,6 +48,15 @@ older nodes everything looks as it did. The config protocol is unchanged.
   before. Panel side: the node's status carries a `disks` list (at most 16
   disks; entries that cannot be right are dropped).
 
+- **One-click upgrade for many nodes at once.** The Node Status page has
+  "Upgrade all (N)" at the top and "Upgrade group (N)" on each group's header
+  (admin only). They upgrade every node that the per-node button would: online,
+  installed under systemd and behind the latest node release. All of them are
+  told at the same time, so those nodes restart together: connections being
+  forwarded drop within 5 seconds, and the nodes of one group go down together
+  for a few seconds. A confirmation lists the nodes first. Panel only; the node
+  binary needs no upgrade.
+
 ### Changed
 
 - **A regular user's rules can no longer point at the panel host itself.** A
@@ -76,6 +85,12 @@ older nodes everything looks as it did. The config protocol is unchanged.
   still one line to paste into bash. The installer and the node's one-click
   self-upgrade got the same treatment (see CHANGELOG-NODE.md). Nothing to
   configure; servers that reach GitHub fine behave as before.
+
+- **The per-node upgrade button is gone from Node Status.** Upgrading is
+  done with "Upgrade group" and "Upgrade all". The Node update column stays
+  as a read-only state: a blue marker on a node that is behind and can be
+  upgraded, a green check when it is current, and the same hints as before
+  for Docker, manual and offline nodes.
 
 ### Fixed
 

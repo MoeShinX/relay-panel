@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Spin, Result, Empty, Modal, message, Typography } from 'antd';
+import { Spin, Result, Empty, message, Typography, Space } from 'antd';
 import {
   DndContext,
   KeyboardSensor,
@@ -31,6 +31,9 @@ import {
   withGroupOrder,
 } from '../components/nodes/sort';
 import { rateSummary } from '../components/nodes/shared';
+import { upgradableNodes } from '../components/nodes/upgrade';
+import { UpgradeAllButton } from '../components/nodes/UpgradeAllButton';
+import { UpgradeSlot } from '../components/nodes/UpgradeSlot';
 import { formatBps } from '../utils/format';
 
 type AnyNodeRow = NodeDisplayRow;
@@ -183,28 +186,6 @@ export default function NodeStatus() {
     return () => clearInterval(ti);
   }, []);
 
-  // v1.0.10: admin triggers a directed node self-upgrade. Confirm first (the
-  // node restarts, so its forwarding blips for a few seconds).
-  const handleUpgrade = (row: AnyNodeRow) => {
-    if (!row.node_id) return;
-    Modal.confirm({
-      title: t('nodeUpgradeConfirmTitle'),
-      content: t('nodeUpgradeConfirm').replace('{v}', latestNodeVersion || 'latest'),
-      okText: t('nodeUpgradeOk'),
-      cancelText: t('cancel'),
-      onOk: async () => {
-        try {
-          const res = await api.post<unknown, ApiEnvelope<null>>(
-            `/nodes/${row.group_id}/upgrade/${row.node_id}`,
-            {},
-          );
-          if (res.code !== 0) { message.error(res.message); return; }
-          message.success(t('nodeUpgradeSent'));
-        } catch { message.error(t('nodeUpgradeFailed')); }
-      },
-    });
-  };
-
   const baseRows: AnyNodeRow[] | null = isAdmin ? adminRows : userRows;
   // Overlay the pushed rate on online nodes that have one. The group header
   // sums row rates, so it picks the live figures up with no change of its own.
@@ -216,6 +197,16 @@ export default function NodeStatus() {
     });
   }, [baseRows, liveRates]);
   const groups = useMemo(() => (rows ? stableGroupedRows(rows) : null), [rows]);
+  // v1.2.16: "upgrade all" — every node the per-node button would accept, across
+  // all groups (same eligibility ladder). Admin only.
+  // Where the icon is lined up: it sits in the page header row, over the first
+  // visible group table's 节点更新 column.
+  const pageHeaderRef = useRef<HTMLDivElement>(null);
+  const groupsRef = useRef<HTMLDivElement>(null);
+  const upgradableAll = useMemo(
+    () => (isAdmin && rows ? upgradableNodes(rows, latestNodeVersion, panelProtocol, nodeVersionCheckFailed) : []),
+    [isAdmin, rows, latestNodeVersion, panelProtocol, nodeVersionCheckFailed],
+  );
   // v1.2.14: every group's header sums its own online nodes; this is the same
   // sum over all of them, for the page header.
   const all = useMemo(() => (rows ? rateSummary(rows) : null), [rows]);
@@ -306,8 +297,8 @@ export default function NodeStatus() {
       isMobile,
       t,
       openDetail: setDetailRow,
-      onUpgrade: isAdmin ? handleUpgrade : undefined,
       onDelete: isAdmin ? handleDelete : undefined,
+      onBatchUpgraded: isAdmin ? refresh : undefined,
     };
     return canReorder && hasGroupOrder(groupRows)
       ? <SortableNodeGroupSection key={gid} id={gid} {...props} />
@@ -330,28 +321,44 @@ export default function NodeStatus() {
 
   return (
     <>
-      <div className="rp-page-header rp-page-header-sticky">
-        <h2 className="rp-page-title"><LineChartOutlined /> {title}</h2>
-        {all && all.total > 0 && (
-          <Typography.Text type="secondary" style={{ fontSize: 13 }} data-testid="all-nodes-rate">
-            {t('onlineNodesOfTotal').replace('{online}', String(all.online)).replace('{total}', String(all.total))}
-            {' · '}
-            <ArrowUpOutlined /> {formatBps(all.up)} <ArrowDownOutlined /> {formatBps(all.down)}
-          </Typography.Text>
+      <div ref={pageHeaderRef} className="rp-page-header rp-page-header-sticky">
+        <h2 className="rp-page-title" data-upgrade-obstacle=""><LineChartOutlined /> {title}</h2>
+        <Space wrap size={[12, 8]}>
+          {all && all.total > 0 && (
+            <Typography.Text type="secondary" style={{ fontSize: 13 }} data-testid="all-nodes-rate" data-upgrade-obstacle="">
+              {t('onlineNodesOfTotal').replace('{online}', String(all.online)).replace('{total}', String(all.total))}
+              {' · '}
+              <ArrowUpOutlined /> {formatBps(all.up)} <ArrowDownOutlined /> {formatBps(all.down)}
+            </Typography.Text>
+          )}
+          {upgradableAll.length > 0 && (
+            <UpgradeSlot rowRef={pageHeaderRef} tablesRef={groupsRef}>
+              <UpgradeAllButton
+                nodes={upgradableAll}
+                latestNodeVersion={latestNodeVersion}
+                labelKey="upgradeAll"
+                t={t}
+                onDone={refresh}
+                testId="upgrade-all"
+              />
+            </UpgradeSlot>
+          )}
+        </Space>
+      </div>
+      <div ref={groupsRef}>
+        {canReorder ? (
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleGroupDragEnd}>
+            <SortableContext
+              items={groups.filter(([, r]) => hasGroupOrder(r)).map(([gid]) => gid)}
+              strategy={verticalListSortingStrategy}
+            >
+              {groups.map(([gid, groupRows]) => renderSection(gid, groupRows))}
+            </SortableContext>
+          </DndContext>
+        ) : (
+          groups.map(([gid, groupRows]) => renderSection(gid, groupRows))
         )}
       </div>
-      {canReorder ? (
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleGroupDragEnd}>
-          <SortableContext
-            items={groups.filter(([, r]) => hasGroupOrder(r)).map(([gid]) => gid)}
-            strategy={verticalListSortingStrategy}
-          >
-            {groups.map(([gid, groupRows]) => renderSection(gid, groupRows))}
-          </SortableContext>
-        </DndContext>
-      ) : (
-        groups.map(([gid, groupRows]) => renderSection(gid, groupRows))
-      )}
       <NodeDetailDrawer
         row={detailCurrent}
         open={detailRow !== null}
