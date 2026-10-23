@@ -878,11 +878,16 @@ echo "  Web:     $(web_mode_label "$RELAYPANEL_WEB_MODE")"
 # show it here so a first install does not send people digging through logs.
 # The line only exists in the log of the container that did the first boot, so
 # an upgrade (new container) shows nothing. We never probe a login.
-INITIAL_ADMIN_PASSWORD="$(docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" logs --no-color panel 2>/dev/null \
-    | sed 's/\x1b\[[0-9;]*m//g' \
-    | grep -o 'initial admin login: username `admin`, password `[^`]*`' \
-    | tail -n 1 \
-    | sed 's/.*password `\([^`]*\)`.*/\1/' || true)"
+INITIAL_ADMIN_PASSWORD=""
+# Only on a first install: a re-run that keeps the same container would otherwise
+# print a password that may long since have been changed.
+if [ "$FRESH_INSTALL" = "1" ]; then
+    INITIAL_ADMIN_PASSWORD="$(docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" logs --no-color panel 2>/dev/null \
+        | sed 's/\x1b\[[0-9;]*m//g' \
+        | grep -o 'initial admin login: username `admin`, password `[^`]*`' \
+        | tail -n 1 \
+        | sed 's/.*password `\([^`]*\)`.*/\1/' || true)"
+fi
 if [ -n "$INITIAL_ADMIN_PASSWORD" ]; then
     echo "  Login:   admin / ${INITIAL_ADMIN_PASSWORD}"
     echo "           (initial password, valid until you change it — the first login asks you to)"
