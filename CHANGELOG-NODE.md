@@ -13,7 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-Runs against any current panel (still protocol version 4). Panel 1.2.15 and
+## [1.2.10] - 2026-10-24
+
+Runs against any current panel (still protocol version 4). Panel 1.2.16 and
 later show the extra disks; an older panel ignores them and shows the system
 disk as before.
 
