@@ -86,6 +86,102 @@ pub fn is_plausible_target_host(host: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'))
 }
 
+/// Parse a host the way glibc `inet_aton` does, so the shorthand forms that
+/// `getaddrinfo` accepts (`127.1`, `2130706433`, `0x7f000001`, `0177.0.0.1`,
+/// `017700000001`) are recognised. 1 to 4 dot-separated parts, each decimal,
+/// `0x` hexadecimal or `0`-prefixed octal; the last part fills all remaining
+/// bytes. Anything else (a normal domain, an empty part, too many parts, an
+/// out-of-range part) is `None`.
+fn parse_inet_aton(host: &str) -> Option<std::net::Ipv4Addr> {
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() > 4 {
+        return None;
+    }
+    let mut vals = Vec::with_capacity(parts.len());
+    for p in &parts {
+        if p.is_empty() {
+            return None;
+        }
+        let v = if let Some(hex) = p.strip_prefix("0x").or_else(|| p.strip_prefix("0X")) {
+            if hex.is_empty() {
+                0
+            } else {
+                u64::from_str_radix(hex, 16).ok()?
+            }
+        } else if p.len() > 1 && p.starts_with('0') {
+            u64::from_str_radix(&p[1..], 8).ok()?
+        } else {
+            if !p.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            p.parse::<u64>().ok()?
+        };
+        vals.push(v);
+    }
+    let (last, head) = vals.split_last()?;
+    if head.iter().any(|&v| v > 255) {
+        return None;
+    }
+    let last_max: u64 = 1u64 << (8 * (5 - parts.len() as u32));
+    if *last >= last_max {
+        return None;
+    }
+    let mut addr: u64 = *last;
+    for (i, &v) in head.iter().enumerate() {
+        addr |= v << (8 * (3 - i as u32));
+    }
+    Some(std::net::Ipv4Addr::from(addr as u32))
+}
+
+fn is_local_ipv4(ip: std::net::Ipv4Addr) -> bool {
+    let o = ip.octets();
+    o[0] == 127 || o[0] == 0 || (o[0] == 169 && o[1] == 254)
+}
+
+/// True when a rule target host points at this machine itself: loopback,
+/// unspecified or link-local (including the cloud metadata address), as an IP
+/// literal in any spelling `getaddrinfo` accepts or as a `localhost` name.
+/// RFC 1918 and CGNAT addresses are NOT local. A domain that merely resolves
+/// to such an address cannot be recognised here.
+pub fn is_local_target_host(host: &str) -> bool {
+    let h = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    if h.is_empty() {
+        return false;
+    }
+    if h == "localhost" || h.ends_with(".localhost") {
+        return true;
+    }
+    if let Ok(v6) = h.parse::<std::net::Ipv6Addr>() {
+        // fe80::/10 link-local; `to_ipv4` covers both ::ffff:a.b.c.d (mapped)
+        // and ::a.b.c.d (compatible) forms.
+        if v6.is_loopback() || v6.is_unspecified() || (v6.segments()[0] & 0xffc0) == 0xfe80 {
+            return true;
+        }
+        return v6.to_ipv4().is_some_and(is_local_ipv4);
+    }
+    parse_inet_aton(&h).is_some_and(is_local_ipv4)
+}
+
+/// Rule owners who are not admins may not forward to the machine itself.
+/// Returns `Ok(Some(message))` when `hosts` contains a local address and the
+/// owner is not an admin; `Ok(None)` when the targets are fine.
+async fn check_local_targets_for_owner<'a>(
+    db: &dyn Repository,
+    owner_uid: i64,
+    hosts: impl Iterator<Item = &'a str>,
+) -> Result<Option<String>, DbError> {
+    let Some(bad) = hosts.into_iter().find(|h| is_local_target_host(h)) else {
+        return Ok(None);
+    };
+    if db.is_admin(owner_uid).await? {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "普通用户的规则不能转发到本机回环或链路本地地址：{}（管理员的规则不受此限制）",
+        bad.trim()
+    )))
+}
+
 pub fn normalize_rule_targets(
     targets: Option<Vec<RuleTargetRequest>>,
     legacy_host: &str,
@@ -466,6 +562,12 @@ pub async fn create_rule(
     // The scope for validating referenced groups = the FINAL owner.
     let owner_scope = ResourceScope::Owner(owner_uid);
 
+    if req.listen_port == Some(0) {
+        return Err(CreateRuleError::BadRequest(
+            "listen_port: must be between 1 and 65535".into(),
+        ));
+    }
+
     // v0.4.20: only direct forward_mode is supported. Group/chain forwarding
     // is no longer exposed in the UI and is rejected at the API boundary.
     // Existing rules with group forwarding still generate valid config, but
@@ -506,6 +608,19 @@ pub async fn create_rule(
     let targets = normalize_rule_targets(req.targets.clone(), &req.target_addr, req.target_port)
         .map_err(|msg| CreateRuleError::BadRequest(msg.into()))?;
     let primary_target = &targets[0];
+
+    // A non-admin owner (including a regular user an admin creates for) may
+    // not point a rule at this machine itself. Judged by the FINAL owner.
+    match check_local_targets_for_owner(db, owner_uid, targets.iter().map(|t| t.host.as_str()))
+        .await
+    {
+        Ok(None) => {}
+        Ok(Some(msg)) => return Err(CreateRuleError::BadRequest(msg)),
+        Err(e) => {
+            tracing::error!("create_rule: owner is_admin failed: {}", e);
+            return Err(CreateRuleError::Database(e));
+        }
+    }
 
     // v0.4.11 PR1: strong validation for transport/profile binding:
     // - Raw: tunnel_profile_id must be NULL
@@ -708,6 +823,12 @@ pub async fn update_rule(
     scope: &ResourceScope,
     req: &UpdateRuleRequest,
 ) -> Result<(), UpdateRuleError> {
+    if req.listen_port == Some(0) {
+        return Err(UpdateRuleError::BadRequest(
+            "listen_port: must be between 1 and 65535".into(),
+        ));
+    }
+
     // v0.4.20: only direct forward_mode is supported.
     if let Some(ref mode) = req.forward_mode {
         if mode != "direct" {
@@ -820,6 +941,26 @@ pub async fn update_rule(
     } else {
         None
     };
+
+    // Only an edit that changes the targets is checked, so existing rules keep
+    // working. A rule's owner cannot be changed by an edit, so the owner is
+    // the stored one (an admin editing a user's rule is still judged by the
+    // rule's owner, not the caller).
+    if normalized_targets.is_some() || req.target_addr.is_some() {
+        let hosts = normalized_targets
+            .iter()
+            .flatten()
+            .map(|t| t.host.as_str())
+            .chain(req.target_addr.as_deref());
+        match check_local_targets_for_owner(db, existing.uid, hosts).await {
+            Ok(None) => {}
+            Ok(Some(msg)) => return Err(UpdateRuleError::BadRequest(msg)),
+            Err(e) => {
+                tracing::error!("update_rule {}: owner is_admin failed: {}", id, e);
+                return Err(UpdateRuleError::Database(e));
+            }
+        }
+    }
 
     let existing_transport = match existing.public_transport.as_str() {
         "raw" => PublicTransport::Raw,
@@ -1083,6 +1224,81 @@ pub async fn update_rule(
 mod tests {
     use super::*;
     use crate::db::repo::RuleRepository;
+
+    #[test]
+    fn local_target_host_covers_every_spelling() {
+        for h in [
+            "127.0.0.1",
+            "127.255.255.254",
+            "0.0.0.0",
+            "0.1.2.3",
+            "169.254.169.254",
+            "169.254.0.1",
+            "localhost",
+            "LOCALHOST",
+            "localhost.",
+            "foo.localhost",
+            "Foo.LocalHost.",
+            "::1",
+            "::",
+            "fe80::1",
+            "febf::1",
+            "::ffff:127.0.0.1",
+            "::ffff:169.254.169.254",
+            "::ffff:0.0.0.0",
+            "::127.0.0.1",
+            "127.1",
+            "127.0.1",
+            "2130706433",
+            "0x7f000001",
+            "0X7F.1",
+            "0177.0.0.1",
+            "017700000001",
+            "0",
+            "0x0",
+            "2851995649",
+            "0xa9fea9fe",
+            " 127.0.0.1 ",
+        ] {
+            assert!(is_local_target_host(h), "{h} must count as a local address");
+        }
+    }
+
+    #[test]
+    fn local_target_host_leaves_ordinary_hosts_alone() {
+        for h in [
+            "example.com",
+            "127.example.com",
+            "localhost.example.com",
+            "mylocalhost",
+            "notlocalhost",
+            "1.2.3.4",
+            "8.8.8.8",
+            "10.0.0.1",
+            "172.16.0.1",
+            "192.168.1.1",
+            "100.64.0.1",
+            "169.253.1.1",
+            "128.0.0.1",
+            "2001:db8::1",
+            "fec0::1",
+            "::ffff:10.0.0.1",
+            "::ffff:8.8.8.8",
+            "1.2.3.4.5",
+            "256.1.1.1",
+            "1.2.3.256",
+            "08.0.0.1",
+            "0xzz.1",
+            "4294967296",
+            "",
+            "a.b.c.d",
+        ] {
+            assert!(
+                !is_local_target_host(h),
+                "{h:?} must not count as a local address"
+            );
+        }
+    }
 
     #[test]
     fn profile_update_distinguishes_omitted_null_and_id() {
@@ -1466,7 +1682,7 @@ mod tests {
 
         let create: CreateRuleRequest = serde_json::from_value(serde_json::json!({
             "name": "late", "listen_port": 24022, "protocol": "tcp",
-            "device_group_in": 1, "target_addr": "127.0.0.1", "target_port": 80
+            "device_group_in": 1, "target_addr": "10.0.0.5", "target_port": 80
         }))
         .unwrap();
         assert!(matches!(

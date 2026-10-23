@@ -28,6 +28,52 @@ was, by id).
   the end. New admin endpoint `PUT /api/v1/groups/order`, recorded in the audit
   log.
 
+### Changed
+
+- **A regular user's rules can no longer point at the panel host itself.** A
+  rule whose owner is not an admin is refused (400) if any target is a
+  loopback, unspecified or link-local address, including the cloud metadata
+  address: `127.0.0.0/8`, `0.0.0.0/8`, `169.254.0.0/16`, `::1`, `::`,
+  `fe80::/10` (and their IPv4-mapped forms), `localhost` and `*.localhost`,
+  and the shorthand spellings the system resolver also accepts (`127.1`,
+  `2130706433`, `0x7f000001`, `0177.0.0.1`). Private ranges such as
+  `10.0.0.0/8` and `192.168.0.0/16` are still allowed. The check is by the
+  rule's owner, so an admin creating a rule for a regular user is held to it
+  too; admins' own rules are not restricted. It runs when a rule is created
+  (including import and copy) and when an edit changes a rule's targets;
+  existing rules keep working and other edits are not checked. A domain name
+  that resolves to such an address cannot be recognised by the panel.
+- **Admin rights follow the database, not the token.** The panel now reads a
+  user's current admin flag on every request, so removing someone's admin role
+  takes effect at once for tokens they already hold (before, it lasted until
+  the token expired or was revoked). Granting the role likewise needs no
+  re-login.
+
+### Fixed
+
+- A rule's listen port of 0 is refused instead of letting the node pick a
+  random port the panel would not know about.
+
+### Security
+
+- **No fixed default admin password.** A fresh panel no longer starts with
+  `admin` / `admin123`, which was a working login for anyone who reached a new
+  install before its owner did. On the first boot the panel uses
+  `ADMIN_INITIAL_PASSWORD` if set, otherwise it generates a random password
+  and logs it once; `deploy.sh` shows it at the end of a first install. The
+  first login still asks for a new password. Existing panels are not
+  affected. Lost it: `relay-panel reset-admin-password`.
+- **Changing your password can no longer stall the panel.** The bcrypt work
+  of a password change (and of an admin resetting a user's password) runs on
+  the blocking pool under the same limits as login, and a user can try at
+  most 5 times a minute.
+- **Admin passwords are changed only with the current password.** The admin
+  "reset password" endpoint no longer accepts any admin account, the
+  caller's own included.
+- **Caddy mode sends HSTS**, so browsers stay on HTTPS.
+
+---
+
 ## [1.2.15] - 2026-10-22
 
 Ships alongside `node-v1.2.9`. The config protocol is unchanged at version 4.

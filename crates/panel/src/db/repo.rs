@@ -187,9 +187,13 @@ pub trait UserRepository: Send + Sync {
     /// banned flag for auth extractor. Returns None if user doesn't exist.
     async fn find_banned_by_id(&self, id: i64) -> Result<Option<bool>, DbError>;
     /// v0.4.10 PR4: the auth state the middleware needs in ONE query —
-    /// (banned, token_version, must_change_password). None = user deleted.
+    /// (banned, token_version, must_change_password, admin). None = user deleted.
+    /// `admin` is the CURRENT role, so a demoted admin loses privileges at once.
     /// Replaces three separate lookups per request.
-    async fn find_auth_state_by_id(&self, id: i64) -> Result<Option<(bool, i64, bool)>, DbError>;
+    async fn find_auth_state_by_id(
+        &self,
+        id: i64,
+    ) -> Result<Option<(bool, i64, bool, bool)>, DbError>;
     /// Check if user is admin (returns None if not found or not admin).
     async fn is_admin(&self, id: i64) -> Result<bool, DbError>;
     /// Check if user exists by id.

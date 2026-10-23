@@ -1329,7 +1329,7 @@ mod tests {
             route_mode: Default::default(),
             public_transport: Default::default(),
             ws_path: None,
-            target_addr: "127.0.0.1".into(),
+            target_addr: "10.0.0.5".into(),
             target_port: 80,
             targets: None,
             load_balance_strategy: Default::default(),
@@ -2489,7 +2489,7 @@ mod tests {
             route_mode: Default::default(),
             public_transport,
             ws_path: None,
-            target_addr: "127.0.0.1".into(),
+            target_addr: "10.0.0.5".into(),
             target_port: 80,
             targets: None,
             load_balance_strategy: Default::default(),
@@ -3043,6 +3043,59 @@ mod tests {
         assert_eq!(resp.code, 403, "{}", resp.message);
     }
 
+    /// An admin cannot reset their own password here: /user/password requires
+    /// the current password, so a stolen admin JWT can't take the account over.
+    #[tokio::test]
+    async fn admin_cannot_reset_own_password() {
+        let (state, _pool) = test_state().await;
+
+        let Json(resp) = reset_user_password(
+            AdminOnly { user_id: 1 },
+            State(state.clone()),
+            Path(1),
+            Json(ResetPasswordRequest {
+                new_password: "temp-pass-1".into(),
+                must_change_password: false,
+            }),
+        )
+        .await;
+        assert_eq!(resp.code, 403, "{}", resp.message);
+    }
+
+    /// change_password is limited to 5 attempts a minute per user, wrong
+    /// current password included.
+    #[tokio::test]
+    async fn change_password_is_rate_limited() {
+        let (state, pool) = test_state().await;
+        let hash = bcrypt::hash("old-pass-1", 4).unwrap();
+        sqlx::query(
+            "INSERT INTO users (id, username, password, admin, token_version, must_change_password) \
+             VALUES (77, 'limited', ?, 0, 0, 0)",
+        )
+        .bind(&hash)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut last = 0;
+        for _ in 0..6 {
+            let Json(resp) = change_password(
+                AuthUser {
+                    user_id: 77,
+                    admin: false,
+                },
+                State(state.clone()),
+                Json(ChangePasswordRequest {
+                    current_password: "wrong-pass-1".into(),
+                    new_password: "new-pass-1".into(),
+                }),
+            )
+            .await;
+            last = resp.code;
+        }
+        assert_eq!(last, 429);
+    }
+
     /// Admin reset rejects a short password (< 8 bytes).
     #[tokio::test]
     async fn admin_reset_password_rejects_short() {
@@ -3371,6 +3424,231 @@ mod tests {
         .await;
         assert_eq!(resp.code, 404, "{}", resp.message);
         assert!(has_status(&state, "node_status:1:node-a").await);
+    }
+
+    // ── local-address targets: non-admin owners may not forward to them ──
+
+    fn local_rule_req(name: &str, port: u16, owner_uid: Option<i64>) -> CreateRuleRequest {
+        let mut req = rule_req(name, port, 11, owner_uid);
+        req.target_addr = "127.0.0.1".into();
+        req
+    }
+
+    #[tokio::test]
+    async fn create_rule_user_cannot_target_local_address() {
+        let (state, pool) = test_state().await;
+        add_user(&pool, 2, "alice", false).await;
+        add_group(&pool, 11, 1, "shared-in").await;
+
+        let Json(resp) = create_rule(
+            auth(2, false),
+            State(state.clone()),
+            Json(local_rule_req("r", 20000, None)),
+        )
+        .await;
+        assert_eq!(resp.code, 400, "{}", resp.message);
+        assert!(resp.message.contains("127.0.0.1"), "{}", resp.message);
+
+        // The multi-target form is checked too (a local host hidden among
+        // otherwise fine targets), and so is the metadata address.
+        let mut req = rule_req("r2", 20001, 11, None);
+        req.targets = Some(vec![
+            relay_shared::protocol::RuleTargetRequest {
+                host: "10.0.0.5".into(),
+                port: 80,
+                enabled: true,
+            },
+            relay_shared::protocol::RuleTargetRequest {
+                host: "169.254.169.254".into(),
+                port: 80,
+                enabled: false,
+            },
+        ]);
+        let Json(resp) = create_rule(auth(2, false), State(state.clone()), Json(req)).await;
+        assert_eq!(resp.code, 400, "{}", resp.message);
+
+        // A private address is still fine.
+        let Json(resp) = create_rule(
+            auth(2, false),
+            State(state.clone()),
+            Json(rule_req("ok", 20002, 11, None)),
+        )
+        .await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+    }
+
+    #[tokio::test]
+    async fn create_rule_admin_can_target_local_address_for_self() {
+        let (state, pool) = test_state().await;
+        add_group(&pool, 11, 1, "shared-in").await;
+        let Json(resp) = create_rule(
+            auth(1, true),
+            State(state.clone()),
+            Json(local_rule_req("r", 20000, None)),
+        )
+        .await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+    }
+
+    #[tokio::test]
+    async fn create_rule_admin_for_user_owner_cannot_target_local_address() {
+        let (state, pool) = test_state().await;
+        add_user(&pool, 3, "bob", false).await;
+        add_group(&pool, 11, 1, "shared-in").await;
+        let Json(resp) = create_rule(
+            auth(1, true),
+            State(state.clone()),
+            Json(local_rule_req("r", 20000, Some(3))),
+        )
+        .await;
+        assert_eq!(resp.code, 400, "{}", resp.message);
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM forward_rules")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[tokio::test]
+    async fn update_rule_user_cannot_retarget_to_local_address() {
+        let (state, pool) = test_state().await;
+        add_user(&pool, 2, "alice", false).await;
+        add_group(&pool, 11, 1, "shared-in").await;
+        add_rule(&pool, 200, 2, 11, 12000, 0).await;
+
+        for body in [
+            UpdateRuleRequest {
+                targets: Some(vec![relay_shared::protocol::RuleTargetRequest {
+                    host: "0x7f000001".into(),
+                    port: 80,
+                    enabled: true,
+                }]),
+                ..Default::default()
+            },
+            UpdateRuleRequest {
+                target_addr: Some("localhost".into()),
+                ..Default::default()
+            },
+        ] {
+            let Json(resp) =
+                update_rule(auth(2, false), State(state.clone()), Path(200), Json(body)).await;
+            assert_eq!(resp.code, 400, "{}", resp.message);
+        }
+    }
+
+    /// An admin editing a regular user's rule is judged by the rule's owner.
+    #[tokio::test]
+    async fn update_rule_admin_editing_user_rule_cannot_set_local_target() {
+        let (state, pool) = test_state().await;
+        add_user(&pool, 2, "alice", false).await;
+        add_group(&pool, 11, 1, "shared-in").await;
+        add_rule(&pool, 200, 2, 11, 12000, 0).await;
+        add_rule(&pool, 201, 1, 11, 12001, 0).await;
+
+        let local = || UpdateRuleRequest {
+            target_addr: Some("127.0.0.1".into()),
+            ..Default::default()
+        };
+        let Json(resp) = update_rule(
+            auth(1, true),
+            State(state.clone()),
+            Path(200),
+            Json(local()),
+        )
+        .await;
+        assert_eq!(resp.code, 400, "{}", resp.message);
+        // The admin's own rule is unrestricted.
+        let Json(resp) = update_rule(
+            auth(1, true),
+            State(state.clone()),
+            Path(201),
+            Json(local()),
+        )
+        .await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+    }
+
+    /// Existing rules that already point at a local address keep working: an
+    /// edit that does not touch the targets is not checked.
+    #[tokio::test]
+    async fn update_rule_user_existing_local_rule_can_still_be_renamed() {
+        let (state, pool) = test_state().await;
+        add_user(&pool, 2, "alice", false).await;
+        add_group(&pool, 11, 1, "shared-in").await;
+        // add_rule stores target 127.0.0.1 directly in the table.
+        add_rule(&pool, 200, 2, 11, 12000, 0).await;
+
+        let Json(resp) = update_rule(
+            auth(2, false),
+            State(state.clone()),
+            Path(200),
+            Json(UpdateRuleRequest {
+                name: Some("renamed".into()),
+                upload_limit_mbps: Some(5),
+                ..Default::default()
+            }),
+        )
+        .await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+    }
+
+    // ── admin flag comes from the database, not the token ──
+
+    fn sign_token(sub: i64, admin: bool, token_version: i64) -> String {
+        use crate::api::middleware::Claims;
+        jsonwebtoken::encode(
+            &jsonwebtoken::Header::default(),
+            &Claims {
+                sub,
+                admin,
+                token_version,
+                exp: chrono::Utc::now().timestamp() as usize + 3600,
+            },
+            &jsonwebtoken::EncodingKey::from_secret(b"test-secret"),
+        )
+        .unwrap()
+    }
+
+    async fn admin_gate(state: &AppState, token: &str) -> bool {
+        use axum::extract::FromRequestParts;
+        let (mut parts, _) = axum::http::Request::builder()
+            .uri("/admin/anything")
+            .header("Authorization", format!("Bearer {token}"))
+            .body(())
+            .unwrap()
+            .into_parts();
+        AdminOnly::from_request_parts(&mut parts, state)
+            .await
+            .is_ok()
+    }
+
+    #[tokio::test]
+    async fn demoted_admin_with_old_admin_token_is_rejected() {
+        let (state, pool) = test_state().await;
+        add_user(&pool, 2, "carol", true).await;
+        let token = sign_token(2, true, 0);
+        assert!(admin_gate(&state, &token).await, "still an admin in the db");
+
+        sqlx::query("UPDATE users SET admin = 0 WHERE id = 2")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            !admin_gate(&state, &token).await,
+            "token says admin but the db no longer does"
+        );
+    }
+
+    /// The database is authoritative both ways: a token minted with
+    /// admin=false for a user who is an admin now still gets admin access.
+    #[tokio::test]
+    async fn db_admin_wins_over_token_claim() {
+        let (state, pool) = test_state().await;
+        add_user(&pool, 2, "dave", true).await;
+        assert!(admin_gate(&state, &sign_token(2, false, 0)).await);
+
+        add_user(&pool, 3, "erin", false).await;
+        assert!(!admin_gate(&state, &sign_token(3, true, 0)).await);
     }
 
     // ── PUT /groups/order ──

@@ -2541,7 +2541,7 @@ async fn find_auth_state_returns_all_three_or_none() {
     .await
     .unwrap();
     let s = db.find_auth_state_by_id(2).await.unwrap().unwrap();
-    assert_eq!(s, (true, 7, true));
+    assert_eq!(s, (true, 7, true, false));
     assert!(db.find_auth_state_by_id(999).await.unwrap().is_none());
 }
 
