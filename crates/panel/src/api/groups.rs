@@ -263,6 +263,7 @@ fn aggregate_shared_node_summaries(
             SharedNodeSummary {
                 group_id: g.id,
                 group_name: g.name.clone(),
+                group_sort_order: g.sort_order,
                 connect_host: g.connect_host.clone(),
                 capabilities: g.capabilities.clone(),
                 region: g.region.clone(),
@@ -331,7 +332,27 @@ mod tests {
             region: None,
             line_type: None,
             hidden: false,
+            sort_order: 0,
         }
+    }
+
+    /// Every node row carries its group's display order, so the page can list
+    /// groups in the order the admin arranged, whatever order they arrive in.
+    #[test]
+    fn node_rows_carry_the_group_sort_order() {
+        let now = chrono::Utc::now();
+        let mut first = group(7, "g7");
+        first.sort_order = 2;
+        let mut second = group(3, "g3");
+        second.sort_order = 1;
+        let rows = vec![row("node_status:7:a", 1, now)];
+        let out = aggregate_shared_node_summaries(vec![second, first], &rows, now);
+        let order: Vec<(i64, i32)> = out
+            .iter()
+            .map(|s| (s.group_id, s.group_sort_order))
+            .collect();
+        // Output follows the (already ordered) group list; each row says why.
+        assert_eq!(order, vec![(3, 1), (7, 2)]);
     }
 
     /// A status row JSON with the given last_seen offset (seconds ago).

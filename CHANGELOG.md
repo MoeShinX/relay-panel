@@ -10,6 +10,24 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+Schema: SQLite migration 47 / PostgreSQL revision 30, applied on start (one
+column on `device_groups`; every existing group gets 0, so the order stays as it
+was, by id).
+
+### Added
+
+- **Drag the device groups into the order you want.** On the Node Status page
+  an admin can now drag a group by the handle at the left of its header (or
+  pick it up with the keyboard) and drop it where it should go; the groups in
+  between shift down or up by one. The order is kept in the panel, so it is the
+  same on every browser and device, and it applies wherever groups are listed:
+  Node Status (admin and user views), Device Groups, the entry/exit group
+  pickers on a rule, and a user's or plan's granted groups. Nodes inside a
+  group keep their automatic order. Regular users see the order but cannot
+  change it, and phones show the order without the handle. A new group goes to
+  the end. New admin endpoint `PUT /api/v1/groups/order`, recorded in the audit
+  log.
+
 ### Changed
 
 - **A regular user's rules can no longer point at the panel host itself.** A

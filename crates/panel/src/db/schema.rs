@@ -94,6 +94,11 @@ CREATE TABLE IF NOT EXISTS device_groups (
     -- available lines). 1 = hidden. Admins are unaffected (they read /groups,
     -- not the shared endpoints). Default 0 keeps existing groups visible.
     hidden INTEGER NOT NULL DEFAULT 0,
+    -- v1.2.16: panel-wide display order of the groups (admin drags them on the
+    -- node-status page). Ties fall back to id, so every group at the default 0
+    -- lists exactly as before. Deliberately NOT indexed here: the baseline runs
+    -- before migrations on an old database, where this column does not exist yet.
+    sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -1868,6 +1873,18 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
     .await?;
     tracing::info!("Migration 46: forward_rules PROXY protocol columns present");
 
+    // ── Migration 47: panel-wide device-group display order ──
+    // Every existing group gets 0, and lists order by (sort_order, id), so the
+    // order is exactly what it was (by id) until an admin drags something.
+    add_column_if_missing(
+        pool,
+        "device_groups",
+        "sort_order",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    .await?;
+    tracing::info!("Migration 47: device_groups.sort_order column present");
+
     Ok(())
 }
 
@@ -2707,5 +2724,59 @@ mod tests {
             .await
             .expect("re-run baseline");
         run_migrations(&pool).await.expect("re-run migrations");
+    }
+
+    /// Migration 47: a database from before `device_groups.sort_order` gets the
+    /// column on the next boot (baseline, then migrations), every existing group
+    /// at 0 so the order is still by id, and re-running changes nothing.
+    #[tokio::test]
+    async fn migration_47_adds_group_sort_order_and_keeps_the_old_order() {
+        let pool = fresh_pool().await;
+        // Back to the pre-47 shape, with groups created out of id order.
+        sqlx::query("ALTER TABLE device_groups DROP COLUMN sort_order")
+            .execute(&pool)
+            .await
+            .expect("drop column");
+        for id in [3_i64, 1, 2] {
+            sqlx::query(
+                "INSERT INTO device_groups (id, name, group_type, token, uid)                  VALUES (?, ?, 'in', ?, 1)",
+            )
+            .bind(id)
+            .bind(format!("g{id}"))
+            .bind(format!("tok-{id}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        // Boot sequence: baseline first (a no-op for the existing table, and it
+        // must not touch the missing column), then migrations.
+        sqlx::query(SCHEMA_SQL)
+            .execute(&pool)
+            .await
+            .expect("baseline on an old database");
+        run_migrations(&pool).await.expect("migrate old database");
+
+        assert_column(&pool, "device_groups", "sort_order").await;
+        let rows: Vec<(i64, i64)> =
+            sqlx::query_as("SELECT id, sort_order FROM device_groups ORDER BY sort_order, id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rows, vec![(1, 0), (2, 0), (3, 0)]);
+
+        run_migrations(&pool).await.expect("re-run migrations");
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM device_groups")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 3);
+    }
+
+    /// A new database has the column from the baseline.
+    #[tokio::test]
+    async fn fresh_db_has_group_sort_order() {
+        let pool = fresh_pool().await;
+        assert_column(&pool, "device_groups", "sort_order").await;
     }
 }

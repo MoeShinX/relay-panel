@@ -1,7 +1,10 @@
 use super::err;
 use crate::api::middleware::{AdminOnly, AuthUser};
 use crate::api::AppState;
-use crate::service::groups::{validate_rate, CreateGroupError, UpdateGroupError, RATE_DEFAULT};
+use crate::db::repo::ResourceScope;
+use crate::service::groups::{
+    validate_rate, CreateGroupError, ReorderGroupsError, UpdateGroupError, RATE_DEFAULT,
+};
 use axum::{
     extract::{Path, State},
     Json,
@@ -57,6 +60,45 @@ pub async fn create_group(
         Err(CreateGroupError::FetchFailed) => Json(err(500, "Failed to fetch created group")),
         Err(CreateGroupError::Database(e)) => {
             tracing::error!("create_group: db error: {}", e);
+            Json(err(500, "数据库错误"))
+        }
+    }
+}
+
+/// `PUT /groups/order`: set the panel-wide display order of the groups (what
+/// the admin arranged by dragging on the node-status page). Admin only.
+pub async fn reorder_groups(
+    admin: AdminOnly,
+    State(state): State<AppState>,
+    Json(req): Json<ReorderGroupsRequest>,
+) -> Json<ApiResponse<()>> {
+    match crate::service::groups::reorder_groups(state.db.as_ref(), &req.ids).await {
+        Ok(()) => {
+            // The audit detail is the resulting order, by name: ids alone say
+            // nothing to whoever reads the log later.
+            let order = match state.db.list_groups(&ResourceScope::All).await {
+                Ok(groups) => groups
+                    .iter()
+                    .map(|g| g.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" > "),
+                Err(_) => format!("{} 个分组", req.ids.len()),
+            };
+            crate::service::audit::record(
+                &state,
+                Some(admin.user_id),
+                "reorder_groups",
+                "group",
+                "-",
+                &order,
+            )
+            .await;
+            Json(ApiResponse::success(()))
+        }
+        Err(ReorderGroupsError::Invalid) => Json(err(400, "分组顺序无效")),
+        Err(ReorderGroupsError::UnknownGroup) => Json(err(400, "包含不存在的分组")),
+        Err(ReorderGroupsError::Database(e)) => {
+            tracing::error!("reorder_groups: db error: {}", e);
             Json(err(500, "数据库错误"))
         }
     }

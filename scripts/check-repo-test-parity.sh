@@ -35,7 +35,7 @@ fi
 extract_tests() {
   local file="$1"
   grep -oP '^\s*async fn\s+\K[a-z_][a-z0-9_]*(?=\s*\()' "$file" \
-	    | grep -vE '^(repo|cleanup|seed_group|seed_group_typed|seed_user|pg_seed_user|seed_code|pg_seed_code|balance_of|pg_balance_of|pg_url|replace_db_in_url|placeholders|_placeholders_unused)$' \
+	    | grep -vE '^(repo|cleanup|seed_group|pg_seed_group|seed_group_typed|seed_user|pg_seed_user|seed_code|pg_seed_code|balance_of|pg_balance_of|pg_url|replace_db_in_url|placeholders|_placeholders_unused)$' \
     || true
 }
 

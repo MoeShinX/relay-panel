@@ -1271,6 +1271,14 @@ pub struct UpdateGroupRequest {
     pub hidden: Option<bool>,
 }
 
+/// `PUT /groups/order`: the panel-wide display order of the device groups.
+/// `ids` is the new order, first to last; groups left out follow, in their
+/// existing relative order.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct ReorderGroupsRequest {
+    pub ids: Vec<i64>,
+}
+
 // === Admin API — Plans (v1.0.8) ===
 /// Create a plan. price is a decimal string (canonicalized via parse_balance).
 /// plan_type 'data' = traffic-quota plan, 'time' = time-limited (duration_days).

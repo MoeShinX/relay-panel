@@ -170,6 +170,9 @@ pub fn routes() -> Router<AppState> {
             "/groups/{id}",
             axum::routing::put(admin::update_group).delete(admin::delete_group),
         )
+        // The panel-wide display order of the groups (admin drags them on the
+        // node-status page). A static segment, so it wins over `/groups/{id}`.
+        .route("/groups/order", axum::routing::put(admin::reorder_groups))
         // Rotate a group's node token (revokes the old one; broadcasts
         // config_changed so nodes re-authenticate). Owner-scoped.
         .route(
