@@ -140,6 +140,19 @@ describe('group order on the node-status page', () => {
     expect(item().className).not.toContain('ant-collapse-item-active');
   });
 
+  it('the handle takes no room until the keyboard reaches it', async () => {
+    mockUseAuth.mockReturnValue({ isAdmin: true });
+    serve([node(1, 1)]);
+    render(<NodeStatus />);
+    await flush();
+    const handle = handles()[0];
+    expect(handle.style.width).toBe('0px');
+    fireEvent.focus(handle);
+    expect(handle.style.width).toBe('');
+    fireEvent.blur(handle);
+    expect(handle.style.width).toBe('0px');
+  });
+
   it('Enter on the handle does not fold the group', async () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
     serve([node(1, 1)]);

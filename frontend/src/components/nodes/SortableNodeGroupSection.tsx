@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { ComponentProps, KeyboardEvent, MouseEvent, PointerEventHandler } from 'react';
 import { HolderOutlined } from '@ant-design/icons';
 import { useSortable } from '@dnd-kit/sortable';
@@ -22,6 +23,9 @@ export function SortableNodeGroupSection({ id, ...props }: SectionProps & { id: 
   } = useSortable({ id });
 
   const swallowClick = useSuppressClickAfterDrag(isDragging);
+  // The whole header is the grip, so the handle is only the keyboard way in:
+  // it takes no room (and shifts nothing on the header row) until it has focus.
+  const [handleFocused, setHandleFocused] = useState(false);
 
   // Groups slide up or down to make room; they never move sideways or stretch.
   const style = {
@@ -55,7 +59,18 @@ export function SortableNodeGroupSection({ id, ...props }: SectionProps & { id: 
         listeners?.onKeyDown?.(e);
         if (e.key === 'Enter') e.stopPropagation();
       }}
-      style={{ cursor: 'grab', touchAction: 'none', color: 'var(--ant-color-text-tertiary, #999)' }}
+      onFocus={() => setHandleFocused(true)}
+      onBlur={() => setHandleFocused(false)}
+      style={{
+        cursor: 'grab',
+        touchAction: 'none',
+        color: 'var(--ant-color-text-tertiary, #999)',
+        display: 'inline-flex',
+        overflow: 'hidden',
+        // 0 wide cancels the row's 8px gap too.
+        width: handleFocused ? undefined : 0,
+        marginRight: handleFocused ? 0 : -8,
+      }}
     >
       <HolderOutlined />
     </span>
@@ -68,6 +83,7 @@ export function SortableNodeGroupSection({ id, ...props }: SectionProps & { id: 
     onClick: (e: MouseEvent) => { if (swallowClick()) e.stopPropagation(); },
     style: { cursor: isDragging ? 'grabbing' : 'grab', userSelect: 'none' as const },
     'data-testid': `group-drag-header-${id}`,
+    title: label,
   };
 
   return (
