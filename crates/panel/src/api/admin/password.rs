@@ -67,10 +67,7 @@ pub async fn reset_user_password(
     if target_is_admin {
         // Not even your own: /user/password re-checks the current password,
         // so a stolen admin JWT cannot be used to take the account over.
-        return Json(err(
-            403,
-            "无法通过此接口重置管理员密码，请使用「修改密码」",
-        ));
+        return Json(err(403, "无法通过此接口重置管理员密码，请使用「修改密码」"));
     }
 
     let new_password = req.new_password.clone();
