@@ -31,6 +31,31 @@ independent `v*` / `node-v*` tracks since this release).
   the token expired or was revoked). Granting the role likewise needs no
   re-login.
 
+### Fixed
+
+- A rule's listen port of 0 is refused instead of letting the node pick a
+  random port the panel would not know about.
+
+### Security
+
+- **No fixed default admin password.** A fresh panel no longer starts with
+  `admin` / `admin123`, which was a working login for anyone who reached a new
+  install before its owner did. On the first boot the panel uses
+  `ADMIN_INITIAL_PASSWORD` if set, otherwise it generates a random password
+  and logs it once; `deploy.sh` shows it at the end of a first install. The
+  first login still asks for a new password. Existing panels are not
+  affected. Lost it: `relay-panel reset-admin-password`.
+- **Changing your password can no longer stall the panel.** The bcrypt work
+  of a password change (and of an admin resetting a user's password) runs on
+  the blocking pool under the same limits as login, and a user can try at
+  most 5 times a minute.
+- **Admin passwords are changed only with the current password.** The admin
+  "reset password" endpoint no longer accepts any admin account, the
+  caller's own included.
+- **Caddy mode sends HSTS**, so browsers stay on HTTPS.
+
+---
+
 ## [1.2.15] - 2026-10-22
 
 Ships alongside `node-v1.2.9`. The config protocol is unchanged at version 4.

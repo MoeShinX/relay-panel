@@ -2,6 +2,7 @@ use crate::db::pg_schema::{apply_pg_schema, run_pg_migrations};
 use crate::db::repo::UserRepository;
 use crate::db::schema::{run_migrations, SCHEMA_SQL};
 use crate::db::sqlite_repo::SqliteRepository;
+use crate::service::password::{generate_password, validate_password};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use std::str::FromStr;
 
@@ -59,7 +60,7 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
         .await?;
 
     // Replace the SCHEMA_SQL placeholder password with a real bcrypt hash of
-    // the default "admin123" — but ONLY when the stored password is still the
+    // the initial password — but ONLY when the stored password is still the
     // placeholder. See hash_default_admin_password_if_placeholder for the
     // safety reasoning (the short version: the WHERE clause matches ONLY the
     // literal placeholder, never an admin-changed bcrypt hash).
@@ -68,7 +69,37 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     Ok(pool)
 }
 
-/// Hash the default "admin123" password into users(id=1) IF AND ONLY IF the
+/// The bcrypt hash for the first-boot admin password.
+///
+/// No fixed default: a published `admin/admin123` is a working login for
+/// anyone who reaches a fresh panel before its owner does. The operator sets
+/// `ADMIN_INITIAL_PASSWORD`; without it (or with one that fails the password
+/// policy) a random password is generated and written to the log ONCE, at
+/// WARN, so `docker logs` shows it. The account still has must_change_password.
+fn initial_admin_password_hash() -> Result<String, sqlx::Error> {
+    let from_env = std::env::var("ADMIN_INITIAL_PASSWORD")
+        .ok()
+        .filter(|v| !v.is_empty());
+    let password = match from_env {
+        Some(p) if validate_password(&p).is_ok() => p,
+        other => {
+            if other.is_some() {
+                tracing::warn!(
+                    "ADMIN_INITIAL_PASSWORD ignored: it must be 8..=72 bytes; generating one"
+                );
+            }
+            let p = generate_password();
+            tracing::warn!(
+                "initial admin login: username `admin`, password `{p}` — shown only this once; \
+                 you must change it at first login (or run `relay-panel reset-admin-password`)"
+            );
+            p
+        }
+    };
+    bcrypt::hash(&password, 12).map_err(|e| sqlx::Error::Protocol(format!("bcrypt: {e}")))
+}
+
+/// Hash the initial admin password into users(id=1) IF AND ONLY IF the
 /// stored value is still the SCHEMA_SQL placeholder. A password an admin has
 /// already changed is NEVER touched.
 ///
@@ -95,11 +126,11 @@ pub async fn hash_default_admin_password_if_placeholder(
         .await
         .map_err(db_err_to_sqlx)?;
     if needs_hash > 0 {
-        let hashed = bcrypt::hash("admin123", 12).unwrap_or_default();
+        let hashed = initial_admin_password_hash()?;
         repo.replace_placeholder_admin_password(&hashed)
             .await
             .map_err(db_err_to_sqlx)?;
-        tracing::info!("hashed the default admin password (first boot placeholder -> bcrypt)");
+        tracing::info!("set the initial admin password (first boot placeholder -> bcrypt)");
     }
     Ok(())
 }
@@ -157,7 +188,7 @@ pub async fn init_pg(database_url: &str) -> Result<sqlx::PgPool, sqlx::Error> {
     run_pg_migrations(&pool).await?;
 
     // Same placeholder-password hashing as SQLite: the seed admin row has the
-    // PLACEHOLDER string, init replaces it with a real bcrypt hash of "admin123".
+    // PLACEHOLDER string, init replaces it with a real bcrypt hash of the initial password.
     // This runs through the Repository trait so the SQL lives in pg_repo.rs.
     hash_default_admin_password_if_placeholder_pg(&pool).await?;
 
@@ -176,11 +207,11 @@ async fn hash_default_admin_password_if_placeholder_pg(
         .await
         .map_err(db_err_to_sqlx)?;
     if needs_hash > 0 {
-        let hashed = bcrypt::hash("admin123", 12).unwrap_or_default();
+        let hashed = initial_admin_password_hash()?;
         repo.replace_placeholder_admin_password(&hashed)
             .await
             .map_err(db_err_to_sqlx)?;
-        tracing::info!("hashed the default admin password (first boot placeholder -> bcrypt)");
+        tracing::info!("set the initial admin password (first boot placeholder -> bcrypt)");
     }
     Ok(())
 }
@@ -194,4 +225,42 @@ pub fn is_postgres_url(database_url: &str) -> bool {
         || database_url.starts_with("postgresql://")
         || database_url.starts_with("postgres+ssl://")
         || database_url.starts_with("postgresql+ssl://")
+}
+
+#[cfg(test)]
+mod initial_password_tests {
+    use super::*;
+
+    async fn admin_hash(dir: &std::path::Path, name: &str) -> String {
+        let url = format!("sqlite:{}?mode=rwc", dir.join(name).display());
+        let pool = init_db(&url).await.unwrap();
+        sqlx::query_scalar("SELECT password FROM users WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    }
+
+    /// One test (env vars are process-global): no fixed default password, the
+    /// operator's ADMIN_INITIAL_PASSWORD is honoured, and an invalid one falls
+    /// back to a random password instead of a weak one.
+    #[tokio::test]
+    async fn first_boot_admin_password_is_not_a_fixed_default() {
+        let dir = std::env::temp_dir().join(format!("relay-init-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::env::remove_var("ADMIN_INITIAL_PASSWORD");
+        let random = admin_hash(&dir, "a.db").await;
+        assert!(!bcrypt::verify("admin123", &random).unwrap());
+
+        std::env::set_var("ADMIN_INITIAL_PASSWORD", "operator-chosen-1");
+        let chosen = admin_hash(&dir, "b.db").await;
+        assert!(bcrypt::verify("operator-chosen-1", &chosen).unwrap());
+
+        std::env::set_var("ADMIN_INITIAL_PASSWORD", "short");
+        let fallback = admin_hash(&dir, "c.db").await;
+        assert!(!bcrypt::verify("short", &fallback).unwrap());
+
+        std::env::remove_var("ADMIN_INITIAL_PASSWORD");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

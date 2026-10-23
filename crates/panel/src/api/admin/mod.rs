@@ -3043,6 +3043,59 @@ mod tests {
         assert_eq!(resp.code, 403, "{}", resp.message);
     }
 
+    /// An admin cannot reset their own password here: /user/password requires
+    /// the current password, so a stolen admin JWT can't take the account over.
+    #[tokio::test]
+    async fn admin_cannot_reset_own_password() {
+        let (state, _pool) = test_state().await;
+
+        let Json(resp) = reset_user_password(
+            AdminOnly { user_id: 1 },
+            State(state.clone()),
+            Path(1),
+            Json(ResetPasswordRequest {
+                new_password: "temp-pass-1".into(),
+                must_change_password: false,
+            }),
+        )
+        .await;
+        assert_eq!(resp.code, 403, "{}", resp.message);
+    }
+
+    /// change_password is limited to 5 attempts a minute per user, wrong
+    /// current password included.
+    #[tokio::test]
+    async fn change_password_is_rate_limited() {
+        let (state, pool) = test_state().await;
+        let hash = bcrypt::hash("old-pass-1", 4).unwrap();
+        sqlx::query(
+            "INSERT INTO users (id, username, password, admin, token_version, must_change_password) \
+             VALUES (77, 'limited', ?, 0, 0, 0)",
+        )
+        .bind(&hash)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut last = 0;
+        for _ in 0..6 {
+            let Json(resp) = change_password(
+                AuthUser {
+                    user_id: 77,
+                    admin: false,
+                },
+                State(state.clone()),
+                Json(ChangePasswordRequest {
+                    current_password: "wrong-pass-1".into(),
+                    new_password: "new-pass-1".into(),
+                }),
+            )
+            .await;
+            last = resp.code;
+        }
+        assert_eq!(last, 429);
+    }
+
     /// Admin reset rejects a short password (< 8 bytes).
     #[tokio::test]
     async fn admin_reset_password_rejects_short() {

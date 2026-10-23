@@ -8,7 +8,7 @@
 #   2. Fill them in below (or use a .env file / secrets manager).
 #   3. Create an inbound device group in the panel UI and copy its Node Token
 #      into NODE_TOKEN for the node service.
-#   4. Change the default admin password (admin/admin123) after first login.
+#   4. Find the random initial admin password in `docker compose logs panel` (or set ADMIN_INITIAL_PASSWORD) and change it after first login.
 #
 # The panel REFUSES TO START if JWT_SECRET is empty, the placeholder, or
 # shorter than 32 characters (deploy.sh replaces a short one in .env).
@@ -43,6 +43,9 @@ services:
       # Leave empty to fall back to the browser's window.location.origin.
       # Example: - PUBLIC_PANEL_URL=https://panel.example.com
       - PUBLIC_PANEL_URL=${PUBLIC_PANEL_URL:-}
+      # OPTIONAL — password for the first-boot `admin` account. Unset: a random
+      # one is generated and printed once in the panel log (docker compose logs panel).
+      - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD:-}
       # v0.4.19 — node-level GeoIP is now ON by default. The panel resolves
       # each node's public IP to a country flag via built-in providers
       # (primary ipinfo.io Lite → fallback ipwho.is). Failures degrade to
