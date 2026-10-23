@@ -32,6 +32,15 @@ disk as before.
   the last finished list meanwhile. A node in Docker only sees the container's
   mounts.
 
+### Changed
+
+- **Installing and upgrading nodes on servers in mainland China.** The node
+  installer and the one-click self-upgrade now switch to accelerated downloads
+  on their own when GitHub is slow or unreachable. Nothing to configure;
+  servers that reach GitHub fine behave as before.
+
+---
+
 ## [1.2.9] - 2026-10-22
 
 Runs against any current panel (still protocol version 4). Needed for PROXY

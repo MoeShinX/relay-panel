@@ -1,5 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Spin, Result, Empty, Modal, message, Typography } from 'antd';
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
 import { LineChartOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
 import api from '../api/client';
 import type { ApiEnvelope, NodeStatus, SharedNodeSummary, NodeDisplayRow, NodeLiveRate } from '../api/types';
@@ -7,8 +21,15 @@ import { useI18n } from '../i18n/context';
 import { useAuth } from '../auth/useAuth';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { NodeGroupSection } from '../components/nodes/NodeGroupSection';
+import { SortableNodeGroupSection } from '../components/nodes/SortableNodeGroupSection';
 import { NodeDetailDrawer } from '../components/nodes/NodeDetailDrawer';
-import { stableGroupedRows } from '../components/nodes/sort';
+import {
+  hasGroupOrder,
+  mergeVisibleOrder,
+  moveGroup,
+  stableGroupedRows,
+  withGroupOrder,
+} from '../components/nodes/sort';
 import { rateSummary } from '../components/nodes/shared';
 import { formatBps } from '../utils/format';
 
@@ -63,10 +84,16 @@ export default function NodeStatus() {
   // report figure instead of freezing on an old number.
   const [liveRates, setLiveRates] = useState<Map<string, NodeLiveRate>>(() => new Map());
   const liveInFlightRef = useRef(false);
+  // Bumped when a group drag starts saving and again when it ends. A poll that
+  // began before the change would otherwise land afterwards with the old order
+  // and flip the page back for a moment, so its answer is dropped.
+  const orderGenRef = useRef(0);
 
   const loadAdmin = async () => {
+    const gen = orderGenRef.current;
     try {
       const res = await api.get<unknown, ApiEnvelope<NodeStatus[]>>('/nodes');
+      if (gen !== orderGenRef.current) return;
       if (res.code !== 0) {
         setLoadFailed(true);
         return;
@@ -198,6 +225,20 @@ export default function NodeStatus() {
     ? rows?.find((r) => r.group_id === detailRow.group_id && r.node_id === detailRow.node_id) ?? detailRow
     : null;
 
+  // Drag to reorder the groups: pointer, plus keyboard (Space to pick up,
+  // arrows to move, Space to drop, Escape to cancel). Enter is left out on
+  // purpose: on the group header it folds the group. Hooks, so above the early
+  // returns.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+      keyboardCodes: { start: ['Space'], cancel: ['Escape'], end: ['Space'] },
+    }),
+  );
+  // Only an admin on a wide screen drags; everyone else just sees the order.
+  const canReorder = isAdmin && !isMobile;
+
   const title = t('nodeStatus');
 
   // Load failure (DB error / request failure) — not a normal empty state.
@@ -229,6 +270,50 @@ export default function NodeStatus() {
     );
   }
 
+  // The admin dropped a group on another's place. Show the new order at once,
+  // then save it; if saving fails, put the old order back.
+  const handleGroupDragEnd = async ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id || !adminRows) return;
+    const shown = groups.filter(([, r]) => hasGroupOrder(r)).map(([gid]) => gid);
+    const next = moveGroup(shown, Number(active.id), Number(over.id));
+    if (next === shown) return;
+
+    const before = adminRows;
+    orderGenRef.current += 1;
+    setAdminRows(withGroupOrder(before, next));
+    try {
+      // The page lists only groups that have a node record; the server orders
+      // all of them. Send the whole list so the others keep their places.
+      const list = await api.get<unknown, ApiEnvelope<{ id: number }[]>>('/groups');
+      if (list.code !== 0) throw new Error(list.message);
+      const full = mergeVisibleOrder((list.data || []).map((g) => g.id), next);
+      const res = await api.put<unknown, ApiEnvelope<null>>('/groups/order', { ids: full });
+      if (res.code !== 0) throw new Error(res.message);
+    } catch {
+      setAdminRows(before);
+      message.error(t('reorderGroupsFailed'));
+    } finally {
+      orderGenRef.current += 1;
+    }
+  };
+
+  const renderSection = (gid: number, groupRows: AnyNodeRow[]) => {
+    const props = {
+      rows: groupRows,
+      panelProtocol,
+      latestNodeVersion,
+      nodeVersionCheckFailed,
+      isMobile,
+      t,
+      openDetail: setDetailRow,
+      onUpgrade: isAdmin ? handleUpgrade : undefined,
+      onDelete: isAdmin ? handleDelete : undefined,
+    };
+    return canReorder && hasGroupOrder(groupRows)
+      ? <SortableNodeGroupSection key={gid} id={gid} {...props} />
+      : <NodeGroupSection key={gid} {...props} />;
+  };
+
   // v1.2.5: drop one node's status record. Admin-only, and the button is only
   // rendered on offline rows — see NodeDesktopTable for why.
   const handleDelete = async (row: NodeDisplayRow) => {
@@ -255,20 +340,18 @@ export default function NodeStatus() {
           </Typography.Text>
         )}
       </div>
-      {groups.map(([gid, groupRows]) => (
-        <NodeGroupSection
-          key={gid}
-          rows={groupRows}
-          panelProtocol={panelProtocol}
-          latestNodeVersion={latestNodeVersion}
-          nodeVersionCheckFailed={nodeVersionCheckFailed}
-          isMobile={isMobile}
-          t={t}
-          openDetail={setDetailRow}
-          onUpgrade={isAdmin ? handleUpgrade : undefined}
-          onDelete={isAdmin ? handleDelete : undefined}
-        />
-      ))}
+      {canReorder ? (
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleGroupDragEnd}>
+          <SortableContext
+            items={groups.filter(([, r]) => hasGroupOrder(r)).map(([gid]) => gid)}
+            strategy={verticalListSortingStrategy}
+          >
+            {groups.map(([gid, groupRows]) => renderSection(gid, groupRows))}
+          </SortableContext>
+        </DndContext>
+      ) : (
+        groups.map(([gid, groupRows]) => renderSection(gid, groupRows))
+      )}
       <NodeDetailDrawer
         row={detailCurrent}
         open={detailRow !== null}

@@ -25,6 +25,7 @@ const ACTIONS = [
   'delete_rule',
   'restart_rule',
   'delete_group',
+  'reorder_groups',
   'rotate_group_token',
   'upgrade_node',
   'upgrade_panel',

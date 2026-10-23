@@ -210,87 +210,45 @@ fn classify_tag(tag: &str) -> Option<(ReleaseTrack, semver::Version)> {
 /// ship a stable 1.0 and only want to notify users about stable releases.
 const ALLOW_PRERELEASE_UPDATES: bool = true;
 
-/// Fetch releases from GitHub and pick the newest eligible PANEL release and
-/// the newest eligible NODE release (from the same `/releases` list, split by
-/// tag prefix: `v*` → panel, `node-v*` → node).
+/// GitHub URL prefixes, tried in order, for the version lookup. The empty
+/// prefix is a direct connection; the other is the trusted relay, which serves
+/// the same URLs for networks where GitHub is slow or blocked. A prefixed URL
+/// is the prefix followed by the full GitHub URL.
 ///
-/// Why not `/releases/latest`: that endpoint only returns the latest
-/// **non-prerelease** release, so during the pre-release phase it returns an
-/// old (or no) release. Instead we list `/releases`, drop drafts (never
-/// installable), classify each tag, and take the greatest semver PER TRACK.
-/// Pre-releases are included when `ALLOW_PRERELEASE_UPDATES` is true.
+/// TRUSTED SOURCES ONLY. The public accelerators (gh-proxy.com, ghfast.top,
+/// ...) are deliberately absent: the answer here decides which version the
+/// panel offers to install as root, and nothing can be checked against it.
 ///
-/// v1.2: a `node-v*` tag is NEVER considered a panel update, and a `v*` tag is
-/// NEVER considered a node update. This is the fix for the bug where a node
-/// release could be misread as a panel version.
-///
-/// Returns:
-/// - `Ok(CachedReleases)`  - call succeeded; each track is Some if an eligible
-///   release was found, None if that track had no eligible release.
-/// - `Err(msg)`             - network/HTTP/parse error (logged, surfaced to
-///   client). NOTE: a single shared error covers BOTH tracks because the
-///   fetch is one HTTP call; the caller maps this to `check_failed` AND
-///   `node_version_check_failed` both true.
-///
-/// Every error path logs a `tracing::warn!` with the URL, status, and body so
-/// ops can diagnose a broken update check (this used to silently return None
-/// and the user saw "no update available" forever).
-async fn fetch_github_releases() -> Result<CachedReleases, String> {
-    let url = format!("https://api.github.com/repos/{}/releases?per_page=30", REPO);
-    let client = match reqwest::Client::builder()
-        .user_agent("RelayPanel-Version-Check")
-        .timeout(Duration::from_secs(10))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(url = %url, error = %e, "version-check: failed to build HTTP client");
-            return Err(format!("build client: {}", e));
-        }
-    };
+/// Keep in sync with the trusted entries of `scripts/mirror-lib.sh` and
+/// `install.sh`.
+const TRUSTED_PREFIXES: &[&str] = &["", "https://down.relaypanel.dev/"];
 
-    let resp = match client.get(&url).send().await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(url = %url, error = %e, "version-check: network error");
-            return Err(format!("network: {}", e));
-        }
-    };
+/// Connect timeout per attempt; the total (headers + body) is 10 seconds.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-    let status = resp.status();
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        tracing::warn!(
-            url = %url,
-            status = %status,
-            body = %body.chars().take(200).collect::<String>(),
-            "version-check: GitHub returned non-2xx"
-        );
-        return Err(format!("HTTP {}", status.as_u16()));
-    }
+/// Messages (and the log) must not show the relay's address: a URL is shown
+/// with the relay's prefix replaced by "(mirror) ".
+fn scrub(text: &str) -> String {
+    text.replace(TRUSTED_PREFIXES[1], "(mirror) ")
+}
 
-    let releases: Vec<GitHubRelease> = match resp.json().await {
-        Ok(r) => r,
-        Err(e) => {
-            // GitHub occasionally returns null for body/html_url/published_at
-            // on old or minimal releases; the GitHubRelease struct tolerates
-            // that via Option fields now, but surface a clear message in case
-            // the response shape changed in some other way.
-            tracing::warn!(
-                url = %url,
-                error = %e,
-                "version-check: GitHub release JSON parse failed; \
-                 response shape may have changed or a field is incompatible"
-            );
-            return Err(format!(
-                "GitHub release JSON parse failed; one or more fields may be null or incompatible ({})",
-                e
-            ));
-        }
-    };
+fn with_prefix(prefix: &str, url: &str) -> String {
+    format!("{prefix}{url}")
+}
 
-    // Per-track selection: drop drafts, apply prerelease filter, classify each
-    // tag, then take the highest semver WITHIN each track.
+fn releases_api_url() -> String {
+    format!("https://api.github.com/repos/{REPO}/releases?per_page=30")
+}
+
+fn raw_cargo_toml_url(krate: &str) -> String {
+    format!("https://raw.githubusercontent.com/{REPO}/main/crates/{krate}/Cargo.toml")
+}
+
+/// Pick the newest eligible PANEL release and the newest eligible NODE release
+/// from a `/releases` list: drop drafts, apply the prerelease filter, classify
+/// each tag, and take the highest semver WITHIN each track.
+fn select_latest(releases: Vec<GitHubRelease>) -> CachedReleases {
     let eligible = releases
         .into_iter()
         .filter(|r| !r.draft)
@@ -313,10 +271,210 @@ async fn fetch_github_releases() -> Result<CachedReleases, String> {
         }
     }
 
-    Ok(CachedReleases {
+    CachedReleases {
         panel: panel.map(|(_, r)| r),
         node: node.map(|(_, r)| r),
+    }
+}
+
+/// The `version = "x.y.z"` of a `Cargo.toml`'s `[package]` table. A tiny
+/// line-based reader (no TOML dependency): it ignores `version` keys in other
+/// tables (`[dependencies.foo]`) and returns None for `version.workspace =
+/// true` or anything that is not a semver string.
+fn parse_cargo_package_version(text: &str) -> Option<semver::Version> {
+    let mut in_package = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            if in_package {
+                // Left [package] without finding a version.
+                return None;
+            }
+            in_package = line.split('#').next().map(str::trim) == Some("[package]");
+            continue;
+        }
+        if !in_package {
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("version") else {
+            continue;
+        };
+        let Some(rest) = rest.trim_start().strip_prefix('=') else {
+            continue; // `version.workspace = true`, `version_foo = ..`
+        };
+        let rest = rest.trim_start().strip_prefix('"')?;
+        let value = &rest[..rest.find('"')?];
+        return semver::Version::parse(value).ok();
+    }
+    None
+}
+
+/// A release synthesised from a bare version (the Cargo.toml fallback). GitHub
+/// was not asked about the release itself, so there are no notes and no
+/// publish date; the link is the conventional tag URL. The frontend already
+/// copes with empty notes / dates (GitHub returns null for old releases too).
+fn synthetic_release(tag: String) -> GitHubRelease {
+    GitHubRelease {
+        html_url: Some(format!("https://github.com/{REPO}/releases/tag/{tag}")),
+        tag_name: tag,
+        body: None,
+        published_at: None,
+        draft: false,
+        prerelease: false,
+    }
+}
+
+fn release_from_cargo_version(tag_prefix: &str, v: semver::Version) -> Option<GitHubRelease> {
+    if !ALLOW_PRERELEASE_UPDATES && !v.pre.is_empty() {
+        return None;
+    }
+    Some(synthetic_release(format!("{tag_prefix}{v}")))
+}
+
+/// Resolve the latest panel and node releases using `get` (URL -> response
+/// body of a 2xx answer, or an error message), trying in order:
+///
+/// 1. the GitHub API, directly;
+/// 2. the GitHub API through the trusted relay;
+/// 3. FALLBACK ONLY: the `version` in `main`'s `crates/panel/Cargo.toml` and
+///    `crates/node/Cargo.toml`, fetched directly, then through the trusted
+///    relay. Public accelerators are never asked.
+///
+/// Step 3 exists for networks where the API is unreachable or rate limited
+/// (unauthenticated callers get 60 requests/hour/IP). It cannot see the
+/// Release itself, so notes and dates are empty and the link is the tag URL,
+/// and it reports whatever version `main` declares, which can run ahead of
+/// the published tag for the short while between a release PR landing and the
+/// tag being pushed. It needs BOTH files from the same route; a half answer
+/// would make a missing node look like "no node release".
+///
+/// An API answer that parses is final, even with an empty list. If every
+/// route fails the FIRST error (the direct API call's) is returned.
+async fn fetch_releases_with<F, Fut>(get: F) -> Result<CachedReleases, String>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Result<String, String>>,
+{
+    let mut first_err: Option<String> = None;
+
+    for prefix in TRUSTED_PREFIXES {
+        let url = with_prefix(prefix, &releases_api_url());
+        match get(url.clone()).await {
+            Ok(body) => match serde_json::from_str::<Vec<GitHubRelease>>(&body) {
+                Ok(releases) => return Ok(select_latest(releases)),
+                Err(e) => {
+                    // GitHub occasionally returns null for body/html_url/
+                    // published_at on old releases; GitHubRelease tolerates
+                    // that, so this is a changed shape or a proxy error page.
+                    tracing::warn!(
+                        url = %scrub(&url),
+                        error = %e,
+                        "version-check: release JSON parse failed; \
+                         response shape may have changed or a field is incompatible"
+                    );
+                    first_err.get_or_insert(format!(
+                        "GitHub release JSON parse failed; one or more fields may be null or incompatible ({})",
+                        e
+                    ));
+                }
+            },
+            Err(e) => {
+                first_err.get_or_insert(e);
+            }
+        }
+    }
+
+    for prefix in TRUSTED_PREFIXES {
+        let panel_url = with_prefix(prefix, &raw_cargo_toml_url("panel"));
+        let node_url = with_prefix(prefix, &raw_cargo_toml_url("node"));
+        let (panel_body, node_body) =
+            futures_util::future::join(get(panel_url), get(node_url)).await;
+        let panel = panel_body
+            .ok()
+            .and_then(|b| parse_cargo_package_version(&b));
+        let node = node_body.ok().and_then(|b| parse_cargo_package_version(&b));
+        if let (Some(p), Some(n)) = (panel, node) {
+            tracing::warn!(
+                route = if prefix.is_empty() {
+                    "direct"
+                } else {
+                    "mirror"
+                },
+                "version-check: GitHub API unreachable; using the versions in Cargo.toml on main"
+            );
+            return Ok(CachedReleases {
+                panel: release_from_cargo_version("v", p),
+                node: release_from_cargo_version("node-v", n),
+            });
+        }
+    }
+
+    Err(first_err.unwrap_or_else(|| "version check failed".to_string()))
+}
+
+/// GET `url` and return the body of a 2xx answer. Every failure is logged with
+/// the URL (and status / body excerpt) so ops can diagnose a broken update
+/// check, then returned as a short message.
+async fn http_get_text(client: &reqwest::Client, url: String) -> Result<String, String> {
+    let resp = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(url = %scrub(&url), error = %scrub(&e.to_string()), "version-check: network error");
+            return Err(format!("network: {}", scrub(&e.to_string())));
+        }
+    };
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        tracing::warn!(
+            url = %scrub(&url),
+            status = %status,
+            body = %body.chars().take(200).collect::<String>(),
+            "version-check: non-2xx answer"
+        );
+        return Err(format!("HTTP {}", status.as_u16()));
+    }
+    resp.text().await.map_err(|e| {
+        tracing::warn!(url = %scrub(&url), error = %scrub(&e.to_string()), "version-check: reading the body failed");
+        format!("network: {}", scrub(&e.to_string()))
     })
+}
+
+/// Fetch the newest eligible PANEL release and the newest eligible NODE
+/// release (from the same `/releases` list, split by tag prefix: `v*` ->
+/// panel, `node-v*` -> node), through the routes described on
+/// `fetch_releases_with`.
+///
+/// Why not `/releases/latest`: that endpoint only returns the latest
+/// **non-prerelease** release, so during the pre-release phase it returns an
+/// old (or no) release. Instead we list `/releases`, drop drafts (never
+/// installable), classify each tag, and take the greatest semver PER TRACK.
+/// Pre-releases are included when `ALLOW_PRERELEASE_UPDATES` is true.
+///
+/// v1.2: a `node-v*` tag is NEVER considered a panel update, and a `v*` tag is
+/// NEVER considered a node update. This is the fix for the bug where a node
+/// release could be misread as a panel version.
+///
+/// Returns:
+/// - `Ok(CachedReleases)`  - a route answered; each track is Some if an
+///   eligible release was found, None if that track had no eligible release.
+/// - `Err(msg)`             - every route failed (logged, surfaced to client).
+///   NOTE: a single shared error covers BOTH tracks; the caller maps this to
+///   `check_failed` AND `node_version_check_failed` both true.
+async fn fetch_github_releases() -> Result<CachedReleases, String> {
+    let client = match reqwest::Client::builder()
+        .user_agent("RelayPanel-Version-Check")
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "version-check: failed to build HTTP client");
+            return Err(format!("build client: {}", e));
+        }
+    };
+    fetch_releases_with(|url| http_get_text(&client, url)).await
 }
 
 /// Query parameters for `get_version`. `refresh=true` (or `1`) bypasses the
@@ -836,5 +994,335 @@ mod tests {
         }
         assert_eq!(panel.unwrap().1.tag_name, "v1.2.0");
         assert_eq!(node.unwrap().1.tag_name, "node-v1.1.0");
+    }
+
+    // ---- download acceleration: URL building, Cargo.toml fallback, order ----
+
+    use std::sync::Mutex;
+
+    const API_DIRECT: &str =
+        "https://api.github.com/repos/MoeShinX/relay-panel/releases?per_page=30";
+    const API_DOWN: &str = "https://down.relaypanel.dev/https://api.github.com/repos/MoeShinX/relay-panel/releases?per_page=30";
+    const PANEL_TOML: &str = "crates/panel/Cargo.toml";
+    const NODE_TOML: &str = "crates/node/Cargo.toml";
+
+    fn raw(prefix: &str, path: &str) -> String {
+        format!("{prefix}https://raw.githubusercontent.com/MoeShinX/relay-panel/main/{path}")
+    }
+
+    fn toml_with_version(name: &str, v: &str) -> String {
+        format!("[package]\nname = \"{name}\"\nversion = \"{v}\"\nedition = \"2021\"\n")
+    }
+
+    /// Drive `fetch_releases_with` against a scripted network: `script` maps a
+    /// URL to its answer (anything not listed fails). Returns the result and
+    /// the URLs asked for, in order (the two Cargo.toml fetches of one route
+    /// are issued together, so they are compared sorted where needed).
+    async fn run_scripted(
+        script: Vec<(String, Result<String, String>)>,
+    ) -> (Result<CachedReleases, String>, Vec<String>) {
+        let calls = Mutex::new(Vec::<String>::new());
+        let result = fetch_releases_with(|url: String| {
+            calls.lock().unwrap().push(url.clone());
+            let answer = script
+                .iter()
+                .find(|(u, _)| *u == url)
+                .map(|(_, a)| a.clone())
+                .unwrap_or_else(|| Err(format!("network: unreachable {url}")));
+            async move { answer }
+        })
+        .await;
+        (result, calls.into_inner().unwrap())
+    }
+
+    const ONE_PANEL_ONE_NODE: &str = r#"[
+        { "tag_name": "v1.2.15", "draft": false },
+        { "tag_name": "node-v1.2.9", "draft": false }
+    ]"#;
+
+    #[test]
+    fn prefixed_urls_are_prefix_then_full_github_url() {
+        assert_eq!(with_prefix("", &releases_api_url()), API_DIRECT);
+        assert_eq!(
+            with_prefix("https://down.relaypanel.dev/", &releases_api_url()),
+            API_DOWN
+        );
+        assert_eq!(
+            with_prefix("https://down.relaypanel.dev/", &raw_cargo_toml_url("node")),
+            "https://down.relaypanel.dev/https://raw.githubusercontent.com/MoeShinX/relay-panel/main/crates/node/Cargo.toml"
+        );
+    }
+
+    #[test]
+    fn the_relay_address_is_scrubbed_from_messages() {
+        let shown = scrub(&format!(
+            "error sending request for url ({}https://api.github.com/x)",
+            TRUSTED_PREFIXES[1]
+        ));
+        assert_eq!(
+            shown,
+            "error sending request for url ((mirror) https://api.github.com/x)"
+        );
+        assert!(!shown.contains(TRUSTED_PREFIXES[1]));
+        // Direct and public URLs are shown as they are.
+        assert_eq!(
+            scrub("https://api.github.com/x"),
+            "https://api.github.com/x"
+        );
+    }
+
+    #[test]
+    fn only_trusted_prefixes_are_ever_used() {
+        assert_eq!(TRUSTED_PREFIXES, &["", "https://down.relaypanel.dev/"]);
+        assert!(TRUSTED_PREFIXES[1..].iter().all(|p| p.ends_with('/')));
+    }
+
+    #[test]
+    fn cargo_version_is_read_from_the_package_table() {
+        let v = |t: &str| parse_cargo_package_version(t).map(|v| v.to_string());
+        assert_eq!(
+            v(&toml_with_version("relay-panel", "1.2.15")).as_deref(),
+            Some("1.2.15")
+        );
+        // CRLF, spacing, a trailing comment and a pre-release.
+        assert_eq!(
+            v("[package]\r\nname = \"x\"\r\nversion   =   \"1.3.0-rc.1\"  # bump\r\n").as_deref(),
+            Some("1.3.0-rc.1")
+        );
+        // Comments and other tables before [package] do not matter.
+        assert_eq!(
+            v("# header\n[workspace]\nversion = \"9.9.9\"\n\n[package] # the crate\nversion = \"0.4.1\"\n")
+                .as_deref(),
+            Some("0.4.1")
+        );
+    }
+
+    #[test]
+    fn cargo_version_ignores_other_tables_and_unusable_values() {
+        let v = |t: &str| parse_cargo_package_version(t);
+        // `version` only inside a dependency table, not in [package].
+        assert!(
+            v("[package]\nname = \"x\"\n\n[dependencies.foo]\nversion = \"1.0.0\"\n").is_none()
+        );
+        // Inherited from the workspace: nothing to read here.
+        assert!(v("[package]\nname = \"x\"\nversion.workspace = true\n").is_none());
+        assert!(v("[package]\nname = \"x\"\nversion = { workspace = true }\n").is_none());
+        // Not semver / not a Cargo.toml (a proxy error page, say).
+        assert!(v("[package]\nversion = \"one\"\n").is_none());
+        assert!(v("<html>403 Forbidden</html>").is_none());
+        assert!(v("").is_none());
+        // A dependency line named like the key does not count.
+        assert!(v("[package]\nversion_note = \"1.0.0\"\n").is_none());
+    }
+
+    #[tokio::test]
+    async fn direct_api_answer_is_used_without_trying_anything_else() {
+        let (res, calls) =
+            run_scripted(vec![(API_DIRECT.into(), Ok(ONE_PANEL_ONE_NODE.into()))]).await;
+        let r = res.unwrap();
+        assert_eq!(r.panel.unwrap().tag_name, "v1.2.15");
+        assert_eq!(r.node.unwrap().tag_name, "node-v1.2.9");
+        assert_eq!(calls, vec![API_DIRECT.to_string()]);
+    }
+
+    #[tokio::test]
+    async fn api_through_down_proxy_when_direct_fails() {
+        let (res, calls) = run_scripted(vec![
+            (API_DIRECT.into(), Err("network: timed out".into())),
+            (API_DOWN.into(), Ok(ONE_PANEL_ONE_NODE.into())),
+        ])
+        .await;
+        let r = res.unwrap();
+        assert_eq!(r.panel.unwrap().tag_name, "v1.2.15");
+        assert_eq!(calls, vec![API_DIRECT.to_string(), API_DOWN.to_string()]);
+    }
+
+    #[tokio::test]
+    async fn api_http_error_or_garbage_moves_on_to_the_next_route() {
+        // 403 (rate limited) on the direct call, an HTML error page from the
+        // proxy: both count as "this route failed", not as an empty list.
+        let (res, calls) = run_scripted(vec![
+            (API_DIRECT.into(), Err("HTTP 403".into())),
+            (API_DOWN.into(), Ok("<html>bad gateway</html>".into())),
+            (
+                raw("", PANEL_TOML),
+                Ok(toml_with_version("relay-panel", "1.2.15")),
+            ),
+            (
+                raw("", NODE_TOML),
+                Ok(toml_with_version("relay-node", "1.2.9")),
+            ),
+        ])
+        .await;
+        let r = res.unwrap();
+        assert_eq!(r.panel.unwrap().tag_name, "v1.2.15");
+        assert_eq!(r.node.unwrap().tag_name, "node-v1.2.9");
+        assert_eq!(calls[0], API_DIRECT);
+        assert_eq!(calls[1], API_DOWN);
+    }
+
+    #[tokio::test]
+    async fn an_empty_api_list_is_a_success_and_never_falls_back() {
+        let (res, calls) = run_scripted(vec![(API_DIRECT.into(), Ok("[]".into()))]).await;
+        let r = res.unwrap();
+        assert!(r.panel.is_none() && r.node.is_none());
+        assert_eq!(calls.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cargo_toml_fallback_walks_the_trusted_prefixes_in_order() {
+        // API dead everywhere; raw: direct has only the panel file (half an
+        // answer is not used), the relay has both.
+        let (res, calls) = run_scripted(vec![
+            (
+                raw("", PANEL_TOML),
+                Ok(toml_with_version("relay-panel", "1.2.16")),
+            ),
+            (
+                raw("https://down.relaypanel.dev/", PANEL_TOML),
+                Ok(toml_with_version("relay-panel", "1.2.16")),
+            ),
+            (
+                raw("https://down.relaypanel.dev/", NODE_TOML),
+                Ok(toml_with_version("relay-node", "1.2.10")),
+            ),
+        ])
+        .await;
+        let r = res.unwrap();
+        let panel = r.panel.unwrap();
+        let node = r.node.unwrap();
+        assert_eq!(panel.tag_name, "v1.2.16");
+        assert_eq!(node.tag_name, "node-v1.2.10");
+        // No notes or date, but a usable link; nothing the frontend cannot show.
+        assert_eq!(
+            panel.html_url.as_deref(),
+            Some("https://github.com/MoeShinX/relay-panel/releases/tag/v1.2.16")
+        );
+        assert_eq!(
+            node.html_url.as_deref(),
+            Some("https://github.com/MoeShinX/relay-panel/releases/tag/node-v1.2.10")
+        );
+        assert!(panel.body.is_none() && panel.published_at.is_none());
+        assert!(!panel.draft && !panel.prerelease);
+
+        // Order: both API routes, then the raw routes, each asking for the
+        // panel and node files together.
+        let mut expected: Vec<String> = vec![API_DIRECT.into(), API_DOWN.into()];
+        for p in TRUSTED_PREFIXES {
+            expected.push(raw(p, PANEL_TOML));
+            expected.push(raw(p, NODE_TOML));
+        }
+        assert_eq!(calls, expected);
+    }
+
+    #[tokio::test]
+    async fn fallback_stops_at_the_first_route_that_answers_fully() {
+        let (res, calls) = run_scripted(vec![
+            (
+                raw("", PANEL_TOML),
+                Ok(toml_with_version("relay-panel", "1.2.15")),
+            ),
+            (
+                raw("", NODE_TOML),
+                Ok(toml_with_version("relay-node", "1.2.9")),
+            ),
+        ])
+        .await;
+        assert!(res.is_ok());
+        // API x2, direct raw x2 - and nothing after.
+        assert_eq!(calls.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn every_route_failing_returns_the_first_error() {
+        let (res, calls) = run_scripted(vec![(
+            API_DIRECT.into(),
+            Err("network: connect timed out".into()),
+        )])
+        .await;
+        assert_eq!(res.err().as_deref(), Some("network: connect timed out"));
+        assert_eq!(calls.len(), 2 + 2 * TRUSTED_PREFIXES.len());
+    }
+
+    /// A public accelerator could serve a forged version, so it is never asked,
+    /// not even when every trusted route is down and a public one would answer.
+    #[tokio::test]
+    async fn public_accelerators_are_never_requested_for_the_version() {
+        let mut script = Vec::new();
+        for p in ["https://gh-proxy.com/", "https://ghfast.top/"] {
+            script.push((
+                raw(p, PANEL_TOML),
+                Ok(toml_with_version("relay-panel", "9.9.9")),
+            ));
+            script.push((
+                raw(p, NODE_TOML),
+                Ok(toml_with_version("relay-node", "9.9.9")),
+            ));
+        }
+        let (res, calls) = run_scripted(script).await;
+        assert!(
+            res.is_err(),
+            "no trusted route answered, so the check fails"
+        );
+        assert!(
+            calls
+                .iter()
+                .all(|u| !u.contains("gh-proxy.com") && !u.contains("ghfast.top")),
+            "requested: {calls:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_proxy_error_page_is_not_mistaken_for_a_cargo_toml() {
+        let (res, _) = run_scripted(vec![
+            (raw("", PANEL_TOML), Ok("<html>blocked</html>".into())),
+            (raw("", NODE_TOML), Ok("<html>blocked</html>".into())),
+        ])
+        .await;
+        assert!(res.is_err());
+    }
+
+    /// Real network, run by hand: `cargo test -p relay-panel real_network -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore = "uses the network"]
+    async fn real_network_latest_releases() {
+        let r = fetch_github_releases()
+            .await
+            .expect("a route should answer");
+        println!(
+            "panel={:?} node={:?}",
+            r.panel.map(|x| x.tag_name),
+            r.node.map(|x| x.tag_name)
+        );
+    }
+
+    /// Real network, run by hand: the GitHub API is made to fail so the
+    /// Cargo.toml fallback runs against the real raw files.
+    #[tokio::test]
+    #[ignore = "uses the network"]
+    async fn real_network_cargo_fallback() {
+        let client = reqwest::Client::builder()
+            .user_agent("RelayPanel-Version-Check")
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .unwrap();
+        let r = fetch_releases_with(|url: String| {
+            let client = client.clone();
+            async move {
+                if url.contains("api.github.com") {
+                    return Err("blocked for the test".to_string());
+                }
+                http_get_text(&client, url).await
+            }
+        })
+        .await
+        .expect("the Cargo.toml fallback should answer");
+        let (p, n) = (r.panel.unwrap(), r.node.unwrap());
+        println!(
+            "panel={} node={} link={:?}",
+            p.tag_name, n.tag_name, p.html_url
+        );
+        assert!(p.tag_name.starts_with('v') && n.tag_name.starts_with("node-v"));
     }
 }

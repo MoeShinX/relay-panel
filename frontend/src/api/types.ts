@@ -453,6 +453,8 @@ export interface NodeStatus {
   /** Present in the API response but not the legacy type; both Nodes and
    *  Dashboard pages render it. Optional for safety on older payloads. */
   group_name?: string;
+  /** The group's panel-wide display order (see NodeDisplayRow). */
+  group_sort_order?: number;
   /** relay-node binary version; missing on older nodes. */
   node_version?: string | null;
   /** v1.0.10: how the node is run — "systemd" | "docker" | "manual". Gates the
@@ -650,6 +652,8 @@ export interface SharedGroupSummary {
 export interface SharedNodeSummary {
   group_id: number;
   group_name: string;
+  /** The group's panel-wide display order (see NodeDisplayRow). */
+  group_sort_order?: number;
   connect_host: string;
   capabilities: string;
   region?: string | null;
@@ -704,6 +708,9 @@ export interface NodeLiveRate {
 export interface NodeDisplayRow {
   group_id: number;
   group_name?: string | null;
+  /** The group's panel-wide display order (lower first; ties fall back to
+   *  group_id). Absent for a status record whose group no longer exists. */
+  group_sort_order?: number | null;
   node_id?: string | null;
   online?: boolean;
   /** v1.2.12 (admin /nodes only): whether the WS control channel is up. An

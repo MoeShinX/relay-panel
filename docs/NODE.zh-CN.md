@@ -134,6 +134,15 @@ sudo systemctl enable --now relay-node
 systemctl status relay-node   # 应显示 active (running)
 ```
 
+### 下载加速
+
+服务器访问 GitHub 很慢或打不开时，安装脚本和节点的一键自升级会自动改用加速下载；
+面板里显示的安装命令在取安装脚本时也一样。无需任何配置，能正常访问 GitHub 的
+服务器行为不变。
+
+如果安装或升级因为「没有可用的下载来源」而停下，稍后重试即可。
+`RELAY_NODE_BASE_URL`（你自己的下载地址）和 `-p` / `RELAY_PROXY` 照常可用。
+
 ---
 
 ## 配置
@@ -353,8 +362,9 @@ HTTP，不受影响。
 
 ### 下载 GitHub 很慢
 GitHub Releases 在国内访问可能很慢。可以：
+- 脚本和一键自升级在 GitHub 很慢或打不开时会自动改用加速下载，见上文「下载加速」
 - 用代理下载：脚本支持 `-p socks5://127.0.0.1:10808`（或其他代理）
-- 或用镜像 / CDN 加速地址，手动下载二进制后放到 `/opt/relay-node/`
+- 或用自己的镜像：设置 `RELAY_NODE_BASE_URL`，或手动下载二进制后放到 `/opt/relay-node/`
 
 ---
 

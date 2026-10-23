@@ -211,7 +211,8 @@ def main():
     start_echo_servers()
 
     panel_env = dict(os.environ, LISTEN="127.0.0.1:18888", RUST_LOG="info",
-                     REGISTRATION_ENABLED="1")
+                     REGISTRATION_ENABLED="1",
+                     ADMIN_INITIAL_PASSWORD="admin123")
     panel = subprocess.Popen([PANEL_BIN], env=panel_env,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     node = None

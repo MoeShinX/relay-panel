@@ -13,6 +13,8 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 REAL_CP="$(command -v cp)"
 PY="$(command -v python3 || command -v python)"
 FAILS=0
+MAIN_SHA=1111111111111111111111111111111111111111
+OTHER_SHA=2222222222222222222222222222222222222222
 
 check() { # DESCRIPTION CONDITION...
     local what="$1"; shift
@@ -29,8 +31,10 @@ setup() {
     T="$(mktemp -d)"
     REPO="$T/repo"; STATE="$T/state"; STUBS="$T/bin"
     mkdir -p "$REPO/scripts" "$REPO/run" "$STATE/data" "$STUBS"
-    cp "$HERE/panel-updater.sh" "$HERE/sqlite-backup.sh" "$REPO/scripts/"
+    cp "$HERE/panel-updater.sh" "$HERE/sqlite-backup.sh" "$HERE/mirror-lib.sh" "$REPO/scripts/"
     echo "$1" > "$STATE/version"
+    echo "$MAIN_SHA" > "$STATE/main-sha"
+    : > "$STATE/git-calls"; : > "$STATE/probe-calls"
     compose() { printf 'services:\n  panel:\n    image: ghcr.io/moeshinx/relay-panel-panel:${RELAYPANEL_PANEL_TAG:-%s}\n' "$1"; }
     compose "$1" > "$REPO/docker-compose.release.yaml"
     compose "$2" > "$STATE/compose-after-pull"
@@ -45,14 +49,81 @@ echo "\${RELAYPANEL_BACKUP_DONE:-unset}" > "$STATE/deploy-backup-flag"
 cp "$STATE/next-version" "$STATE/version" 2>/dev/null || true
 echo "deployed"
 EOF
+    # Which GitHub routes work. No $STATE/git-routes file = all of them; else
+    # one URL prefix per line, "DIRECT" meaning github.com itself. A route
+    # works when the URL asked for starts with that prefix. git-fetch-routes
+    # (optional) narrows the routes that can TRANSFER, leaving the others able
+    # to answer ls-remote only; route-sha lines "PREFIX SHA" make a route
+    # deliver a different commit than the one asked for.
+    cat > "$STATE/route-ok.sh" <<EOF
+route_in() { # FILE URL
+    [ -f "\$1" ] || return 0
+    local line
+    while IFS= read -r line; do
+        [ -n "\$line" ] || continue
+        if [ "\$line" = DIRECT ]; then
+            case "\$2" in https://github.com/*) return 0 ;; esac
+        else
+            case "\$2" in "\$line"*) return 0 ;; esac
+        fi
+    done < "\$1"
+    return 1
+}
+route_ok() { route_in "$STATE/git-routes" "\$1"; }
+fetch_ok() {
+    if [ -f "$STATE/git-fetch-routes" ]; then route_in "$STATE/git-fetch-routes" "\$1"; else route_ok "\$1"; fi
+}
+delivered_sha() { # URL -> the commit this route delivers
+    local prefix sha
+    if [ -f "$STATE/route-sha" ]; then
+        while read -r prefix sha; do
+            case "\$1" in "\$prefix"*) echo "\$sha"; return ;; esac
+        done < "$STATE/route-sha"
+    fi
+    cat "$STATE/main-sha"
+}
+EOF
+    # curl answers the health check; for the reachability probe of a GitHub
+    # route (.../info/refs) it follows route_ok, unless probes-all-ok is set
+    # (a route that connects but then stalls on the real transfer).
     cat > "$STUBS/curl" <<EOF
 #!/usr/bin/env bash
+. "$STATE/route-ok.sh"
+for a in "\$@"; do
+    case "\$a" in
+    *info/refs*)
+        echo "probe \$a" >> "$STATE/probe-calls"
+        [ -f "$STATE/probes-all-ok" ] && exit 0
+        route_ok "\$a" && exit 0
+        exit 28 ;;
+    esac
+done
 printf '{"status":"ok","version":"%s"}' "\$(cat "$STATE/version")"
 EOF
     cat > "$STUBS/git" <<EOF
 #!/usr/bin/env bash
-[ -f "$STATE/git-fails" ] && { echo "fatal: local changes would be overwritten"; exit 1; }
-cp "$STATE/compose-after-pull" "$REPO/docker-compose.release.yaml"
+. "$STATE/route-ok.sh"
+echo "git \$*" >> "$STATE/git-calls"
+url=""
+for a in "\$@"; do case "\$a" in http*) url="\$a" ;; esac; done
+case " \$* " in
+*" ls-remote "*)
+    route_ok "\$url" || { echo "fatal: unable to access '\$url'"; exit 128; }
+    printf '%s\trefs/heads/main\n' "\$(cat "$STATE/main-sha")" ;;
+*" fetch "*)
+    fetch_ok "\$url" || { echo "fatal: unable to access '\$url'"; exit 128; }
+    [ -f "$STATE/git-fetch-fails" ] && { echo "fatal: early EOF"; exit 128; }
+    # Fetching by commit id: it must be the id main has.
+    case " \$* " in *" $MAIN_SHA "*) ;; *) echo "fatal: couldn't find remote ref"; exit 128 ;; esac
+    delivered_sha "\$url" > "$STATE/fetch-head" ;;
+*" rev-parse "*)
+    cat "$STATE/fetch-head" 2>/dev/null || exit 1 ;;
+*" merge "*)
+    [ -f "$STATE/git-fails" ] && { echo "fatal: local changes would be overwritten"; exit 1; }
+    cp "$STATE/compose-after-pull" "$REPO/docker-compose.release.yaml"
+    ;;
+esac
+exit 0
 EOF
     cat > "$STUBS/docker" <<EOF
 #!/usr/bin/env bash
@@ -116,6 +187,91 @@ check "says git pull" message_has "git pull failed"
 check "log tail carries git's error" message_has "local changes would be overwritten"
 check "status is valid JSON" valid_json
 check "nothing was stopped" bash -c "! grep -q stop '$STATE/docker-calls' 2>/dev/null"
+
+DOWN='https://down.relaypanel.dev/'
+REPO_URL='https://github.com/MoeShinX/relay-panel.git'
+
+echo "fast-forward refused (diverged history or local changes)"
+setup 1.2.10 1.2.11
+touch "$STATE/git-fails"
+run_updater
+check "reports failed" state_is failed
+check "blames the local repository, not the network" message_has "cannot be fast-forwarded"
+check "main was fetched from the first route only" bash -c "[ \$(grep -c ' fetch ' '$STATE/git-calls') -eq 1 ]"
+check "no other mirror is tried for a merge problem" bash -c "! grep -q 'down.relaypanel.dev' '$STATE/git-calls'"
+check "status is valid JSON" valid_json
+
+echo "GitHub direct is tried first"
+setup 1.2.10 1.2.10
+run_updater
+check "reports up_to_date" state_is up_to_date
+check "fetches github.com directly" bash -c "[ \"\$(grep ' fetch ' '$STATE/git-calls' | grep -o 'http[^ ]*' | head -n1)\" = '$REPO_URL' ]"
+check "fast-forwards only" grep -q "merge --ff-only" "$STATE/git-calls"
+check "origin is never rewritten" bash -c "! grep -q 'set-url' '$STATE/git-calls'"
+
+echo "direct GitHub unreachable, the second route works"
+setup 1.2.10 1.2.11
+echo 1.2.11 > "$STATE/next-version"
+echo "$DOWN" > "$STATE/git-routes"
+run_updater
+check "reports succeeded" state_is succeeded
+check "fetched through the project's mirror" bash -c "[ \"\$(grep ' fetch ' '$STATE/git-calls' | grep -o 'http[^ ]*')\" = '${DOWN}${REPO_URL}' ]"
+check "the direct route was probed first" bash -c "head -n1 '$STATE/probe-calls' | grep -q 'probe https://github.com/'"
+check "the log says which route (the relay is called mirror, not named)" bash -c "grep -q \"via mirror\" \"$T/updater.log\" && ! grep -q relaypanel \"$T/updater.log\""
+check "status is valid JSON" valid_json
+
+echo "direct answers ls-remote but the transfer fails, the next route works"
+setup 1.2.10 1.2.10
+echo "https://gh-proxy.com/" > "$STATE/git-fetch-routes"
+run_updater
+check "reports up_to_date" state_is up_to_date
+check "tried direct, then down.relaypanel.dev, then gh-proxy" bash -c "[ \"\$(grep ' fetch ' '$STATE/git-calls' | grep -o 'http[^ ]*' | tr '\n' ' ')\" = '${REPO_URL} ${DOWN}${REPO_URL} https://gh-proxy.com/${REPO_URL} ' ]"
+check "asked for the commit id, not the branch" bash -c "grep ' fetch ' '$STATE/git-calls' | grep -q ' $MAIN_SHA\$'"
+
+echo "the commit id comes from trusted sources only"
+setup 1.2.10 1.2.11
+printf 'https://gh-proxy.com/\nhttps://ghfast.top/\n' > "$STATE/git-routes"
+run_updater
+check "reports failed" state_is failed
+check "says GitHub could not be reached" message_has "could not be reached"
+check "the log explains why public routes were not used" grep -q "public accelerators are not used" "$T/updater.log"
+check "nothing was fetched from anywhere" bash -c "! grep -q ' fetch ' '$STATE/git-calls'"
+check "only trusted sources were probed or asked for the id" bash -c "! grep -qE 'gh-proxy|ghfast' '$STATE/git-calls' '$STATE/probe-calls'"
+check "nothing was merged" bash -c "! grep -q ' merge ' '$STATE/git-calls'"
+check "status is valid JSON" valid_json
+
+echo "a public route that serves a different commit is rejected, the next one is tried"
+setup 1.2.10 1.2.11
+echo 1.2.11 > "$STATE/next-version"
+printf 'https://gh-proxy.com/\nhttps://ghfast.top/\n' > "$STATE/git-fetch-routes"
+printf 'https://gh-proxy.com/ %s\n' "$OTHER_SHA" > "$STATE/route-sha"
+run_updater
+check "reports succeeded (via ghfast.top)" state_is succeeded
+check "gh-proxy.com was tried and its answer refused" grep -q "gh-proxy.com: delivered $OTHER_SHA instead of" "$T/updater.log"
+check "ghfast.top delivered the right commit" bash -c "grep ' fetch ' '$STATE/git-calls' | tail -n1 | grep -q 'ghfast.top'"
+check "merged exactly the trusted commit" bash -c "grep ' merge ' '$STATE/git-calls' | grep -q ' $MAIN_SHA\$'"
+
+echo "every route serves the wrong commit"
+setup 1.2.10 1.2.11
+printf 'https://gh-proxy.com/\n' > "$STATE/git-fetch-routes"
+printf 'https://gh-proxy.com/ %s\n' "$OTHER_SHA" > "$STATE/route-sha"
+run_updater
+check "reports failed" state_is failed
+check "nothing was merged" bash -c "! grep -q ' merge ' '$STATE/git-calls'"
+check "the compose file is untouched" grep -q '1.2.10' "$REPO/docker-compose.release.yaml"
+check "nothing was stopped" bash -c "! grep -q stop '$STATE/docker-calls' 2>/dev/null"
+
+echo "no route reaches GitHub"
+setup 1.2.10 1.2.11
+: > "$STATE/git-routes"
+run_updater
+check "reports failed" state_is failed
+check "says GitHub could not be reached" message_has "could not be reached"
+check "nothing was merged" bash -c "! grep -q ' merge ' '$STATE/git-calls' 2>/dev/null"
+check "nothing was stopped" bash -c "! grep -q stop '$STATE/docker-calls' 2>/dev/null"
+check "the compose file is untouched" grep -q '1.2.10' "$REPO/docker-compose.release.yaml"
+check "request consumed" request_gone
+check "status is valid JSON" valid_json
 
 echo "already up to date"
 setup 1.2.10 1.2.10
