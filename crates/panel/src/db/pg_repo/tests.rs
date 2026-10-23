@@ -6626,6 +6626,12 @@ async fn pg_a_new_group_is_listed_last() {
     for gid in [1, 2, 3] {
         pg_seed_group(&db, gid).await;
     }
+    // The seeds above took ids by hand, so the id sequence is still at its
+    // start: move it past them, or the first automatic id collides with id 1.
+    sqlx::query("SELECT setval(pg_get_serial_sequence('device_groups', 'id'), 100)")
+        .execute(&db.pool)
+        .await
+        .unwrap();
     db.insert_group("new-a", "in", "tok-new-a", 1, "", "1-65535", 1.0, false)
         .await
         .unwrap();
