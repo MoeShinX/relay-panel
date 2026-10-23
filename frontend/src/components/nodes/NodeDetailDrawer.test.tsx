@@ -92,3 +92,39 @@ describe('NodeDetailDrawer CPU model', () => {
     expect(within(memRow).getByText('12.5%')).toBeInTheDocument();
   });
 });
+
+// The disk row lists every disk a node reports (nodes after node-v1.2.9); one
+// disk, or an older node's none, keeps the single line it has always had.
+describe('NodeDetailDrawer disks', () => {
+  const zh = { t: (k: keyof typeof zhCN) => zhCN[k], lang: 'zh-CN' as const, setLang: () => {} };
+  const GB = 1024 ** 3;
+  const primary = { disk_usage_percent: 40, disk_used: 4 * GB, disk_total: 10 * GB, disk_mount: '/' };
+  const root = { mount: '/', fs_type: 'ext4', total: 10 * GB, used: 4 * GB };
+  const data = { mount: '/data', fs_type: 'xfs', total: 4 * GB, used: GB };
+  const renderZh = (row: NodeDisplayRow) =>
+    render(
+      <I18nContext.Provider value={zh}>
+        <NodeDetailDrawer row={row} open onClose={vi.fn()} isAdmin panelProtocol={2} />
+      </I18nContext.Provider>,
+    );
+  const diskRow = () => screen.getByText('主硬盘').closest('tr') as HTMLElement;
+
+  it('lists each disk', () => {
+    renderZh({ ...baseRow, ...primary, disks: [root, data] });
+    const r = diskRow();
+    expect(within(r).getByText('/data')).toBeInTheDocument();
+    expect(within(r).getByText(/xfs/)).toBeInTheDocument();
+    expect(within(r).getByText('1.00 GB / 4.00 GB (25.0%)')).toBeInTheDocument();
+    expect(within(r).getByText('4.00 GB / 10.00 GB (40.0%)')).toBeInTheDocument();
+  });
+
+  it('keeps the one-line summary for a single disk', () => {
+    renderZh({ ...baseRow, ...primary, disks: [root] });
+    expect(within(diskRow()).getByText('40.0% (4.00 GB/10.00 GB)')).toBeInTheDocument();
+  });
+
+  it('keeps the one-line summary for an older node', () => {
+    renderZh({ ...baseRow, ...primary });
+    expect(within(diskRow()).getByText('40.0% (4.00 GB/10.00 GB)')).toBeInTheDocument();
+  });
+});

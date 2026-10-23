@@ -10,7 +10,52 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+Schema: SQLite migration 47 / PostgreSQL revision 30, applied on start (one
+column on `device_groups`; every existing group gets 0, so the order stays as it
+was, by id).
+
+
+Needs a node newer than `node-v1.2.9` to show more than the system disk; with
+older nodes everything looks as it did. The config protocol is unchanged.
+
 ### Added
+
+- **Drag the device groups into the order you want.** On the Node Status page
+  an admin can now drag a group by the handle at the left of its header (or
+  pick it up with the keyboard) and drop it where it should go; the groups in
+  between shift down or up by one. The order is kept in the panel, so it is the
+  same on every browser and device, and it applies wherever groups are listed:
+  Node Status (admin and user views), Device Groups, the entry/exit group
+  pickers on a rule, and a user's or plan's granted groups. Nodes inside a
+  group keep their automatic order. Regular users see the order but cannot
+  change it, and phones show the order without the handle. A new group goes to
+  the end. New admin endpoint `PUT /api/v1/groups/order`, recorded in the audit
+  log.
+
+- **Installing and updating the panel on servers in mainland China.** The
+  installer, `deploy.sh` and the dashboard's "Update now" now switch to
+  accelerated downloads on their own when GitHub or the registries are slow or
+  unreachable. Nothing to configure; servers that reach them fine behave as
+  before. The one-click update that brings this version in still runs the
+  previous updater, so on a server that cannot reach GitHub install this
+  version once by hand.
+
+- **Nodes with several disks show all of them.** The Primary Disk bar is still
+  the system disk (`/`), but hovering it now lists every disk the node has —
+  mount point, filesystem, used / total and usage — on the desktop table and
+  the phone list, and the node detail drawer lists them too. A node with one
+  disk, or an older node that reports only the system disk, looks exactly as
+  before. Panel side: the node's status carries a `disks` list (at most 16
+  disks; entries that cannot be right are dropped).
+
+- **One-click upgrade for many nodes at once.** The Node Status page has
+  "Upgrade all (N)" at the top and "Upgrade group (N)" on each group's header
+  (admin only). They upgrade every node that the per-node button would: online,
+  installed under systemd and behind the latest node release. All of them are
+  told at the same time, so those nodes restart together: connections being
+  forwarded drop within 5 seconds, and the nodes of one group go down together
+  for a few seconds. A confirmation lists the nodes first. Panel only; the node
+  binary needs no upgrade.
 
 - **Node Status shows the combined cumulative traffic of every machine.** The
   line at the top of the page, next to the online count and the live rate,
@@ -19,6 +64,64 @@ independent `v*` / `node-v*` tracks since this release).
   boot; an offline node counts at its last reported figure). Hover for the
   explanation. It is left out when no node reports the figures (older nodes).
   Panel only.
+
+### Changed
+
+- **A regular user's rules can no longer point at the panel host itself.** A
+  rule whose owner is not an admin is refused (400) if any target is a
+  loopback, unspecified or link-local address, including the cloud metadata
+  address: `127.0.0.0/8`, `0.0.0.0/8`, `169.254.0.0/16`, `::1`, `::`,
+  `fe80::/10` (and their IPv4-mapped forms), `localhost` and `*.localhost`,
+  and the shorthand spellings the system resolver also accepts (`127.1`,
+  `2130706433`, `0x7f000001`, `0177.0.0.1`). Private ranges such as
+  `10.0.0.0/8` and `192.168.0.0/16` are still allowed. The check is by the
+  rule's owner, so an admin creating a rule for a regular user is held to it
+  too; admins' own rules are not restricted. It runs when a rule is created
+  (including import and copy) and when an edit changes a rule's targets;
+  existing rules keep working and other edits are not checked. A domain name
+  that resolves to such an address cannot be recognised by the panel.
+- **Admin rights follow the database, not the token.** The panel now reads a
+  user's current admin flag on every request, so removing someone's admin role
+  takes effect at once for tokens they already hold (before, it lasted until
+  the token expired or was revoked). Granting the role likewise needs no
+  re-login.
+
+- **The update check works where GitHub's API is blocked or rate limited.**
+
+- **Installing nodes on servers in mainland China.** The node install command
+  shown in the panel now also works when GitHub is slow or unreachable, and is
+  still one line to paste into bash. The installer and the node's one-click
+  self-upgrade got the same treatment (see CHANGELOG-NODE.md). Nothing to
+  configure; servers that reach GitHub fine behave as before.
+
+- **The per-node upgrade button is gone from Node Status.** Upgrading is
+  done with "Upgrade group" and "Upgrade all". The Node update column stays
+  as a read-only state: a blue marker on a node that is behind and can be
+  upgraded, a green check when it is current, and the same hints as before
+  for Docker, manual and offline nodes.
+
+### Fixed
+
+- A rule's listen port of 0 is refused instead of letting the node pick a
+  random port the panel would not know about.
+
+### Security
+
+- **No fixed default admin password.** A fresh panel no longer starts with
+  `admin` / `admin123`, which was a working login for anyone who reached a new
+  install before its owner did. On the first boot the panel uses
+  `ADMIN_INITIAL_PASSWORD` if set, otherwise it generates a random password
+  and logs it once; `deploy.sh` shows it at the end of a first install. The
+  first login still asks for a new password. Existing panels are not
+  affected. Lost it: `relay-panel reset-admin-password`.
+- **Changing your password can no longer stall the panel.** The bcrypt work
+  of a password change (and of an admin resetting a user's password) runs on
+  the blocking pool under the same limits as login, and a user can try at
+  most 5 times a minute.
+- **Admin passwords are changed only with the current password.** The admin
+  "reset password" endpoint no longer accepts any admin account, the
+  caller's own included.
+- **Caddy mode sends HSTS**, so browsers stay on HTTPS.
 
 ---
 

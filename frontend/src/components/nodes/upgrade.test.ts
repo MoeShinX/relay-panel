@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveNodeUpgrade } from './upgrade';
+import { resolveNodeUpgrade, canUpgradeNode, upgradableNodes } from './upgrade';
 import type { NodeDisplayRow } from '../../api/types';
 
 /** Build a node row with the fields resolveNodeUpgrade reads. */
@@ -77,5 +77,58 @@ describe('resolveNodeUpgrade — eligibility ladder (shared by desktop + mobile)
     // Panel is 1.2.0 but latest node release is 1.1.0; a node on 1.1.0 is
     // current (latest), NOT behind. This is the core PR5 scenario.
     expect(resolveNodeUpgrade(row({ node_version: '1.1.0' }), '1.1.0', 0, false).state).toBe('latest');
+  });
+});
+
+describe('canUpgradeNode / upgradableNodes — the yes/no behind one-click and batch upgrade', () => {
+  const can = (r: Partial<NodeDisplayRow>, latest = '1.1.0', failed = false) =>
+    canUpgradeNode(row(r), latest, 0, failed);
+
+  it('accepts an online, systemd-managed node that is behind', () => {
+    expect(can({})).toBe(true);
+  });
+
+  it('rejects an offline node', () => {
+    expect(can({ online: false })).toBe(false);
+  });
+
+  it('rejects anything that is not systemd-managed', () => {
+    expect(can({ install_method: 'docker' })).toBe(false);
+    expect(can({ install_method: 'manual' })).toBe(false);
+    expect(can({ install_method: null })).toBe(false);
+  });
+
+  it('rejects a node that is already current or ahead', () => {
+    expect(can({ node_version: '1.1.0' })).toBe(false);
+    expect(can({ node_version: '1.2.0' })).toBe(false);
+  });
+
+  it('rejects everything when the version check failed or the latest version is unknown', () => {
+    expect(can({}, '', true)).toBe(false);
+    expect(can({}, '')).toBe(false);
+  });
+
+  it('rejects a node with no control channel and a protocol-incompatible one', () => {
+    expect(can({ ws_connected: false })).toBe(false);
+    expect(canUpgradeNode(row({ config_protocol_version: 1 }), '1.1.0', 2, false)).toBe(false);
+  });
+
+  it('agrees with the per-node ladder for every row', () => {
+    const rows = [
+      row({}), row({ online: false }), row({ install_method: 'docker' }),
+      row({ node_version: '1.1.0' }), row({ node_id: null }), row({ ws_connected: false }),
+    ];
+    for (const r of rows) {
+      expect(canUpgradeNode(r, '1.1.0', 0, false))
+        .toBe(resolveNodeUpgrade(r, '1.1.0', 0, false).state === 'upgradeable');
+    }
+  });
+
+  it('upgradableNodes keeps only the accepted rows, in order', () => {
+    const a = row({ node_id: 'a' });
+    const b = row({ node_id: 'b', online: false });
+    const c = row({ node_id: 'c' });
+    expect(upgradableNodes([a, b, c], '1.1.0', 0, false).map((r) => r.node_id)).toEqual(['a', 'c']);
+    expect(upgradableNodes([a, b, c], '1.1.0', 0, true)).toEqual([]);
   });
 });

@@ -2541,7 +2541,7 @@ async fn find_auth_state_returns_all_three_or_none() {
     .await
     .unwrap();
     let s = db.find_auth_state_by_id(2).await.unwrap().unwrap();
-    assert_eq!(s, (true, 7, true));
+    assert_eq!(s, (true, 7, true, false));
     assert!(db.find_auth_state_by_id(999).await.unwrap().is_none());
 }
 
@@ -6342,4 +6342,137 @@ async fn a_late_copy_of_a_confirmed_batch_is_still_recognised() {
         "got {late:?}"
     );
     assert_eq!(rule_used(&db, 100).await, 110);
+}
+
+// ── Device-group display order (sort_order) ──
+
+/// Group ids in the order `list_groups` returns them.
+async fn group_order(db: &SqliteRepository) -> Vec<i64> {
+    db.list_groups(&ResourceScope::All)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|g| g.id)
+        .collect()
+}
+
+/// Every group at the default sort_order lists by id, as before the column existed.
+#[tokio::test]
+async fn groups_default_to_id_order() {
+    let db = repo().await;
+    for gid in [3, 1, 2] {
+        seed_group_typed(&db, gid, 1, "in").await;
+    }
+    let groups = db.list_groups(&ResourceScope::All).await.unwrap();
+    assert!(groups.iter().all(|g| g.sort_order == 0));
+    assert_eq!(
+        groups.iter().map(|g| g.id).collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+}
+
+/// reorder_groups numbers the listed groups 1..n in the given order, and every
+/// listing that shows groups follows it.
+#[tokio::test]
+async fn reorder_groups_sets_the_order_every_listing_follows() {
+    let db = repo().await;
+    seed_user(&db, 2, false).await;
+    for gid in [1, 2, 3, 4] {
+        seed_group_typed(&db, gid, 1, "in").await;
+    }
+    db.reorder_groups(&[3, 1, 4, 2]).await.unwrap();
+
+    assert_eq!(group_order(&db).await, vec![3, 1, 4, 2]);
+    let sort: Vec<i32> = db
+        .list_groups(&ResourceScope::All)
+        .await
+        .unwrap()
+        .iter()
+        .map(|g| g.sort_order)
+        .collect();
+    assert_eq!(sort, vec![1, 2, 3, 4]);
+
+    let shared: Vec<i64> = db
+        .list_shared_groups(2, false)
+        .await
+        .unwrap()
+        .iter()
+        .map(|g| g.id)
+        .collect();
+    assert_eq!(shared, vec![3, 1, 4, 2]);
+
+    assert_eq!(
+        db.list_all_inbound_group_ids().await.unwrap(),
+        vec![3, 1, 4, 2]
+    );
+    // A user's granted groups, the effective authorized set, and the names shown
+    // for them all come out in the same order.
+    db.set_user_device_groups(2, &[1, 2, 3]).await.unwrap();
+    assert_eq!(db.list_user_device_groups(2).await.unwrap(), vec![3, 1, 2]);
+    assert_eq!(
+        db.authorized_device_group_ids(2).await.unwrap(),
+        vec![3, 1, 2]
+    );
+    assert_eq!(
+        db.list_group_names_by_ids(&[1, 2, 3]).await.unwrap(),
+        vec!["g3", "g1", "g2"]
+    );
+}
+
+/// An unknown id fails the whole call and changes nothing.
+#[tokio::test]
+async fn reorder_groups_rejects_an_unknown_id_and_changes_nothing() {
+    let db = repo().await;
+    for gid in [1, 2, 3] {
+        seed_group_typed(&db, gid, 1, "in").await;
+    }
+    let err = db.reorder_groups(&[3, 99, 1]).await.unwrap_err();
+    assert!(matches!(err, DbError::NotFound), "got {err:?}");
+    assert_eq!(group_order(&db).await, vec![1, 2, 3]);
+    let sort: Vec<i32> = db
+        .list_groups(&ResourceScope::All)
+        .await
+        .unwrap()
+        .iter()
+        .map(|g| g.sort_order)
+        .collect();
+    assert_eq!(sort, vec![0, 0, 0], "the transaction must roll back");
+}
+
+/// Groups left out of the list come after the listed ones, in their existing
+/// relative order.
+#[tokio::test]
+async fn reorder_groups_puts_unlisted_groups_after_in_their_old_order() {
+    let db = repo().await;
+    for gid in [1, 2, 3, 4, 5] {
+        seed_group_typed(&db, gid, 1, "in").await;
+    }
+    db.reorder_groups(&[5, 4]).await.unwrap();
+    assert_eq!(group_order(&db).await, vec![5, 4, 1, 2, 3]);
+    // And again, with a different partial list: 3 is listed, the rest keep
+    // the order they now have (5, 4, 1, 2).
+    db.reorder_groups(&[3]).await.unwrap();
+    assert_eq!(group_order(&db).await, vec![3, 5, 4, 1, 2]);
+}
+
+/// A new group goes last, even after a reorder.
+#[tokio::test]
+async fn a_new_group_is_listed_last() {
+    let db = repo().await;
+    for gid in [1, 2, 3] {
+        seed_group_typed(&db, gid, 1, "in").await;
+    }
+    // Old data: nothing reordered yet (all 0). The new group is still last.
+    db.insert_group("new-a", "in", "tok-new-a", 1, "", "1-65535", 1.0, false)
+        .await
+        .unwrap();
+    let a = db.find_by_token("tok-new-a").await.unwrap().unwrap();
+    assert_eq!(group_order(&db).await, vec![1, 2, 3, a.id]);
+
+    db.reorder_groups(&[3, a.id, 1, 2]).await.unwrap();
+    db.insert_group("new-b", "in", "tok-new-b", 1, "", "1-65535", 1.0, false)
+        .await
+        .unwrap();
+    let b = db.find_by_token("tok-new-b").await.unwrap().unwrap();
+    assert_eq!(group_order(&db).await, vec![3, a.id, 1, 2, b.id]);
 }

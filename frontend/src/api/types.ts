@@ -438,6 +438,14 @@ export interface ListenerError {
   error: string;
 }
 
+/** One disk filesystem in a node's status (nodes after node-v1.2.9). */
+export interface NodeDisk {
+  mount: string;
+  fs_type: string;
+  total: number;
+  used: number;
+}
+
 export interface NodeStatus {
   group_id: number;
   /** Per-node identity. Null/undefined for legacy single-node status rows. */
@@ -445,6 +453,8 @@ export interface NodeStatus {
   /** Present in the API response but not the legacy type; both Nodes and
    *  Dashboard pages render it. Optional for safety on older payloads. */
   group_name?: string;
+  /** The group's panel-wide display order (see NodeDisplayRow). */
+  group_sort_order?: number;
   /** relay-node binary version; missing on older nodes. */
   node_version?: string | null;
   /** v1.0.10: how the node is run — "systemd" | "docker" | "manual". Gates the
@@ -490,6 +500,9 @@ export interface NodeStatus {
   disk_used?: number | null;
   disk_usage_percent?: number | null;
   disk_mount?: string | null;
+  /** Every local disk the node lists, root first (nodes after node-v1.2.9).
+   *  Empty/missing on older nodes, which report only the primary disk above. */
+  disks?: NodeDisk[] | null;
   upload_bps?: number | null;
   download_bps?: number | null;
   boot_upload_bytes?: number | null;
@@ -639,6 +652,8 @@ export interface SharedGroupSummary {
 export interface SharedNodeSummary {
   group_id: number;
   group_name: string;
+  /** The group's panel-wide display order (see NodeDisplayRow). */
+  group_sort_order?: number;
   connect_host: string;
   capabilities: string;
   region?: string | null;
@@ -693,6 +708,9 @@ export interface NodeLiveRate {
 export interface NodeDisplayRow {
   group_id: number;
   group_name?: string | null;
+  /** The group's panel-wide display order (lower first; ties fall back to
+   *  group_id). Absent for a status record whose group no longer exists. */
+  group_sort_order?: number | null;
   node_id?: string | null;
   online?: boolean;
   /** v1.2.12 (admin /nodes only): whether the WS control channel is up. An
@@ -726,6 +744,8 @@ export interface NodeDisplayRow {
   disk_used?: number | null;
   disk_usage_percent?: number | null;
   disk_mount?: string | null;
+  /** Every local disk (admin /nodes, nodes after node-v1.2.9). */
+  disks?: NodeDisk[] | null;
   upload_bps?: number | null;
   download_bps?: number | null;
   boot_upload_bytes?: number | null;

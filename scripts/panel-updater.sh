@@ -6,7 +6,12 @@
 #
 #     git pull --ff-only && ./deploy.sh
 #
-# with a database backup in between for SQLite, and it reports the outcome in
+# (the fetch goes direct to GitHub first and then through the download mirrors
+# listed in scripts/mirror-lib.sh, still fast-forward only. Whichever route
+# delivers it, the commit must be the one GitHub or a trusted relay
+# reported for main, and image pulls through public mirrors are by digest only:
+# see the trust model in mirror-lib.sh), with a database backup in between for
+# SQLite, and it reports the outcome in
 # ./run/update-status.json for the panel to show. The panel's half, and why the
 # panel cannot simply update itself, is in crates/panel/src/api/panel_update.rs.
 #
@@ -121,12 +126,23 @@ if [ -n "$PINNED" ]; then
 fi
 
 # ---- 1. Fetch the new release definition ----
-log "git pull --ff-only"
+log "git pull --ff-only (GitHub, then the download mirrors)"
+if [ ! -f "$ROOT/scripts/mirror-lib.sh" ]; then
+    finish failed "git pull failed: $ROOT/scripts/mirror-lib.sh is missing, so the repository looks incomplete. Nothing was changed."
+fi
+# The library prints through rp_say; its output (and git's) goes to the run log.
+rp_say() { echo "[$(date '+%F %T')] $*"; }
 # safe.directory: this runs as root, and git refuses to touch a repository
 # owned by another user (a clone made as a regular user, deployed with sudo).
-if ! git -c safe.directory="$ROOT" pull --ff-only --quiet >>"$LOG.run" 2>&1; then
-    finish failed "git pull failed: GitHub unreachable from this server, or local changes in $ROOT (see the log below). Nothing was changed."
-fi
+RP_GIT=(git -c safe.directory="$ROOT")
+# shellcheck source=mirror-lib.sh
+. "$ROOT/scripts/mirror-lib.sh"
+rp_git_update >>"$LOG.run" 2>&1
+case $? in
+    0) ;;
+    1) finish failed "git pull failed: GitHub could not be reached from this server, or the download routes could not deliver the commit GitHub reported for main (see the log below). Nothing was changed." ;;
+    *) finish failed "git pull failed: local changes in $ROOT, or its history diverged from GitHub, so main cannot be fast-forwarded (see the log below). Nothing was changed." ;;
+esac
 
 RELEASE_COMPOSE="docker-compose.release.yaml"
 TARGET="$(grep -o 'relay-panel-panel:\${RELAYPANEL_PANEL_TAG:-[^}]*}' "$RELEASE_COMPOSE" 2>/dev/null \
@@ -139,8 +155,15 @@ fi
 # ---- 2. Download the new images while the old panel keeps serving ----
 if [ "$(env_get RELAYPANEL_BUILD_LOCAL)" != "1" ]; then
     log "pre-pulling images"
-    docker compose -f "$RELEASE_COMPOSE" pull panel >>"$LOG.run" 2>&1 \
-        || log "pre-pull failed; deploy.sh will try again"
+    # Registry mirrors are tried when ghcr.io is slow or blocked (mirror-lib.sh).
+    # Return 2 means the image list could not be read: plain compose pull.
+    pull_rc=0
+    rp_pull_compose_images -f "$RELEASE_COMPOSE" >>"$LOG.run" 2>&1 || pull_rc=$?
+    if [ "$pull_rc" -eq 2 ]; then
+        pull_rc=0
+        docker compose -f "$RELEASE_COMPOSE" pull panel >>"$LOG.run" 2>&1 || pull_rc=1
+    fi
+    [ "$pull_rc" -eq 0 ] || log "pre-pull failed; deploy.sh will try again"
 fi
 
 # ---- 3. Back up the database (SQLite) ----

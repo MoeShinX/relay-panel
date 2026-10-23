@@ -238,10 +238,10 @@ curl http://127.0.0.1:18888/
 # login works?
 curl -X POST http://127.0.0.1:18888/api/v1/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"admin123"}'
+  -d '{"username":"admin","password":"<initial-password>"}'
 ```
 
-Open `http://<server-ip>:18888` in a browser. Login `admin` / `admin123`.
+Open `http://<server-ip>:18888` in a browser. Login `admin` with the initial password: set `ADMIN_INITIAL_PASSWORD` in `.env` before first start, or read the random one the panel prints once in its log (`docker compose logs panel`).
 The panel forces a password change on this first login — pick a strong one.
 
 ### 5. View logs
@@ -285,7 +285,7 @@ pulls the new GHCR images, and restarts the `panel`/`node` containers:
 > **Note on the admin password:** `deploy.sh` decides success by the container
 > state + port reachability + the `GET /api/v1/health` endpoint (a real JSON
 > health probe — status:"ok" + version). It does **not** log in as
-> `admin`/`admin123` at all (that probe was removed — it was a
+> `admin` at all (that probe was removed — it was a
 > needless login that could trip rate-limiting). So an upgrade on a deployment
 > where you've already changed the default password reports success exactly
 > like a first deploy.

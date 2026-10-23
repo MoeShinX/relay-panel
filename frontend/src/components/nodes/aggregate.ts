@@ -72,7 +72,9 @@ export function aggregateNodesByGroup(rows: NodeStatus[]): NodeGroupSummary[] {
   }
 
   const out: NodeGroupSummary[] = [];
+  const orderOf = new Map<number, number>();
   for (const [gid, members] of groups) {
+    orderOf.set(gid, members[0]?.group_sort_order ?? Number.POSITIVE_INFINITY);
     const total = members.length;
     const onlineMembers = members.filter((m) => m.online === true);
     const online = onlineMembers.length;
@@ -91,6 +93,13 @@ export function aggregateNodesByGroup(rows: NodeStatus[]): NodeGroupSummary[] {
     });
   }
 
-  out.sort((a, b) => a.group_id - b.group_id);
+  // The panel-wide group order (what the admin arranged); ties and groups
+  // with no known order fall back to group_id.
+  out.sort((a, b) => {
+    const oa = orderOf.get(a.group_id)!;
+    const ob = orderOf.get(b.group_id)!;
+    if (oa !== ob) return oa < ob ? -1 : 1;
+    return a.group_id - b.group_id;
+  });
   return out;
 }

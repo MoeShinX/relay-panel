@@ -1,4 +1,5 @@
 use super::{err, UserSelf};
+use crate::api::auth_throttle::{run_bcrypt, AttemptLimiter};
 use crate::api::middleware::{AdminOnly, AuthUser};
 use crate::api::AppState;
 use crate::service::password::{
@@ -8,7 +9,18 @@ use axum::{
     extract::{Path, State},
     Json,
 };
+use once_cell::sync::Lazy;
 use relay_shared::protocol::ApiResponse;
+use std::time::Duration;
+
+/// 5 password-change attempts per user per minute. Each costs a bcrypt-12
+/// check even when the current password is wrong.
+static CHANGE_PASSWORD_LIMITER: Lazy<AttemptLimiter<i64>> =
+    Lazy::new(|| AttemptLimiter::new(5, Duration::from_secs(60), 10_000));
+
+fn busy<T: serde::Serialize>() -> Json<ApiResponse<T>> {
+    Json(err(429, "服务器繁忙，请稍后再试"))
+}
 // === v0.4.10 PR4: admin password reset ===
 /// PUT /admin/users/{id}/password — an admin sets a (temporary) password for
 /// another user. Atomically bumps the target's token_version (revoking ALL
@@ -52,13 +64,17 @@ pub async fn reset_user_password(
             return Json(err(500, "数据库错误"));
         }
     };
-    if target_is_admin && id != admin.user_id {
-        return Json(err(403, "无法重置其他管理员的密码"));
+    if target_is_admin {
+        // Not even your own: /user/password re-checks the current password,
+        // so a stolen admin JWT cannot be used to take the account over.
+        return Json(err(403, "无法通过此接口重置管理员密码，请使用「修改密码」"));
     }
 
-    let new_hash = match hash_password(&req.new_password) {
-        Ok(h) => h,
-        Err(e) => return Json(err(500, format!("Failed to hash password: {}", e))),
+    let new_password = req.new_password.clone();
+    let new_hash = match run_bcrypt(move || hash_password(&new_password)).await {
+        None => return busy(),
+        Some(Ok(h)) => h,
+        Some(Err(e)) => return Json(err(500, format!("Failed to hash password: {}", e))),
     };
 
     match state
@@ -331,15 +347,24 @@ pub async fn change_password(
         }
     };
 
-    // Verify current password
-    if !verify_password(&req.current_password, &current_hash) {
-        return Json(err(401, "Current password is incorrect"));
+    if CHANGE_PASSWORD_LIMITER.hit(&user.user_id) {
+        return Json(err(429, "尝试次数过多，请一分钟后再试"));
+    }
+
+    // Verify current password (blocking pool, under the global bcrypt permits)
+    let current_password = req.current_password.clone();
+    match run_bcrypt(move || verify_password(&current_password, &current_hash)).await {
+        None => return busy(),
+        Some(false) => return Json(err(401, "Current password is incorrect")),
+        Some(true) => {}
     }
 
     // Hash and update
-    let new_hash = match hash_password(&req.new_password) {
-        Ok(h) => h,
-        Err(e) => return Json(err(500, format!("Failed to hash password: {}", e))),
+    let new_password = req.new_password.clone();
+    let new_hash = match run_bcrypt(move || hash_password(&new_password)).await {
+        None => return busy(),
+        Some(Ok(h)) => h,
+        Some(Err(e)) => return Json(err(500, format!("Failed to hash password: {}", e))),
     };
 
     // v0.4.10 PR4: change_own_password atomically bumps token_version (revoking

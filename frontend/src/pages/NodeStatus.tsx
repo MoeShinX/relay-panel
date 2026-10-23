@@ -1,5 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Spin, Result, Empty, Modal, message, Typography } from 'antd';
+import { Spin, Result, Empty, message, Typography, Space } from 'antd';
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
 import { LineChartOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
 import api from '../api/client';
 import type { ApiEnvelope, NodeStatus, SharedNodeSummary, NodeDisplayRow, NodeLiveRate } from '../api/types';
@@ -7,9 +21,19 @@ import { useI18n } from '../i18n/context';
 import { useAuth } from '../auth/useAuth';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { NodeGroupSection } from '../components/nodes/NodeGroupSection';
+import { SortableNodeGroupSection } from '../components/nodes/SortableNodeGroupSection';
 import { NodeDetailDrawer } from '../components/nodes/NodeDetailDrawer';
-import { stableGroupedRows } from '../components/nodes/sort';
+import {
+  hasGroupOrder,
+  mergeVisibleOrder,
+  moveGroup,
+  stableGroupedRows,
+  withGroupOrder,
+} from '../components/nodes/sort';
 import { rateSummary } from '../components/nodes/shared';
+import { upgradableNodes } from '../components/nodes/upgrade';
+import { UpgradeAllButton } from '../components/nodes/UpgradeAllButton';
+import { UpgradeSlot } from '../components/nodes/UpgradeSlot';
 import { formatBps, formatBytes } from '../utils/format';
 
 type AnyNodeRow = NodeDisplayRow;
@@ -63,10 +87,16 @@ export default function NodeStatus() {
   // report figure instead of freezing on an old number.
   const [liveRates, setLiveRates] = useState<Map<string, NodeLiveRate>>(() => new Map());
   const liveInFlightRef = useRef(false);
+  // Bumped when a group drag starts saving and again when it ends. A poll that
+  // began before the change would otherwise land afterwards with the old order
+  // and flip the page back for a moment, so its answer is dropped.
+  const orderGenRef = useRef(0);
 
   const loadAdmin = async () => {
+    const gen = orderGenRef.current;
     try {
       const res = await api.get<unknown, ApiEnvelope<NodeStatus[]>>('/nodes');
+      if (gen !== orderGenRef.current) return;
       if (res.code !== 0) {
         setLoadFailed(true);
         return;
@@ -156,28 +186,6 @@ export default function NodeStatus() {
     return () => clearInterval(ti);
   }, []);
 
-  // v1.0.10: admin triggers a directed node self-upgrade. Confirm first (the
-  // node restarts, so its forwarding blips for a few seconds).
-  const handleUpgrade = (row: AnyNodeRow) => {
-    if (!row.node_id) return;
-    Modal.confirm({
-      title: t('nodeUpgradeConfirmTitle'),
-      content: t('nodeUpgradeConfirm').replace('{v}', latestNodeVersion || 'latest'),
-      okText: t('nodeUpgradeOk'),
-      cancelText: t('cancel'),
-      onOk: async () => {
-        try {
-          const res = await api.post<unknown, ApiEnvelope<null>>(
-            `/nodes/${row.group_id}/upgrade/${row.node_id}`,
-            {},
-          );
-          if (res.code !== 0) { message.error(res.message); return; }
-          message.success(t('nodeUpgradeSent'));
-        } catch { message.error(t('nodeUpgradeFailed')); }
-      },
-    });
-  };
-
   const baseRows: AnyNodeRow[] | null = isAdmin ? adminRows : userRows;
   // Overlay the pushed rate on online nodes that have one. The group header
   // sums row rates, so it picks the live figures up with no change of its own.
@@ -189,6 +197,16 @@ export default function NodeStatus() {
     });
   }, [baseRows, liveRates]);
   const groups = useMemo(() => (rows ? stableGroupedRows(rows) : null), [rows]);
+  // v1.2.16: "upgrade all" — every node the per-node button would accept, across
+  // all groups (same eligibility ladder). Admin only.
+  // Where the icon is lined up: it sits in the page header row, over the first
+  // visible group table's 节点更新 column.
+  const pageHeaderRef = useRef<HTMLDivElement>(null);
+  const groupsRef = useRef<HTMLDivElement>(null);
+  const upgradableAll = useMemo(
+    () => (isAdmin && rows ? upgradableNodes(rows, latestNodeVersion, panelProtocol, nodeVersionCheckFailed) : []),
+    [isAdmin, rows, latestNodeVersion, panelProtocol, nodeVersionCheckFailed],
+  );
   // v1.2.14: every group's header sums its own online nodes; this is the same
   // sum over all of them, for the page header.
   const all = useMemo(() => (rows ? rateSummary(rows) : null), [rows]);
@@ -197,6 +215,20 @@ export default function NodeStatus() {
   const detailCurrent = detailRow
     ? rows?.find((r) => r.group_id === detailRow.group_id && r.node_id === detailRow.node_id) ?? detailRow
     : null;
+
+  // Drag to reorder the groups: pointer, plus keyboard (Space to pick up,
+  // arrows to move, Space to drop, Escape to cancel). Enter is left out on
+  // purpose: on the group header it folds the group. Hooks, so above the early
+  // returns.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+      keyboardCodes: { start: ['Space'], cancel: ['Escape'], end: ['Space'] },
+    }),
+  );
+  // Only an admin on a wide screen drags; everyone else just sees the order.
+  const canReorder = isAdmin && !isMobile;
 
   const title = t('nodeStatus');
 
@@ -229,6 +261,50 @@ export default function NodeStatus() {
     );
   }
 
+  // The admin dropped a group on another's place. Show the new order at once,
+  // then save it; if saving fails, put the old order back.
+  const handleGroupDragEnd = async ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id || !adminRows) return;
+    const shown = groups.filter(([, r]) => hasGroupOrder(r)).map(([gid]) => gid);
+    const next = moveGroup(shown, Number(active.id), Number(over.id));
+    if (next === shown) return;
+
+    const before = adminRows;
+    orderGenRef.current += 1;
+    setAdminRows(withGroupOrder(before, next));
+    try {
+      // The page lists only groups that have a node record; the server orders
+      // all of them. Send the whole list so the others keep their places.
+      const list = await api.get<unknown, ApiEnvelope<{ id: number }[]>>('/groups');
+      if (list.code !== 0) throw new Error(list.message);
+      const full = mergeVisibleOrder((list.data || []).map((g) => g.id), next);
+      const res = await api.put<unknown, ApiEnvelope<null>>('/groups/order', { ids: full });
+      if (res.code !== 0) throw new Error(res.message);
+    } catch {
+      setAdminRows(before);
+      message.error(t('reorderGroupsFailed'));
+    } finally {
+      orderGenRef.current += 1;
+    }
+  };
+
+  const renderSection = (gid: number, groupRows: AnyNodeRow[]) => {
+    const props = {
+      rows: groupRows,
+      panelProtocol,
+      latestNodeVersion,
+      nodeVersionCheckFailed,
+      isMobile,
+      t,
+      openDetail: setDetailRow,
+      onDelete: isAdmin ? handleDelete : undefined,
+      onBatchUpgraded: isAdmin ? refresh : undefined,
+    };
+    return canReorder && hasGroupOrder(groupRows)
+      ? <SortableNodeGroupSection key={gid} id={gid} {...props} />
+      : <NodeGroupSection key={gid} {...props} />;
+  };
+
   // v1.2.5: drop one node's status record. Admin-only, and the button is only
   // rendered on offline rows — see NodeDesktopTable for why.
   const handleDelete = async (row: NodeDisplayRow) => {
@@ -245,35 +321,49 @@ export default function NodeStatus() {
 
   return (
     <>
-      <div className="rp-page-header rp-page-header-sticky">
-        <h2 className="rp-page-title"><LineChartOutlined /> {title}</h2>
-        {all && all.total > 0 && (
-          <Typography.Text type="secondary" style={{ fontSize: 13 }} data-testid="all-nodes-rate">
-            {t('onlineNodesOfTotal').replace('{online}', String(all.online)).replace('{total}', String(all.total))}
-            {' · '}
-            <ArrowUpOutlined /> {formatBps(all.up)} <ArrowDownOutlined /> {formatBps(all.down)}
-            {all.hasTotals && (
-              <span data-testid="all-nodes-traffic" title={t('allNodesTrafficTip')}>
-                {' · '}{t('allNodesTraffic')} <ArrowUpOutlined /> {formatBytes(all.totalUp)} <ArrowDownOutlined /> {formatBytes(all.totalDown)}
-              </span>
-            )}
-          </Typography.Text>
+      <div ref={pageHeaderRef} className="rp-page-header rp-page-header-sticky">
+        <h2 className="rp-page-title" data-upgrade-obstacle=""><LineChartOutlined /> {title}</h2>
+        <Space wrap size={[12, 8]}>
+          {all && all.total > 0 && (
+            <Typography.Text type="secondary" style={{ fontSize: 13 }} data-testid="all-nodes-rate" data-upgrade-obstacle="">
+              {t('onlineNodesOfTotal').replace('{online}', String(all.online)).replace('{total}', String(all.total))}
+              {' · '}
+              <ArrowUpOutlined /> {formatBps(all.up)} <ArrowDownOutlined /> {formatBps(all.down)}
+              {all.hasTotals && (
+                <span data-testid="all-nodes-traffic" title={t('allNodesTrafficTip')}>
+                  {' · '}{t('allNodesTraffic')} <ArrowUpOutlined /> {formatBytes(all.totalUp)} <ArrowDownOutlined /> {formatBytes(all.totalDown)}
+                </span>
+              )}
+            </Typography.Text>
+          )}
+          {upgradableAll.length > 0 && (
+            <UpgradeSlot rowRef={pageHeaderRef} tablesRef={groupsRef}>
+              <UpgradeAllButton
+                nodes={upgradableAll}
+                latestNodeVersion={latestNodeVersion}
+                labelKey="upgradeAll"
+                t={t}
+                onDone={refresh}
+                testId="upgrade-all"
+              />
+            </UpgradeSlot>
+          )}
+        </Space>
+      </div>
+      <div ref={groupsRef}>
+        {canReorder ? (
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleGroupDragEnd}>
+            <SortableContext
+              items={groups.filter(([, r]) => hasGroupOrder(r)).map(([gid]) => gid)}
+              strategy={verticalListSortingStrategy}
+            >
+              {groups.map(([gid, groupRows]) => renderSection(gid, groupRows))}
+            </SortableContext>
+          </DndContext>
+        ) : (
+          groups.map(([gid, groupRows]) => renderSection(gid, groupRows))
         )}
       </div>
-      {groups.map(([gid, groupRows]) => (
-        <NodeGroupSection
-          key={gid}
-          rows={groupRows}
-          panelProtocol={panelProtocol}
-          latestNodeVersion={latestNodeVersion}
-          nodeVersionCheckFailed={nodeVersionCheckFailed}
-          isMobile={isMobile}
-          t={t}
-          openDetail={setDetailRow}
-          onUpgrade={isAdmin ? handleUpgrade : undefined}
-          onDelete={isAdmin ? handleDelete : undefined}
-        />
-      ))}
       <NodeDetailDrawer
         row={detailCurrent}
         open={detailRow !== null}
