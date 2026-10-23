@@ -535,8 +535,9 @@ impl PlanRepository for SqliteRepository {
 
     async fn list_plan_device_groups(&self, plan_id: i64) -> Result<Vec<i64>, DbError> {
         let rows: Vec<(i64,)> = sqlx::query_as(
-            "SELECT device_group_id FROM plan_device_groups \
-             WHERE plan_id = ? ORDER BY device_group_id",
+            "SELECT pdg.device_group_id FROM plan_device_groups pdg \
+             JOIN device_groups dg ON dg.id = pdg.device_group_id \
+             WHERE pdg.plan_id = ? ORDER BY dg.sort_order, dg.id",
         )
         .bind(plan_id)
         .fetch_all(&self.pool)

@@ -83,7 +83,7 @@ curl -fsSL https://raw.githubusercontent.com/MoeShinX/relay-panel/main/install.s
 
 大陆服务器上，GitHub 无法直连时，安装和更新会自动改走下载镜像，无需额外操作。
 
-> 🔑 **默认账号 `admin` / `admin123`，首次登录强制修改密码。**
+> 🔑 **首次启动不再使用固定密码：初始 `admin` 密码为随机生成，只在面板日志中打印一次（`docker compose logs panel`）；也可通过环境变量 `ADMIN_INITIAL_PASSWORD` 指定。首次登录强制修改密码。忘记或没看到时，在部署目录运行 `docker compose exec panel relaypanel-entrypoint ./relay-panel reset-admin-password` 重新生成一个。**
 
 📖 完整指南：**[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
 

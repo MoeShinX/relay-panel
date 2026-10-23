@@ -10,9 +10,10 @@ use relay_shared::models::{DeviceGroup, SharedGroupSummary};
 impl GroupRepository for PgRepository {
     async fn list_groups(&self, scope: &ResourceScope) -> Result<Vec<DeviceGroup>, DbError> {
         let groups: Vec<DeviceGroup> = match scope.owner_id() {
-            None => sqlx::query_as("SELECT * FROM device_groups ORDER BY id"),
+            None => sqlx::query_as("SELECT * FROM device_groups ORDER BY sort_order, id"),
             Some(uid) => {
-                sqlx::query_as("SELECT * FROM device_groups WHERE uid = $1 ORDER BY id").bind(uid)
+                sqlx::query_as("SELECT * FROM device_groups WHERE uid = $1 ORDER BY sort_order, id")
+                    .bind(uid)
             }
         }
         .fetch_all(&self.pool)
@@ -37,11 +38,11 @@ impl GroupRepository for PgRepository {
         // it; the rule dropdown / shop still list hidden groups so existing and
         // new rules keep working. Admins get [] above and are unaffected.
         let groups: Vec<SharedGroupSummary> = sqlx::query_as(
-            "SELECT g.id, g.name, g.group_type, g.connect_host, g.capabilities, g.region, g.line_type, g.hidden \
+            "SELECT g.id, g.name, g.group_type, g.connect_host, g.capabilities, g.region, g.line_type, g.hidden, g.sort_order \
              FROM device_groups g \
              JOIN users u ON u.id = g.uid \
              WHERE g.uid != $1 AND u.admin = TRUE AND g.group_type = 'in' \
-             ORDER BY g.id",
+             ORDER BY g.sort_order, g.id",
         )
         .bind(uid)
         .fetch_all(&self.pool)
@@ -104,8 +105,9 @@ impl GroupRepository for PgRepository {
         hidden: bool,
     ) -> Result<(), DbError> {
         sqlx::query(
-            "INSERT INTO device_groups (name, group_type, token, uid, connect_host, port_range, rate, hidden) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            // A new group goes last: one past the largest sort_order in use.
+            "INSERT INTO device_groups (name, group_type, token, uid, connect_host, port_range, rate, hidden, sort_order) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM device_groups))",
         )
         .bind(name)
         .bind(group_type)
@@ -275,11 +277,36 @@ impl GroupRepository for PgRepository {
         Ok(result.rows_affected())
     }
 
-    async fn list_all_inbound_group_ids(&self) -> Result<Vec<i64>, DbError> {
-        let rows: Vec<(i64,)> =
-            sqlx::query_as("SELECT id FROM device_groups WHERE group_type = 'in' ORDER BY id")
-                .fetch_all(&self.pool)
+    async fn reorder_groups(&self, ids: &[i64]) -> Result<(), DbError> {
+        let mut tx = self.pool.begin().await?;
+        // Current order first, so the groups left out of `ids` can follow the
+        // listed ones in their existing relative order.
+        let current: Vec<(i64,)> =
+            sqlx::query_as("SELECT id FROM device_groups ORDER BY sort_order, id")
+                .fetch_all(&mut *tx)
                 .await?;
+        let rest = unlisted_ids(&current, ids);
+        for (pos, id) in ids.iter().chain(rest.iter()).enumerate() {
+            let r = sqlx::query("UPDATE device_groups SET sort_order = $1 WHERE id = $2")
+                .bind(pos as i32 + 1)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            if r.rows_affected() == 0 {
+                // Unknown id: dropping the transaction rolls everything back.
+                return Err(DbError::NotFound);
+            }
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn list_all_inbound_group_ids(&self) -> Result<Vec<i64>, DbError> {
+        let rows: Vec<(i64,)> = sqlx::query_as(
+            "SELECT id FROM device_groups WHERE group_type = 'in' ORDER BY sort_order, id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 
@@ -292,7 +319,7 @@ impl GroupRepository for PgRepository {
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(
-            "SELECT name FROM device_groups WHERE id IN ({}) ORDER BY name",
+            "SELECT name FROM device_groups WHERE id IN ({}) ORDER BY sort_order, id",
             placeholders
         );
         let mut q = sqlx::query_as(&sql);

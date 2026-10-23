@@ -2258,7 +2258,7 @@ async fn pg_find_auth_state_returns_all_three_or_none() {
     .await
     .unwrap();
     let s = db.find_auth_state_by_id(2).await.unwrap().unwrap();
-    assert_eq!(s, (true, 7, true));
+    assert_eq!(s, (true, 7, true, false));
     assert!(db.find_auth_state_by_id(999).await.unwrap().is_none());
     cleanup(&db).await;
 }
@@ -6532,5 +6532,197 @@ async fn pg_a_late_copy_of_a_confirmed_batch_is_still_recognised() {
         "got {late:?}"
     );
     assert_eq!(pg_rule_used(&db, 100).await, 110);
+    cleanup(&db).await;
+}
+
+// ── Device-group display order (sort_order) ──
+
+/// Seed an admin-owned inbound group named `g{gid}`.
+async fn pg_seed_group(db: &PgRepository, gid: i64) {
+    sqlx::query(
+        "INSERT INTO device_groups (id, name, group_type, token, uid)          VALUES ($1, $2, 'in', $3, 1)",
+    )
+    .bind(gid)
+    .bind(format!("g{gid}"))
+    .bind(format!("tok-{gid}"))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+}
+
+async fn pg_group_order(db: &PgRepository) -> Vec<i64> {
+    db.list_groups(&ResourceScope::All)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|g| g.id)
+        .collect()
+}
+
+/// Every group at the default sort_order lists by id.
+#[tokio::test]
+async fn pg_groups_default_to_id_order() {
+    let Some(db) = repo("groups_default_order").await else {
+        return;
+    };
+    for gid in [3, 1, 2] {
+        pg_seed_group(&db, gid).await;
+    }
+    let groups = db.list_groups(&ResourceScope::All).await.unwrap();
+    assert!(groups.iter().all(|g| g.sort_order == 0));
+    assert_eq!(pg_group_order(&db).await, vec![1, 2, 3]);
+    cleanup(&db).await;
+}
+
+/// reorder_groups numbers the listed groups 1..n in the given order, and every
+/// listing that shows groups follows it.
+#[tokio::test]
+async fn pg_reorder_groups_sets_the_order_every_listing_follows() {
+    let Some(db) = repo("reorder_groups").await else {
+        return;
+    };
+    sqlx::query("INSERT INTO users (id, username, password, admin) VALUES (2, 'u2', 'x', FALSE)")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    for gid in [3, 1, 2, 4] {
+        pg_seed_group(&db, gid).await;
+    }
+    db.reorder_groups(&[3, 1, 4, 2]).await.unwrap();
+    assert_eq!(pg_group_order(&db).await, vec![3, 1, 4, 2]);
+    let shared: Vec<i64> = db
+        .list_shared_groups(2, false)
+        .await
+        .unwrap()
+        .iter()
+        .map(|g| g.id)
+        .collect();
+    assert_eq!(shared, vec![3, 1, 4, 2]);
+    assert_eq!(
+        db.list_all_inbound_group_ids().await.unwrap(),
+        vec![3, 1, 4, 2]
+    );
+    db.set_user_device_groups(2, &[1, 2, 3]).await.unwrap();
+    assert_eq!(db.list_user_device_groups(2).await.unwrap(), vec![3, 1, 2]);
+    assert_eq!(
+        db.authorized_device_group_ids(2).await.unwrap(),
+        vec![3, 1, 2]
+    );
+    assert_eq!(
+        db.list_group_names_by_ids(&[1, 2, 3]).await.unwrap(),
+        vec!["g3", "g1", "g2"]
+    );
+    cleanup(&db).await;
+}
+
+/// An unknown id is an error and changes nothing.
+#[tokio::test]
+async fn pg_reorder_groups_rejects_an_unknown_id_and_changes_nothing() {
+    let Some(db) = repo("reorder_unknown").await else {
+        return;
+    };
+    for gid in [1, 2, 3] {
+        pg_seed_group(&db, gid).await;
+    }
+    let err = db.reorder_groups(&[3, 99, 1]).await.unwrap_err();
+    assert!(matches!(err, DbError::NotFound), "got {err:?}");
+    assert_eq!(pg_group_order(&db).await, vec![1, 2, 3]);
+    let sort: Vec<i32> = db
+        .list_groups(&ResourceScope::All)
+        .await
+        .unwrap()
+        .iter()
+        .map(|g| g.sort_order)
+        .collect();
+    assert_eq!(sort, vec![0, 0, 0], "the transaction must roll back");
+    cleanup(&db).await;
+}
+
+/// Groups left out of the list come after the listed ones, in their existing
+/// relative order.
+#[tokio::test]
+async fn pg_reorder_groups_puts_unlisted_groups_after_in_their_old_order() {
+    let Some(db) = repo("reorder_unlisted").await else {
+        return;
+    };
+    for gid in [1, 2, 3, 4, 5] {
+        pg_seed_group(&db, gid).await;
+    }
+    db.reorder_groups(&[5, 4]).await.unwrap();
+    assert_eq!(pg_group_order(&db).await, vec![5, 4, 1, 2, 3]);
+    db.reorder_groups(&[3]).await.unwrap();
+    assert_eq!(pg_group_order(&db).await, vec![3, 5, 4, 1, 2]);
+    cleanup(&db).await;
+}
+
+/// A new group goes last, before and after a reorder.
+#[tokio::test]
+async fn pg_a_new_group_is_listed_last() {
+    let Some(db) = repo("new_group_last").await else {
+        return;
+    };
+    for gid in [1, 2, 3] {
+        pg_seed_group(&db, gid).await;
+    }
+    // The seeds above took ids by hand, so the id sequence is still at its
+    // start: move it past them, or the first automatic id collides with id 1.
+    sqlx::query("SELECT setval(pg_get_serial_sequence('device_groups', 'id'), 100)")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    db.insert_group("new-a", "in", "tok-new-a", 1, "", "1-65535", 1.0, false)
+        .await
+        .unwrap();
+    let a = db.find_by_token("tok-new-a").await.unwrap().unwrap();
+    assert_eq!(pg_group_order(&db).await, vec![1, 2, 3, a.id]);
+
+    db.reorder_groups(&[3, a.id, 1, 2]).await.unwrap();
+    db.insert_group("new-b", "in", "tok-new-b", 1, "", "1-65535", 1.0, false)
+        .await
+        .unwrap();
+    let b = db.find_by_token("tok-new-b").await.unwrap().unwrap();
+    assert_eq!(pg_group_order(&db).await, vec![3, a.id, 1, 2, b.id]);
+    cleanup(&db).await;
+}
+
+/// Revision 30 adds the column to a database from before it: existing groups
+/// at 0, so the order is unchanged, and a re-run is a no-op.
+#[tokio::test]
+async fn pg_migration_30_adds_group_sort_order() {
+    let Some(db) = repo("mig30_sort_order").await else {
+        return;
+    };
+    for gid in [2, 1] {
+        pg_seed_group(&db, gid).await;
+    }
+    // Back to the pre-30 shape.
+    sqlx::query("ALTER TABLE device_groups DROP COLUMN sort_order")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM schema_version WHERE version >= 30")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    crate::db::pg_schema::run_pg_migrations(&db.pool)
+        .await
+        .expect("revision 30 must apply to an older database");
+    let v: i32 = sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM schema_version")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(v, crate::db::pg_schema::PG_SCHEMA_VERSION);
+    let groups = db.list_groups(&ResourceScope::All).await.unwrap();
+    assert_eq!(
+        groups
+            .iter()
+            .map(|g| (g.id, g.sort_order))
+            .collect::<Vec<_>>(),
+        vec![(1, 0), (2, 0)]
+    );
+    crate::db::pg_schema::run_pg_migrations(&db.pool)
+        .await
+        .expect("re-run is a no-op");
     cleanup(&db).await;
 }

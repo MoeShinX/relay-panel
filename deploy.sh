@@ -906,14 +906,34 @@ case "$RELAYPANEL_WEB_MODE" in
 esac
 echo "  DB:      ${RELAYPANEL_DB_MODE:-sqlite}"
 echo "  Web:     $(web_mode_label "$RELAYPANEL_WEB_MODE")"
-# Security: we deliberately do NOT print the default admin/admin123 credentials
-# here, nor do we probe them (probing an unchanged default is a needless login
-# attempt that can trip rate-limiting; printing it trains users to ignore creds
-# in shell output). First-time installers are told once in the README to change
-# the password; upgrades use whatever password the admin already set.
-echo "  Login:   open the URL above and sign in"
-echo ""
-echo "  If this is a FIRST install, change the default admin password now."
+# There is no fixed default password. On its very first boot the panel picks a
+# random admin password (unless ADMIN_INITIAL_PASSWORD is set) and logs it once;
+# show it here so a first install does not send people digging through logs.
+# The line only exists in the log of the container that did the first boot, so
+# an upgrade (new container) shows nothing. We never probe a login.
+INITIAL_ADMIN_PASSWORD=""
+# Only on a first install: a re-run that keeps the same container would otherwise
+# print a password that may long since have been changed.
+if [ "$FRESH_INSTALL" = "1" ]; then
+    INITIAL_ADMIN_PASSWORD="$(docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" logs --no-color panel 2>/dev/null \
+        | sed 's/\x1b\[[0-9;]*m//g' \
+        | grep -o 'initial admin login: username `admin`, password `[^`]*`' \
+        | tail -n 1 \
+        | sed 's/.*password `\([^`]*\)`.*/\1/' || true)"
+fi
+if [ -n "$INITIAL_ADMIN_PASSWORD" ]; then
+    echo "  Login:   admin / ${INITIAL_ADMIN_PASSWORD}"
+    echo "           (initial password, valid until you change it — the first login asks you to)"
+else
+    # Upgrades land here, and so would a first install whose log no longer
+    # holds the line (rotated away, or ADMIN_INITIAL_PASSWORD was set).
+    echo "  Login:   open the URL above and sign in"
+    echo "           First install and no password shown? Set a new one with:"
+    # Through the entrypoint, like the panel itself: it fixes ownership of the
+    # data directory and drops to the panel user, so the reset never leaves
+    # root-owned database files behind.
+    echo "           docker compose -f $COMPOSE_FILE exec panel relaypanel-entrypoint ./relay-panel reset-admin-password"
+fi
 if [ "${RELAYPANEL_WITH_NODE:-0}" != "1" ]; then
     echo ""
     echo "  Only the panel is running. To forward traffic, install relay-node"
