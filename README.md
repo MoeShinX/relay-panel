@@ -81,7 +81,7 @@
 curl -fsSL https://raw.githubusercontent.com/MoeShinX/relay-panel/main/install.sh | bash
 ```
 
-> 🔑 **首次启动不再使用固定密码：初始 `admin` 密码为随机生成，只在面板日志中打印一次（`docker compose logs panel`）；也可通过环境变量 `ADMIN_INITIAL_PASSWORD` 指定。首次登录强制修改密码。忘记时可运行 `relay-panel reset-admin-password`。**
+> 🔑 **首次启动不再使用固定密码：初始 `admin` 密码为随机生成，只在面板日志中打印一次（`docker compose logs panel`）；也可通过环境变量 `ADMIN_INITIAL_PASSWORD` 指定。首次登录强制修改密码。忘记或没看到时，在部署目录运行 `docker compose exec panel relaypanel-entrypoint ./relay-panel reset-admin-password` 重新生成一个。**
 
 📖 完整指南：**[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
 

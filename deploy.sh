@@ -887,7 +887,14 @@ if [ -n "$INITIAL_ADMIN_PASSWORD" ]; then
     echo "  Login:   admin / ${INITIAL_ADMIN_PASSWORD}"
     echo "           (initial password, valid until you change it — the first login asks you to)"
 else
+    # Upgrades land here, and so would a first install whose log no longer
+    # holds the line (rotated away, or ADMIN_INITIAL_PASSWORD was set).
     echo "  Login:   open the URL above and sign in"
+    echo "           First install and no password shown? Set a new one with:"
+    # Through the entrypoint, like the panel itself: it fixes ownership of the
+    # data directory and drops to the panel user, so the reset never leaves
+    # root-owned database files behind.
+    echo "           docker compose -f $COMPOSE_FILE exec panel relaypanel-entrypoint ./relay-panel reset-admin-password"
 fi
 if [ "${RELAYPANEL_WITH_NODE:-0}" != "1" ]; then
     echo ""
