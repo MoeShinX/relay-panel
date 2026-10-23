@@ -82,7 +82,7 @@ Full feature reference and user docs: **[relaypanel.dev](https://relaypanel.dev)
 curl -fsSL https://raw.githubusercontent.com/MoeShinX/relay-panel/main/install.sh | bash
 ```
 
-> 🔑 **Default login `admin` / `admin123` — first login forces a password change.**
+> 🔑 **No fixed default password: the initial `admin` password is random and printed once in the panel log (`docker compose logs panel`), or set it with `ADMIN_INITIAL_PASSWORD`. The first login forces a password change. Lost it? Run `relay-panel reset-admin-password`.**
 
 📖 Full guide: **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
 
