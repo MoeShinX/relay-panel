@@ -59,6 +59,12 @@ was, by id).
 
 - **The update check works where GitHub's API is blocked or rate limited.**
 
+- **Installing nodes on servers in mainland China.** The node install command
+  shown in the panel now also works when GitHub is slow or unreachable, and is
+  still one line to paste into bash. The installer and the node's one-click
+  self-upgrade got the same treatment (see CHANGELOG-NODE.md). Nothing to
+  configure; servers that reach GitHub fine behave as before.
+
 ### Fixed
 
 - A rule's listen port of 0 is refused instead of letting the node pick a
