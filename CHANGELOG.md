@@ -28,6 +28,14 @@ was, by id).
   the end. New admin endpoint `PUT /api/v1/groups/order`, recorded in the audit
   log.
 
+- **Installing and updating the panel on servers in mainland China.** The
+  installer, `deploy.sh` and the dashboard's "Update now" now switch to
+  accelerated downloads on their own when GitHub or the registries are slow or
+  unreachable. Nothing to configure; servers that reach them fine behave as
+  before. The one-click update that brings this version in still runs the
+  previous updater, so on a server that cannot reach GitHub install this
+  version once by hand.
+
 ### Changed
 
 - **A regular user's rules can no longer point at the panel host itself.** A
@@ -48,6 +56,8 @@ was, by id).
   takes effect at once for tokens they already hold (before, it lasted until
   the token expired or was revoked). Granting the role likewise needs no
   re-login.
+
+- **The update check works where GitHub's API is blocked or rate limited.**
 
 ### Fixed
 

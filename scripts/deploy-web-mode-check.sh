@@ -36,6 +36,19 @@ while [ $# -gt 0 ]; do
     esac
 done
 case "${url:-}" in
+    # Registry API (the digest lookup deploy.sh does before using a public
+    # mirror). HARNESS_DIGEST_HOSTS lists the hosts that answer (unset = all).
+    https://*/v2/*/manifests/*)
+        host="${url#https://}"; host="${host%%/*}"
+        [ "$host" != registry-1.docker.io ] || host=docker.io
+        if [ -n "${HARNESS_DIGEST_HOSTS+x}" ]; then
+            ok=""; for h in $HARNESS_DIGEST_HOSTS; do [ "$h" = "$host" ] && ok=1; done
+            [ -n "$ok" ] || exit 7
+        fi
+        printf 'CURL_DIGEST %s\n' "$url" >> "${HARNESS_LOG:?HARNESS_LOG not set}"
+        printf 'HTTP/2 200\r\ndocker-content-digest: sha256:%064d\r\n\r\n' 7
+        exit 0
+        ;;
     *'/api/v1/health')
         [ -n "$out" ] && printf '{"status":"ok","version":"0.4.8"}' > "$out"
         [ -n "$headers" ] && printf 'content-type: application/json\n' > "$headers"
@@ -58,10 +71,28 @@ log="${HARNESS_LOG:?HARNESS_LOG not set}"
 case "$*" in
     '--version') echo 'Docker version 27.0.0'; exit 0 ;;
     'compose version') echo 'Docker Compose version v2.27.0'; exit 0 ;;
+    'manifest --help') exit 0 ;;
+esac
+# Registry mirrors: HARNESS_REACHABLE lists the registry hosts that answer
+# (unset = all of them); a bare name such as caddy:2-alpine lives on docker.io.
+if [ "${1:-}" = "manifest" ] && [ "${2:-}" = "inspect" ]; then
+    [ -n "${HARNESS_REACHABLE+x}" ] || exit 0
+    case "${3:-}" in */*) host="${3%%/*}" ;; *) host=docker.io ;; esac
+    case "$host" in *.*) ;; *) host=docker.io ;; esac
+    for h in $HARNESS_REACHABLE; do [ "$h" = "$host" ] && exit 0; done
+    exit 1
+fi
+case "${1:-}" in
+    pull|tag|rmi) printf 'IMG %s\n' "$*" >> "$log"; exit 0 ;;
 esac
 if [ "${1:-}" = "compose" ]; then
     shift
     case "$*" in
+        *' config --images')
+            printf 'ghcr.io/moeshinx/relay-panel-panel:1.2.15\n'
+            case "$*" in *'--profile caddy'*) echo 'caddy:2-alpine' ;; esac
+            case "$*" in *'--profile postgres'*) echo 'postgres:16-alpine' ;; esac
+            exit 0 ;;
         *' ps -q caddy') echo 'caddy123'; exit 0 ;;
         *' ps -q postgres') echo 'pg123'; exit 0 ;;
         *' ps --all -q panel')
@@ -114,7 +145,7 @@ make_case_dir() {
     mkdir -p "$dir"
     cp "$ROOT/deploy.sh" "$ROOT/docker-compose.release.yaml" "$ROOT/docker-compose.yaml" "$ROOT/Caddyfile" "$dir/"
     mkdir -p "$dir/scripts"
-    cp "$ROOT/scripts/sqlite-backup.sh" "$dir/scripts/"
+    cp "$ROOT/scripts/sqlite-backup.sh" "$ROOT/scripts/mirror-lib.sh" "$dir/scripts/"
 }
 
 assert_file_has() {
@@ -350,6 +381,72 @@ res=$(run_case fresh-no-backup env)
 dir=${res%|*}
 [ ! -d "$dir/backups" ] || fail 'a fresh install must not create backups'
 pass 'fresh install takes no backup'
+
+# Image downloads: only the services the active profiles enable are pulled,
+# directly from ghcr.io / Docker Hub when they answer.
+res=$(run_case pull-direct env)
+dir=${res%|*}; log=${res#*|}
+assert_log_has "$log" 'IMG pull ghcr.io/moeshinx/relay-panel-panel:1.2.15'
+grep -q 'caddy' "$log" && fail 'the caddy image must not be pulled when caddy is not enabled'
+grep -q '^IMG tag' "$log" && fail 'nothing needs tagging when the registries answer directly'
+pass 'direct pull: panel image only, no re-tagging'
+
+# ghcr.io and Docker Hub blocked, down.relaypanel.dev (trusted) serves: pulled by
+# tag, tagged back to the names the compose file uses, before `up`.
+res=$(run_case pull-mirror env HARNESS_REACHABLE='down.relaypanel.dev docker.m.daocloud.io' RELAYPANEL_WEB_MODE=caddy RELAYPANEL_DOMAIN=mirror.example.com)
+dir=${res%|*}; log=${res#*|}
+assert_log_has "$log" 'IMG pull -q down.relaypanel.dev/moeshinx/relay-panel-panel:1.2.15'
+assert_log_has "$log" 'IMG tag down.relaypanel.dev/moeshinx/relay-panel-panel:1.2.15 ghcr.io/moeshinx/relay-panel-panel:1.2.15'
+assert_log_has "$log" 'IMG pull -q down.relaypanel.dev/library/caddy:2-alpine'
+assert_log_has "$log" 'IMG tag down.relaypanel.dev/library/caddy:2-alpine caddy:2-alpine'
+grep -q '^CURL_DIGEST' "$log" && fail 'a trusted route needs no digest lookup'
+last_img=$(grep -n '^IMG ' "$log" | tail -1 | cut -d: -f1)
+first_up=$(grep -n '^UP ' "$log" | head -1 | cut -d: -f1)
+[ -n "$last_img" ] && [ -n "$first_up" ] && [ "$last_img" -lt "$first_up" ] \
+    || fail 'every image must be in place before compose up'
+pass 'trusted mirror pull: images tagged back to the compose names before up'
+
+# Only public mirrors reach docker: they are used BY DIGEST only, with the digest
+# a trusted registry gave.
+res=$(run_case pull-public env HARNESS_REACHABLE='ghcr.nju.edu.cn docker.m.daocloud.io' HARNESS_DIGEST_HOSTS='ghcr.io docker.io' RELAYPANEL_WEB_MODE=caddy RELAYPANEL_DOMAIN=public.example.com)
+dir=${res%|*}; log=${res#*|}
+digest="sha256:0000000000000000000000000000000000000000000000000000000000000007"
+assert_log_has "$log" "IMG pull ghcr.nju.edu.cn/moeshinx/relay-panel-panel@$digest"
+assert_log_has "$log" "IMG tag ghcr.nju.edu.cn/moeshinx/relay-panel-panel@$digest ghcr.io/moeshinx/relay-panel-panel:1.2.15"
+assert_log_has "$log" "IMG pull docker.m.daocloud.io/library/caddy@$digest"
+assert_log_has "$log" "IMG tag docker.m.daocloud.io/library/caddy@$digest caddy:2-alpine"
+grep -E '^IMG pull (ghcr.nju|docker.m.daocloud)' "$log" | grep -v '@sha256:' && fail 'a public mirror must only be pulled by digest'
+pass 'public mirror pull: by digest only, tagged back before up'
+
+# No trusted registry gives a digest: the public mirrors are not used at all.
+dir="$TMP/pull-nodigest"; fake="$TMP/fakebin-pull-nodigest"; log="$TMP/pull-nodigest.log"
+make_case_dir "$dir"; make_fakebin "$fake"; : > "$log"
+if (cd "$dir" && HARNESS_LOG="$log" HARNESS_REACHABLE='ghcr.nju.edu.cn docker.m.daocloud.io' HARNESS_DIGEST_HOSTS='' PATH="$fake:$PATH" bash ./deploy.sh >/tmp/rp-pull-nodigest.out 2>/tmp/rp-pull-nodigest.err); then
+    fail 'deploy.sh must fail when only public mirrors answer and no digest can be verified'
+fi
+grep -q '^IMG pull' "$log" && fail 'nothing may be pulled from a public mirror without a trusted digest'
+grep -q '^UP ' "$log" && fail 'compose up must not run without the images'
+pass 'no trusted digest: public mirrors are not used'
+
+# Embedded PostgreSQL is started before step 3, so its image is fetched first.
+res=$(run_case pull-pg env HARNESS_REACHABLE='docker.m.daocloud.io ghcr.io' HARNESS_DIGEST_HOSTS='ghcr.io docker.io' RELAYPANEL_DB_MODE=embedded-postgres)
+dir=${res%|*}; log=${res#*|}
+assert_log_has "$log" 'IMG tag docker.m.daocloud.io/library/postgres@sha256:0000000000000000000000000000000000000000000000000000000000000007 postgres:16-alpine'
+pg_pull=$(grep -n '^IMG pull .*postgres' "$log" | head -1 | cut -d: -f1)
+first_up=$(grep -n '^UP ' "$log" | head -1 | cut -d: -f1)
+[ -n "$pg_pull" ] && [ -n "$first_up" ] && [ "$pg_pull" -lt "$first_up" ] \
+    || fail 'the postgres image must be pulled before the postgres container is started'
+pass 'embedded PostgreSQL image comes through the mirrors too (by digest)'
+
+# No registry answers: deploy.sh fails before touching anything.
+dir="$TMP/pull-none"; fake="$TMP/fakebin-pull-none"; log="$TMP/pull-none.log"
+make_case_dir "$dir"; make_fakebin "$fake"; : > "$log"
+if (cd "$dir" && HARNESS_LOG="$log" HARNESS_REACHABLE='' PATH="$fake:$PATH" bash ./deploy.sh >/tmp/rp-pull-none.out 2>/tmp/rp-pull-none.err); then
+    fail 'deploy.sh must fail when no registry can deliver the image'
+fi
+grep -q '^UP ' "$log" && fail 'compose up must not run without the images'
+grep -q 'any mirror' /tmp/rp-pull-none.out || fail 'the failure must say that no mirror worked'
+pass 'no registry reachable: deploy.sh stops before compose up'
 
 # Invalid Caddy domain must fail before compose starts.
 dir="$TMP/bad-domain"; fake="$TMP/fakebin-bad-domain"; log="$TMP/bad-domain.log"

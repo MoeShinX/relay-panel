@@ -82,6 +82,8 @@ Full feature reference and user docs: **[relaypanel.dev](https://relaypanel.dev)
 curl -fsSL https://raw.githubusercontent.com/MoeShinX/relay-panel/main/install.sh | bash
 ```
 
+In mainland China the installer and the updater fall back to download mirrors by themselves when GitHub cannot be reached.
+
 > 🔑 **No fixed default password: the initial `admin` password is random and printed once in the panel log (`docker compose logs panel`), or set it with `ADMIN_INITIAL_PASSWORD`. The first login forces a password change. Lost it or never saw it? In the deploy directory run `docker compose exec panel relaypanel-entrypoint ./relay-panel reset-admin-password` to generate a new one.**
 
 📖 Full guide: **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
