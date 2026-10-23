@@ -8,6 +8,16 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **Installing nodes on servers in mainland China.** The node install command
+  shown in the panel now also works when GitHub is slow or unreachable, and is
+  still one line to paste into bash. The installer and the node's one-click
+  self-upgrade got the same treatment (see CHANGELOG-NODE.md). Nothing to
+  configure; servers that reach GitHub fine behave as before.
+
 ## [1.2.15] - 2026-10-22
 
 Ships alongside `node-v1.2.9`. The config protocol is unchanged at version 4.

@@ -137,6 +137,17 @@ sudo systemctl enable --now relay-node
 systemctl status relay-node   # should show active (running)
 ```
 
+### Download acceleration
+
+When GitHub is slow or unreachable from the server, the installer and the
+one-click self-upgrade switch to accelerated downloads on their own, and the
+install command shown in the panel does the same when it fetches the installer.
+There is nothing to configure; servers that reach GitHub fine behave as before.
+
+If an install or upgrade stops because no download source could be reached,
+retry a little later. `RELAY_NODE_BASE_URL` (your own download address) and
+`-p` / `RELAY_PROXY` keep working as before.
+
 ---
 
 ## Configuration
