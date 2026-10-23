@@ -13,7 +13,7 @@ vi.mock('../auth/useAuth', () => ({ useAuth: mockUseAuth }));
 import NodeStatus from './NodeStatus';
 import { stableGroupedRows, compareNodeRows } from '../components/nodes/sort';
 import type { NodeDisplayRow } from '../api/types';
-import { formatBps } from '../utils/format';
+import { formatBps, formatBytes } from '../utils/format';
 
 const ok = <T,>(data: T) => ({ code: 0, message: 'ok', data });
 
@@ -428,6 +428,27 @@ describe('NodeStatus total rate of every online node', () => {
     expect(total).toContain(formatBps(4_000));
     expect(total).toContain(formatBps(6_000));
     expect(total).not.toContain(formatBps(54_000));
+  });
+
+  it('adds up the cumulative traffic of every machine, offline ones included', async () => {
+    const withTotals = [
+      { ...adminNode, node_id: 'n1', boot_upload_bytes: 1_000_000_000, boot_download_bytes: 2_000_000_000 },
+      { ...adminNode, node_id: 'n2', online: false, boot_upload_bytes: 500_000_000, boot_download_bytes: 250_000_000 },
+      { ...adminNode, group_id: 2, group_name: 'grp-2', node_id: 'm1', boot_upload_bytes: 4_000_000_000, boot_download_bytes: null },
+    ];
+    serve(withTotals);
+    render(<NodeStatus />);
+    await flush();
+    const text = screen.getByTestId('all-nodes-traffic').textContent ?? '';
+    expect(text).toContain(formatBytes(5_500_000_000));
+    expect(text).toContain(formatBytes(2_250_000_000));
+  });
+
+  it('leaves the cumulative figure out when no node reports it', async () => {
+    serve(nodes);
+    render(<NodeStatus />);
+    await flush();
+    expect(screen.queryByTestId('all-nodes-traffic')).toBeNull();
   });
 
   it('follows the pushed live rates, as the group headers do', async () => {

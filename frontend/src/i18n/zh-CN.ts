@@ -388,6 +388,8 @@ export const zhCN = {
   cpuModel: 'CPU 型号',
   cpuCores: '{n} 核',
   onlineNodesOfTotal: '在线节点 {online}/{total}',
+  allNodesTraffic: '累计',
+  allNodesTrafficTip: '所有机器的累计流量之和：各节点网卡自上次开机以来的上传和下载（离线节点按它最后一次上报的数值计入）。节点重启后会从零重新累计。',
   nodeUpgrade: '节点更新',
   nodeUpgradeTip: '升级到 v{v}',
   nodeUpgradeLatest: '已是最新',

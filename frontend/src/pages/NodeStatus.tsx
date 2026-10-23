@@ -10,7 +10,7 @@ import { NodeGroupSection } from '../components/nodes/NodeGroupSection';
 import { NodeDetailDrawer } from '../components/nodes/NodeDetailDrawer';
 import { stableGroupedRows } from '../components/nodes/sort';
 import { rateSummary } from '../components/nodes/shared';
-import { formatBps } from '../utils/format';
+import { formatBps, formatBytes } from '../utils/format';
 
 type AnyNodeRow = NodeDisplayRow;
 
@@ -252,6 +252,11 @@ export default function NodeStatus() {
             {t('onlineNodesOfTotal').replace('{online}', String(all.online)).replace('{total}', String(all.total))}
             {' · '}
             <ArrowUpOutlined /> {formatBps(all.up)} <ArrowDownOutlined /> {formatBps(all.down)}
+            {all.hasTotals && (
+              <span data-testid="all-nodes-traffic" title={t('allNodesTrafficTip')}>
+                {' · '}{t('allNodesTraffic')} <ArrowUpOutlined /> {formatBytes(all.totalUp)} <ArrowDownOutlined /> {formatBytes(all.totalDown)}
+              </span>
+            )}
           </Typography.Text>
         )}
       </div>

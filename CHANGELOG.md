@@ -8,6 +8,20 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Node Status shows the combined cumulative traffic of every machine.** The
+  line at the top of the page, next to the online count and the live rate,
+  now ends with the sum of every node's upload and download from the
+  Cumulative column (what each node's network card has carried since its last
+  boot; an offline node counts at its last reported figure). Hover for the
+  explanation. It is left out when no node reports the figures (older nodes).
+  Panel only.
+
+---
+
 ## [1.2.15] - 2026-10-22
 
 Ships alongside `node-v1.2.9`. The config protocol is unchanged at version 4.

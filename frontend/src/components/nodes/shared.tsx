@@ -41,7 +41,12 @@ export function memTooltip(r: NodeDisplayRow, t: Tfn): ReactNode {
 }
 
 /** Online/total (placeholder rows excluded) and the summed live ↑↓ of the
- *  ONLINE nodes among `rows`: one group's header, or the whole page's. */
+ *  ONLINE nodes among `rows`: one group's header, or the whole page's.
+ *
+ *  `totalUp`/`totalDown` add up every node's cumulative bytes (the 累计 column:
+ *  what its network card has carried since the node's last boot), offline
+ *  nodes included at their last reported figure. `hasTotals` is false when no
+ *  node reported them (older nodes), so the caller can leave the figure out. */
 export function rateSummary(rows: NodeDisplayRow[]) {
   const real = rows.filter((r) => r.node_id);
   const onlineRows = real.filter((r) => r.online);
@@ -50,6 +55,9 @@ export function rateSummary(rows: NodeDisplayRow[]) {
     online: onlineRows.length,
     up: onlineRows.reduce((s, r) => s + (r.upload_bps || 0), 0),
     down: onlineRows.reduce((s, r) => s + (r.download_bps || 0), 0),
+    totalUp: real.reduce((s, r) => s + (r.boot_upload_bytes || 0), 0),
+    totalDown: real.reduce((s, r) => s + (r.boot_download_bytes || 0), 0),
+    hasTotals: real.some((r) => r.boot_upload_bytes != null || r.boot_download_bytes != null),
   };
 }
 
