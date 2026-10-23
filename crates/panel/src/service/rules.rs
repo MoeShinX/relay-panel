@@ -466,6 +466,12 @@ pub async fn create_rule(
     // The scope for validating referenced groups = the FINAL owner.
     let owner_scope = ResourceScope::Owner(owner_uid);
 
+    if req.listen_port == Some(0) {
+        return Err(CreateRuleError::BadRequest(
+            "listen_port: must be between 1 and 65535".into(),
+        ));
+    }
+
     // v0.4.20: only direct forward_mode is supported. Group/chain forwarding
     // is no longer exposed in the UI and is rejected at the API boundary.
     // Existing rules with group forwarding still generate valid config, but
@@ -708,6 +714,12 @@ pub async fn update_rule(
     scope: &ResourceScope,
     req: &UpdateRuleRequest,
 ) -> Result<(), UpdateRuleError> {
+    if req.listen_port == Some(0) {
+        return Err(UpdateRuleError::BadRequest(
+            "listen_port: must be between 1 and 65535".into(),
+        ));
+    }
+
     // v0.4.20: only direct forward_mode is supported.
     if let Some(ref mode) = req.forward_mode {
         if mode != "direct" {
