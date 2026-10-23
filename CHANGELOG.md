@@ -14,6 +14,10 @@ Schema: SQLite migration 47 / PostgreSQL revision 30, applied on start (one
 column on `device_groups`; every existing group gets 0, so the order stays as it
 was, by id).
 
+
+Needs a node newer than `node-v1.2.9` to show more than the system disk; with
+older nodes everything looks as it did. The config protocol is unchanged.
+
 ### Added
 
 - **Drag the device groups into the order you want.** On the Node Status page
@@ -35,6 +39,14 @@ was, by id).
   before. The one-click update that brings this version in still runs the
   previous updater, so on a server that cannot reach GitHub install this
   version once by hand.
+
+- **Nodes with several disks show all of them.** The Primary Disk bar is still
+  the system disk (`/`), but hovering it now lists every disk the node has —
+  mount point, filesystem, used / total and usage — on the desktop table and
+  the phone list, and the node detail drawer lists them too. A node with one
+  disk, or an older node that reports only the system disk, looks exactly as
+  before. Panel side: the node's status carries a `disks` list (at most 16
+  disks; entries that cannot be right are dropped).
 
 ### Changed
 

@@ -477,6 +477,12 @@ of inactivity. Generate real traffic and the count moves.
    listeners, and panel 1.2.9+ refuses to save them. For HTTPS on the panel's
    admin UI, use an external reverse proxy or the Compose Caddy profile.
 
+9. **Disks.** Besides the system disk (`/`), the node reports every real local
+   disk filesystem it finds in `/proc/self/mountinfo` (ext4, xfs, btrfs, zfs,
+   NTFS and the like — not tmpfs, overlay, network or FUSE mounts, or anything
+   under `/boot`), up to 16, so the panel can list them all. A node running in
+   Docker only sees the container's mounts, so the host's disks do not show.
+
 ---
 
 ## Version pinning

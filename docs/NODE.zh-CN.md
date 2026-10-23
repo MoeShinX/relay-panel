@@ -401,6 +401,11 @@ GitHub Releases 在国内访问可能很慢。可以：
    WS / TLS Simple 入口已在 node 1.0.8 停用：节点会跳过这类监听，面板 1.2.9 起
    也不再允许保存。如需面板管理界面 HTTPS，请使用外部反代或 Compose Caddy。
 
+9. **硬盘。** 除系统盘（`/`）外，节点还会读取 `/proc/self/mountinfo`，上报所有
+   真实的本地磁盘文件系统（ext4、xfs、btrfs、zfs、NTFS 等；不含 tmpfs、overlay、
+   网络盘、FUSE 挂载，也不含 `/boot` 下的分区），最多 16 块，面板会全部列出。
+   节点跑在 Docker 里时只能看到容器内的挂载，看不到宿主机的硬盘。
+
 ---
 
 ## 版本固定

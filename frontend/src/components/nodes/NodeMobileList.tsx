@@ -3,7 +3,7 @@ import { Typography, Button, Space, Tag, Tooltip } from 'antd';
 import { CloudDownloadOutlined, CheckCircleOutlined, CloudServerOutlined } from '@ant-design/icons';
 import type { Tfn } from './types';
 import type { NodeDisplayRow } from '../../api/types';
-import { NodeResourceBar } from './NodeResourceBar';
+import { NodeResourceBar, DiskList, hasDiskList } from './NodeResourceBar';
 import { NetworkCell, cpuTooltip, memTooltip, statusTag } from './shared';
 import { formatBps, formatUptime } from '../../utils/format';
 import { versionRelation, versionTagColor } from '../../utils/version';
@@ -102,7 +102,10 @@ export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', no
               </div>
               <div style={{ flex: 1 }}>
                 <Text type="secondary" style={{ fontSize: 11 }}>{t('disk')}</Text>
-                <NodeResourceBar value={r.disk_usage_percent} tooltip={`${t('disk')}: ${r.disk_usage_percent ?? '-'}%`} />
+                <NodeResourceBar
+                  value={r.disk_usage_percent}
+                  tooltip={hasDiskList(r.disks) ? <DiskList disks={r.disks} /> : `${t('disk')}: ${r.disk_usage_percent ?? '-'}%`}
+                />
               </div>
             </div>
           </div>

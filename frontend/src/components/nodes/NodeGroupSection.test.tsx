@@ -281,3 +281,58 @@ describe('memory in bytes in the memory tooltip', () => {
     expect(tip.textContent).toBe('mem: 12.5%');
   });
 });
+
+// A node with several disks lists them all on hover; the bar stays the primary
+// disk. One disk, or an older node that lists none, looks exactly as before.
+describe('every disk in the disk tooltip', () => {
+  const GB = 1024 ** 3;
+  const primary = { disk_usage_percent: 40, disk_used: 4 * GB, disk_total: 10 * GB, disk_mount: '/' };
+  const root = { mount: '/', fs_type: 'ext4', total: 10 * GB, used: 4 * GB };
+  const data = { mount: '/data', fs_type: 'xfs', total: 4 * GB, used: GB };
+  const section = (r: NodeDisplayRow, isMobile: boolean) =>
+    render(
+      <NodeGroupSection rows={[r]} panelProtocol={0} latestNodeVersion="1.1.0" nodeVersionCheckFailed={false} isMobile={isMobile} t={t} openDetail={vi.fn()} />,
+    );
+  const diskBar = (c: HTMLElement) => c.querySelectorAll('.ant-progress')[2] as HTMLElement;
+
+  for (const isMobile of [false, true]) {
+    const where = isMobile ? 'mobile' : 'desktop';
+
+    it(`lists each disk with its used / total and usage (${where})`, async () => {
+      const { container } = section(row({ online: true, cpu: 1, mem: 2, ...primary, disks: [root, data] }), isMobile);
+      await userEvent.setup().hover(diskBar(container));
+      expect(await screen.findByText('/data')).toBeInTheDocument();
+      expect(screen.getByText('/')).toBeInTheDocument();
+      expect(screen.getByText(/1\.00 GB \/ 4\.00 GB \(25\.0%\)/)).toBeInTheDocument();
+      expect(screen.getByText(/4\.00 GB \/ 10\.00 GB \(40\.0%\)/)).toBeInTheDocument();
+    });
+
+    it(`keeps the single-disk tooltip for one disk (${where})`, async () => {
+      const { container } = section(row({ online: true, cpu: 1, mem: 2, ...primary, disks: [root] }), isMobile);
+      await userEvent.setup().hover(diskBar(container));
+      if (isMobile) {
+        expect((await screen.findByText(/^disk: 40%$/)).textContent).toBe('disk: 40%');
+      } else {
+        expect((await screen.findByText(/diskMount/)).textContent).toBe('diskMount: /');
+        expect(screen.getByText('diskUsage: 40.0%')).toBeInTheDocument();
+      }
+      expect(screen.queryByText(/ext4/)).not.toBeInTheDocument();
+    });
+
+    it(`keeps the single-disk tooltip for an older node (${where})`, async () => {
+      const { container } = section(row({ online: true, cpu: 1, mem: 2, ...primary }), isMobile);
+      await userEvent.setup().hover(diskBar(container));
+      if (isMobile) {
+        expect((await screen.findByText(/^disk: 40%$/)).textContent).toBe('disk: 40%');
+      } else {
+        expect((await screen.findByText(/diskMount/)).textContent).toBe('diskMount: /');
+      }
+      expect(screen.queryByText('/data')).not.toBeInTheDocument();
+    });
+  }
+
+  it('leaves the bar on the primary disk when there are several', () => {
+    const { container } = section(row({ online: true, cpu: 1, mem: 2, ...primary, disks: [root, data] }), false);
+    expect(diskBar(container).textContent).toContain('40%');
+  });
+});

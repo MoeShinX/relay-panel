@@ -230,6 +230,36 @@ fn mem_bytes(total: Option<u64>, used: Option<u64>) -> Option<(u64, u64)> {
     }
 }
 
+/// Most disks kept per node, and the longest mount point / filesystem name.
+/// Real ones are far under both; they only bound what a node can make the
+/// panel store.
+const MAX_DISKS: usize = 16;
+const MAX_DISK_MOUNT_LEN: usize = 256;
+const MAX_DISK_FS_TYPE_LEN: usize = 32;
+
+/// The disks a node listed (nodes after node-v1.2.9), kept only as far as they
+/// make sense: at most [`MAX_DISKS`], each with a mount and a filesystem name
+/// (cut to length), a total above zero and no more in use than that. A disk
+/// that fails any of this is dropped, not the whole list.
+fn clean_disks(disks: &[DiskUsage]) -> Vec<DiskUsage> {
+    let cut = |s: &str, max: usize| s.trim().chars().take(max).collect::<String>();
+    disks
+        .iter()
+        .filter(|d| d.total > 0 && d.used <= d.total)
+        .filter_map(|d| {
+            let mount = cut(&d.mount, MAX_DISK_MOUNT_LEN);
+            let fs_type = cut(&d.fs_type, MAX_DISK_FS_TYPE_LEN);
+            (!mount.is_empty() && !fs_type.is_empty()).then_some(DiskUsage {
+                mount,
+                fs_type,
+                total: d.total,
+                used: d.used,
+            })
+        })
+        .take(MAX_DISKS)
+        .collect()
+}
+
 /// A node-reported string made fit to show: whitespace runs collapsed,
 /// control characters dropped, capped at [`MAX_DISPLAY_TEXT`] characters.
 /// None when nothing is left.
@@ -340,6 +370,10 @@ pub async fn report_status(
             // and no more in use than that.
             "mem_total": mem_bytes(req.mem_total, req.mem_used).map(|(t, _)| t),
             "mem_used": mem_bytes(req.mem_total, req.mem_used).map(|(_, u)| u),
+            // Every local disk the node lists (root first), cleaned; the
+            // primary-disk fields above are untouched. Always an array so the
+            // frontend can tell "older node, none" from nothing by its length.
+            "disks": clean_disks(&req.disks),
         });
         // Status persistence is best-effort: the original used .ok() to swallow
         // any DB error so a transient failure never broke the report cycle.
@@ -765,6 +799,7 @@ mod tests {
             cpu_cores: None,
             mem_total: None,
             mem_used: None,
+            disks: Vec::new(),
         };
         let Json(resp) = report_status(State(state.clone()), h, Json(req)).await;
         assert_eq!(resp.code, 401, "missing token → business 401, not HTTP 401");
@@ -859,6 +894,7 @@ mod tests {
             cpu_cores: None,
             mem_total: None,
             mem_used: None,
+            disks: Vec::new(),
         };
         let Json(resp) =
             report_status(State(state.clone()), auth_headers("tok-A"), Json(req)).await;
@@ -934,6 +970,11 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert!(v["cpu_model"].is_null() && v["cpu_cores"].is_null());
         assert!(v["mem_total"].is_null() && v["mem_used"].is_null());
+        assert_eq!(
+            v["disks"],
+            serde_json::json!([]),
+            "no list from an older node"
+        );
     }
 
     /// v1.2.14: memory in bytes (node-v1.2.8+) reaches the stored status as a
@@ -977,6 +1018,89 @@ mod tests {
                 "{nonsense} must not be stored"
             );
         }
+    }
+
+    /// Every local disk a node lists reaches the stored status, the primary
+    /// disk's own fields stay as they were, and a disk that cannot be right
+    /// (or more disks than anyone has) is dropped rather than shown.
+    #[tokio::test]
+    async fn report_status_stores_the_disk_list_cleaned() {
+        use relay_shared::protocol::StatusReport;
+        let (state, _pool) = seeded_state().await;
+        let send = |disks: serde_json::Value| {
+            let state = state.clone();
+            async move {
+                let req: StatusReport = serde_json::from_value(serde_json::json!({
+                    "cpu_usage": 0.0, "mem_usage": 0.0, "active_connections": 0,
+                    "uptime_secs": 0, "node_id": "n1",
+                    "disk_total": 100, "disk_used": 40, "disk_usage_percent": 40.0,
+                    "disk_mount": "/",
+                    "disks": disks,
+                }))
+                .unwrap();
+                let Json(resp) =
+                    report_status(State(state.clone()), auth_headers("tok-A"), Json(req)).await;
+                assert_eq!(resp.code, 0, "{}", resp.message);
+                let raw = state.db.get("node_status:10:n1").await.unwrap().unwrap();
+                serde_json::from_str::<serde_json::Value>(&raw).unwrap()
+            }
+        };
+        let disk = |mount: &str, total: u64, used: u64| serde_json::json!({ "mount": mount, "fs_type": "ext4", "total": total, "used": used });
+
+        // Good disks are kept in the order sent; the primary fields are as sent.
+        let v = send(serde_json::json!([
+            disk("/", 100, 40),
+            disk("/data", 1000, 1000)
+        ]))
+        .await;
+        assert_eq!(
+            v["disks"],
+            serde_json::json!([disk("/", 100, 40), disk("/data", 1000, 1000)])
+        );
+        assert_eq!(
+            (v["disk_total"].as_u64(), v["disk_used"].as_u64()),
+            (Some(100), Some(40))
+        );
+        assert_eq!(v["disk_mount"], "/");
+
+        // Only the bad ones go: no size, more used than total, empty names.
+        let v = send(serde_json::json!([
+            disk("/", 100, 40),
+            disk("/zero", 0, 0),
+            disk("/over", 10, 11),
+            disk("", 10, 1),
+            { "mount": "/nofs", "fs_type": "  ", "total": 10, "used": 1 },
+            disk("/ok", 10, 1),
+        ]))
+        .await;
+        let mounts: Vec<&str> = v["disks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["mount"].as_str().unwrap())
+            .collect();
+        assert_eq!(mounts, vec!["/", "/ok"]);
+
+        // Too many are cut to the limit; long names are cut to theirs.
+        let many: Vec<_> = (0..40).map(|i| disk(&format!("/d{i}"), 10, 1)).collect();
+        let v = send(serde_json::json!(many)).await;
+        assert_eq!(v["disks"].as_array().unwrap().len(), super::MAX_DISKS);
+        let v = send(serde_json::json!([{
+            "mount": "m".repeat(1000), "fs_type": "f".repeat(1000), "total": 10, "used": 1
+        }]))
+        .await;
+        assert_eq!(
+            v["disks"][0]["mount"].as_str().unwrap().len(),
+            super::MAX_DISK_MOUNT_LEN
+        );
+        assert_eq!(
+            v["disks"][0]["fs_type"].as_str().unwrap().len(),
+            super::MAX_DISK_FS_TYPE_LEN
+        );
+
+        // A node that sends none (older, or nothing found) stores an empty list.
+        let v = send(serde_json::json!([])).await;
+        assert_eq!(v["disks"], serde_json::json!([]));
     }
 
     /// v1.2.12: a node re-sends a batch whose acknowledgement it lost. The
