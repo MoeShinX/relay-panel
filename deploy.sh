@@ -11,7 +11,8 @@
 # What it does:
 #   1. Checks Docker + docker compose are installed (installs via get.docker.com if not)
 #   2. Generates JWT_SECRET + PANEL_KEY into .env (skips if .env already exists)
-#   3. Pulls pre-built images from GHCR (or builds from source if BUILD_LOCAL=1)
+#   3. Pulls pre-built images from GHCR, falling back to mirror registries where
+#      GHCR / Docker Hub are slow or blocked (or builds from source if BUILD_LOCAL=1)
 #   4. docker compose up -d
 #   5. Waits for panel HTTP, then checks GET /api/v1/health (a real JSON health
 #      probe — requires HTTP 200 + application/json + status:"ok" + a version).
@@ -36,6 +37,16 @@ NC='\033[0m'
 info()  { echo -e "${GREEN}[INFO]${NC}  $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 fail()  { echo -e "${RED}[FAIL]${NC}  $*"; exit 1; }
+
+# Download acceleration: container images are pulled from ghcr.io / Docker Hub
+# first and, where those are slow or blocked, from mirror registries (see
+# scripts/mirror-lib.sh). Nothing to configure.
+if [ ! -f scripts/mirror-lib.sh ]; then
+    fail "scripts/mirror-lib.sh not found in ${REPO_DIR}. The repository may be incomplete; run: git -C ${REPO_DIR} status"
+fi
+rp_say() { info "$*"; }
+# shellcheck source=scripts/mirror-lib.sh
+. scripts/mirror-lib.sh
 
 # v1.2.11: install the host half of the panel's one-click update (see
 # scripts/panel-updater.sh). The panel only drops ./run/update-request; this
@@ -329,6 +340,14 @@ case "${RELAYPANEL_DB_MODE:-}" in
         else
             _PRE_COMPOSE="docker-compose.yaml"
         fi
+        # Fetch the image through the registry mirrors first, so that `up`
+        # below finds it locally instead of waiting on a slow registry.
+        _pg_image="$(docker compose -f "$_PRE_COMPOSE" --profile postgres config --images 2>/dev/null \
+            | grep -E '(^|/)postgres:' | head -n1 || true)"
+        if [ -n "$_pg_image" ] && ! rp_pull_image "$_pg_image"; then
+            warn "Could not pull ${_pg_image} from any registry; trying with whatever compose can do."
+        fi
+        unset _pg_image
         docker compose -f "$_PRE_COMPOSE" --profile postgres up -d postgres
 
         info "Waiting for PostgreSQL to become healthy ..."
@@ -350,6 +369,9 @@ case "${RELAYPANEL_DB_MODE:-}" in
         # We use a temporary postgres container on the same compose network
         # so the user doesn't need psql installed on the host.
         info "Verifying external PostgreSQL connectivity ..."
+        if ! rp_pull_image postgres:16-alpine; then
+            warn "Could not pull postgres:16-alpine from any registry; using a local copy if there is one."
+        fi
         if ! docker run --rm --network host \
             postgres:16-alpine \
             psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -c "SELECT 1" >/dev/null 2>&1; then
@@ -710,12 +732,23 @@ elif [ -f "$RELEASE_COMPOSE" ]; then
     # The exact image version comes from docker-compose.release.yaml (e.g.
     # ghcr.io/moeshinx/relay-panel-node:0.2.1), so bumping the tag there is
     # what rolls users forward.
-    info "Pulling pre-built panel image from GHCR ..."
+    info "Pulling pre-built images from GHCR (mirror registries are tried if it is slow or blocked) ..."
     COMPOSE_FILE="$RELEASE_COMPOSE"
     COMPOSE_FLAGS=""
-    if ! docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" pull; then
-        fail "Failed to pull images from GHCR. Check your internet connection, or build from source with: RELAYPANEL_BUILD_LOCAL=1 ./deploy.sh"
+    # Only the services the active profiles enable are pulled. An image that
+    # came from a mirror is tagged back to the name the compose file uses, so
+    # `up -d` below finds it locally. If the image list cannot be read (return
+    # 2), fall back to a plain `docker compose pull`.
+    pull_rc=0
+    rp_pull_compose_images -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" || pull_rc=$?
+    if [ "$pull_rc" -eq 2 ]; then
+        pull_rc=0
+        docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" pull || pull_rc=1
     fi
+    if [ "$pull_rc" -ne 0 ]; then
+        fail "Failed to pull images from GHCR or any mirror. Check your internet connection, or build from source with: RELAYPANEL_BUILD_LOCAL=1 ./deploy.sh"
+    fi
+    unset pull_rc
 else
     # Fallback: no release compose file, build from source
     warn "docker-compose.release.yaml not found - building from source ..."

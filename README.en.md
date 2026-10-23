@@ -82,6 +82,8 @@ Full feature reference and user docs: **[relaypanel.dev](https://relaypanel.dev)
 curl -fsSL https://raw.githubusercontent.com/MoeShinX/relay-panel/main/install.sh | bash
 ```
 
+In mainland China the installer and the updater fall back to download mirrors by themselves when GitHub cannot be reached.
+
 > 🔑 **Default login `admin` / `admin123` — first login forces a password change.**
 
 📖 Full guide: **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**

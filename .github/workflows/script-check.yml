@@ -49,6 +49,11 @@ jobs:
       - name: panel updater scenarios
         run: bash scripts/test-panel-updater.sh
 
+      # Download acceleration: GitHub / registry mirror order and fallbacks,
+      # against a stubbed docker.
+      - name: mirror library scenarios
+        run: bash scripts/test-mirror-lib.sh
+
       # v1.2.12: operator input (-t/-u/-s) is validated and written into the
       # node's start.sh without any chance of executing.
       - name: node installer input handling

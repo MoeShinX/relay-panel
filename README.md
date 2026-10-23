@@ -81,6 +81,8 @@
 curl -fsSL https://raw.githubusercontent.com/MoeShinX/relay-panel/main/install.sh | bash
 ```
 
+大陆服务器上，GitHub 无法直连时，安装和更新会自动改走下载镜像，无需额外操作。
+
 > 🔑 **默认账号 `admin` / `admin123`，首次登录强制修改密码。**
 
 📖 完整指南：**[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**

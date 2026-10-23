@@ -8,6 +8,24 @@ independent `v*` / `node-v*` tracks since this release).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Installing and updating the panel on servers in mainland China.** The
+  installer, `deploy.sh` and the dashboard's "Update now" now switch to
+  accelerated downloads on their own when GitHub or the registries are slow or
+  unreachable. Nothing to configure; servers that reach them fine behave as
+  before. The one-click update that brings this version in still runs the
+  previous updater, so on a server that cannot reach GitHub install this
+  version once by hand.
+
+### Changed
+
+- **The update check works where GitHub's API is blocked or rate limited.**
+
+---
+
 ## [1.2.15] - 2026-10-22
 
 Ships alongside `node-v1.2.9`. The config protocol is unchanged at version 4.
