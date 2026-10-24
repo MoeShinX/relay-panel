@@ -182,6 +182,33 @@ async fn check_local_targets_for_owner<'a>(
     )))
 }
 
+/// A rule owned by a non-admin must listen inside its inbound group's port
+/// range, the same pool auto-assignment draws from (a group left at the
+/// `1-65535` sentinel means 10000-65535 here too, never system ports).
+/// Returns `Ok(Some(message))` when `port` is outside it; admins are not
+/// restricted.
+async fn check_listen_port_for_owner(
+    db: &dyn Repository,
+    owner_uid: i64,
+    device_group_in: i64,
+    port: u16,
+) -> Result<Option<String>, DbError> {
+    if db.is_admin(owner_uid).await? {
+        return Ok(None);
+    }
+    let raw = db
+        .group_port_range(device_group_in)
+        .await?
+        .unwrap_or_default();
+    let (lo, hi) = resolve_auto_port_range(&raw);
+    if (lo..=hi).contains(&port) {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "listen_port: 该设备分组只允许使用 {lo}-{hi} 范围内的端口（管理员的规则不受此限制）"
+    )))
+}
+
 pub fn normalize_rule_targets(
     targets: Option<Vec<RuleTargetRequest>>,
     legacy_host: &str,
@@ -622,6 +649,19 @@ pub async fn create_rule(
         }
     }
 
+    // A non-admin owner types a listen port only inside the group's range
+    // (an unset port is auto-assigned from that same range).
+    if let Some(port) = req.listen_port {
+        match check_listen_port_for_owner(db, owner_uid, req.device_group_in, port).await {
+            Ok(None) => {}
+            Ok(Some(msg)) => return Err(CreateRuleError::BadRequest(msg)),
+            Err(e) => {
+                tracing::error!("create_rule: listen port range check failed: {}", e);
+                return Err(CreateRuleError::Database(e));
+            }
+        }
+    }
+
     // v0.4.11 PR1: strong validation for transport/profile binding:
     // - Raw: tunnel_profile_id must be NULL
     // - WS: must bind a ws transport template
@@ -958,6 +998,27 @@ pub async fn update_rule(
             Err(e) => {
                 tracing::error!("update_rule {}: owner is_admin failed: {}", id, e);
                 return Err(UpdateRuleError::Database(e));
+            }
+        }
+    }
+
+    // Likewise only an edit that moves the rule's port or its inbound group is
+    // checked; a rule left as it is keeps working wherever it listens now.
+    if req.listen_port.is_some() || req.device_group_in.is_some() {
+        let eff_port = req
+            .listen_port
+            .map(i32::from)
+            .or(Some(existing.listen_port))
+            .and_then(|p| u16::try_from(p).ok());
+        let eff_group = req.device_group_in.unwrap_or(existing.device_group_in);
+        if let Some(port) = eff_port {
+            match check_listen_port_for_owner(db, existing.uid, eff_group, port).await {
+                Ok(None) => {}
+                Ok(Some(msg)) => return Err(UpdateRuleError::BadRequest(msg)),
+                Err(e) => {
+                    tracing::error!("update_rule {}: listen port range check failed: {}", id, e);
+                    return Err(UpdateRuleError::Database(e));
+                }
             }
         }
     }
