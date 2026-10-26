@@ -14,7 +14,7 @@ import HostSummary from '../components/HostSummary';
 import { splitHosts } from '../utils/connectHosts';
 import { moveRules } from '../utils/moveRules';
 import type { MoveResult } from '../utils/moveRules';
-import { asValidatedEntry, buildExportJSON, exportFileLabel, mergeBulkTargets, parseDest, ruleTargets, validateImportEntry } from '../utils/rulesIO';
+import { asValidatedEntry, buildExportJSON, countUnexportable, exportFileLabel, mergeBulkTargets, parseDest, ruleTargets, validateImportEntry } from '../utils/rulesIO';
 import type { TargetRow } from '../utils/rulesIO';
 
 const { Text } = Typography;
@@ -383,10 +383,18 @@ export default function Rules() {
     setCreateOpen(true);
   };
 
+  /** After an export: success, or a warning naming how many rules had no
+   *  enabled target and so were left out of the file. */
+  const notifyExported = (exported: ForwardRule[]) => {
+    const skipped = countUnexportable(exported);
+    if (skipped > 0) message.warning(t('exportedSkipped').replace('{count}', String(skipped)));
+    else message.success(t('exported'));
+  };
+
   /** Export all rules as JSON download. */
   const handleExportAll = () => {
     downloadText(`relaypanel-rules-${new Date().toISOString().slice(0, 10)}.json`, buildExportJSON(rules));
-    message.success(t('exported'));
+    notifyExported(rules);
   };
 
   /** v1.2.12: export the rules the current filter shows — one inbound group
@@ -402,7 +410,7 @@ export default function Rules() {
       `relaypanel-rules-${label}-${new Date().toISOString().slice(0, 10)}.json`,
       buildExportJSON(visibleRules),
     );
-    message.success(t('exported'));
+    notifyExported(visibleRules);
   };
 
   /** Export only the currently-selected rules as JSON download. */
@@ -410,7 +418,7 @@ export default function Rules() {
     const selected = rules.filter(r => selectedRowKeys.includes(r.id));
     if (selected.length === 0) return;
     downloadText(`relaypanel-rules-selected-${new Date().toISOString().slice(0, 10)}.json`, buildExportJSON(selected));
-    message.success(t('exported'));
+    notifyExported(selected);
   };
 
 const IMPORT_DEFAULTS = {
@@ -455,6 +463,8 @@ const IMPORT_DEFAULTS = {
           name: entry.name,
           listen_port: entry.listen_port,
           ...IMPORT_DEFAULTS,
+          // The file's protocol when it has one; older exports have none.
+          ...(entry.protocol ? { protocol: entry.protocol } : {}),
           device_group_in: importGroupId,
           target_addr: first.host,
           target_port: first.port,
@@ -1346,7 +1356,7 @@ const IMPORT_DEFAULTS = {
         {importResults.length === 0 ? (
           <>
             <Form.Item label={t('selectInboundGroup')}>
-              <Select value={importGroupId} onChange={setImportGroupId}
+              <Select aria-label={t('selectInboundGroup')} value={importGroupId} onChange={setImportGroupId}
                 options={(isAdmin ? groups.filter(g => g.group_type === 'in') : sharedGroups)
                   .map(g => ({ value: g.id, label: `${g.name} (#${g.id})` }))}
                 placeholder={t('selectDeviceGroups')} style={{ width: '100%' }} />

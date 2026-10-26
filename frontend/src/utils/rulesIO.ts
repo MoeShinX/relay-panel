@@ -3,10 +3,13 @@
  * unit-testable without mounting the React page.
  *
  * The export format is intentionally MINIMAL (a "share export"): only
- * `dest[]`, `listen_port`, `name`. Its purpose is quick copy/paste and target
- * migration between groups/installs, NOT a full backup (rate limits, load-
- * balance strategy, protocol, group, etc. are deliberately dropped — the import
- * path re-applies sensible defaults via IMPORT_DEFAULTS in Rules.tsx).
+ * `dest[]`, `listen_port`, `name` and `protocol`. Its purpose is quick
+ * copy/paste and target migration between groups/installs, NOT a full backup
+ * (rate limits, load-balance strategy, PROXY protocol, paused state, group,
+ * etc. are deliberately dropped — the import path re-applies sensible defaults
+ * via IMPORT_DEFAULTS in Rules.tsx). The protocol IS kept: importing a TCP-only
+ * or UDP-only rule as TCP+UDP would open a listener it never had.
+ * `protocol` is optional on import so files from before it existed still load.
  *
  * The golden property this module guarantees: a rule exported by `buildExportJSON`
  * ALWAYS round-trips back through `validateImportEntry` + `parseDest` into the
@@ -36,6 +39,22 @@ export interface ExportEntry {
   dest: string[];
   listen_port: number;
   name: string;
+  protocol: string;
+}
+
+/** What the import box accepts for `protocol`. */
+export const IMPORT_PROTOCOLS = ['tcp', 'udp', 'tcp_udp'] as const;
+export type ImportProtocol = (typeof IMPORT_PROTOCOLS)[number];
+
+/** A rule can be exported only while it has an enabled target: its `dest` would
+ *  otherwise be empty, and the import rejects an empty `dest`. */
+export function isExportable(rule: ForwardRule): boolean {
+  return ruleTargets(rule).some(t => t.enabled);
+}
+
+/** How many of `rules` an export leaves out (see isExportable). */
+export function countUnexportable(rules: ForwardRule[]): number {
+  return rules.filter(r => !isExportable(r)).length;
 }
 
 /**
@@ -61,10 +80,10 @@ export function exportFileLabel(name: string): string {
 }
 
 export function buildExportJSON(rules: ForwardRule[]): string {
-  const simplified: ExportEntry[] = rules.map(r => {
+  const simplified: ExportEntry[] = rules.filter(isExportable).map(r => {
     const targets = ruleTargets(r).filter(t => t.enabled);
     const dest = targets.map(t => formatDest(t.host, t.port));
-    return { dest, listen_port: r.listen_port, name: r.name };
+    return { dest, listen_port: r.listen_port, name: r.name, protocol: r.protocol };
   });
   return JSON.stringify(simplified);
 }
@@ -141,6 +160,7 @@ export interface ImportEntry {
   name?: string;
   listen_port?: number;
   dest?: string[];
+  protocol?: string;
 }
 
 /**
@@ -182,6 +202,10 @@ export function validateImportEntry(e: unknown): string | null {
     if (typeof d !== 'string') return `invalid dest format: ${String(d)}`;
     if (!parseDest(d)) return `invalid dest format: ${d}`;
   }
+  // protocol: optional (older exports have none); when present it must be real.
+  const protocol = e['protocol'];
+  if (protocol !== undefined && !(IMPORT_PROTOCOLS as readonly unknown[]).includes(protocol))
+    return `protocol must be one of ${IMPORT_PROTOCOLS.join(', ')}`;
   return null;
 }
 
@@ -191,7 +215,7 @@ export function validateImportEntry(e: unknown): string | null {
  * Centralises the `as` cast so the consuming code (handleImport) doesn't lie
  * about types in multiple places.
  */
-export function asValidatedEntry(e: unknown): { name: string; listen_port: number; dest: string[] } {
+export function asValidatedEntry(e: unknown): { name: string; listen_port: number; dest: string[]; protocol?: ImportProtocol } {
   // validateImportEntry already checked the runtime types; re-assert here only
   // to satisfy TS. This never throws for an entry that passed validation.
   const o = e as Record<string, unknown>;
@@ -199,5 +223,6 @@ export function asValidatedEntry(e: unknown): { name: string; listen_port: numbe
     name: o['name'] as string,
     listen_port: o['listen_port'] as number,
     dest: o['dest'] as string[],
+    protocol: o['protocol'] as ImportProtocol | undefined,
   };
 }

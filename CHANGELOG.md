@@ -18,6 +18,15 @@ independent `v*` / `node-v*` tracks since this release).
   target group is skipped and stays where it is; when the batch is done the
   skipped ones are listed (with any that failed for another reason).
 
+### Fixed
+
+- **Export and import keep the rule's protocol.** The share file now carries
+  `protocol`, so a TCP-only or UDP-only rule no longer comes back as TCP+UDP
+  (which opened a listener it never had). A file without `protocol`, as older
+  exports are, still imports as TCP+UDP; any other value is refused.
+- **A rule with no enabled target is left out of an export** (and the export
+  says how many), instead of writing an empty `dest` that its own import rejects.
+
 ### Changed
 
 - **A group can have several connect addresses.** The group form takes them

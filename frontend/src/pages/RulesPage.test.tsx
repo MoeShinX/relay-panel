@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 
@@ -244,7 +244,7 @@ describe('exporting the filtered rules', () => {
     await waitFor(() => expect(saved.name).toBeDefined());
     expect(saved.name).toMatch(/^relaypanel-rules-jp-line-\d{4}-\d{2}-\d{2}\.json$/);
     const exported = JSON.parse(await readBlob(saved.blob!));
-    expect(exported).toEqual([{ dest: ['1.2.3.4:80'], listen_port: 10002, name: 'jp-game' }]);
+    expect(exported).toEqual([{ dest: ['1.2.3.4:80'], listen_port: 10002, name: 'jp-game', protocol: 'tcp' }]);
     restore();
   });
 
@@ -327,6 +327,35 @@ describe('batch traffic reset', () => {
     await waitFor(() =>
       expect(mockGet.mock.calls.filter((c) => String(c[0]).startsWith('/rules')).length).toBeGreaterThan(getsBefore),
     );
+  });
+});
+
+describe('import', () => {
+  it('creates each rule with the protocol from the file, defaulting to tcp_udp without one', async () => {
+    mockPost.mockReset();
+    mockPost.mockResolvedValue(ok(null));
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
+
+    await user.hover(screen.getByRole('button', { name: /exportImport/ }));
+    await user.click(await screen.findByText('import'));
+    await user.click(await screen.findByLabelText('selectInboundGroup'));
+    await user.click(await screen.findByTitle('hk-line (#7)'));
+    fireEvent.change(document.querySelector('textarea') as HTMLTextAreaElement, {
+      target: {
+        value: JSON.stringify([
+          { name: 'u', listen_port: 31001, dest: ['1.1.1.1:53'], protocol: 'udp' },
+          { name: 't', listen_port: 31002, dest: ['1.1.1.1:80'], protocol: 'tcp' },
+          { name: 'old', listen_port: 31003, dest: ['1.1.1.1:81'] },
+        ]),
+      },
+    });
+    await user.click(screen.getByRole('button', { name: /^import$/ }));
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(3));
+    const sent = Object.fromEntries(mockPost.mock.calls.map((c) => [c[1].name, c[1].protocol]));
+    expect(sent).toEqual({ u: 'udp', t: 'tcp', old: 'tcp_udp' });
   });
 });
 
