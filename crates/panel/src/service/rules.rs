@@ -1787,4 +1787,46 @@ mod tests {
             .await
             .unwrap();
     }
+    /// Batch "move to another group" is one PUT per rule with only
+    /// `device_group_in`. A listen port is unique per inbound group, so a rule
+    /// whose port is taken in the target group is refused with PortConflict and
+    /// stays where it was; one with a free port moves.
+    #[tokio::test]
+    async fn moving_a_rule_to_a_group_where_its_port_is_taken_is_refused() {
+        let (pool, repo) = transport_test_db().await;
+        sqlx::query("INSERT INTO device_groups (id, name, group_type, token, uid) VALUES (2, 'other', 'in', 'unused-2', 1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        // (id, port, group): rule 1 collides with rule 3 on port 24030 in group 2.
+        for (id, port, group) in [(1, 24030, 1), (2, 24031, 1), (3, 24030, 2)] {
+            sqlx::query(
+                "INSERT INTO forward_rules (id, name, uid, listen_port, device_group_in, \
+                 target_addr, target_port, paused) VALUES (?, 'r', 1, ?, ?, '127.0.0.1', 80, 0)",
+            )
+            .bind(id)
+            .bind(port)
+            .bind(group)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let to_2 = UpdateRuleRequest {
+            device_group_in: Some(2),
+            ..Default::default()
+        };
+        let owner = ResourceScope::Owner(1);
+        assert!(matches!(
+            update_rule(&repo, 1, &owner, &to_2).await,
+            Err(UpdateRuleError::PortConflict)
+        ));
+        update_rule(&repo, 2, &owner, &to_2).await.unwrap();
+
+        let rules: Vec<(i64, i64)> =
+            sqlx::query_as("SELECT id, device_group_in FROM forward_rules ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rules, vec![(1, 1), (2, 2), (3, 2)]);
+    }
 }

@@ -10,8 +10,32 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Added
+
+- **Move rules to another group in bulk.** Select rules on the Rules page and
+  choose "Move to group": they go, with their targets and limits, to the nodes
+  of the chosen inbound group. A rule whose listen port is already used in the
+  target group is skipped and stays where it is; when the batch is done the
+  skipped ones are listed (with any that failed for another reason).
+
+### Fixed
+
+- **Export and import keep the rule's protocol.** The share file now carries
+  `protocol`, so a TCP-only or UDP-only rule no longer comes back as TCP+UDP
+  (which opened a listener it never had). A file without `protocol`, as older
+  exports are, still imports as TCP+UDP; any other value is refused.
+- **A rule with no enabled target is left out of an export** (and the export
+  says how many), instead of writing an empty `dest` that its own import rejects.
+
 ### Changed
 
+- **A group can have several connect addresses.** The group form takes them
+  one per row ("Add connection"), each an IPv4 address, an IPv6 address or a
+  domain name (no port), and the rules page lists them like targets: the first,
+  "(+N)", the rest on hover. They are only displayed (as the rule's listen IP)
+  and never change what the nodes listen on. Stored comma-separated in the same
+  field, so nothing migrates; a value a group already holds stays editable even
+  if it would not pass today. Outbound-type legacy groups stay single-address.
 - **A regular user's listen port must be inside the device group's port
   range.** A rule whose owner is not an admin is refused (400) if its listen
   port is outside the range set on its inbound group; a group left at the

@@ -8,6 +8,9 @@ import { useTableScroll } from '../hooks/useIsMobile';
 import { copyText } from '../utils/clipboard';
 import { buildInstallCommand } from '../utils/installCommand';
 import { useAuth } from '../auth/useAuth';
+import ConnectHostsEditor from '../components/ConnectHostsEditor';
+import HostSummary from '../components/HostSummary';
+import { joinHosts, splitHosts } from '../utils/connectHosts';
 
 const { Text } = Typography;
 
@@ -107,11 +110,14 @@ export default function Groups() {
   const nodeCount = useCallback((groupId: number) => nodesByGroup(groupId).length, [nodesByGroup]);
   const onlineCount = useCallback((groupId: number) => nodesByGroup(groupId).filter(n => n.online).length, [nodesByGroup]);
 
-  const handleCreate = async (values: { name: string; group_type: string; connect_host: string; port_range: string; rate?: number; hidden?: boolean; owner_uid?: number | null }) => {
+  const handleCreate = async (values: { name: string; group_type: string; connect_hosts?: string[]; port_range: string; rate?: number; hidden?: boolean; owner_uid?: number | null }) => {
     try {
       // v1.0.8: rate defaults to 1.0 on the server when omitted; send it
       // explicitly so the value the admin picked is what gets persisted.
-      const payload = { ...values, rate: values.rate ?? 1.0, hidden: values.hidden ?? false, owner_uid: values.owner_uid || undefined };
+      // The addresses are several inputs but one column: join them. The API
+      // wants the key even when empty (an omitted field is a 422).
+      const { connect_hosts, ...rest } = values;
+      const payload = { ...rest, connect_host: joinHosts(connect_hosts ?? []), rate: values.rate ?? 1.0, hidden: values.hidden ?? false, owner_uid: values.owner_uid || undefined };
       // v1.2.5: a monitor-only group forwards nothing, so the forwarding fields
       // are neutralised explicitly.
       //
@@ -138,11 +144,11 @@ export default function Groups() {
 
   const handleEdit = (g: DeviceGroup) => {
     setEditing(g);
-    editForm.setFieldsValue({ name: g.name, group_type: g.group_type, connect_host: g.connect_host, port_range: g.port_range, rate: g.rate, hidden: !!g.hidden });
+    editForm.setFieldsValue({ name: g.name, group_type: g.group_type, connect_hosts: splitHosts(g.connect_host).length ? splitHosts(g.connect_host) : [''], port_range: g.port_range, rate: g.rate, hidden: !!g.hidden });
     setEditOpen(true);
   };
 
-  const handleUpdate = async (values: { name?: string; group_type?: string; connect_host?: string; port_range?: string; rate?: number; hidden?: boolean }) => {
+  const handleUpdate = async (values: { name?: string; group_type?: string; connect_hosts?: string[]; port_range?: string; rate?: number; hidden?: boolean }) => {
     if (!editing) return;
     const payload: Record<string, unknown> = {};
     if (values.name !== undefined && values.name !== editing.name) payload.name = values.name;
@@ -154,7 +160,10 @@ export default function Groups() {
     // round trip. No special case is needed here: hiding those Form.Items
     // unregisters them, so they arrive undefined and the `!== undefined` guards
     // below already skip them. Groups.test.tsx pins that round trip.
-    if (values.connect_host !== undefined && values.connect_host !== editing.connect_host) payload.connect_host = values.connect_host;
+    if (values.connect_hosts !== undefined) {
+      const joined = joinHosts(values.connect_hosts);
+      if (joined !== joinHosts(splitHosts(editing.connect_host))) payload.connect_host = joined;
+    }
     if (values.port_range !== undefined && values.port_range !== editing.port_range) payload.port_range = values.port_range;
     // v1.0.8: only send rate when it actually changed (avoid no-op 400s and
     // keep the diff-based payload pattern used for the other fields).
@@ -343,7 +352,7 @@ export default function Groups() {
     // nothing and is never shown to a user — so it reads "-" rather than a
     // stored value that looks like configuration but is inert. The value itself
     // is kept in the DB; see handleUpdate.
-    { title: t('connectHost'), dataIndex: 'connect_host', key: 'connect_host', render: (v: string, g: DeviceGroup) => isMonitorOnly(g) ? dash : <span className="rp-mono">{v}</span> },
+    { title: t('connectHost'), dataIndex: 'connect_host', key: 'connect_host', render: (v: string, g: DeviceGroup) => isMonitorOnly(g) ? dash : <HostSummary value={v} empty={dash} /> },
     { title: t('portRange'), dataIndex: 'port_range', key: 'port_range', render: (v: string, g: DeviceGroup) => isMonitorOnly(g) ? dash : <span className="rp-mono">{v}</span> },
     {
       // v1.0.8: billing rate. Only show a tag when it differs from 1.0 — a 1x
@@ -479,7 +488,7 @@ export default function Groups() {
             />
           ) : (
             <>
-              <Form.Item name="connect_host" label={t('connectHost')} rules={[{ required: true }]}><Input placeholder="1.2.3.4 or node.example.com" /></Form.Item>
+              <ConnectHostsEditor t={t} />
               <Form.Item name="port_range" label={t('portRange')} rules={[{ required: true }]} initialValue="10000-65535"><Input placeholder="10000-65535" /></Form.Item>
               {/* v1.0.8: billing rate. Users are charged real bytes × rate; the
                   rule/user byte counters keep real bytes. 1.0 = bill as used. */}
@@ -509,7 +518,9 @@ export default function Groups() {
             />
           ) : (
             <>
-              <Form.Item name="connect_host" label={t('connectHost')}><Input /></Form.Item>
+              {/* A legacy outbound group's address is a real forwarding target, so it stays
+                  a single value; and what it already holds (maybe a hostname) stays valid. */}
+              <ConnectHostsEditor t={t} legacy={splitHosts(editing?.connect_host)} canAdd={editType !== 'out'} />
               <Form.Item name="port_range" label={t('portRange')}><Input /></Form.Item>
               <Form.Item name="rate" label={t('rate')} extra={t('rateHint')}>
                 <InputNumber min={0.1} max={100} step={0.1} style={{ width: '100%' }} />

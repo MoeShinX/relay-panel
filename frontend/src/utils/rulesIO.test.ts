@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   asValidatedEntry,
   buildExportJSON,
+  countUnexportable,
   exportFileLabel,
   mergeBulkTargets,
   parseDest,
@@ -95,9 +96,44 @@ describe('buildExportJSON', () => {
     expect(entry.dest).toEqual(['[2001:db8::1]:443', '93.184.216.34:80']);
   });
 
-  it('only carries dest / listen_port / name (the minimal share shape)', () => {
+  it('only carries dest / listen_port / name / protocol (the minimal share shape)', () => {
     const out = JSON.parse(buildExportJSON([mkRule({ name: 'r1', listen_port: 10000, target_addr: '1.1.1.1', target_port: 80 })]));
-    expect(Object.keys(out[0]).sort()).toEqual(['dest', 'listen_port', 'name']);
+    expect(Object.keys(out[0]).sort()).toEqual(['dest', 'listen_port', 'name', 'protocol']);
+  });
+
+  it('keeps the protocol, so a tcp-only or udp-only rule does not come back as tcp_udp', () => {
+    const out = JSON.parse(buildExportJSON([
+      mkRule({ id: 1, name: 'a', protocol: 'tcp' }),
+      mkRule({ id: 2, name: 'b', protocol: 'udp' }),
+      mkRule({ id: 3, name: 'c', protocol: 'tcp_udp' }),
+    ]));
+    expect(out.map((e: ExportEntry) => e.protocol)).toEqual(['tcp', 'udp', 'tcp_udp']);
+    for (const e of out) expect(asValidatedEntry(e).protocol).toBe(e.protocol);
+  });
+
+  it('leaves out a rule with no enabled target, since its import would be refused', () => {
+    const none = mkRule({ id: 1, name: 'none', targets: [tgt('off.com', 1, false, 1, 1, 1)] });
+    const ok = mkRule({ id: 2, name: 'ok' });
+    const out = JSON.parse(buildExportJSON([none, ok]));
+    expect(out.map((e: ExportEntry) => e.name)).toEqual(['ok']);
+    expect(countUnexportable([none, ok])).toBe(1);
+    expect(countUnexportable([ok])).toBe(0);
+    // And everything that IS exported imports cleanly.
+    for (const e of out) expect(validateImportEntry(e)).toBeNull();
+  });
+});
+
+describe('import protocol', () => {
+  const base = { name: 'r', listen_port: 10000, dest: ['1.1.1.1:80'] };
+  it('accepts tcp, udp and tcp_udp, and a file with no protocol at all (older exports)', () => {
+    for (const protocol of ['tcp', 'udp', 'tcp_udp']) expect(validateImportEntry({ ...base, protocol })).toBeNull();
+    expect(validateImportEntry(base)).toBeNull();
+    expect(asValidatedEntry(base).protocol).toBeUndefined();
+  });
+  it('refuses anything else instead of guessing', () => {
+    for (const protocol of ['TCP', 'icmp', '', 1, null, true]) {
+      expect(validateImportEntry({ ...base, protocol })).toMatch(/protocol/);
+    }
   });
 });
 

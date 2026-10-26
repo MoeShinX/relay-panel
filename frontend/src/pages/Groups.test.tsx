@@ -117,6 +117,55 @@ describe('monitor-only groups hide the forwarding fields', () => {
     });
   });
 
+  it('joins several connect addresses, IPs and domain names alike, into the one stored value', async () => {
+    const user = userEvent.setup();
+    mockPost.mockResolvedValue(ok(group()));
+    render(<Groups />);
+    await user.click(screen.getByRole('button', { name: /addGroup/i }));
+
+    await user.type(await screen.findByLabelText('name'), 'multi-node');
+    await user.type(screen.getByLabelText('connectHost'), '69.165.73.45');
+    await user.click(screen.getByRole('button', { name: /addConnection/ }));
+    const rows = screen.getAllByLabelText('connectHost');
+    expect(rows).toHaveLength(2);
+    await user.type(rows[1], 'node.example.com');
+    await user.click(screen.getByRole('button', { name: /^create$/i }));
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+    const body = mockPost.mock.calls[0][1];
+    expect(body.connect_host).toBe('69.165.73.45,node.example.com');
+    expect(body).not.toHaveProperty('connect_hosts');
+  });
+
+  it('refuses a malformed address or a missing first address', async () => {
+    const user = userEvent.setup();
+    render(<Groups />);
+    await user.click(screen.getByRole('button', { name: /addGroup/i }));
+    await user.type(await screen.findByLabelText('name'), 'bad');
+
+    await user.click(screen.getByRole('button', { name: /^create$/i }));
+    expect((await screen.findAllByText('connectHostInvalid')).length).toBeGreaterThan(0);
+
+    await user.type(screen.getByLabelText('connectHost'), '1.2.3.4:8080');
+    await user.click(screen.getByRole('button', { name: /^create$/i }));
+    await waitFor(() => expect(screen.getAllByText('connectHostInvalid').length).toBeGreaterThan(0));
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it('lets a group keep a stored value that is no longer valid, and saves nothing when untouched', async () => {
+    const user = userEvent.setup();
+    mockGet.mockImplementation((url: string) =>
+      Promise.resolve(url === '/groups' ? ok([group({ connect_host: 'node_1.example.com' })]) : ok([])));
+    mockPut.mockResolvedValue(ok(null));
+    render(<Groups />);
+
+    await user.click(await screen.findByRole('button', { name: /edit/i }));
+    expect(await screen.findByDisplayValue('node_1.example.com')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(screen.queryByText('connectHostInvalid')).toBeNull());
+    expect(mockPut).not.toHaveBeenCalled();
+  });
+
   it('leaves the stored forwarding fields alone when converting a group to monitor', async () => {
     // Wiping them would destroy what you need to convert the group back, and
     // flipping the type to look at something has to be a safe round trip.

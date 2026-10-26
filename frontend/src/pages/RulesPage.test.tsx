@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 
@@ -244,7 +244,7 @@ describe('exporting the filtered rules', () => {
     await waitFor(() => expect(saved.name).toBeDefined());
     expect(saved.name).toMatch(/^relaypanel-rules-jp-line-\d{4}-\d{2}-\d{2}\.json$/);
     const exported = JSON.parse(await readBlob(saved.blob!));
-    expect(exported).toEqual([{ dest: ['1.2.3.4:80'], listen_port: 10002, name: 'jp-game' }]);
+    expect(exported).toEqual([{ dest: ['1.2.3.4:80'], listen_port: 10002, name: 'jp-game', protocol: 'tcp' }]);
     restore();
   });
 
@@ -327,6 +327,90 @@ describe('batch traffic reset', () => {
     await waitFor(() =>
       expect(mockGet.mock.calls.filter((c) => String(c[0]).startsWith('/rules')).length).toBeGreaterThan(getsBefore),
     );
+  });
+});
+
+describe('import', () => {
+  it('creates each rule with the protocol from the file, defaulting to tcp_udp without one', async () => {
+    mockPost.mockReset();
+    mockPost.mockResolvedValue(ok(null));
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
+
+    await user.hover(screen.getByRole('button', { name: /exportImport/ }));
+    await user.click(await screen.findByText('import'));
+    await user.click(await screen.findByLabelText('selectInboundGroup'));
+    await user.click(await screen.findByTitle('hk-line (#7)'));
+    fireEvent.change(document.querySelector('textarea') as HTMLTextAreaElement, {
+      target: {
+        value: JSON.stringify([
+          { name: 'u', listen_port: 31001, dest: ['1.1.1.1:53'], protocol: 'udp' },
+          { name: 't', listen_port: 31002, dest: ['1.1.1.1:80'], protocol: 'tcp' },
+          { name: 'old', listen_port: 31003, dest: ['1.1.1.1:81'] },
+        ]),
+      },
+    });
+    await user.click(screen.getByRole('button', { name: /^import$/ }));
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(3));
+    const sent = Object.fromEntries(mockPost.mock.calls.map((c) => [c[1].name, c[1].protocol]));
+    expect(sent).toEqual({ u: 'udp', t: 'tcp', old: 'tcp_udp' });
+  });
+});
+
+describe('listen IP column', () => {
+  it('reads like targets: the first address, (+N), and the rest on hover', async () => {
+    routes({
+      rules: ok([rule({ device_group_in: 7 }), rule({ id: 2, name: 'solo', device_group_in: 8 })]),
+      groups: ok([
+        group({ connect_host: '69.165.73.45,2001:db8::1,1.2.3.4' }),
+        group({ id: 8, name: 'one', connect_host: '5.6.7.8' }),
+      ]),
+    });
+    const user = userEvent.setup();
+    renderPage();
+    const multi = await screen.findByText('69.165.73.45 (+2)');
+    expect(screen.getByText('5.6.7.8')).toBeInTheDocument();
+    await user.hover(multi);
+    expect(await screen.findByText('2001:db8::1')).toBeInTheDocument();
+    expect(screen.getByText('1.2.3.4')).toBeInTheDocument();
+  });
+});
+
+describe('batch move to another group', () => {
+  it('moves the selection, skips a port taken in the target group, and says so', async () => {
+    mockPut.mockReset();
+    mockPut.mockImplementation((url: string) =>
+      Promise.resolve(url === '/rules/1' ? { code: 409, message: 'in use', data: null } : ok(null)),
+    );
+    routes({
+      rules: ok([
+        rule(),
+        rule({ id: 2, name: 'jp-game', listen_port: 10002, device_group_in: 7 }),
+      ]),
+      groups: ok([group(), group({ id: 8, name: 'jp-line' })]),
+    });
+    const user = userEvent.setup();
+    const { container } = renderPage();
+    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
+
+    const boxes = container.querySelectorAll('tr.ant-table-row input[type="checkbox"]');
+    await user.click(boxes[0] as HTMLElement);
+    await user.click(boxes[1] as HTMLElement);
+    await user.click(screen.getByRole('button', { name: /batchMove \(2\)/ }));
+    await user.click(await screen.findByLabelText('batchMoveTarget'));
+    await user.click(await screen.findByTitle('jp-line (#8)'));
+    await user.click(screen.getByRole('button', { name: /batchMoveRun/ }));
+
+    await waitFor(() => expect(mockPut).toHaveBeenCalledTimes(2));
+    expect(mockPut).toHaveBeenCalledWith('/rules/1', { device_group_in: 8 });
+    expect(mockPut).toHaveBeenCalledWith('/rules/2', { device_group_in: 8 });
+    // rule 1 was refused for its port: it is named in the result, rule 2 is counted as moved.
+    const dialog = await screen.findByText(/batchMoveResultTitle/);
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByText(/#1 hk-web/)).toBeInTheDocument();
+    expect(screen.getByText(/batchMoveDone/)).toBeInTheDocument();
   });
 });
 

@@ -10,7 +10,11 @@ import { useI18n } from '../i18n/context';
 import { useTableScroll } from '../hooks/useIsMobile';
 import { formatBytes } from '../utils/format';
 import { useAuth } from '../auth/useAuth';
-import { asValidatedEntry, buildExportJSON, exportFileLabel, mergeBulkTargets, parseDest, ruleTargets, validateImportEntry } from '../utils/rulesIO';
+import HostSummary from '../components/HostSummary';
+import { splitHosts } from '../utils/connectHosts';
+import { moveRules } from '../utils/moveRules';
+import type { MoveResult } from '../utils/moveRules';
+import { asValidatedEntry, buildExportJSON, countUnexportable, exportFileLabel, mergeBulkTargets, parseDest, ruleTargets, validateImportEntry } from '../utils/rulesIO';
 import type { TargetRow } from '../utils/rulesIO';
 
 const { Text } = Typography;
@@ -148,6 +152,11 @@ export default function Rules() {
   }, [setSearchParams]);
 
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
+  // Batch "move to another inbound group": dialog state, then the outcome.
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [moveTarget, setMoveTarget] = useState<number | undefined>(undefined);
+  const [moving, setMoving] = useState(false);
+  const [moveResult, setMoveResult] = useState<MoveResult | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -374,10 +383,18 @@ export default function Rules() {
     setCreateOpen(true);
   };
 
+  /** After an export: success, or a warning naming how many rules had no
+   *  enabled target and so were left out of the file. */
+  const notifyExported = (exported: ForwardRule[]) => {
+    const skipped = countUnexportable(exported);
+    if (skipped > 0) message.warning(t('exportedSkipped').replace('{count}', String(skipped)));
+    else message.success(t('exported'));
+  };
+
   /** Export all rules as JSON download. */
   const handleExportAll = () => {
     downloadText(`relaypanel-rules-${new Date().toISOString().slice(0, 10)}.json`, buildExportJSON(rules));
-    message.success(t('exported'));
+    notifyExported(rules);
   };
 
   /** v1.2.12: export the rules the current filter shows — one inbound group
@@ -393,7 +410,7 @@ export default function Rules() {
       `relaypanel-rules-${label}-${new Date().toISOString().slice(0, 10)}.json`,
       buildExportJSON(visibleRules),
     );
-    message.success(t('exported'));
+    notifyExported(visibleRules);
   };
 
   /** Export only the currently-selected rules as JSON download. */
@@ -401,7 +418,7 @@ export default function Rules() {
     const selected = rules.filter(r => selectedRowKeys.includes(r.id));
     if (selected.length === 0) return;
     downloadText(`relaypanel-rules-selected-${new Date().toISOString().slice(0, 10)}.json`, buildExportJSON(selected));
-    message.success(t('exported'));
+    notifyExported(selected);
   };
 
 const IMPORT_DEFAULTS = {
@@ -446,6 +463,8 @@ const IMPORT_DEFAULTS = {
           name: entry.name,
           listen_port: entry.listen_port,
           ...IMPORT_DEFAULTS,
+          // The file's protocol when it has one; older exports have none.
+          ...(entry.protocol ? { protocol: entry.protocol } : {}),
           device_group_in: importGroupId,
           target_addr: first.host,
           target_port: first.port,
@@ -587,6 +606,25 @@ const IMPORT_DEFAULTS = {
     }
     setSelectedRowKeys([]);
     load();
+  };
+
+  /** Move the selected rules to another inbound group. A rule whose listen port
+   *  is already taken there is skipped and reported (see utils/moveRules). */
+  const handleBatchMove = async () => {
+    if (moveTarget == null) return;
+    const chosen = rules.filter(r => selectedRowKeys.includes(r.id));
+    if (chosen.length === 0) return;
+    setMoving(true);
+    try {
+      const result = await moveRules(chosen, moveTarget, (url, body) =>
+        api.put<unknown, ApiEnvelope<null>>(url, body));
+      setMoveResult(result);
+      setMoveOpen(false);
+      setSelectedRowKeys([]);
+      load();
+    } finally {
+      setMoving(false);
+    }
   };
 
   /** v1.2.0: restart one rule — drop its live connections and rebuild its
@@ -734,10 +772,13 @@ const IMPORT_DEFAULTS = {
     {
       title: t('listenIp'), key: 'listen_ip', width: 160,
       render: (_: unknown, r: ForwardRule) => {
-        const host = groupInfo.get(r.device_group_in)?.connect_host ?? '';
-        return host
-          ? <span className="rp-mono">{host}</span>
-          : <Text type="secondary">{t('notConfigured')}</Text>;
+        // Several addresses read like several targets: first, "(+N)", all on hover.
+        return (
+          <HostSummary
+            value={groupInfo.get(r.device_group_in)?.connect_host}
+            empty={<Text type="secondary">{t('notConfigured')}</Text>}
+          />
+        );
       },
     },
     { title: t('listenPort'), dataIndex: 'listen_port', key: 'listen_port', render: (v: number) => <span className="rp-mono">{v}</span> },
@@ -895,7 +936,7 @@ const IMPORT_DEFAULTS = {
     // v1.0.7: a regular user doesn't own the admin device groups, so `groups`
     // is empty for them — resolve the connect host from the merged groupInfo
     // (which also folds in their authorized shared groups) instead.
-    return groupInfo.get(gid)?.connect_host ?? '';
+    return splitHosts(groupInfo.get(gid)?.connect_host).join(', ');
   };
   const renderHostHint = (gid?: number) => {
     const host = hostForForm(gid);
@@ -1109,6 +1150,11 @@ const IMPORT_DEFAULTS = {
             </Button>
           )}
           {selectedRowKeys.length > 0 && (
+            <Button onClick={() => { setMoveTarget(undefined); setMoveOpen(true); }}>
+              {t('batchMove')} ({selectedRowKeys.length})
+            </Button>
+          )}
+          {selectedRowKeys.length > 0 && (
             <Popconfirm
               title={t('batchRestartConfirm').replace('{count}', String(selectedRowKeys.length))}
               description={t('restartConfirmDesc')}
@@ -1310,7 +1356,7 @@ const IMPORT_DEFAULTS = {
         {importResults.length === 0 ? (
           <>
             <Form.Item label={t('selectInboundGroup')}>
-              <Select value={importGroupId} onChange={setImportGroupId}
+              <Select aria-label={t('selectInboundGroup')} value={importGroupId} onChange={setImportGroupId}
                 options={(isAdmin ? groups.filter(g => g.group_type === 'in') : sharedGroups)
                   .map(g => ({ value: g.id, label: `${g.name} (#${g.id})` }))}
                 placeholder={t('selectDeviceGroups')} style={{ width: '100%' }} />
@@ -1323,6 +1369,61 @@ const IMPORT_DEFAULTS = {
         ) : (
           <div style={{ maxHeight: 300, overflowY: 'auto' }} aria-live="polite" aria-label={t('import')}>
             {importResults.map((r, i) => <div key={i} style={{ fontFamily: 'var(--rp-font-mono)', fontSize: 13, lineHeight: 1.8 }}>{r}</div>)}
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={moveOpen} title={t('batchMoveTitle').replace('{count}', String(selectedRowKeys.length))}
+        onCancel={() => setMoveOpen(false)} onOk={handleBatchMove}
+        okText={t('batchMoveRun')} cancelText={t('cancel')}
+        okButtonProps={{ disabled: moveTarget == null, loading: moving }}
+      >
+        <Form.Item label={t('batchMoveTarget')}>
+          <Select
+            aria-label={t('batchMoveTarget')} value={moveTarget} onChange={setMoveTarget}
+            options={allInGroups.map(g => ({ value: g.id, label: `${g.name} (#${g.id})` }))}
+            placeholder={t('selectDeviceGroups')} style={{ width: '100%' }}
+          />
+        </Form.Item>
+        <Alert type="info" showIcon title={t('batchMoveHint')} />
+      </Modal>
+
+      <Modal
+        open={moveResult != null} title={t('batchMoveResultTitle')}
+        onCancel={() => setMoveResult(null)} footer={<Button onClick={() => setMoveResult(null)}>{t('close')}</Button>}
+      >
+        {moveResult && (
+          <div aria-live="polite">
+            <Alert
+              type={moveResult.moved.length > 0 ? 'success' : 'warning'} showIcon style={{ marginBottom: 12 }}
+              title={moveResult.moved.length > 0
+                ? t('batchMoveDone').replace('{count}', String(moveResult.moved.length))
+                : t('batchMoveNothing')}
+            />
+            {moveResult.occupied.length > 0 && (
+              <>
+                <Text strong>{t('batchMoveOccupied').replace('{count}', String(moveResult.occupied.length))}</Text>
+                <div style={{ maxHeight: 200, overflowY: 'auto', margin: '6px 0 12px' }}>
+                  {moveResult.occupied.map(r => (
+                    <div key={r.id} className="rp-mono">#{r.id} {r.name} — :{r.listen_port}</div>
+                  ))}
+                </div>
+              </>
+            )}
+            {moveResult.failed.length > 0 && (
+              <>
+                <Text strong>{t('batchMoveFailed').replace('{count}', String(moveResult.failed.length))}</Text>
+                <div style={{ maxHeight: 200, overflowY: 'auto', margin: '6px 0 12px' }}>
+                  {moveResult.failed.map(f => (
+                    <div key={f.rule.id} className="rp-mono">#{f.rule.id} {f.rule.name} — {f.message}</div>
+                  ))}
+                </div>
+              </>
+            )}
+            {moveResult.alreadyThere.length > 0 && (
+              <Text type="secondary">{t('batchMoveAlready').replace('{count}', String(moveResult.alreadyThere.length))}</Text>
+            )}
           </div>
         )}
       </Modal>
