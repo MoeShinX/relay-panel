@@ -49,7 +49,25 @@ export function isIPv6(s: string): boolean {
   return halves.length === 2 ? n <= 7 : n === 8;
 }
 
-/** A standard IPv4 or IPv6 literal — no brackets, ports, zones or hostnames. */
+/** A standard IPv4 or IPv6 literal — no brackets, ports or zones. */
 export function isIpAddress(s: string): boolean {
   return isIPv4(s) || isIPv6(s);
+}
+
+/**
+ * A DNS name (RFC 1123): labels of letters, digits and inner hyphens, 1-63
+ * characters each, 253 in all. The last label may not be all digits, so a
+ * mistyped address such as `256.1.1.1` or `1.2.3` is refused instead of being
+ * taken for a name. Internationalised names are written in their `xn--` form.
+ */
+export function isHostname(s: string): boolean {
+  if (s.length === 0 || s.length > 253) return false;
+  const labels = s.split('.');
+  if (!labels.every(l => /^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(l))) return false;
+  return !/^\d+$/.test(labels[labels.length - 1]);
+}
+
+/** What a group's connect address may be: an IP address or a host name. */
+export function isConnectHost(s: string): boolean {
+  return isIpAddress(s) || isHostname(s);
 }

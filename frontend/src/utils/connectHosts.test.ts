@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isIpAddress, joinHosts, splitHosts } from './connectHosts';
+import { isConnectHost, isHostname, isIpAddress, joinHosts, splitHosts } from './connectHosts';
 
 describe('isIpAddress', () => {
   it.each([
@@ -28,5 +28,30 @@ describe('splitHosts / joinHosts', () => {
   });
   it('leaves a single legacy value (even a hostname) as it was', () => {
     expect(joinHosts(splitHosts('node.example.com'))).toBe('node.example.com');
+  });
+});
+
+describe('isHostname / isConnectHost', () => {
+  it.each([
+    'node.example.com', 'a.b.c.d.example.org', 'node1', 'localhost', 'my-node.example.com',
+    'xn--fiqs8s.example', 'EXAMPLE.com', 'a'.repeat(63) + '.com', '1node.example.com',
+  ])('accepts the name %s', (s) => {
+    expect(isHostname(s)).toBe(true);
+    expect(isConnectHost(s)).toBe(true);
+  });
+
+  it.each([
+    '', ' node.example.com', 'node.example.com ', 'node_1.example.com', '-node.example.com',
+    'node-.example.com', 'node..example.com', '.example.com', 'node.example.com.',
+    'node.example.com:8080', 'http://node.example.com', '节点.example.com',
+    'a'.repeat(64) + '.com', ('a.'.repeat(130)) + 'com',
+    // Look like addresses, are not: refused rather than taken for a name.
+    '256.1.1.1', '1.2.3', '1.2.3.4.5', '123',
+  ])('rejects %j', (s) => {
+    expect(isConnectHost(s)).toBe(false);
+  });
+
+  it('still takes addresses', () => {
+    for (const s of ['1.2.3.4', '2001:db8::1']) expect(isConnectHost(s)).toBe(true);
   });
 });

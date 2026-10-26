@@ -1,14 +1,14 @@
 import { Button, Form, Input, Space, Typography } from 'antd';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
-import { isIpAddress } from '../utils/connectHosts';
+import { isConnectHost } from '../utils/connectHosts';
 
 /**
  * The connect addresses of a device group, one input per address, the way a
  * rule's targets are entered: a first row, "add connection" for more.
  *
- * Each address must be a standard IPv4/IPv6 literal. `legacy` lists the values
- * the group already had; those stay acceptable while unchanged, so a group whose
- * stored address is an older hostname can still be edited and saved.
+ * Each address is an IPv4/IPv6 literal or a host name. `legacy` lists the values
+ * the group already had; those stay acceptable while unchanged, so a group
+ * holding something older and looser can still be edited and saved.
  *
  * Lives in the form under `connect_hosts` (a string array); the page joins it
  * back into the single `connect_host` column.
@@ -38,7 +38,7 @@ export default function ConnectHostsEditor({
                   {
                     validator: (_, v: string | undefined) => {
                       const s = (v ?? '').trim();
-                      if (!s || isIpAddress(s) || legacy.includes(s)) return Promise.resolve();
+                      if (!s || isConnectHost(s) || legacy.includes(s)) return Promise.resolve();
                       return Promise.reject(new Error(t('connectHostInvalid')));
                     },
                   },

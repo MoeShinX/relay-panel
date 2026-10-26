@@ -30,12 +30,12 @@ independent `v*` / `node-v*` tracks since this release).
 ### Changed
 
 - **A group can have several connect addresses.** The group form takes them
-  one per row ("Add connection"), each a standard IPv4 or IPv6 address, and
-  the rules page lists them like targets: the first, "(+N)", the rest on hover.
-  They are only displayed (as the rule's listen IP) and never change what the
-  nodes listen on. Stored comma-separated in the same field, so nothing
-  migrates; a group that already holds a hostname keeps it. Outbound-type
-  legacy groups stay single-address.
+  one per row ("Add connection"), each an IPv4 address, an IPv6 address or a
+  domain name (no port), and the rules page lists them like targets: the first,
+  "(+N)", the rest on hover. They are only displayed (as the rule's listen IP)
+  and never change what the nodes listen on. Stored comma-separated in the same
+  field, so nothing migrates; a value a group already holds stays editable even
+  if it would not pass today. Outbound-type legacy groups stay single-address.
 
 ## [1.2.16] - 2026-10-24
 
