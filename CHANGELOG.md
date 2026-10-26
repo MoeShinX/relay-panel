@@ -10,6 +10,21 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Added
+
+- **Move rules to another group in bulk.** Select rules on the Rules page and
+  choose "Move to group": they go, with their targets and limits, to the nodes
+  of the chosen inbound group. A rule whose listen port is already used in the
+  target group is skipped and stays where it is; when the batch is done the
+  skipped ones are listed (with any that failed for another reason).
+
+### Changed
+
+- **A group's connect address is optional when creating a group, and says what
+  it is for.** It is only shown to users as the rule's listen IP and never
+  changes what the nodes listen on, so a group with several nodes can leave it
+  empty or list several addresses, separated by commas.
+
 ## [1.2.16] - 2026-10-24
 
 Ships alongside `node-v1.2.10`. The config protocol is unchanged at version 4.
