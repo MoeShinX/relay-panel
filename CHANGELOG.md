@@ -10,6 +10,16 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`deploy.sh` no longer re-fetches an image it already has.** It asked the
+  registries for the database image (and any other image under a pinned tag)
+  on every run even when it was present, and with the registries and mirrors
+  slow or unreachable that meant waiting out every route — minutes — before
+  carrying on with the local copy. An image already here under a pinned tag is
+  now used as it is. `latest` is still asked for, and `RELAYPANEL_FORCE_PULL=1`
+  refreshes everything.
+
 ## [1.2.17] - 2026-10-27
 
 Panel only; no node release, and the config protocol is unchanged at version 4.
