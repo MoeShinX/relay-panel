@@ -479,7 +479,7 @@ export default function Groups() {
             />
           ) : (
             <>
-              <Form.Item name="connect_host" label={t('connectHost')} rules={[{ required: true }]}><Input placeholder="1.2.3.4 or node.example.com" /></Form.Item>
+              <Form.Item name="connect_host" label={t('connectHost')} extra={t('connectHostHint')} rules={[{ required: true }]}><Input placeholder="1.2.3.4 or node.example.com" /></Form.Item>
               <Form.Item name="port_range" label={t('portRange')} rules={[{ required: true }]} initialValue="10000-65535"><Input placeholder="10000-65535" /></Form.Item>
               {/* v1.0.8: billing rate. Users are charged real bytes × rate; the
                   rule/user byte counters keep real bytes. 1.0 = bill as used. */}
@@ -509,7 +509,7 @@ export default function Groups() {
             />
           ) : (
             <>
-              <Form.Item name="connect_host" label={t('connectHost')}><Input /></Form.Item>
+              <Form.Item name="connect_host" label={t('connectHost')} extra={t('connectHostHint')}><Input /></Form.Item>
               <Form.Item name="port_range" label={t('portRange')}><Input /></Form.Item>
               <Form.Item name="rate" label={t('rate')} extra={t('rateHint')}>
                 <InputNumber min={0.1} max={100} step={0.1} style={{ width: '100%' }} />

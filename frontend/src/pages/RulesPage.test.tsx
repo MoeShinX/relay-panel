@@ -330,6 +330,42 @@ describe('batch traffic reset', () => {
   });
 });
 
+describe('batch move to another group', () => {
+  it('moves the selection, skips a port taken in the target group, and says so', async () => {
+    mockPut.mockReset();
+    mockPut.mockImplementation((url: string) =>
+      Promise.resolve(url === '/rules/1' ? { code: 409, message: 'in use', data: null } : ok(null)),
+    );
+    routes({
+      rules: ok([
+        rule(),
+        rule({ id: 2, name: 'jp-game', listen_port: 10002, device_group_in: 7 }),
+      ]),
+      groups: ok([group(), group({ id: 8, name: 'jp-line' })]),
+    });
+    const user = userEvent.setup();
+    const { container } = renderPage();
+    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
+
+    const boxes = container.querySelectorAll('tr.ant-table-row input[type="checkbox"]');
+    await user.click(boxes[0] as HTMLElement);
+    await user.click(boxes[1] as HTMLElement);
+    await user.click(screen.getByRole('button', { name: /batchMove \(2\)/ }));
+    await user.click(await screen.findByLabelText('batchMoveTarget'));
+    await user.click(await screen.findByTitle('jp-line (#8)'));
+    await user.click(screen.getByRole('button', { name: /batchMoveRun/ }));
+
+    await waitFor(() => expect(mockPut).toHaveBeenCalledTimes(2));
+    expect(mockPut).toHaveBeenCalledWith('/rules/1', { device_group_in: 8 });
+    expect(mockPut).toHaveBeenCalledWith('/rules/2', { device_group_in: 8 });
+    // rule 1 was refused for its port: it is named in the result, rule 2 is counted as moved.
+    const dialog = await screen.findByText(/batchMoveResultTitle/);
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByText(/#1 hk-web/)).toBeInTheDocument();
+    expect(screen.getByText(/batchMoveDone/)).toBeInTheDocument();
+  });
+});
+
 describe('target address entry', () => {
   const openCreate = async () => {
     const user = userEvent.setup();

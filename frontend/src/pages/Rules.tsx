@@ -10,6 +10,8 @@ import { useI18n } from '../i18n/context';
 import { useTableScroll } from '../hooks/useIsMobile';
 import { formatBytes } from '../utils/format';
 import { useAuth } from '../auth/useAuth';
+import { moveRules } from '../utils/moveRules';
+import type { MoveResult } from '../utils/moveRules';
 import { asValidatedEntry, buildExportJSON, exportFileLabel, mergeBulkTargets, parseDest, ruleTargets, validateImportEntry } from '../utils/rulesIO';
 import type { TargetRow } from '../utils/rulesIO';
 
@@ -148,6 +150,11 @@ export default function Rules() {
   }, [setSearchParams]);
 
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
+  // Batch "move to another inbound group": dialog state, then the outcome.
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [moveTarget, setMoveTarget] = useState<number | undefined>(undefined);
+  const [moving, setMoving] = useState(false);
+  const [moveResult, setMoveResult] = useState<MoveResult | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -587,6 +594,25 @@ const IMPORT_DEFAULTS = {
     }
     setSelectedRowKeys([]);
     load();
+  };
+
+  /** Move the selected rules to another inbound group. A rule whose listen port
+   *  is already taken there is skipped and reported (see utils/moveRules). */
+  const handleBatchMove = async () => {
+    if (moveTarget == null) return;
+    const chosen = rules.filter(r => selectedRowKeys.includes(r.id));
+    if (chosen.length === 0) return;
+    setMoving(true);
+    try {
+      const result = await moveRules(chosen, moveTarget, (url, body) =>
+        api.put<unknown, ApiEnvelope<null>>(url, body));
+      setMoveResult(result);
+      setMoveOpen(false);
+      setSelectedRowKeys([]);
+      load();
+    } finally {
+      setMoving(false);
+    }
   };
 
   /** v1.2.0: restart one rule — drop its live connections and rebuild its
@@ -1109,6 +1135,11 @@ const IMPORT_DEFAULTS = {
             </Button>
           )}
           {selectedRowKeys.length > 0 && (
+            <Button onClick={() => { setMoveTarget(undefined); setMoveOpen(true); }}>
+              {t('batchMove')} ({selectedRowKeys.length})
+            </Button>
+          )}
+          {selectedRowKeys.length > 0 && (
             <Popconfirm
               title={t('batchRestartConfirm').replace('{count}', String(selectedRowKeys.length))}
               description={t('restartConfirmDesc')}
@@ -1323,6 +1354,61 @@ const IMPORT_DEFAULTS = {
         ) : (
           <div style={{ maxHeight: 300, overflowY: 'auto' }} aria-live="polite" aria-label={t('import')}>
             {importResults.map((r, i) => <div key={i} style={{ fontFamily: 'var(--rp-font-mono)', fontSize: 13, lineHeight: 1.8 }}>{r}</div>)}
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={moveOpen} title={t('batchMoveTitle').replace('{count}', String(selectedRowKeys.length))}
+        onCancel={() => setMoveOpen(false)} onOk={handleBatchMove}
+        okText={t('batchMoveRun')} cancelText={t('cancel')}
+        okButtonProps={{ disabled: moveTarget == null, loading: moving }}
+      >
+        <Form.Item label={t('batchMoveTarget')}>
+          <Select
+            aria-label={t('batchMoveTarget')} value={moveTarget} onChange={setMoveTarget}
+            options={allInGroups.map(g => ({ value: g.id, label: `${g.name} (#${g.id})` }))}
+            placeholder={t('selectDeviceGroups')} style={{ width: '100%' }}
+          />
+        </Form.Item>
+        <Alert type="info" showIcon title={t('batchMoveHint')} />
+      </Modal>
+
+      <Modal
+        open={moveResult != null} title={t('batchMoveResultTitle')}
+        onCancel={() => setMoveResult(null)} footer={<Button onClick={() => setMoveResult(null)}>{t('close')}</Button>}
+      >
+        {moveResult && (
+          <div aria-live="polite">
+            <Alert
+              type={moveResult.moved.length > 0 ? 'success' : 'warning'} showIcon style={{ marginBottom: 12 }}
+              title={moveResult.moved.length > 0
+                ? t('batchMoveDone').replace('{count}', String(moveResult.moved.length))
+                : t('batchMoveNothing')}
+            />
+            {moveResult.occupied.length > 0 && (
+              <>
+                <Text strong>{t('batchMoveOccupied').replace('{count}', String(moveResult.occupied.length))}</Text>
+                <div style={{ maxHeight: 200, overflowY: 'auto', margin: '6px 0 12px' }}>
+                  {moveResult.occupied.map(r => (
+                    <div key={r.id} className="rp-mono">#{r.id} {r.name} — :{r.listen_port}</div>
+                  ))}
+                </div>
+              </>
+            )}
+            {moveResult.failed.length > 0 && (
+              <>
+                <Text strong>{t('batchMoveFailed').replace('{count}', String(moveResult.failed.length))}</Text>
+                <div style={{ maxHeight: 200, overflowY: 'auto', margin: '6px 0 12px' }}>
+                  {moveResult.failed.map(f => (
+                    <div key={f.rule.id} className="rp-mono">#{f.rule.id} {f.rule.name} — {f.message}</div>
+                  ))}
+                </div>
+              </>
+            )}
+            {moveResult.alreadyThere.length > 0 && (
+              <Text type="secondary">{t('batchMoveAlready').replace('{count}', String(moveResult.alreadyThere.length))}</Text>
+            )}
           </div>
         )}
       </Modal>
