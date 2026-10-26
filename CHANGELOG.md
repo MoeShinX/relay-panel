@@ -10,6 +10,13 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+## [1.2.17] - 2026-10-27
+
+Panel only; no node release, and the config protocol is unchanged at version 4.
+No schema change.
+
+Upgrading: "Update now" on the dashboard, or `git pull --quiet && ./deploy.sh`.
+
 ### Added
 
 - **Move rules to another group in bulk.** Select rules on the Rules page and
