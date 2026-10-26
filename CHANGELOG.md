@@ -20,10 +20,13 @@ independent `v*` / `node-v*` tracks since this release).
 
 ### Changed
 
-- **A group's connect address is optional when creating a group, and says what
-  it is for.** It is only shown to users as the rule's listen IP and never
-  changes what the nodes listen on, so a group with several nodes can leave it
-  empty or list several addresses, separated by commas.
+- **A group can have several connect addresses.** The group form takes them
+  one per row ("Add connection"), each a standard IPv4 or IPv6 address, and
+  the rules page lists them like targets: the first, "(+N)", the rest on hover.
+  They are only displayed (as the rule's listen IP) and never change what the
+  nodes listen on. Stored comma-separated in the same field, so nothing
+  migrates; a group that already holds a hostname keeps it. Outbound-type
+  legacy groups stay single-address.
 
 ## [1.2.16] - 2026-10-24
 

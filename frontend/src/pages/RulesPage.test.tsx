@@ -330,6 +330,25 @@ describe('batch traffic reset', () => {
   });
 });
 
+describe('listen IP column', () => {
+  it('reads like targets: the first address, (+N), and the rest on hover', async () => {
+    routes({
+      rules: ok([rule({ device_group_in: 7 }), rule({ id: 2, name: 'solo', device_group_in: 8 })]),
+      groups: ok([
+        group({ connect_host: '69.165.73.45,2001:db8::1,1.2.3.4' }),
+        group({ id: 8, name: 'one', connect_host: '5.6.7.8' }),
+      ]),
+    });
+    const user = userEvent.setup();
+    renderPage();
+    const multi = await screen.findByText('69.165.73.45 (+2)');
+    expect(screen.getByText('5.6.7.8')).toBeInTheDocument();
+    await user.hover(multi);
+    expect(await screen.findByText('2001:db8::1')).toBeInTheDocument();
+    expect(screen.getByText('1.2.3.4')).toBeInTheDocument();
+  });
+});
+
 describe('batch move to another group', () => {
   it('moves the selection, skips a port taken in the target group, and says so', async () => {
     mockPut.mockReset();

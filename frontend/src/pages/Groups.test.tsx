@@ -117,19 +117,53 @@ describe('monitor-only groups hide the forwarding fields', () => {
     });
   });
 
-  it('creates a forwarding group with the connect address left empty', async () => {
-    // A group with several nodes has no single address to show, so the field is
-    // optional — but the API needs the key, so it goes out as an empty string.
+  it('joins several connect addresses into the one stored value', async () => {
     const user = userEvent.setup();
     mockPost.mockResolvedValue(ok(group()));
     render(<Groups />);
     await user.click(screen.getByRole('button', { name: /addGroup/i }));
 
     await user.type(await screen.findByLabelText('name'), 'multi-node');
+    await user.type(screen.getByLabelText('connectHost'), '69.165.73.45');
+    await user.click(screen.getByRole('button', { name: /addConnection/ }));
+    const rows = screen.getAllByLabelText('connectHost');
+    expect(rows).toHaveLength(2);
+    await user.type(rows[1], '2001:db8::1');
     await user.click(screen.getByRole('button', { name: /^create$/i }));
 
     await waitFor(() => expect(mockPost).toHaveBeenCalled());
-    expect(mockPost.mock.calls[0][1]).toMatchObject({ name: 'multi-node', connect_host: '' });
+    const body = mockPost.mock.calls[0][1];
+    expect(body.connect_host).toBe('69.165.73.45,2001:db8::1');
+    expect(body).not.toHaveProperty('connect_hosts');
+  });
+
+  it('refuses a hostname or a missing first address', async () => {
+    const user = userEvent.setup();
+    render(<Groups />);
+    await user.click(screen.getByRole('button', { name: /addGroup/i }));
+    await user.type(await screen.findByLabelText('name'), 'bad');
+
+    await user.click(screen.getByRole('button', { name: /^create$/i }));
+    expect((await screen.findAllByText('connectHostInvalid')).length).toBeGreaterThan(0);
+
+    await user.type(screen.getByLabelText('connectHost'), 'node.example.com');
+    await user.click(screen.getByRole('button', { name: /^create$/i }));
+    await waitFor(() => expect(screen.getAllByText('connectHostInvalid').length).toBeGreaterThan(0));
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it('lets a group keep a hostname it already has, and saves nothing when untouched', async () => {
+    const user = userEvent.setup();
+    mockGet.mockImplementation((url: string) =>
+      Promise.resolve(url === '/groups' ? ok([group({ connect_host: 'node.example.com' })]) : ok([])));
+    mockPut.mockResolvedValue(ok(null));
+    render(<Groups />);
+
+    await user.click(await screen.findByRole('button', { name: /edit/i }));
+    expect(await screen.findByDisplayValue('node.example.com')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(screen.queryByText('connectHostInvalid')).toBeNull());
+    expect(mockPut).not.toHaveBeenCalled();
   });
 
   it('leaves the stored forwarding fields alone when converting a group to monitor', async () => {

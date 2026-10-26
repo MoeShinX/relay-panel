@@ -10,6 +10,8 @@ import { useI18n } from '../i18n/context';
 import { useTableScroll } from '../hooks/useIsMobile';
 import { formatBytes } from '../utils/format';
 import { useAuth } from '../auth/useAuth';
+import HostSummary from '../components/HostSummary';
+import { splitHosts } from '../utils/connectHosts';
 import { moveRules } from '../utils/moveRules';
 import type { MoveResult } from '../utils/moveRules';
 import { asValidatedEntry, buildExportJSON, exportFileLabel, mergeBulkTargets, parseDest, ruleTargets, validateImportEntry } from '../utils/rulesIO';
@@ -760,10 +762,13 @@ const IMPORT_DEFAULTS = {
     {
       title: t('listenIp'), key: 'listen_ip', width: 160,
       render: (_: unknown, r: ForwardRule) => {
-        const host = groupInfo.get(r.device_group_in)?.connect_host ?? '';
-        return host
-          ? <span className="rp-mono">{host}</span>
-          : <Text type="secondary">{t('notConfigured')}</Text>;
+        // Several addresses read like several targets: first, "(+N)", all on hover.
+        return (
+          <HostSummary
+            value={groupInfo.get(r.device_group_in)?.connect_host}
+            empty={<Text type="secondary">{t('notConfigured')}</Text>}
+          />
+        );
       },
     },
     { title: t('listenPort'), dataIndex: 'listen_port', key: 'listen_port', render: (v: number) => <span className="rp-mono">{v}</span> },
@@ -921,7 +926,7 @@ const IMPORT_DEFAULTS = {
     // v1.0.7: a regular user doesn't own the admin device groups, so `groups`
     // is empty for them — resolve the connect host from the merged groupInfo
     // (which also folds in their authorized shared groups) instead.
-    return groupInfo.get(gid)?.connect_host ?? '';
+    return splitHosts(groupInfo.get(gid)?.connect_host).join(', ');
   };
   const renderHostHint = (gid?: number) => {
     const host = hostForForm(gid);
