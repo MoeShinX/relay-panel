@@ -10,6 +10,18 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Changed
+
+- **A regular user's listen port must be inside the device group's port
+  range.** A rule whose owner is not an admin is refused (400) if its listen
+  port is outside the range set on its inbound group; a group left at the
+  default `1-65535` counts as `10000-65535`, the same pool automatic
+  assignment uses, so no system ports. The check is by the rule's owner, so
+  an admin creating a rule for a regular user is held to it too; admins'
+  own rules are not restricted. It runs when a rule is created (including
+  import and copy) and when an edit moves the rule's port or its inbound
+  group; existing rules keep working and other edits are not checked.
+
 ## [1.2.16] - 2026-10-24
 
 Ships alongside `node-v1.2.10`. The config protocol is unchanged at version 4.
