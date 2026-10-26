@@ -3592,6 +3592,128 @@ mod tests {
         assert_eq!(resp.code, 0, "{}", resp.message);
     }
 
+    // ── listen ports: non-admin owners stay inside the group's port range ──
+
+    async fn set_group_range(pool: &SqlitePool, gid: i64, range: &str) {
+        sqlx::query("UPDATE device_groups SET port_range = ? WHERE id = ?")
+            .bind(range)
+            .bind(gid)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    /// A group left at the 1-65535 default means 10000-65535 to a user, the
+    /// same pool auto-assignment draws from; an explicit range is honored.
+    #[tokio::test]
+    async fn create_rule_user_port_must_be_inside_the_group_range() {
+        let (state, pool) = test_state().await;
+        add_user(&pool, 2, "alice", false).await;
+        add_group(&pool, 11, 1, "shared-in").await;
+
+        for (port, code) in [(80u16, 400), (9999, 400), (10000, 0), (65535, 0)] {
+            let Json(resp) = create_rule(
+                auth(2, false),
+                State(state.clone()),
+                Json(rule_req(&format!("r{port}"), port, 11, None)),
+            )
+            .await;
+            assert_eq!(resp.code, code, "port {port}: {}", resp.message);
+        }
+
+        set_group_range(&pool, 11, "30000-30010").await;
+        for (port, code) in [(29999u16, 400), (30011, 400), (30000, 0), (30010, 0)] {
+            let Json(resp) = create_rule(
+                auth(2, false),
+                State(state.clone()),
+                Json(rule_req(&format!("s{port}"), port, 11, None)),
+            )
+            .await;
+            assert_eq!(resp.code, code, "port {port}: {}", resp.message);
+        }
+    }
+
+    /// Admins are not restricted, but the owner decides: an admin creating a
+    /// rule for a user is held to the user's range.
+    #[tokio::test]
+    async fn create_rule_admin_ignores_the_range_unless_the_owner_is_a_user() {
+        let (state, pool) = test_state().await;
+        add_user(&pool, 3, "bob", false).await;
+        add_group(&pool, 11, 1, "shared-in").await;
+        set_group_range(&pool, 11, "30000-30010").await;
+
+        let Json(resp) = create_rule(
+            auth(1, true),
+            State(state.clone()),
+            Json(rule_req("own", 80, 11, None)),
+        )
+        .await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+
+        let Json(resp) = create_rule(
+            auth(1, true),
+            State(state.clone()),
+            Json(rule_req("for-bob", 80, 11, Some(3))),
+        )
+        .await;
+        assert_eq!(resp.code, 400, "{}", resp.message);
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM forward_rules WHERE uid = 3")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    /// Only an edit that moves the port or the group is checked; a rule left
+    /// where it is keeps working even if the range was narrowed since.
+    #[tokio::test]
+    async fn update_rule_user_port_is_checked_only_when_it_moves() {
+        let (state, pool) = test_state().await;
+        add_user(&pool, 2, "alice", false).await;
+        add_group(&pool, 11, 1, "shared-in").await;
+        add_group(&pool, 12, 1, "other-in").await;
+        set_group_range(&pool, 12, "40000-40010").await;
+        add_rule(&pool, 200, 2, 11, 12000, 0).await;
+        set_group_range(&pool, 11, "30000-30010").await;
+
+        let upd = |body: UpdateRuleRequest| {
+            let state = state.clone();
+            async move {
+                let Json(resp) =
+                    update_rule(auth(2, false), State(state), Path(200), Json(body)).await;
+                resp
+            }
+        };
+        // Untouched port: fine, even though 12000 is now outside the range.
+        let resp = upd(UpdateRuleRequest {
+            name: Some("renamed".into()),
+            ..Default::default()
+        })
+        .await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+        // Moving the port out of the range, or to another group whose range
+        // does not hold the current port, is refused.
+        let resp = upd(UpdateRuleRequest {
+            listen_port: Some(31000),
+            ..Default::default()
+        })
+        .await;
+        assert_eq!(resp.code, 400, "{}", resp.message);
+        let resp = upd(UpdateRuleRequest {
+            device_group_in: Some(12),
+            ..Default::default()
+        })
+        .await;
+        assert_eq!(resp.code, 400, "{}", resp.message);
+        // Moving it inside the range works.
+        let resp = upd(UpdateRuleRequest {
+            listen_port: Some(30005),
+            ..Default::default()
+        })
+        .await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+    }
+
     // ── admin flag comes from the database, not the token ──
 
     fn sign_token(sub: i64, admin: bool, token_version: i64) -> String {

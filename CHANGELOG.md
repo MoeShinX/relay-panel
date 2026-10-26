@@ -36,6 +36,15 @@ independent `v*` / `node-v*` tracks since this release).
   and never change what the nodes listen on. Stored comma-separated in the same
   field, so nothing migrates; a value a group already holds stays editable even
   if it would not pass today. Outbound-type legacy groups stay single-address.
+- **A regular user's listen port must be inside the device group's port
+  range.** A rule whose owner is not an admin is refused (400) if its listen
+  port is outside the range set on its inbound group; a group left at the
+  default `1-65535` counts as `10000-65535`, the same pool automatic
+  assignment uses, so no system ports. The check is by the rule's owner, so
+  an admin creating a rule for a regular user is held to it too; admins'
+  own rules are not restricted. It runs when a rule is created (including
+  import and copy) and when an edit moves the rule's port or its inbound
+  group; existing rules keep working and other edits are not checked.
 
 ## [1.2.16] - 2026-10-24
 
