@@ -117,6 +117,21 @@ describe('monitor-only groups hide the forwarding fields', () => {
     });
   });
 
+  it('creates a forwarding group with the connect address left empty', async () => {
+    // A group with several nodes has no single address to show, so the field is
+    // optional — but the API needs the key, so it goes out as an empty string.
+    const user = userEvent.setup();
+    mockPost.mockResolvedValue(ok(group()));
+    render(<Groups />);
+    await user.click(screen.getByRole('button', { name: /addGroup/i }));
+
+    await user.type(await screen.findByLabelText('name'), 'multi-node');
+    await user.click(screen.getByRole('button', { name: /^create$/i }));
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+    expect(mockPost.mock.calls[0][1]).toMatchObject({ name: 'multi-node', connect_host: '' });
+  });
+
   it('leaves the stored forwarding fields alone when converting a group to monitor', async () => {
     // Wiping them would destroy what you need to convert the group back, and
     // flipping the type to look at something has to be a safe round trip.

@@ -107,11 +107,12 @@ export default function Groups() {
   const nodeCount = useCallback((groupId: number) => nodesByGroup(groupId).length, [nodesByGroup]);
   const onlineCount = useCallback((groupId: number) => nodesByGroup(groupId).filter(n => n.online).length, [nodesByGroup]);
 
-  const handleCreate = async (values: { name: string; group_type: string; connect_host: string; port_range: string; rate?: number; hidden?: boolean; owner_uid?: number | null }) => {
+  const handleCreate = async (values: { name: string; group_type: string; connect_host?: string; port_range: string; rate?: number; hidden?: boolean; owner_uid?: number | null }) => {
     try {
       // v1.0.8: rate defaults to 1.0 on the server when omitted; send it
       // explicitly so the value the admin picked is what gets persisted.
-      const payload = { ...values, rate: values.rate ?? 1.0, hidden: values.hidden ?? false, owner_uid: values.owner_uid || undefined };
+      // connect_host is optional, but the API wants the key: an omitted field is a 422.
+      const payload = { ...values, connect_host: values.connect_host ?? '', rate: values.rate ?? 1.0, hidden: values.hidden ?? false, owner_uid: values.owner_uid || undefined };
       // v1.2.5: a monitor-only group forwards nothing, so the forwarding fields
       // are neutralised explicitly.
       //
@@ -479,7 +480,7 @@ export default function Groups() {
             />
           ) : (
             <>
-              <Form.Item name="connect_host" label={t('connectHost')} extra={t('connectHostHint')} rules={[{ required: true }]}><Input placeholder="1.2.3.4 or node.example.com" /></Form.Item>
+              <Form.Item name="connect_host" label={t('connectHost')} extra={t('connectHostHint')}><Input placeholder="1.2.3.4 or node.example.com" /></Form.Item>
               <Form.Item name="port_range" label={t('portRange')} rules={[{ required: true }]} initialValue="10000-65535"><Input placeholder="10000-65535" /></Form.Item>
               {/* v1.0.8: billing rate. Users are charged real bytes × rate; the
                   rule/user byte counters keep real bytes. 1.0 = bill as used. */}
