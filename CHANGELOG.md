@@ -10,6 +10,13 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+## [1.2.18] - 2026-10-30
+
+Panel only; no node release, and the config protocol is unchanged at version 4.
+No schema change: node names are kept with the node records.
+
+Upgrading: "Update now" on the dashboard, or `git pull --quiet && ./deploy.sh`.
+
 ### Added
 
 - **Name the machines of a group.** A group with several nodes lists them by
@@ -47,7 +54,6 @@ independent `v*` / `node-v*` tracks since this release).
 
 - **A node's label shows in full on the mobile card** (it was squeezed down to
   "…"): it now has a line of its own.
-
 - **`deploy.sh` no longer re-fetches an image it already has.** It asked the
   registries for the database image (and any other image under a pinned tag)
   on every run even when it was present, and with the registries and mirrors
