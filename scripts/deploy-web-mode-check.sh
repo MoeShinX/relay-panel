@@ -82,6 +82,11 @@ if [ "${1:-}" = "manifest" ] && [ "${2:-}" = "inspect" ]; then
     for h in $HARNESS_REACHABLE; do [ "$h" = "$host" ] && exit 0; done
     exit 1
 fi
+# Images already on the machine: HARNESS_LOCAL_IMAGES lists them (default none).
+if [ "${1:-}" = "image" ] && [ "${2:-}" = "inspect" ]; then
+    for i in ${HARNESS_LOCAL_IMAGES:-}; do [ "$i" = "${3:-}" ] && exit 0; done
+    exit 1
+fi
 case "${1:-}" in
     pull|tag|rmi) printf 'IMG %s\n' "$*" >> "$log"; exit 0 ;;
 esac
@@ -390,6 +395,16 @@ assert_log_has "$log" 'IMG pull ghcr.io/moeshinx/relay-panel-panel:1.2.15'
 grep -q 'caddy' "$log" && fail 'the caddy image must not be pulled when caddy is not enabled'
 grep -q '^IMG tag' "$log" && fail 'nothing needs tagging when the registries answer directly'
 pass 'direct pull: panel image only, no re-tagging'
+
+# A pinned image that is already here is used as is; RELAYPANEL_FORCE_PULL=1
+# pulls it anyway.
+res=$(run_case pull-local env HARNESS_LOCAL_IMAGES='ghcr.io/moeshinx/relay-panel-panel:1.2.15')
+log=${res#*|}
+grep -q '^IMG pull' "$log" && fail 'an image already here under a pinned tag must not be pulled again'
+res=$(run_case pull-local-forced env HARNESS_LOCAL_IMAGES='ghcr.io/moeshinx/relay-panel-panel:1.2.15' RELAYPANEL_FORCE_PULL=1)
+log=${res#*|}
+assert_log_has "$log" 'IMG pull ghcr.io/moeshinx/relay-panel-panel:1.2.15'
+pass 'a pinned image already here is not pulled again unless forced'
 
 # ghcr.io and Docker Hub blocked, down.relaypanel.dev (trusted) serves: pulled by
 # tag, tagged back to the names the compose file uses, before `up`.
