@@ -83,6 +83,8 @@ pub struct UpdateSiteRequest {
     pub announcement_type: String,
     #[serde(default)]
     pub contact: String,
+    #[serde(default)]
+    pub show_node_labels: bool,
 }
 
 /// PUT /api/v1/admin/settings/site
@@ -99,6 +101,7 @@ pub async fn update_site_settings(
         announcement: req.announcement,
         announcement_type: req.announcement_type,
         contact: req.contact,
+        show_node_labels: req.show_node_labels,
     }
     .sanitized();
 

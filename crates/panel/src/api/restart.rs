@@ -70,6 +70,9 @@ pub struct RestartResponse {
     /// request can succeed while restarting nothing (every node old or offline).
     pub restarted: usize,
     pub nodes: Vec<NodeRestartStatus>,
+    /// The admin's names for this group's nodes, by node id, limited to what
+    /// the caller may see (see `service::node_labels`).
+    pub node_labels: std::collections::HashMap<String, String>,
 }
 
 /// Send `restart_rule` for `rule_id` to every eligible node of `group_id`.
@@ -246,10 +249,17 @@ pub async fn restart_rule(
     )
     .await;
 
+    let node_labels = crate::service::node_labels::visible_labels_of_group(
+        &state,
+        user.admin,
+        rule.device_group_in,
+    )
+    .await;
     Json(ApiResponse::success(RestartResponse {
         rule_id,
         restarted,
         nodes,
+        node_labels,
     }))
 }
 

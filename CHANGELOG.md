@@ -10,6 +10,23 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Added
+
+- **Name the machines of a group.** A group with several nodes lists them by
+  public IP, which says little about which box is which. The node status page
+  has a new 备注 column where an admin can give each machine a name ("HK-1 备用",
+  the provider, a rack) in place; blank clears it. The name is kept in the panel
+  (not in the node's report, so the next report cannot overwrite it) and goes
+  away with the node when an admin removes its record.
+- **The name is used wherever a node is mentioned.** The "upgrade all / upgrade
+  group" confirmation and its failure messages, rule diagnosis, the node
+  offline / recovery / outdated alerts, and the audit log entries for upgrading
+  a node all use it in place of a bare id or address.
+- **Whether users see the names is a setting.** Site settings has "Show node
+  labels to users", off by default: a label is the operator's own note and may
+  name a provider or a rack. When on, users see it on the node status page and
+  in diagnosis. Alerts and the audit log go to admins only and always use it.
+
 ### Fixed
 
 - **`deploy.sh` no longer re-fetches an image it already has.** It asked the

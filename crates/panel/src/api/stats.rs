@@ -276,6 +276,9 @@ pub async fn get_node_status(
     // (indistinguishable by design); a non-admin treats None as "not mine" and
     // drops the row, while an admin keeps it with a fallback name.
     let scope = user.resource_scope();
+    // Admin-given node names: all for an admin, and for anyone else only when
+    // the site setting shows them to users.
+    let labels = crate::service::node_labels::visible_labels(&state, user.admin).await;
 
     let rows: Vec<(String, String)> = match state.db.scan_prefix("node_status:").await {
         Ok(rows) => rows,
@@ -382,6 +385,13 @@ pub async fn get_node_status(
 
         status["online"] = serde_json::json!(status_is_online(value, now));
 
+        if let Some(label) = key
+            .strip_prefix("node_status:")
+            .and_then(|node_key| labels.get(node_key))
+        {
+            status["label"] = serde_json::json!(label);
+        }
+
         statuses.push(status);
     }
 
@@ -484,6 +494,21 @@ pub async fn delete_node_status(
         }),
         Ok(_) => {
             tracing::info!("admin deleted node status record {}", key);
+            // The label names the machine, which is gone from the list now. A
+            // node that reports again later starts without one.
+            if let Some(nid) = q
+                .node_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+            {
+                if let Err(e) =
+                    crate::service::node_labels::set_label(state.db.as_ref(), group_id, nid, None)
+                        .await
+                {
+                    tracing::warn!("delete_node_status: removing the label failed: {}", e);
+                }
+            }
             // v1.2.5: audited like every other destructive admin action. The
             // record is what the panel knows about a machine — removing it is
             // how a decommissioned node disappears from the list, and "who
@@ -511,6 +536,105 @@ pub async fn delete_node_status(
             })
         }
     }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct SetLabelRequest {
+    /// The node's new label. Empty or blank removes it.
+    #[serde(default)]
+    pub label: String,
+}
+
+/// PUT /nodes/{group_id}/label/{node_id} — an admin names one machine.
+///
+/// The node must have a status row: a label for a machine the panel has never
+/// heard from would be an orphan nothing could ever show or remove.
+pub async fn set_node_label(
+    admin: AdminOnly,
+    State(state): State<AppState>,
+    axum::extract::Path((group_id, node_id)): axum::extract::Path<(i64, String)>,
+    Json(req): Json<SetLabelRequest>,
+) -> Json<ApiResponse<Option<String>>> {
+    use crate::service::node_labels::{normalize_label, set_label, LabelError};
+
+    let node_id = node_id.trim().to_string();
+    let status_key = format!("node_status:{}:{}", group_id, node_id);
+    // Same defence as the delete: the key built from the path must parse back
+    // to this group, and a node id cannot smuggle in another key.
+    match parse_status_key(&status_key) {
+        Some((gid, Some(nid))) if gid == group_id && nid == node_id && !node_id.is_empty() => {}
+        _ => {
+            return Json(ApiResponse {
+                code: 400,
+                message: "invalid group_id / node_id combination".into(),
+                data: None,
+            })
+        }
+    }
+
+    let label = match normalize_label(&req.label) {
+        Ok(l) => l,
+        Err(LabelError::TooLong) => {
+            return Json(ApiResponse {
+                code: 400,
+                message: format!(
+                    "备注最多 {} 个字符",
+                    crate::service::node_labels::MAX_LABEL_CHARS
+                ),
+                data: None,
+            })
+        }
+        Err(LabelError::ControlChars) => {
+            return Json(ApiResponse {
+                code: 400,
+                message: "备注不能包含换行或控制字符".into(),
+                data: None,
+            })
+        }
+    };
+
+    match state.db.get(&status_key).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return Json(ApiResponse {
+                code: 404,
+                message: "status record not found".into(),
+                data: None,
+            })
+        }
+        Err(e) => {
+            tracing::error!("set_node_label: status lookup failed: {}", e);
+            return Json(ApiResponse {
+                code: 500,
+                message: "database error".into(),
+                data: None,
+            });
+        }
+    }
+
+    if let Err(e) = set_label(state.db.as_ref(), group_id, &node_id, label.as_deref()).await {
+        tracing::error!("set_node_label: save failed: {}", e);
+        return Json(ApiResponse {
+            code: 500,
+            message: "database error".into(),
+            data: None,
+        });
+    }
+
+    crate::service::audit::record(
+        &state,
+        Some(admin.user_id),
+        "set_node_label",
+        "node",
+        &node_id,
+        &format!(
+            "分组 {} / 备注 {}",
+            crate::service::audit::group_label(&state, group_id).await,
+            label.as_deref().unwrap_or("(已清除)")
+        ),
+    )
+    .await;
+    Json(ApiResponse::success(label))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -613,7 +737,8 @@ pub async fn upgrade_node(
         "node",
         &node_id,
         &format!(
-            "分组 {} · 已下发 → {target_version}（升级结果以节点上报版本为准）",
+            "{}分组 {} · 已下发 → {target_version}（升级结果以节点上报版本为准）",
+            crate::service::node_labels::audit_prefix(state.db.as_ref(), group_id, &node_id).await,
             crate::service::audit::group_label(&state, group_id).await
         ),
     )
@@ -716,7 +841,9 @@ pub async fn receive_upgrade_result(
         "node",
         &req.node_id,
         &format!(
-            "分组 {} · {from} → {target} 升级失败：{reason}",
+            "{}分组 {} · {from} → {target} 升级失败：{reason}",
+            crate::service::node_labels::audit_prefix(state.db.as_ref(), group.id, &req.node_id)
+                .await,
             crate::service::audit::group_label(&state, group.id).await
         ),
     )
@@ -911,6 +1038,219 @@ mod upgrade_result_tests {
             rows[0].detail.chars().count() < MAX_UPGRADE_ERROR_LEN + 200,
             "detail was {} chars",
             rows[0].detail.chars().count()
+        );
+    }
+
+    // ── node labels ──
+
+    async fn put_status(state: &AppState, node_id: &str) {
+        let status = serde_json::json!({
+            "node_id": node_id,
+            "last_seen": chrono::Utc::now().to_rfc3339(),
+            "public_ipv4": "1.2.3.4",
+        });
+        state
+            .db
+            .set(&format!("node_status:9:{node_id}"), &status.to_string())
+            .await
+            .unwrap();
+    }
+
+    async fn set_label_as_admin(
+        state: &AppState,
+        node_id: &str,
+        label: &str,
+    ) -> ApiResponse<Option<String>> {
+        let Json(resp) = set_node_label(
+            AdminOnly { user_id: 1 },
+            State(state.clone()),
+            axum::extract::Path((9, node_id.to_string())),
+            Json(SetLabelRequest {
+                label: label.to_string(),
+            }),
+        )
+        .await;
+        resp
+    }
+
+    async fn labels_seen_by(state: &AppState, user: AuthUser) -> Vec<(String, Option<String>)> {
+        let Json(resp) = get_node_status(user, State(state.clone())).await;
+        let mut rows: Vec<(String, Option<String>)> = resp
+            .data
+            .unwrap()
+            .into_iter()
+            .map(|s| {
+                (
+                    s["node_id"].as_str().unwrap().to_string(),
+                    s["label"].as_str().map(str::to_string),
+                )
+            })
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    #[tokio::test]
+    async fn an_admin_can_name_a_node_and_see_the_name() {
+        let state = state_with_group().await;
+        put_status(&state, "n1").await;
+        put_status(&state, "n2").await;
+        let r = set_label_as_admin(&state, "n1", "  香港 HK-1  ").await;
+        assert_eq!(r.code, 0, "{}", r.message);
+        assert_eq!(r.data, Some(Some("香港 HK-1".to_string())));
+
+        let admin = AuthUser {
+            user_id: 1,
+            admin: true,
+        };
+        assert_eq!(
+            labels_seen_by(&state, admin).await,
+            vec![
+                ("n1".to_string(), Some("香港 HK-1".to_string())),
+                ("n2".to_string(), None),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_blank_label_clears_it() {
+        let state = state_with_group().await;
+        put_status(&state, "n1").await;
+        set_label_as_admin(&state, "n1", "HK-1").await;
+        let r = set_label_as_admin(&state, "n1", "   ").await;
+        assert_eq!(r.code, 0, "{}", r.message);
+        assert_eq!(r.data, Some(None));
+        assert!(state.db.get("node_label:9:n1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_bad_label_or_an_unknown_node_is_refused_and_nothing_is_stored() {
+        let state = state_with_group().await;
+        put_status(&state, "n1").await;
+        assert_eq!(
+            set_label_as_admin(&state, "n1", &"x".repeat(41)).await.code,
+            400
+        );
+        assert_eq!(set_label_as_admin(&state, "n1", "a\nb").await.code, 400);
+        // A node the panel has never heard from: no orphan label.
+        assert_eq!(set_label_as_admin(&state, "ghost", "HK-1").await.code, 404);
+        assert!(state
+            .db
+            .scan_prefix("node_label:")
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn users_see_labels_only_when_the_site_setting_allows_it() {
+        let state = state_with_group().await;
+        put_status(&state, "n1").await;
+        set_label_as_admin(&state, "n1", "HK-1").await;
+        // The group's owner is user 1, so a non-admin user 1 sees its nodes.
+        let user = || AuthUser {
+            user_id: 1,
+            admin: false,
+        };
+
+        // Off by default: the node is listed, without its name.
+        assert_eq!(
+            labels_seen_by(&state, user()).await,
+            vec![("n1".to_string(), None)]
+        );
+
+        let on = crate::service::site::SiteConfig {
+            show_node_labels: true,
+            ..Default::default()
+        };
+        state
+            .db
+            .set(
+                crate::service::site::SITE_CONFIG_KEY,
+                &serde_json::to_string(&on).unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            labels_seen_by(&state, user()).await,
+            vec![("n1".to_string(), Some("HK-1".to_string()))]
+        );
+    }
+
+    #[tokio::test]
+    async fn removing_a_node_removes_its_label_and_only_its_label() {
+        let state = state_with_group().await;
+        put_status(&state, "n1").await;
+        put_status(&state, "n2").await;
+        set_label_as_admin(&state, "n1", "HK-1").await;
+        set_label_as_admin(&state, "n2", "HK-2").await;
+
+        let Json(resp) = delete_node_status(
+            AdminOnly { user_id: 1 },
+            State(state.clone()),
+            axum::extract::Path((9,)),
+            axum::extract::Query(DeleteStatusQuery {
+                node_id: Some("n1".into()),
+            }),
+        )
+        .await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+        assert!(state.db.get("node_label:9:n1").await.unwrap().is_none());
+        assert_eq!(
+            state.db.get("node_label:9:n2").await.unwrap().as_deref(),
+            Some("HK-2")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_audit_log_names_the_node_by_its_label() {
+        let state = state_with_group().await;
+        put_status(&state, "n1").await;
+        set_label_as_admin(&state, "n1", "HK-1").await;
+        assert_eq!(
+            crate::service::node_labels::audit_prefix(state.db.as_ref(), 9, "n1").await,
+            "节点「HK-1」· "
+        );
+        assert_eq!(
+            crate::service::node_labels::audit_prefix(state.db.as_ref(), 9, "n2").await,
+            ""
+        );
+    }
+
+    /// What a diagnose or restart response carries: the labels of THIS group's
+    /// nodes by node id — nothing of another group's, and for a user only when
+    /// the site setting allows it.
+    #[tokio::test]
+    async fn a_groups_labels_are_by_node_id_and_follow_the_visibility_setting() {
+        use crate::service::node_labels::visible_labels_of_group;
+        let state = state_with_group().await;
+        state.db.set("node_label:9:n1", "HK-1").await.unwrap();
+        state
+            .db
+            .set("node_label:10:n9", "other group")
+            .await
+            .unwrap();
+
+        let admin = visible_labels_of_group(&state, true, 9).await;
+        assert_eq!(admin.len(), 1);
+        assert_eq!(admin["n1"], "HK-1");
+        assert!(visible_labels_of_group(&state, false, 9).await.is_empty());
+
+        let on = crate::service::site::SiteConfig {
+            show_node_labels: true,
+            ..Default::default()
+        };
+        state
+            .db
+            .set(
+                crate::service::site::SITE_CONFIG_KEY,
+                &serde_json::to_string(&on).unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            visible_labels_of_group(&state, false, 9).await["n1"],
+            "HK-1"
         );
     }
 }

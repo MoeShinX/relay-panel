@@ -1031,6 +1031,7 @@ mod tests {
                 announcement: String::new(),
                 announcement_type: "info".into(),
                 contact: "tg:@someone".into(),
+                show_node_labels: false,
             }),
         )
         .await;

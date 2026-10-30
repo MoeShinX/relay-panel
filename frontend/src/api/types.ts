@@ -285,7 +285,10 @@ export interface SiteNotice {
 }
 
 /** v1.2.4: the full site config, as the admin form reads and writes it. */
-export interface SiteConfig extends PublicSite, SiteNotice {}
+export interface SiteConfig extends PublicSite, SiteNotice {
+  /** Whether regular users see the admin's names for nodes (default off). */
+  show_node_labels?: boolean;
+}
 
 /** v1.2.4: one recorded admin action. */
 export interface AuditEntry {
@@ -349,6 +352,7 @@ export interface RestartResponse {
   rule_id: number;
   restarted: number;
   nodes: NodeRestartStatus[];
+  node_labels?: Record<string, string>;
 }
 
 /** v0.4.0: a tunnel profile (matches backend TunnelProfile struct). Builtin
@@ -450,6 +454,8 @@ export interface NodeStatus {
   group_id: number;
   /** Per-node identity. Null/undefined for legacy single-node status rows. */
   node_id?: string | null;
+  /** The admin's name for this machine (see NodeDisplayRow.label). */
+  label?: string | null;
   /** Present in the API response but not the legacy type; both Nodes and
    *  Dashboard pages render it. Optional for safety on older payloads. */
   group_name?: string;
@@ -627,6 +633,9 @@ export interface DiagnoseResponse {
   request_id: string;
   rule_id: number;
   nodes: NodeDiagnoseStatus[];
+  /** The admin's names for this group's nodes, by node id — only what the
+   *  caller may see. Absent from an older panel. */
+  node_labels?: Record<string, string>;
 }
 
 /** v0.4.11 PR3: inbound groups owned by an admin that are available for
@@ -652,6 +661,9 @@ export interface SharedGroupSummary {
 export interface SharedNodeSummary {
   group_id: number;
   group_name: string;
+  /** The admin's name for this machine; only present when the site setting
+   *  shows node labels to users. */
+  label?: string | null;
   /** The group's panel-wide display order (see NodeDisplayRow). */
   group_sort_order?: number;
   connect_host: string;
@@ -708,6 +720,10 @@ export interface NodeLiveRate {
 export interface NodeDisplayRow {
   group_id: number;
   group_name?: string | null;
+  /** The admin's own name for this machine ("HK-1 备用"). The admin always gets
+   *  it; a regular user only when the site setting "show node labels to users"
+   *  is on. Absent when the node has none. */
+  label?: string | null;
   /** The group's panel-wide display order (lower first; ties fall back to
    *  group_id). Absent for a status record whose group no longer exists. */
   group_sort_order?: number | null;

@@ -314,6 +314,11 @@ pub fn routes() -> Router<AppState> {
             "/nodes/{group_id}",
             axum::routing::delete(stats::delete_node_status),
         )
+        // An admin's own name for one machine of a group (empty clears it).
+        .route(
+            "/nodes/{group_id}/label/{node_id}",
+            axum::routing::put(stats::set_node_label),
+        )
         // v1.0.10: admin triggers a directed self-upgrade on one node.
         .route(
             "/nodes/{group_id}/upgrade/{node_id}",

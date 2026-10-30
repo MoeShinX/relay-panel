@@ -174,7 +174,9 @@ pub async fn list_shared_node_summary(
         }
     };
 
-    let mut summaries = aggregate_shared_node_summaries(groups, &rows, chrono::Utc::now());
+    // A user sees the admin's node labels only when the site setting allows it.
+    let labels = crate::service::node_labels::visible_labels(&state, user.admin).await;
+    let mut summaries = aggregate_shared_node_summaries(groups, &rows, chrono::Utc::now(), &labels);
 
     // v0.4.15: enrich each node row with GeoIP country from the KVS cache
     // (geoip:{ip}). This is a READ of cached results — no third-party call
@@ -212,6 +214,7 @@ fn aggregate_shared_node_summaries(
     groups: Vec<SharedGroupSummary>,
     rows: &[(String, String)],
     now: chrono::DateTime<chrono::Utc>,
+    labels: &HashMap<String, String>,
 ) -> Vec<SharedNodeSummary> {
     let shared_ids: HashSet<i64> = groups.iter().map(|g| g.id).collect();
 
@@ -260,7 +263,11 @@ fn aggregate_shared_node_summaries(
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
             };
+            let label = (!node_id.is_empty())
+                .then(|| labels.get(&format!("{}:{}", g.id, node_id)).cloned())
+                .flatten();
             SharedNodeSummary {
+                label,
                 group_id: g.id,
                 group_name: g.name.clone(),
                 group_sort_order: g.sort_order,
@@ -346,7 +353,7 @@ mod tests {
         let mut second = group(3, "g3");
         second.sort_order = 1;
         let rows = vec![row("node_status:7:a", 1, now)];
-        let out = aggregate_shared_node_summaries(vec![second, first], &rows, now);
+        let out = aggregate_shared_node_summaries(vec![second, first], &rows, now, &HashMap::new());
         let order: Vec<(i64, i32)> = out
             .iter()
             .map(|s| (s.group_id, s.group_sort_order))
@@ -394,6 +401,35 @@ mod tests {
         )
     }
 
+    /// A node's label reaches the row by its `{group}:{node}` key, only for the
+    /// nodes that have one, and never onto the group's no-node placeholder.
+    #[test]
+    fn a_node_row_carries_its_label() {
+        let now = chrono::Utc::now();
+        let rows = vec![
+            row("node_status:5:a", 5, now),
+            row("node_status:5:b", 5, now),
+        ];
+        let labels = HashMap::from([
+            ("5:a".to_string(), "HK-1".to_string()),
+            ("6:b".to_string(), "other group".to_string()),
+        ]);
+        let out = aggregate_shared_node_summaries(vec![group(5, "g5")], &rows, now, &labels);
+        let by_id: HashMap<&str, Option<&str>> = out
+            .iter()
+            .map(|s| (s.node_id.as_str(), s.label.as_deref()))
+            .collect();
+        assert_eq!(by_id["a"], Some("HK-1"));
+        assert_eq!(
+            by_id["b"], None,
+            "no label of its own, and 6:b is another group's"
+        );
+
+        let empty = aggregate_shared_node_summaries(vec![group(5, "g5")], &[], now, &labels);
+        assert_eq!(empty.len(), 1, "the placeholder row");
+        assert_eq!(empty[0].label, None);
+    }
+
     /// v0.4.13 PR2: one row PER NODE; online flag reflects each node's last_seen.
     #[test]
     fn one_row_per_node_with_online_flag() {
@@ -404,7 +440,7 @@ mod tests {
             row("node_status:5:b", 10, now),  // online
             row("node_status:5:c", 600, now), // offline
         ];
-        let out = aggregate_shared_node_summaries(groups, &rows, now);
+        let out = aggregate_shared_node_summaries(groups, &rows, now, &HashMap::new());
         assert_eq!(out.len(), 3, "one row per node");
         assert!(out.iter().all(|s| s.group_id == 5));
         assert_eq!(out.iter().filter(|s| s.online).count(), 2);
@@ -421,7 +457,7 @@ mod tests {
     fn group_with_no_status_returns_placeholder_row() {
         let now = chrono::Utc::now();
         let groups = vec![group(7, "g7")];
-        let out = aggregate_shared_node_summaries(groups, &[], now);
+        let out = aggregate_shared_node_summaries(groups, &[], now, &HashMap::new());
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].group_id, 7);
         assert_eq!(out[0].node_id, "");
@@ -440,7 +476,7 @@ mod tests {
             row("node_status:1:x", 5, now),
             row("node_status:9:z", 5, now), // group 9 not shared → ignored
         ];
-        let out = aggregate_shared_node_summaries(groups, &rows, now);
+        let out = aggregate_shared_node_summaries(groups, &rows, now, &HashMap::new());
         // g1 → its one node row; g2 → one placeholder row. No g9 anywhere.
         assert_eq!(out.len(), 2);
         assert!(out.iter().all(|s| s.group_id == 1 || s.group_id == 2));
@@ -456,7 +492,7 @@ mod tests {
         let now = chrono::Utc::now();
         let groups = vec![group(3, "g3")];
         let rows = vec![row("node_status:3", 5, now)];
-        let out = aggregate_shared_node_summaries(groups, &rows, now);
+        let out = aggregate_shared_node_summaries(groups, &rows, now, &HashMap::new());
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].node_id, "legacy");
         assert!(out[0].online);
@@ -469,7 +505,7 @@ mod tests {
         let now = chrono::Utc::now();
         let groups = vec![group(8, "g8")];
         let rows = vec![row_full("node_status:8:n1", 3, now)];
-        let out = aggregate_shared_node_summaries(groups, &rows, now);
+        let out = aggregate_shared_node_summaries(groups, &rows, now, &HashMap::new());
         assert_eq!(out.len(), 1);
         let s = &out[0];
         assert_eq!(s.cpu, Some(27.5));
@@ -497,7 +533,7 @@ mod tests {
     #[test]
     fn placeholder_row_has_zero_connections_and_none_metrics() {
         let now = chrono::Utc::now();
-        let out = aggregate_shared_node_summaries(vec![group(9, "g9")], &[], now);
+        let out = aggregate_shared_node_summaries(vec![group(9, "g9")], &[], now, &HashMap::new());
         assert_eq!(out.len(), 1);
         let s = &out[0];
         assert_eq!(s.connections, 0);
@@ -523,7 +559,7 @@ mod tests {
             ),
             row("node_status:4:good", 5, now), // the only valid row
         ];
-        let out = aggregate_shared_node_summaries(groups, &rows, now);
+        let out = aggregate_shared_node_summaries(groups, &rows, now, &HashMap::new());
         assert_eq!(out.len(), 1, "only the parseable row produces a node row");
         assert_eq!(out[0].node_id, "good");
     }

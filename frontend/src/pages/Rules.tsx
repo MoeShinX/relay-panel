@@ -1453,7 +1453,7 @@ const IMPORT_DEFAULTS = {
             ) : (
               <Space orientation="vertical" style={{ width: '100%' }}>
                 {diagnoseResult.nodes.map((n, i) => (
-                  <DiagnoseNodeRow key={i} node={n} t={t} isAdmin={isAdmin} />
+                  <DiagnoseNodeRow key={i} node={n} t={t} isAdmin={isAdmin} label={diagnoseResult.node_labels?.[n.node_id]} />
                 ))}
               </Space>
             )}
@@ -1470,9 +1470,11 @@ const IMPORT_DEFAULTS = {
  *  "分组名 · 公网IP" (or "分组名 · IP 未上报"), NEVER the raw node_id. node_id is
  *  admin-only (tooltip for troubleshooting); a regular user sees just the
  *  label. Same shape across all four statuses; the status tag + details differ. */
-function DiagnoseNodeRow({ node, t, isAdmin }: { node: NodeDiagnoseStatus; t: (k: string) => string; isAdmin: boolean }) {
+function DiagnoseNodeRow({ node, t, isAdmin, label: nodeLabel }: { node: NodeDiagnoseStatus; t: (k: string) => string; isAdmin: boolean; label?: string }) {
   const tableScroll = useTableScroll();
-  const label = `${node.group_name || '-'} · ${node.public_ip || t('diagnoseIpMissing')}`;
+  // The admin's name for the machine, when there is one the viewer may see, goes
+  // first: "HK-1 · 分组名 · 公网IP".
+  const label = `${nodeLabel ? `${nodeLabel} · ` : ''}${node.group_name || '-'} · ${node.public_ip || t('diagnoseIpMissing')}`;
   const labelText = <Text strong>{label}</Text>;
   // node_id is internal — only an admin gets the troubleshooting tooltip.
   const labelWithId = isAdmin
