@@ -33,7 +33,14 @@ OTHER_DIGEST="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 
 cat > "$T/bin/docker" <<EOF
 #!/usr/bin/env bash
-echo "docker \$*" >> "$S/calls"
+# The "is it here already?" check (image inspect without --format) is answered
+# but not logged: the scenarios below count and order the calls that reach a
+# registry, and that check is not one of them.
+case "\$*" in
+"image inspect "*--format*) echo "docker \$*" >> "$S/calls" ;;
+"image inspect "*) ;;
+*) echo "docker \$*" >> "$S/calls" ;;
+esac
 host_of() { echo "\${1%%/*}"; }
 reachable() { # IMAGE_REF -> its registry host is listed in $S/reachable
     local h; h="\$(host_of "\$1")"
@@ -47,6 +54,8 @@ case "\$1 \$2" in
     if grep -qxF "\$2" "$S/pull-fails" 2>/dev/null; then echo "pull failed: \$2" >&2; exit 1; fi
     exit 0 ;;
 "image inspect")
+    # Without --format: "is this image present locally?" (listed in local-images).
+    case "\$*" in *--format*) ;; *) grep -qxF "\$3" "$S/local-images" 2>/dev/null; exit \$? ;; esac
     if [ -f "$S/inspect-out" ]; then cat "$S/inspect-out"; else echo '["x@$DIGEST"]'; fi
     exit 0 ;;
 "compose -f")
@@ -211,6 +220,29 @@ check "succeeds via the public registry" test $rc -eq 0
 check "by digest" has_call "docker pull ghcr.nju.edu.cn/$PANEL_NAMED@$DIGEST"
 check "tagged back" has_call "docker tag ghcr.nju.edu.cn/$PANEL_NAMED@$DIGEST $PANEL"
 check "the unreachable mirror between was skipped" no_call "docker pull down.relaypanel.dev"
+
+echo "an image that is already here is not pulled again"
+new_case; echo "$PANEL" > "$S/local-images"
+run_lib "rp_pull_image $PANEL"; rc=$?
+check "succeeds" test $rc -eq 0
+check "no registry was probed or pulled from" no_call "docker manifest inspect"
+check "nothing pulled" no_call "docker pull"
+check "says so" said "is already here"
+new_case; echo "$PANEL" > "$S/local-images"
+run_lib "rp_pull_image $PANEL"; rc=$?
+check "even with every registry unreachable it succeeds at once (the postgres case)" test $rc -eq 0
+new_case; echo "caddy:2-alpine" > "$S/local-images"
+run_lib 'rp_pull_image caddy:2-alpine'; rc=$?
+check "a Docker Hub image with a pinned tag counts too" test $rc -eq 0 -a "$(calls | grep -c 'docker pull')" -eq 0
+new_case; echo "caddy:latest" > "$S/local-images"; echo docker.io > "$S/reachable"
+run_lib 'rp_pull_image caddy:latest'; rc=$?
+check "latest moves, so it is asked for anyway" test $rc -eq 0 && has_call "docker pull caddy:latest"
+new_case; echo "$PANEL" > "$S/local-images"; echo ghcr.io > "$S/reachable"
+( export RELAYPANEL_FORCE_PULL=1; run_lib "rp_pull_image $PANEL" ); rc=$?
+check "RELAYPANEL_FORCE_PULL=1 refreshes it" test $rc -eq 0 && has_call "docker pull $PANEL"
+new_case; echo "$NODE" > "$S/local-images"; echo ghcr.io > "$S/reachable"
+run_lib "rp_pull_image $PANEL"; rc=$?
+check "only the image that is here is skipped" test $rc -eq 0 && has_call "docker pull $PANEL"
 
 echo "nothing reachable"
 new_case

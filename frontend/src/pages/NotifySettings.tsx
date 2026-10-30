@@ -138,7 +138,8 @@ export default function NotifySettings() {
       const key = eventKey[v as keyof typeof eventKey];
       return key ? t(key) : v;
     } },
-    { title: t('notifyHistoryNode'), dataIndex: 'node_key', key: 'node_key', width: 150, render: (v?: string | null) => v || '-' },
+    { title: t('notifyHistoryNode'), dataIndex: 'node_key', key: 'node_key', width: 150, render: (v: string | null | undefined, r: { node_label?: string | null }) =>
+      v ? (r.node_label ? <span title={v}>{r.node_label}</span> : v) : '-' },
     { title: t('notifyHistoryChannel'), dataIndex: 'channel', key: 'channel', width: 110 },
     { title: t('notifyHistoryResult'), dataIndex: 'status', key: 'status', width: 110, render: (v: string) => <Tag color={v === 'sent' ? 'success' : 'error'}>{v === 'sent' ? t('notifyHistorySent') : t('notifyHistoryFailed')}</Tag> },
     { title: t('notifyHistoryDetail'), dataIndex: 'detail', key: 'detail', render: (v: string) => v || '-' },

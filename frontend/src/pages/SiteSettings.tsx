@@ -1,4 +1,4 @@
-import { Card, Form, Input, Button, message, Spin, Result, Typography } from 'antd';
+import { Card, Form, Input, Button, message, Spin, Result, Switch, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import api from '../api/client';
 import type { ApiEnvelope, SiteConfig } from '../api/types';
@@ -122,6 +122,14 @@ export default function SiteSettings() {
           rules={[{ max: MAX_CONTACT, message: t('siteFieldTooLong') }]}
         >
           <Input showCount maxLength={MAX_CONTACT} />
+        </Form.Item>
+        <Form.Item
+          name="show_node_labels"
+          label={t('showNodeLabels')}
+          extra={t('showNodeLabelsHint')}
+          valuePropName="checked"
+        >
+          <Switch />
         </Form.Item>
         <Text type="secondary" style={{ fontSize: 12 }}>{t('siteSettingsHint')}</Text>
       </Form>

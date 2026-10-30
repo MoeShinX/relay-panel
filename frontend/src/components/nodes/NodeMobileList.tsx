@@ -8,6 +8,7 @@ import { NetworkCell, cpuTooltip, memTooltip, statusTag } from './shared';
 import { formatBps, formatUptime } from '../../utils/format';
 import { versionRelation, versionTagColor } from '../../utils/version';
 import { resolveNodeUpgrade, type NodeUpgradeState } from './upgrade';
+import { NodeLabelCell } from './NodeLabelCell';
 
 const { Text } = Typography;
 
@@ -26,12 +27,14 @@ interface Props {
    *  ladder (PR4), compared against the latest NODE release (PR5). */
   /** Admin view: show each node's version and upgrade state. */
   showUpgrade?: boolean;
+  /** Admin-only: save one node's label ('' clears it). */
+  onSetLabel?: (row: NodeDisplayRow, label: string) => Promise<boolean>;
 }
 
 /** Mobile-friendly compact list — one card per node. No wide table, no
  *  horizontal scroll. Shows: status + version + upgrade + network + speed +
  *  resource bars + uptime + a details button. */
-export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', nodeVersionCheckFailed = false, t, openDetail, showUpgrade }: Props) {
+export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', nodeVersionCheckFailed = false, t, openDetail, showUpgrade, onSetLabel }: Props) {
   const labels = { d: t('uptimeDay'), h: t('uptimeHour'), m: t('uptimeMinute'), s: t('uptimeSecond') };
 
   return (
@@ -53,6 +56,13 @@ export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', no
             className={r.online ? undefined : 'rp-node-offline-card'}
             style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 10 }}
           >
+            {/* The machine's name has a line of its own: squeezed in beside the
+                status and version tags it shrank to a bare "…". */}
+            {!isPlaceholder && (onSetLabel || r.label) ? (
+              <div style={{ marginBottom: 6, fontWeight: 500 }}>
+                <NodeLabelCell row={r} t={t} wide onSave={onSetLabel} />
+              </div>
+            ) : null}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, flexWrap: 'wrap', gap: 4 }}>
               {statusTag(r, t, panelProtocol)}
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>

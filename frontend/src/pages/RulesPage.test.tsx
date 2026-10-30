@@ -359,6 +359,38 @@ describe('import', () => {
   });
 });
 
+describe('diagnosis names a node by its label', () => {
+  const diagnose = (node_labels?: Record<string, string>) => ok({
+    request_id: 'r', rule_id: 1, node_labels,
+    nodes: [
+      { status: 'control_channel_offline', node_id: 'n-a', group_name: 'hk-line', public_ip: '1.1.1.1' },
+      { status: 'timeout', node_id: 'n-b', group_name: 'hk-line', public_ip: '2.2.2.2' },
+    ],
+  });
+
+  it('puts the admin\'s name first, for the nodes that have one', async () => {
+    mockPost.mockReset();
+    mockPost.mockResolvedValue(diagnose({ 'n-a': '蓝希云 1号' }));
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'diagnose hk-web' }));
+
+    expect(await screen.findByText('蓝希云 1号 · hk-line · 1.1.1.1')).toBeInTheDocument();
+    expect(screen.getByText('hk-line · 2.2.2.2')).toBeInTheDocument();
+  });
+
+  it('is as before when the panel sent no names (an older panel, or the user setting is off)', async () => {
+    mockPost.mockReset();
+    mockPost.mockResolvedValue(diagnose(undefined));
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'diagnose hk-web' }));
+    expect(await screen.findByText('hk-line · 1.1.1.1')).toBeInTheDocument();
+  });
+});
+
 describe('listen IP column', () => {
   it('reads like targets: the first address, (+N), and the rest on hover', async () => {
     routes({

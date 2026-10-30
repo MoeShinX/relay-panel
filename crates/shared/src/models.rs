@@ -271,6 +271,10 @@ pub struct SharedNodeSummary {
     pub line_type: Option<String>,
     /// Per-node identity (row key). Empty for a group's no-node placeholder row.
     pub node_id: String,
+    /// The admin's name for this machine. Present only when the site setting
+    /// lets users see node labels, and the node has one.
+    #[serde(default)]
+    pub label: Option<String>,
     /// This node's last_seen is within the online window (backend SoT).
     pub online: bool,
     /// v0.4.14: node public IP (exposed to regular users). v0.4.15: this is the

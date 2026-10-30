@@ -30,10 +30,11 @@ interface Failure {
   reason: string;
 }
 
-/** What the admin recognises a node by: its IPv4, else any IP, else the head of
- *  its id. */
+/** What the admin recognises a node by: the name they gave it, else its IPv4,
+ *  else any IP, else the head of its id. */
 function nodeLabel(n: NodeDisplayRow): string {
-  return n.public_ipv4 || n.public_ip || n.public_ipv6 || (n.node_id ?? '').slice(0, 8) || '-';
+  const ip = n.public_ipv4 || n.public_ip || n.public_ipv6 || (n.node_id ?? '').slice(0, 8) || '-';
+  return n.label ? `${n.label} (${ip})` : ip;
 }
 
 /** The backend answers 200 with `code != 0`, but a network error or a non-2xx

@@ -51,6 +51,7 @@ export function NodeDetailDrawer({ row, open, onClose, isAdmin, panelProtocol, o
     <Drawer title={row?.group_name || t('resourceDetails')} open={open} onClose={onClose} size={440}>
       {row && (
         <Descriptions column={1} size="small" bordered>
+          {row.label && <Descriptions.Item label={t('nodeLabel')}>{row.label}</Descriptions.Item>}
           <Descriptions.Item label={t('status')}>
             {row.online ? <><Tag color="green">{t('online')}</Tag>{wsDownTag(row, t)}</> : <Tag>{t('offline')}</Tag>}
           </Descriptions.Item>

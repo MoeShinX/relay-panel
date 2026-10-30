@@ -26,6 +26,8 @@ interface Props {
   t: Tfn;
   openDetail: (row: NodeDisplayRow) => void;
   onDelete?: (row: NodeDisplayRow) => void;
+  /** Admin-only: name a machine (see NodeDesktopTable). */
+  onSetLabel?: (row: NodeDisplayRow, label: string) => Promise<boolean>;
   /** Admin-only drag handle for reordering the groups, shown at the start of
    *  the header. The caller supplies it (it needs the sortable context). */
   dragHandle?: ReactNode;
@@ -41,7 +43,7 @@ interface Props {
 /** One group block: header bar (name · ID · online/total · aggregate ↑↓) +
  *  either a desktop table or mobile list. Collapsible. A group with only a
  *  placeholder row shows "no node reporting". */
-export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeVersionCheckFailed, isMobile, t, openDetail, onDelete, dragHandle, dragHeaderProps, onBatchUpgraded }: Props) {
+export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeVersionCheckFailed, isMobile, t, openDetail, onDelete, onSetLabel, dragHandle, dragHeaderProps, onBatchUpgraded }: Props) {
   // The upgrade column / badge is the admin view, like the batch buttons.
   const showUpgrade = !!onBatchUpgraded;
   const head = rows[0];
@@ -107,10 +109,11 @@ export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeV
         t={t}
         openDetail={openDetail}
         showUpgrade={showUpgrade}
+        onSetLabel={onSetLabel}
       />
     </div>
   ) : (
-    <NodeDesktopTable rows={rows} panelProtocol={panelProtocol} latestNodeVersion={latestNodeVersion} nodeVersionCheckFailed={nodeVersionCheckFailed} t={t} openDetail={openDetail} showUpgrade={showUpgrade} onDelete={onDelete} />
+    <NodeDesktopTable rows={rows} panelProtocol={panelProtocol} latestNodeVersion={latestNodeVersion} nodeVersionCheckFailed={nodeVersionCheckFailed} t={t} openDetail={openDetail} showUpgrade={showUpgrade} onDelete={onDelete} onSetLabel={onSetLabel} />
   );
 
   return (

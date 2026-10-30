@@ -85,7 +85,7 @@ export default function NodeMetricsChart() {
       const value = metric === 'cpu' ? b.cpu_avg : metric === 'mem' ? b.mem_avg : b.conn_avg;
       return {
         label,
-        node: seriesName(b, multiNodeGroups),
+        node: seriesName(b, multiNodeGroups, resp?.node_labels),
         value,
         _key: `${b.bucket}\u0000${b.node_id}`,
       } as Point & { _key: string };

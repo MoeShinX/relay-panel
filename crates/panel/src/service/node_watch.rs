@@ -161,6 +161,10 @@ async fn tick(state: &AppState, watch: &mut Watch, now: chrono::DateTime<chrono:
         }
     };
 
+    // The admin's names for nodes, read once per tick: an alert that says
+    // "HK-1" is acted on faster than one that says a long node id. All labels,
+    // whatever the user-visibility setting: alerts go to the operator.
+    let labels = notify_labels(state).await;
     let threshold = cfg.alert_after();
     let latest_node_version = if cfg.notify_version_outdated {
         match state.release_cache.resolve_latest_node_version().await {
@@ -194,16 +198,41 @@ async fn tick(state: &AppState, watch: &mut Watch, now: chrono::DateTime<chrono:
         );
         match announce {
             Announce::Offline if cfg.notify_offline => {
-                announce_offline(state, &cfg, &node_key, value, offline_secs, false).await
+                announce_offline(
+                    state,
+                    &cfg,
+                    &node_key,
+                    value,
+                    offline_secs,
+                    false,
+                    labels.get(&node_key).map(String::as_str),
+                )
+                .await
             }
             Announce::OfflineReminder if cfg.notify_offline => {
-                announce_offline(state, &cfg, &node_key, value, offline_secs, true).await
+                announce_offline(
+                    state,
+                    &cfg,
+                    &node_key,
+                    value,
+                    offline_secs,
+                    true,
+                    labels.get(&node_key).map(String::as_str),
+                )
+                .await
             }
             // The recovery toggle is applied here rather than inside `decide`
             // so the state machine stays about STATE and the config only gates
             // delivery.
             Announce::Recovery if cfg.notify_recovery => {
-                announce_recovery(state, &cfg, &node_key, value).await
+                announce_recovery(
+                    state,
+                    &cfg,
+                    &node_key,
+                    value,
+                    labels.get(&node_key).map(String::as_str),
+                )
+                .await
             }
             _ => {}
         }
@@ -224,7 +253,15 @@ async fn tick(state: &AppState, watch: &mut Watch, now: chrono::DateTime<chrono:
                 .map(String::as_str)
                 != Some(latest)
             {
-                announce_version_outdated(state, &cfg, &node_key, value, latest).await;
+                announce_version_outdated(
+                    state,
+                    &cfg,
+                    &node_key,
+                    value,
+                    latest,
+                    labels.get(&node_key).map(String::as_str),
+                )
+                .await;
                 watch
                     .version_alerted_target
                     .insert(node_key.clone(), latest.to_string());
@@ -243,15 +280,31 @@ async fn tick(state: &AppState, watch: &mut Watch, now: chrono::DateTime<chrono:
         .retain(|k, _| seen.iter().any(|s| s == k));
 }
 
+/// Every node label, or none when they cannot be read — an alert still goes out
+/// by node key then.
+async fn notify_labels(state: &AppState) -> std::collections::HashMap<String, String> {
+    crate::service::node_labels::all_labels(state.db.as_ref())
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("node-watch: reading node labels failed: {}", e);
+            Default::default()
+        })
+}
+
 /// Pull display fields out of a node_status JSON blob for the message body.
-fn describe(node_key: &str, status_json: &str) -> String {
+///
+/// A node with a label is named by it; otherwise by its `{group}:{node}` key.
+fn describe(node_key: &str, status_json: &str, label: Option<&str>) -> String {
     let v: serde_json::Value = serde_json::from_str(status_json).unwrap_or_default();
     let ip = v
         .get("public_ipv4")
         .or_else(|| v.get("public_ip"))
         .and_then(|s| s.as_str())
         .unwrap_or("-");
-    format!("{node_key} (IP: {ip})")
+    format!(
+        "{} (IP: {ip})",
+        crate::service::node_labels::display_name(label, node_key)
+    )
 }
 
 async fn announce_offline(
@@ -261,6 +314,7 @@ async fn announce_offline(
     status_json: &str,
     offline_secs: i64,
     reminder: bool,
+    label: Option<&str>,
 ) {
     // Offline detection runs regardless of the notification config so the state
     // machine stays accurate; only DELIVERY is gated. That way enabling alerts
@@ -280,7 +334,7 @@ async fn announce_offline(
     };
     let text = format!(
         "{title}\n\n{}\n已离线约 {} 分钟。\n\n该节点上的转发规则可能已经中断。",
-        describe(node_key, status_json),
+        describe(node_key, status_json, label),
         mins
     );
     let event = if reminder {
@@ -298,6 +352,7 @@ async fn announce_recovery(
     cfg: &NotifyConfig,
     node_key: &str,
     status_json: &str,
+    label: Option<&str>,
 ) {
     if !cfg.any_channel_enabled() {
         tracing::info!("node-watch: {} recovered (alerts disabled)", node_key);
@@ -305,7 +360,7 @@ async fn announce_recovery(
     }
     let text = format!(
         "🟢 节点已恢复\n\n{}\n已重新上报状态。",
-        describe(node_key, status_json)
+        describe(node_key, status_json, label)
     );
     let report = notify::send_all(cfg, "RelayPanel 节点恢复", &text).await;
     notify::record_report(state.db.as_ref(), "recovery", Some(node_key), &report).await;
@@ -318,13 +373,14 @@ async fn announce_version_outdated(
     node_key: &str,
     status_json: &str,
     latest_version: &str,
+    label: Option<&str>,
 ) {
     if !cfg.any_channel_enabled() {
         return;
     }
     let text = format!(
         "🟠 节点版本过旧\n\n{}\n当前节点版本低于最新版本 {}，建议在节点状态页面安排升级。",
-        describe(node_key, status_json),
+        describe(node_key, status_json, label),
         latest_version,
     );
     let report = notify::send_all(cfg, "RelayPanel 节点版本过旧", &text).await;
@@ -473,5 +529,23 @@ mod tests {
 
         let (_, announce) = decide(Some(state), false, now, 0);
         assert_eq!(announce, Announce::Nothing, "and so is coming back");
+    }
+
+    #[test]
+    fn an_alert_names_a_labelled_node_by_its_label() {
+        let status = r#"{"public_ipv4":"1.2.3.4"}"#;
+        assert_eq!(
+            describe("11:abcdef", status, Some("香港 HK-1")),
+            "香港 HK-1 (IP: 1.2.3.4)"
+        );
+        // No label: the key, as before.
+        assert_eq!(
+            describe("11:abcdef", status, None),
+            "11:abcdef (IP: 1.2.3.4)"
+        );
+        assert_eq!(
+            describe("11:abcdef", status, Some("")),
+            "11:abcdef (IP: 1.2.3.4)"
+        );
     }
 }

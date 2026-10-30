@@ -10,6 +10,52 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Added
+
+- **Name the machines of a group.** A group with several nodes lists them by
+  public IP, which says little about which box is which. The node status page
+  has a new 备注 column where an admin can give each machine a name ("HK-1 备用",
+  the provider, a rack) in place; blank clears it. The name is kept in the panel
+  (not in the node's report, so the next report cannot overwrite it) and goes
+  away with the node when an admin removes its record or deletes its group.
+- **The name is used wherever a node is mentioned.** The "upgrade all / upgrade
+  group" confirmation and its failure messages, rule diagnosis, the node
+  offline / recovery / outdated alerts, and the audit log entries for upgrading
+  a node all use it in place of a bare id or address.
+- **Whether users see the names is a setting.** Site settings has "Show node
+  labels to users", off by default: a label is the operator's own note and may
+  name a provider or a rack. When on, users see it on the node status page and
+  in diagnosis. Alerts and the audit log go to admins only and always use it.
+
+### Changed
+
+- **Node names reach the last few places.** The dashboard's node-metrics legend
+  and the notification history use the label of a node in place of the first
+  characters of its id; within a group the node status page lists named nodes
+  first, in the order of their names ("HK-2" before "HK-10").
+- **The group page lists each node with its label and a readable last-report
+  time** (it showed a nanosecond RFC 3339 stamp).
+- **Table headers stay on one line** ("名称", "流量" were split one character per
+  line), with slightly tighter cell padding so the rules table still fits a
+  1440px window; the group name is no longer squeezed into a column of its own
+  width; dialogs get space between the title and the first field.
+- **Frontend dependencies:** `axios` is raised to 1.21 and `vite` to 6.4.5,
+  closing the published advisories against the versions in the lockfile
+  (`npm audit` is clean for what ships to the browser).
+
+### Fixed
+
+- **A node's label shows in full on the mobile card** (it was squeezed down to
+  "…"): it now has a line of its own.
+
+- **`deploy.sh` no longer re-fetches an image it already has.** It asked the
+  registries for the database image (and any other image under a pinned tag)
+  on every run even when it was present, and with the registries and mirrors
+  slow or unreachable that meant waiting out every route — minutes — before
+  carrying on with the local copy. An image already here under a pinned tag is
+  now used as it is. `latest` is still asked for, and `RELAYPANEL_FORCE_PULL=1`
+  refreshes everything.
+
 ## [1.2.17] - 2026-10-27
 
 Panel only; no node release, and the config protocol is unchanged at version 4.

@@ -228,6 +228,10 @@ pub struct DiagnoseResponse {
     pub request_id: String,
     pub rule_id: i64,
     pub nodes: Vec<NodeDiagnoseStatus>,
+    /// The admin's names for this group's nodes, by node id — only those the
+    /// caller may see (see `service::node_labels`). Lets the page say "HK-1"
+    /// instead of a long node id.
+    pub node_labels: std::collections::HashMap<String, String>,
 }
 
 /// A node's status row from kvs, parsed for diagnosis scheduling. v0.4.15:
@@ -317,6 +321,8 @@ pub async fn diagnose_rule(
     }
 
     let group_id = rule.device_group_in;
+    let node_labels =
+        crate::service::node_labels::visible_labels_of_group(&state, user.admin, group_id).await;
 
     // v0.4.15: load the inbound group ONCE — its name is attached to every
     // node row for display ("分组名 · 公网IP"), avoiding a per-node lookup. If
@@ -410,6 +416,7 @@ pub async fn diagnose_rule(
             request_id: String::new(),
             rule_id,
             nodes: statuses,
+            node_labels: node_labels.clone(),
         }));
     }
 
@@ -467,6 +474,7 @@ pub async fn diagnose_rule(
             request_id: String::new(),
             rule_id,
             nodes: statuses,
+            node_labels: node_labels.clone(),
         }));
     }
 
@@ -534,6 +542,7 @@ pub async fn diagnose_rule(
         request_id,
         rule_id,
         nodes: statuses,
+        node_labels,
     }))
 }
 

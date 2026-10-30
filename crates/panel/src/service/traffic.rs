@@ -149,6 +149,11 @@ pub async fn remove_group_status(db: &dyn Repository, group_id: i64) -> Result<u
             removed += db.delete(&key).await?;
         }
     }
+    // The admin's names for those nodes go with them.
+    let label_prefix = format!("{}{}:", crate::service::node_labels::LABEL_PREFIX, group_id);
+    for (key, _) in db.scan_prefix(&label_prefix).await? {
+        removed += db.delete(&key).await?;
+    }
     Ok(removed)
 }
 

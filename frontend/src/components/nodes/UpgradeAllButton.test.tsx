@@ -123,6 +123,36 @@ describe('group "upgrade this group" button', () => {
     expect(mockPost).not.toHaveBeenCalled();
   });
 
+  it('names a node by the label its admin gave it, with the address after', async () => {
+    const user = userEvent.setup();
+    renderGroup([
+      row({ node_id: 'a1', public_ipv4: '10.0.0.1', label: '香港 1号' }),
+      row({ node_id: 'a2', public_ipv4: '10.0.0.2' }),
+    ]);
+    await user.click(screen.getByTestId('upgrade-group-1'));
+    await expectTitle('升级 2 台节点');
+    const items = document.querySelectorAll('.ant-modal-confirm li');
+    expect(Array.from(items).map((li) => li.textContent)).toEqual([
+      '香港 1号 (10.0.0.1) · v1.0.0',
+      '10.0.0.2 · v1.0.0',
+    ]);
+  });
+
+  it('a failure names the node by its label too', async () => {
+    const user = userEvent.setup();
+    mockPost.mockImplementation((url: string) =>
+      url.endsWith('/a2')
+        ? Promise.resolve({ code: 409, message: '节点当前无 WS 控制通道', data: null })
+        : ok());
+    renderGroup([
+      row({ node_id: 'a1', public_ipv4: '10.0.0.1' }),
+      row({ node_id: 'a2', public_ipv4: '10.0.0.2', label: '备用机' }),
+    ]);
+    await user.click(screen.getByTestId('upgrade-group-1'));
+    await user.click(await screen.findByText('确认升级'));
+    expect(await screen.findByText('备用机 (10.0.0.2)：节点当前无 WS 控制通道')).toBeInTheDocument();
+  });
+
   it('sends nothing when the confirmation is cancelled', async () => {
     const user = userEvent.setup();
     renderGroup(mixed);

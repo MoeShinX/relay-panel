@@ -63,3 +63,26 @@ describe('legend naming', () => {
     expect(multiNodeGroupNames([]).size).toBe(0);
   });
 });
+
+describe('seriesName with node labels', () => {
+  const b = (node_id: string) => ({ group_name: '广港自用', group_id: 3, node_id });
+  const multi = new Set(['广港自用']);
+
+  it('names a node of a multi-node group by the label its admin gave it', () => {
+    const labels = { '3:17e54bxxxx': '香港 1号' };
+    expect(seriesName(b('17e54bxxxx'), multi, labels)).toBe('广港自用/香港 1号');
+  });
+
+  it('falls back to the head of the id for a node without one', () => {
+    expect(seriesName(b('e797c4yyyy'), multi, { '3:17e54bxxxx': '香港 1号' })).toBe('广港自用/e797c4');
+    expect(seriesName(b('e797c4yyyy'), multi, undefined)).toBe('广港自用/e797c4');
+  });
+
+  it('keys a label by group AND node, so another group\'s label is not borrowed', () => {
+    expect(seriesName(b('17e54bxxxx'), multi, { '9:17e54bxxxx': 'other' })).toBe('广港自用/17e54b');
+  });
+
+  it('leaves a single-node group named by the group alone', () => {
+    expect(seriesName(b('17e54bxxxx'), new Set(), { '3:17e54bxxxx': '香港 1号' })).toBe('广港自用');
+  });
+});

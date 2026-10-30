@@ -49,6 +49,11 @@ pub struct SiteConfig {
     pub announcement_type: String,
     /// How users reach the operator (Telegram handle, email, whatever).
     pub contact: String,
+    /// Whether regular users see the admin's labels for nodes (see
+    /// `service::node_labels`). Off by default: a label is an operator's own
+    /// note about a machine and may name a provider, a rack or a purpose that
+    /// is not for customers.
+    pub show_node_labels: bool,
 }
 
 /// Allowed values for `announcement_type`, and the fallback for anything else.
@@ -96,6 +101,7 @@ impl SiteConfig {
                 DEFAULT_ANNOUNCEMENT_TYPE.to_string()
             },
             contact: clamp(&self.contact, MAX_CONTACT),
+            show_node_labels: self.show_node_labels,
         };
         if out.site_name.is_empty() {
             out.site_name = DEFAULT_NAME.to_string();

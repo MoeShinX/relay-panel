@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatBytes, formatBps, formatPercent, formatUptime } from './format';
+import { formatBytes, formatBps, formatDateTime, formatPercent, formatUptime } from './format';
 
 const L = { d: 'd', h: 'h', m: 'm', s: 's' };
 
@@ -50,5 +50,20 @@ describe('formatBytes / formatBps', () => {
   it('return "-" for missing input', () => {
     expect(formatBytes(undefined)).toBe('-');
     expect(formatBps(null)).toBe('-');
+  });
+});
+
+describe('formatDateTime', () => {
+  it('turns a nanosecond RFC 3339 stamp into local seconds', () => {
+    const out = formatDateTime('2026-10-26T13:11:17.452529009+00:00');
+    expect(out).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    // Same instant as the plain UTC stamp, whatever the viewer's timezone.
+    expect(formatDateTime('2026-10-26T13:11:17Z')).toBe(out);
+  });
+  it('shows a dash for nothing and leaves an unparseable value as it came', () => {
+    expect(formatDateTime(undefined)).toBe('-');
+    expect(formatDateTime(null)).toBe('-');
+    expect(formatDateTime('')).toBe('-');
+    expect(formatDateTime('not a time')).toBe('not a time');
   });
 });

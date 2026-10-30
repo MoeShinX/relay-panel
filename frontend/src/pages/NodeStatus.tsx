@@ -298,11 +298,32 @@ export default function NodeStatus() {
       t,
       openDetail: setDetailRow,
       onDelete: isAdmin ? handleDelete : undefined,
+      onSetLabel: isAdmin ? handleSetLabel : undefined,
       onBatchUpgraded: isAdmin ? refresh : undefined,
     };
     return canReorder && hasGroupOrder(groupRows)
       ? <SortableNodeGroupSection key={gid} id={gid} {...props} />
       : <NodeGroupSection key={gid} {...props} />;
+  };
+
+  // Name one machine. '' clears the name. Resolves whether it was saved, so the
+  // cell can leave its edit state either way and the page tells the admin why
+  // when it was not (too long, a control character).
+  const handleSetLabel = async (row: NodeDisplayRow, label: string): Promise<boolean> => {
+    if (!row.node_id) return false;
+    try {
+      const res = await api.put<unknown, ApiEnvelope<string | null>>(
+        `/nodes/${row.group_id}/label/${encodeURIComponent(row.node_id)}`,
+        { label },
+      );
+      if (res.code !== 0) { message.error(res.message || t('nodeLabelSaveFailed')); return false; }
+      message.success(t('nodeLabelSaved'));
+      refresh();
+      return true;
+    } catch {
+      message.error(t('nodeLabelSaveFailed'));
+      return false;
+    }
   };
 
   // v1.2.5: drop one node's status record. Admin-only, and the button is only

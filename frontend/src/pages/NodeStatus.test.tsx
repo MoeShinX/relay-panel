@@ -153,6 +153,7 @@ const mk = (
     public_ip: string;
     public_ipv6: string;
     online: boolean;
+    label: string;
   }> = {},
 ): NodeDisplayRow =>
   ({
@@ -163,6 +164,7 @@ const mk = (
     public_ip: opts.public_ip,
     public_ipv6: opts.public_ipv6,
     online: opts.online ?? true,
+    label: opts.label,
     cpu: 0,
     mem: 0,
     connections: 0,
@@ -225,6 +227,49 @@ describe('compareNodeRows — direct comparator', () => {
         mk(2, 'other', { node_id: 'x', public_ipv4: '1.1.1.1', public_ipv6: '::1' }),
       ),
     ).toBe(0);
+  });
+});
+
+describe('within a group, nodes the admin named come first, in the order of their names', () => {
+  it('reads the names like a person: 1号 before 2号, 2 before 10, case ignored', () => {
+    const rows = [
+      mk(1, 'g', { node_id: 'c', public_ipv4: '1.1.1.1', label: 'HK-10' }),
+      mk(1, 'g', { node_id: 'a', public_ipv4: '9.9.9.9', label: 'hk-2' }),
+      mk(1, 'g', { node_id: 'b', public_ipv4: '5.5.5.5', label: 'HK-1' }),
+    ];
+    const [[, group]] = stableGroupedRows(rows);
+    expect(group.map((r) => r.node_id)).toEqual(['b', 'a', 'c']);
+  });
+
+  it('puts unnamed nodes after the named ones, by address as before', () => {
+    const rows = [
+      mk(1, 'g', { node_id: 'x', public_ipv4: '1.1.1.1' }),
+      mk(1, 'g', { node_id: 'n', public_ipv4: '9.9.9.9', label: 'spare' }),
+      mk(1, 'g', { node_id: 'y', public_ipv4: '0.0.0.5' }),
+    ];
+    const [[, group]] = stableGroupedRows(rows);
+    expect(group.map((r) => r.node_id)).toEqual(['n', 'y', 'x']);
+  });
+
+  it('falls back to the address when two nodes carry the same name', () => {
+    expect(
+      compareNodeRows(
+        mk(1, 'g', { node_id: 'a', public_ipv4: '2.2.2.2', label: 'same' }),
+        mk(1, 'g', { node_id: 'b', public_ipv4: '1.1.1.1', label: 'same' }),
+      ),
+    ).toBeGreaterThan(0);
+  });
+
+  it('is the same whatever order the rows arrive in', () => {
+    const rows = [
+      mk(1, 'g', { node_id: 'a', label: 'B' }),
+      mk(1, 'g', { node_id: 'b', label: 'A' }),
+      mk(1, 'g', { node_id: 'c' }),
+    ];
+    const forward = stableGroupedRows([...rows])[0][1].map((r) => r.node_id);
+    const reversed = stableGroupedRows([...rows].reverse())[0][1].map((r) => r.node_id);
+    expect(reversed).toEqual(forward);
+    expect(forward).toEqual(['b', 'a', 'c']);
   });
 });
 

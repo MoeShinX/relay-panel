@@ -355,8 +355,26 @@ rp_registry_label() { # INDEX HOST
     esac
 }
 
+# Is IMAGE already here, so that asking a registry would only cost time?
+#
+# Yes for a pinned tag (a release version, `2-alpine`, `16-alpine`) that exists
+# locally: nothing a registry says changes what compose will run. That matters
+# when the registries are slow or unreachable: every route is probed for up to
+# 10 s, so re-fetching an image that is already present — the database image on
+# every upgrade — kept deploy.sh waiting minutes for nothing.
+#
+# No for `latest` (or an untagged name), which is meant to move, and when
+# RELAYPANEL_FORCE_PULL=1 asks for a refresh.
+rp_have_locally() { # IMAGE
+    [ "${RELAYPANEL_FORCE_PULL:-0}" != "1" ] || return 1
+    rp_split_image "$1"
+    [ "$RP_IMG_TAG" != "latest" ] || return 1
+    docker image inspect "$1" >/dev/null 2>&1 </dev/null
+}
+
 # Pull IMAGE, from the first route that has it, and leave it under the name
-# IMAGE (compose then finds it locally and does not pull again).
+# IMAGE (compose then finds it locally and does not pull again). An image that
+# is already here under a pinned tag is not pulled again (see rp_have_locally).
 #
 #  - A TRUSTED route (direct registry, the trusted relay) is pulled by tag.
 #  - A PUBLIC route is pulled ONLY by digest (<mirror>/<repo>@sha256:<digest>),
@@ -370,6 +388,10 @@ rp_registry_label() { # INDEX HOST
 #   0 pulled   1 no route could deliver it
 rp_pull_image() {
     local img="$1" idx reg cand ref digest="" digest_asked=0 family repo tag by_digest seen label quiet
+    if rp_have_locally "$img"; then
+        rp_say "$img is already here, not pulling it again"
+        return 0
+    fi
     rp_split_image "$img"
     family="$RP_IMG_REG"
     repo="$RP_IMG_REPO"
