@@ -3320,12 +3320,22 @@ mod tests {
         put_status(&state, "node_status:1:node-a").await;
         put_status(&state, "node_status:1").await;
         put_status(&state, "node_status:10:node-b").await;
+        state.db.set("node_label:1:node-a", "HK-1").await.unwrap();
+        state.db.set("node_label:10:node-b", "JP-1").await.unwrap();
 
         let Json(resp) =
             super::delete_group(AdminOnly { user_id: 1 }, State(state.clone()), Path(1)).await;
         assert_eq!(resp.code, 0, "{}", resp.message);
 
         assert!(!has_status(&state, "node_status:1:node-a").await);
+        assert!(
+            !has_status(&state, "node_label:1:node-a").await,
+            "the node's label goes with the group"
+        );
+        assert!(
+            has_status(&state, "node_label:10:node-b").await,
+            "group 10's labels stay"
+        );
         assert!(
             !has_status(&state, "node_status:1").await,
             "the legacy per-group row goes too"

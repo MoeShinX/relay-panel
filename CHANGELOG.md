@@ -17,7 +17,7 @@ independent `v*` / `node-v*` tracks since this release).
   has a new 备注 column where an admin can give each machine a name ("HK-1 备用",
   the provider, a rack) in place; blank clears it. The name is kept in the panel
   (not in the node's report, so the next report cannot overwrite it) and goes
-  away with the node when an admin removes its record.
+  away with the node when an admin removes its record or deletes its group.
 - **The name is used wherever a node is mentioned.** The "upgrade all / upgrade
   group" confirmation and its failure messages, rule diagnosis, the node
   offline / recovery / outdated alerts, and the audit log entries for upgrading
