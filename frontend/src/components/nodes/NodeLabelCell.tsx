@@ -41,6 +41,7 @@ export function NodeLabelCell({ row, t, wide, onSave }: Props) {
   }
   return (
     <Text
+      className="rp-node-label"
       style={style}
       type={label ? undefined : 'secondary'}
       ellipsis={label ? { tooltip: label } : false}
