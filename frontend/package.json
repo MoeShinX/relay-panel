@@ -19,7 +19,7 @@
     "@dnd-kit/utilities": "3.2.2",
     "@fontsource/noto-sans-sc": "^5.2.9",
     "antd": "^6.4.4",
-    "axios": "^1.18.0",
+    "axios": "^1.21.0",
     "flag-icons": "^7.5.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
@@ -43,7 +43,7 @@
     "jsdom": "^25.0.1",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.59.2",
-    "vite": "^6.0.7",
+    "vite": "^6.4.5",
     "vitest": "^4.1.9"
   }
 }

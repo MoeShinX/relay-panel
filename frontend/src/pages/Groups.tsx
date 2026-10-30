@@ -6,6 +6,7 @@ import type { ApiEnvelope, DeviceGroup, User, NodeStatus } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { useTableScroll } from '../hooks/useIsMobile';
 import { copyText } from '../utils/clipboard';
+import { formatDateTime } from '../utils/format';
 import { buildInstallCommand } from '../utils/installCommand';
 import { useAuth } from '../auth/useAuth';
 import ConnectHostsEditor from '../components/ConnectHostsEditor';
@@ -322,7 +323,9 @@ export default function Groups() {
 
   const columns = [
     { title: t('id'), dataIndex: 'id', key: 'id', width: 60 },
-    { title: t('name'), dataIndex: 'name', key: 'name' },
+    // A floor on the width: with the table's other columns the name was squeezed
+    // to a few characters and wrapped one character per line.
+    { title: t('name'), dataIndex: 'name', key: 'name', width: 160, ellipsis: { showTitle: true } },
     {
       title: t('type'), dataIndex: 'group_type', key: 'group_type',
       render: (gt: string) => <Tag color={typeColor(gt)}>{typeLabel(gt)}</Tag>,
@@ -426,10 +429,13 @@ export default function Groups() {
           scroll={tableScroll}
           size="small"
           columns={[
+            // The admin's name for the machine (set on the node status page) leads;
+            // the id stays for matching it to a node's own node-id file.
+            { title: t('nodeLabel'), dataIndex: 'label', key: 'label', width: 160, render: (v: string | null | undefined) => v ? <Text ellipsis={{ tooltip: v }} style={{ maxWidth: 150 }}>{v}</Text> : <Text type="secondary">-</Text> },
             { title: 'ID', dataIndex: 'node_id', key: 'node_id', width: 120, render: (v: string | undefined) => v ? <Text code style={{ fontSize: 11 }}>{v.slice(0, 8)}...{v.slice(-4)}</Text> : '-' },
             { title: t('status'), dataIndex: 'online', key: 'online', width: 80, render: (v: boolean) => <Tag color={v ? 'green' : 'default'}>{v ? t('online') : t('offline')}</Tag> },
             { title: t('nodeVersion'), dataIndex: 'node_version', key: 'version', width: 90, render: (v: string | undefined) => v ? <span className="rp-mono" style={{ fontSize: 12 }}>{v}</span> : '-' },
-            { title: t('lastSeen'), dataIndex: 'last_seen', key: 'last_seen', width: 120, render: (v: string | undefined) => v ? <span style={{ fontSize: 12 }}>{v}</span> : '-' },
+            { title: t('lastSeen'), dataIndex: 'last_seen', key: 'last_seen', width: 120, render: (v: string | undefined) => <span className="rp-mono" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{formatDateTime(v)}</span> },
           ]}
         />
       </div>

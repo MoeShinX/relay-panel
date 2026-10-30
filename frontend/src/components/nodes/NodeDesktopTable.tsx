@@ -65,7 +65,7 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
     // The admin's name for each machine, so a group's several nodes can be told
     // apart at a glance. Shown to a regular user only when a node has one.
     ...(onSetLabel || rows.some((r) => r.label) ? [{
-      title: t('nodeLabel'), key: 'label', width: 180,
+      title: t('nodeLabel'), key: 'label', width: 168,
       render: (_: unknown, r: NodeDisplayRow) => <NodeLabelCell row={r} t={t} onSave={onSetLabel} />,
     }] : []),
     // v1.0.10: node version moved forward, with the upgrade action right after it.

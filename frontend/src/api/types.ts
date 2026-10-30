@@ -137,6 +137,8 @@ export interface NodeMetricsResponse {
   granularity: string;
   since: string;
   buckets: NodeMetricBucket[];
+  /** The admin's names for nodes, keyed `{group_id}:{node_id}`. */
+  node_labels?: Record<string, string>;
 }
 
 export interface TrafficHistoryResponse {
@@ -178,6 +180,8 @@ export interface NotifyHistoryEntry {
   channel: 'telegram' | 'email' | string;
   status: 'sent' | 'failed' | string;
   node_key?: string | null;
+  /** The label the node has now, when it has one. */
+  node_label?: string | null;
   detail: string;
 }
 

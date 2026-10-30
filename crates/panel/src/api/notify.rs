@@ -46,10 +46,31 @@ pub async fn get_notify_settings(
 pub async fn get_notify_history(
     _admin: AdminOnly,
     State(state): State<AppState>,
-) -> Json<ApiResponse<Vec<DeliveryLogEntry>>> {
-    Json(ApiResponse::success(
-        notify::list_history(state.db.as_ref()).await,
-    ))
+) -> Json<ApiResponse<Vec<DeliveryLogRow>>> {
+    // An entry records the node as `{group}:{node}`; its label, if it has one
+    // now, says which machine that was.
+    let labels = crate::service::node_labels::visible_labels(&state, true).await;
+    let rows = notify::list_history(state.db.as_ref())
+        .await
+        .into_iter()
+        .map(|entry| DeliveryLogRow {
+            node_label: entry
+                .node_key
+                .as_deref()
+                .and_then(|k| labels.get(k))
+                .cloned(),
+            entry,
+        })
+        .collect();
+    Json(ApiResponse::success(rows))
+}
+
+/// A delivery-log entry plus the label the node it was about has today.
+#[derive(Debug, Serialize)]
+pub struct DeliveryLogRow {
+    #[serde(flatten)]
+    pub entry: DeliveryLogEntry,
+    pub node_label: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

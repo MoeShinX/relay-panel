@@ -27,7 +27,26 @@ independent `v*` / `node-v*` tracks since this release).
   name a provider or a rack. When on, users see it on the node status page and
   in diagnosis. Alerts and the audit log go to admins only and always use it.
 
+### Changed
+
+- **Node names reach the last few places.** The dashboard's node-metrics legend
+  and the notification history use the label of a node in place of the first
+  characters of its id; within a group the node status page lists named nodes
+  first, in the order of their names ("HK-2" before "HK-10").
+- **The group page lists each node with its label and a readable last-report
+  time** (it showed a nanosecond RFC 3339 stamp).
+- **Table headers stay on one line** ("名称", "流量" were split one character per
+  line), with slightly tighter cell padding so the rules table still fits a
+  1440px window; the group name is no longer squeezed into a column of its own
+  width; dialogs get space between the title and the first field.
+- **Frontend dependencies:** `axios` is raised to 1.21 and `vite` to 6.4.5,
+  closing the published advisories against the versions in the lockfile
+  (`npm audit` is clean for what ships to the browser).
+
 ### Fixed
+
+- **A node's label shows in full on the mobile card** (it was squeezed down to
+  "…"): it now has a line of its own.
 
 - **`deploy.sh` no longer re-fetches an image it already has.** It asked the
   registries for the database image (and any other image under a pinned tag)

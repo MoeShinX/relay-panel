@@ -81,6 +81,9 @@ html, body, #root {
   font-size: 13px;
 }
 .ant-table-thead > tr > th {
+  /* A header is a word or two: wrapping it ("名\a称", "流\a量") only makes the
+     row taller; the table scrolls sideways when it runs out of room. */
+  white-space: nowrap;
   background: var(--rp-table-header-bg) !important;
   font-weight: 500;
   color: var(--rp-text-secondary);
@@ -88,6 +91,14 @@ html, body, #root {
 }
 .ant-table-tbody > tr > td {
   border-bottom: 1px solid var(--rp-border) !important;
+}
+
+/* Tighter side padding (antd's 16px): with headers that no longer wrap, the
+   rules table was a few dozen pixels wider than a 1440px window and its last
+   action button was cut off. */
+.ant-table-thead > tr > th.ant-table-cell,
+.ant-table-tbody > tr > td.ant-table-cell {
+  padding-inline: 11px;
 }
 .ant-table-tbody > tr:hover > td {
   background: var(--rp-table-row-hover) !important;
@@ -152,6 +163,12 @@ html, body, #root {
 /* Modal */
 .ant-modal-content {
   border-radius: var(--rp-radius);
+}
+
+/* Air between a dialog's title and its first field: with none, "编辑分组" sat
+   on top of the first label. */
+.ant-modal-header {
+  margin-bottom: 16px;
 }
 
 /* Form labels */

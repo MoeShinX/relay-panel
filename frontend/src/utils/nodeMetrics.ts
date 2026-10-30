@@ -26,12 +26,18 @@ export function multiNodeGroupNames(
   );
 }
 
-/** The legend entry for one bucket, given the set from multiNodeGroupNames. */
+/** The legend entry for one bucket, given the set from multiNodeGroupNames.
+ *  Within a group of several nodes a node is told apart by the name its admin
+ *  gave it (`labels`, keyed `{group_id}:{node_id}`), or failing that by the
+ *  head of its id. */
 export function seriesName(
-  b: { group_name: string; node_id: string },
+  b: { group_name: string; node_id: string; group_id?: number },
   multi: Set<string>,
+  labels?: Record<string, string>,
 ): string {
-  return multi.has(b.group_name) ? `${b.group_name}/${b.node_id.slice(0, 6)}` : b.group_name;
+  if (!multi.has(b.group_name)) return b.group_name;
+  const label = b.group_id != null ? labels?.[`${b.group_id}:${b.node_id}`] : undefined;
+  return `${b.group_name}/${label || b.node_id.slice(0, 6)}`;
 }
 
 /**

@@ -78,3 +78,14 @@ function pickUnit(
   // Bytes/Bps stay integer; larger units show 2 decimals.
   return i === 0 ? `${v} ${units[i]}` : `${v.toFixed(2)} ${units[i]}`;
 }
+
+/** A timestamp from the panel (RFC 3339, often with nanoseconds and a "+00:00"
+ *  offset) as the viewer's local "YYYY-MM-DD HH:mm:ss". An unparseable value is
+ *  returned as it came rather than hidden; empty gives "-". */
+export function formatDateTime(s?: string | null): string {
+  if (!s) return '-';
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return s;
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}

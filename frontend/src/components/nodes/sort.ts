@@ -19,14 +19,25 @@ import type { NodeDisplayRow } from '../../api/types';
 /**
  * Compare two node rows for STABLE within-group ordering. Sort keys (first
  * difference wins):
+ *   0. the admin's label, when the node has one — "香港 1号" before "香港 2号",
+ *      "HK-2" before "HK-10" (digits compare as numbers) — and labelled nodes
+ *      before unlabelled ones: a name the admin chose is the order they want
  *   1. public_ipv4 (falling back to legacy public_ip)
  *   2. public_ipv6
  *   3. node_id
  * Missing/empty values sort LAST (so a node that hasn't reported its IP yet
- * doesn't jump around above named nodes). The comparison is a plain string
- * compare — it just needs to be deterministic, not human-meaningful.
+ * doesn't jump around above named nodes). Past the label the comparison is a
+ * plain string compare — it just needs to be deterministic, not
+ * human-meaningful.
  */
 export function compareNodeRows<T extends NodeDisplayRow>(a: T, b: T): number {
+  const al = a.label ?? '';
+  const bl = b.label ?? '';
+  if (al !== bl) {
+    if (!al || !bl) return blankLast(al, bl);
+    const byName = LABEL_COLLATOR.compare(al, bl);
+    if (byName !== 0) return byName;
+  }
   const av4 = a.public_ipv4 ?? a.public_ip ?? '';
   const bv4 = b.public_ipv4 ?? b.public_ip ?? '';
   if (av4 !== bv4) return blankLast(av4, bv4);
@@ -37,6 +48,9 @@ export function compareNodeRows<T extends NodeDisplayRow>(a: T, b: T): number {
   const bid = b.node_id ?? '';
   return blankLast(aid, bid);
 }
+
+/** Labels compare the way a person reads them: digits as numbers, case ignored. */
+const LABEL_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 /** Empty string sorts after non-empty (blank-last). Otherwise lexical. */
 function blankLast(a: string, b: string): number {

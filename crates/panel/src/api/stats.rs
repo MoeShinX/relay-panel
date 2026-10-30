@@ -218,6 +218,10 @@ pub struct NodeMetricsResponse {
     pub granularity: String,
     pub since: String,
     pub buckets: Vec<crate::db::repo::NodeMetricBucket>,
+    /// The admin's names for nodes, keyed `{group_id}:{node_id}`, so the chart
+    /// legend can say "HK-1" instead of the first six hex characters of an id.
+    /// (This endpoint is admin-only, so every label is the caller's to see.)
+    pub node_labels: std::collections::HashMap<String, String>,
 }
 
 /// GET /api/v1/stats/node-metrics?range=1d|7d
@@ -253,6 +257,7 @@ pub async fn get_node_metrics(
             granularity: "hour".into(),
             since,
             buckets,
+            node_labels: crate::service::node_labels::visible_labels(&state, true).await,
         })),
         Err(e) => {
             tracing::error!("get_node_metrics: db error: {}", e);
@@ -1252,6 +1257,61 @@ mod upgrade_result_tests {
             visible_labels_of_group(&state, false, 9).await["n1"],
             "HK-1"
         );
+    }
+
+    /// The node-metrics chart names a multi-node group's lines by label; the
+    /// response carries every label, keyed `{group}:{node}`.
+    #[tokio::test]
+    async fn the_metrics_response_carries_the_node_labels() {
+        let state = state_with_group().await;
+        put_status(&state, "n1").await;
+        set_label_as_admin(&state, "n1", "HK-1").await;
+        let Json(resp) = get_node_metrics(
+            AdminOnly { user_id: 1 },
+            State(state.clone()),
+            axum::extract::Query(NodeMetricsQuery { range: "1d".into() }),
+        )
+        .await;
+        let data = resp.data.expect("metrics");
+        assert_eq!(
+            data.node_labels.get("9:n1").map(String::as_str),
+            Some("HK-1")
+        );
+    }
+
+    /// Delivery-log entries record `{group}:{node}`; the admin's history page
+    /// gets the node's label beside it.
+    #[tokio::test]
+    async fn the_delivery_history_names_the_node_by_its_label() {
+        use crate::service::notify::DeliveryLogEntry;
+        let state = state_with_group().await;
+        put_status(&state, "n1").await;
+        set_label_as_admin(&state, "n1", "HK-1").await;
+        let entry = DeliveryLogEntry {
+            id: "1".into(),
+            created_at: "2026-10-30T00:00:00Z".into(),
+            event: "offline".into(),
+            channel: "telegram".into(),
+            status: "sent".into(),
+            node_key: Some("9:n1".into()),
+            detail: String::new(),
+        };
+        state
+            .db
+            .set(
+                "notify:history:test",
+                &serde_json::to_string(&entry).unwrap(),
+            )
+            .await
+            .unwrap();
+        let Json(resp) =
+            crate::api::notify::get_notify_history(AdminOnly { user_id: 1 }, State(state.clone()))
+                .await;
+        let rows = resp.data.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].node_label.as_deref(), Some("HK-1"));
+        // The entry itself is untouched, and still reads as before.
+        assert_eq!(rows[0].entry.node_key.as_deref(), Some("9:n1"));
     }
 }
 

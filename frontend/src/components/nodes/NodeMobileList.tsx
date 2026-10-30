@@ -56,11 +56,15 @@ export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', no
             className={r.online ? undefined : 'rp-node-offline-card'}
             style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 10 }}
           >
+            {/* The machine's name has a line of its own: squeezed in beside the
+                status and version tags it shrank to a bare "…". */}
+            {!isPlaceholder && (onSetLabel || r.label) ? (
+              <div style={{ marginBottom: 6, fontWeight: 500 }}>
+                <NodeLabelCell row={r} t={t} wide onSave={onSetLabel} />
+              </div>
+            ) : null}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, flexWrap: 'wrap', gap: 4 }}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                {statusTag(r, t, panelProtocol)}
-                {!isPlaceholder && (onSetLabel || r.label) ? <NodeLabelCell row={r} t={t} onSave={onSetLabel} /> : null}
-              </span>
+              {statusTag(r, t, panelProtocol)}
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                 {/* node version tag (only when the admin upgrade view is on).
                     When the node-version check failed, render the bare version
