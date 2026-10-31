@@ -43,7 +43,10 @@ case "$target" in
         ;;
 esac
 
-stage_dir="$repo_root/dist/package-root/$target"
+# Each GitHub Actions matrix job has its own workspace, so a shared staging
+# path is safe there and keeps it aligned with packaging/nfpm.yaml. Local
+# builds also clean it before use.
+stage_dir="$repo_root/dist/package-root"
 output_dir="$repo_root/dist/packages/$target"
 rm -rf "$stage_dir" "$output_dir"
 mkdir -p "$stage_dir" "$output_dir"
