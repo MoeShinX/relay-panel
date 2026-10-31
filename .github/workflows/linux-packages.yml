@@ -1,26 +1,33 @@
 name: Linux Packages
 
 on:
-  push:
-    tags:
-      - 'v*'
+  # docker-release.yml creates and verifies the GitHub Release first. Running
+  # afterward lets this workflow attach deb/rpm files directly to that Release
+  # instead of exposing them only through ZIP-wrapped workflow artifacts.
+  workflow_run:
+    workflows: ['Docker Release']
+    types: [completed]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: linux-packages-${{ github.ref }}
+  group: linux-packages-${{ github.event.workflow_run.id || github.ref }}
   cancel-in-progress: true
 
 jobs:
   build-frontend:
     name: Build frontend
     runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
 
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
 
       - name: Set up Node
@@ -47,6 +54,9 @@ jobs:
     name: Build ${{ matrix.target }} deb and rpm packages
     runs-on: ubuntu-latest
     needs: build-frontend
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -70,6 +80,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
 
       - name: Download frontend distribution
@@ -80,19 +91,22 @@ jobs:
 
       - name: Determine package version
         id: version
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
-          RELEASE_TAG="$(git tag --points-at "$GITHUB_SHA" --list 'v[0-9]*' | sort -V | tail -n 1)"
+          RELEASE_TAG="$(git tag --points-at "$SOURCE_SHA" --list 'v[0-9]*' | sort -V | tail -n 1)"
           if [ -n "$RELEASE_TAG" ]; then
             VERSION="${RELEASE_TAG#v}"
           else
-            VERSION="0.0.0+git.${GITHUB_SHA::12}"
+            VERSION="0.0.0+git.${SOURCE_SHA::12}"
           fi
           if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(\+[0-9A-Za-z.]+)?$'; then
             echo "::error::release tag must be v<stable-semver>"
             exit 1
           fi
-          echo "Packaging source commit $GITHUB_SHA as version $VERSION"
+          echo "Packaging source commit $SOURCE_SHA as version $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
       # Match ci.yml: rust-toolchain.toml selects the repository's Rust
       # version, so no additional third-party setup action is required.
@@ -121,11 +135,31 @@ jobs:
 
       - name: Inspect packages
         run: |
-          dpkg-deb --info dist/packages/${{ matrix.target }}/*.deb
-          rpm -qip dist/packages/${{ matrix.target }}/*.rpm
+          DEB="$(printf '%s\n' dist/packages/${{ matrix.target }}/*.deb)"
+          RPM="$(printf '%s\n' dist/packages/${{ matrix.target }}/*.rpm)"
+          test "$(dpkg-deb --field "$DEB" Package)" = relay-panel
+          test "$(rpm -qp --qf '%{NAME}' "$RPM")" = relay-panel
+          dpkg-deb --field "$DEB" Package Version Architecture Maintainer Description
+          rpm -qp --qf 'Name: %{NAME}\nVersion: %{VERSION}\nRelease: %{RELEASE}\nArchitecture: %{ARCH}\nVendor: %{VENDOR}\nSummary: %{SUMMARY}\n' "$RPM"
+          dpkg-deb --contents "$DEB"
+          rpm -qpl "$RPM"
           sha256sum -c dist/packages/${{ matrix.target }}/SHA256SUMS
 
-      - name: Upload packages
+      - name: Attach packages to the GitHub Release
+        if: github.event_name == 'workflow_run'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: |
+            dist/packages/${{ matrix.target }}/*.deb
+            dist/packages/${{ matrix.target }}/*.rpm
+            dist/packages/${{ matrix.target }}/SHA256SUMS
+          fail_on_unmatched_files: true
+
+      # Artifacts are intentionally available only for manually built,
+      # untagged commits. GitHub always wraps workflow artifacts in ZIP files.
+      - name: Upload development packages
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: relay-panel-linux-packages-${{ matrix.target }}-${{ github.sha }}
