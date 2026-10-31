@@ -1,33 +1,26 @@
 name: Linux Packages
 
 on:
-  # docker-release.yml creates and verifies the GitHub Release first. Running
-  # afterward lets this workflow attach deb/rpm files directly to that Release
-  # instead of exposing them only through ZIP-wrapped workflow artifacts.
-  workflow_run:
-    workflows: ['Docker Release']
-    types: [completed]
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: linux-packages-${{ github.event.workflow_run.id || github.ref }}
+  group: linux-packages-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build-frontend:
     name: Build frontend
     runs-on: ubuntu-latest
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
 
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
 
       - name: Set up Node
@@ -54,9 +47,6 @@ jobs:
     name: Build ${{ matrix.target }} deb and rpm packages
     runs-on: ubuntu-latest
     needs: build-frontend
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -80,7 +70,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
 
       - name: Download frontend distribution
@@ -92,7 +81,7 @@ jobs:
       - name: Determine package version
         id: version
         env:
-          SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          SOURCE_SHA: ${{ github.sha }}
         run: |
           RELEASE_TAG="$(git tag --points-at "$SOURCE_SHA" --list 'v[0-9]*' | sort -V | tail -n 1)"
           if [ -n "$RELEASE_TAG" ]; then
@@ -106,7 +95,6 @@ jobs:
           fi
           echo "Packaging source commit $SOURCE_SHA as version $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
       # Match ci.yml: rust-toolchain.toml selects the repository's Rust
       # version, so no additional third-party setup action is required.
@@ -119,11 +107,9 @@ jobs:
       - name: Install build and packaging dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libssl-dev rpm ${{ matrix.cross_packages }}
-          curl -fsSL -o /tmp/nfpm.tar.gz \
-            https://github.com/goreleaser/nfpm/releases/download/v2.48.0/nfpm_2.48.0_Linux_x86_64.tar.gz
-          sudo tar -xzf /tmp/nfpm.tar.gz -C /usr/local/bin nfpm
-          nfpm --version
+          sudo apt-get install -y build-essential pkg-config libssl-dev dpkg-dev rpm ${{ matrix.cross_packages }}
+          dpkg-deb --version
+          rpmbuild --version
 
       - name: Build packages
         env:
@@ -145,24 +131,29 @@ jobs:
           rpm -qpl "$RPM"
           sha256sum -c dist/packages/${{ matrix.target }}/SHA256SUMS
 
-      - name: Attach packages to the GitHub Release
-        if: github.event_name == 'workflow_run'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          files: |
-            dist/packages/${{ matrix.target }}/*.deb
-            dist/packages/${{ matrix.target }}/*.rpm
-            dist/packages/${{ matrix.target }}/SHA256SUMS
-          fail_on_unmatched_files: true
-
-      # Artifacts are intentionally available only for manually built,
-      # untagged commits. GitHub always wraps workflow artifacts in ZIP files.
-      - name: Upload development packages
-        if: github.event_name == 'workflow_dispatch'
+      # GitHub wraps every workflow artifact in ZIP. Keeping the DEB and RPM
+      # uploads separate makes each architecture/package type easy to find,
+      # without changing the repository's Release publishing flow.
+      - name: Upload DEB package artifact
         uses: actions/upload-artifact@v4
         with:
-          name: relay-panel-linux-packages-${{ matrix.target }}-${{ github.sha }}
-          path: dist/packages/${{ matrix.target }}/
+          name: relay-panel-deb-${{ matrix.target }}-${{ github.sha }}
+          path: dist/packages/${{ matrix.target }}/*.deb
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload RPM package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-panel-rpm-${{ matrix.target }}-${{ github.sha }}
+          path: dist/packages/${{ matrix.target }}/*.rpm
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload package checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-panel-checksums-${{ matrix.target }}-${{ github.sha }}
+          path: dist/packages/${{ matrix.target }}/SHA256SUMS
           if-no-files-found: error
           retention-days: 30
