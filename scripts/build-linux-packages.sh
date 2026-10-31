@@ -160,7 +160,9 @@ cat >> "$spec_file" <<'EOF'
 - Automated package build
 EOF
 sed -i "s/PACKAGE_VERSION/$version/g" "$spec_file"
-rpmbuild -bb "$spec_file" --define "_topdir $rpm_topdir"
+# --target tells rpmbuild to emit metadata for the cross-built target instead
+# of rejecting a non-host BuildArch (for example aarch64 on an x86_64 runner).
+rpmbuild --target "$rpm_arch" -bb "$spec_file" --define "_topdir $rpm_topdir"
 cp "$rpm_topdir/RPMS/$rpm_arch"/*.rpm "$output_dir/"
 
 sha256sum "$output_dir"/* > "$output_dir/SHA256SUMS"
