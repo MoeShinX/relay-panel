@@ -1,0 +1,155 @@
+name: Linux Packages
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-packages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-frontend:
+    name: Build frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        run: |
+          npm ci --prefix frontend --no-audit --no-fund
+          npm run build --prefix frontend
+
+      - name: Upload frontend distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  build:
+    name: Build ${{ matrix.target }} deb and rpm packages
+    runs-on: ${{ matrix.runner }}
+    needs: build-frontend
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download frontend distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+
+      - name: Determine package version
+        id: version
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          RELEASE_TAG="$(git tag --points-at "$SOURCE_SHA" --list 'v[0-9]*' | sort -V | tail -n 1)"
+          if [ -n "$RELEASE_TAG" ]; then
+            VERSION="${RELEASE_TAG#v}"
+          else
+            VERSION="0.0.0+git.${SOURCE_SHA::12}"
+          fi
+          if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(\+[0-9A-Za-z.]+)?$'; then
+            echo "::error::release tag must be v<stable-semver>"
+            exit 1
+          fi
+          echo "Packaging source commit $SOURCE_SHA as version $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # Match ci.yml: rust-toolchain.toml selects the repository's Rust
+      # version, so no additional third-party setup action is required.
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup show
+
+      - name: Install build and packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev dpkg-dev rpm
+          dpkg-deb --version
+
+      - name: Build DEB package and native staging tree
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          SKIP_FRONTEND_BUILD: '1'
+          PACKAGE_FORMAT: deb
+        run: bash scripts/build-linux-packages.sh
+
+      - name: Build RPM package on Ubuntu 24.04
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          PACKAGE_FORMAT: rpm
+          SKIP_BUILD: '1'
+        run: |
+          rpmbuild --version
+          bash scripts/build-linux-packages.sh
+
+      - name: Inspect packages
+        run: |
+          DEB="$(printf '%s\n' dist/packages/${{ matrix.target }}/*.deb)"
+          RPM="$(printf '%s\n' dist/packages/${{ matrix.target }}/*.rpm)"
+          test "$(dpkg-deb --field "$DEB" Package)" = relay-panel
+          test "$(rpm -qp --qf '%{NAME}' "$RPM")" = relay-panel
+          dpkg-deb --field "$DEB" Package Version Architecture Maintainer Description
+          rpm -qp --qf 'Name: %{NAME}\nVersion: %{VERSION}\nRelease: %{RELEASE}\nArchitecture: %{ARCH}\nVendor: %{VENDOR}\nSummary: %{SUMMARY}\n' "$RPM"
+          dpkg-deb --contents "$DEB"
+          rpm -qpl "$RPM"
+          cd dist/packages/${{ matrix.target }}
+          sha256sum -c SHA256SUMS
+
+      # GitHub wraps every workflow artifact in ZIP. Keeping the DEB and RPM
+      # uploads separate makes each architecture/package type easy to find,
+      # without changing the repository's Release publishing flow.
+      - name: Upload DEB package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-panel-deb-${{ matrix.target }}-${{ github.sha }}
+          path: dist/packages/${{ matrix.target }}/*.deb
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload RPM package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-panel-rpm-${{ matrix.target }}-${{ github.sha }}
+          path: dist/packages/${{ matrix.target }}/*.rpm
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload package checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-panel-checksums-${{ matrix.target }}-${{ github.sha }}
+          path: dist/packages/${{ matrix.target }}/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
