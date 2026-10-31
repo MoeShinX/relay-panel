@@ -45,27 +45,16 @@ jobs:
 
   build:
     name: Build ${{ matrix.target }} deb and rpm packages
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     needs: build-frontend
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
-            cross_linker: ''
-            cross_packages: ''
-          - target: aarch64-unknown-linux-gnu
-            cross_linker: aarch64-linux-gnu-gcc
-            cross_packages: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-          - target: powerpc64le-unknown-linux-gnu
-            cross_linker: powerpc64le-linux-gnu-gcc
-            cross_packages: gcc-powerpc64le-linux-gnu g++-powerpc64le-linux-gnu
-          - target: riscv64gc-unknown-linux-gnu
-            cross_linker: riscv64-linux-gnu-gcc
-            cross_packages: gcc-riscv64-linux-gnu g++-riscv64-linux-gnu
-          - target: s390x-unknown-linux-gnu
-            cross_linker: s390x-linux-gnu-gcc
-            cross_packages: gcc-s390x-linux-gnu g++-s390x-linux-gnu
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
 
     steps:
       - uses: actions/checkout@v4
@@ -101,23 +90,34 @@ jobs:
       - name: Install Rust (rust-toolchain.toml)
         run: rustup show
 
-      - name: Add Rust target
-        run: rustup target add ${{ matrix.target }}
-
       - name: Install build and packaging dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libssl-dev dpkg-dev rpm ${{ matrix.cross_packages }}
+          # `rpm` is used only to inspect the result; rpmbuild itself runs in
+          # the AlmaLinux container below.
+          sudo apt-get install -y build-essential pkg-config libssl-dev dpkg-dev rpm
           dpkg-deb --version
-          rpmbuild --version
 
-      - name: Build packages
+      - name: Build DEB package and native staging tree
         env:
           VERSION: ${{ steps.version.outputs.version }}
           TARGET: ${{ matrix.target }}
-          CROSS_LINKER: ${{ matrix.cross_linker }}
           SKIP_FRONTEND_BUILD: '1'
+          PACKAGE_FORMAT: deb
         run: bash scripts/build-linux-packages.sh
+
+      - name: Build RPM package in AlmaLinux 9
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          docker run --rm \
+            -e VERSION -e TARGET \
+            -e PACKAGE_FORMAT=rpm -e SKIP_BUILD=1 \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -w /workspace \
+            almalinux:9 \
+            bash -lc 'dnf -y install rpm-build && bash scripts/build-linux-packages.sh'
 
       - name: Inspect packages
         run: |
