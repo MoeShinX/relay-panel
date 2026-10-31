@@ -19,12 +19,65 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build deb and rpm packages
+  build-frontend:
+    name: Build frontend
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        run: |
+          npm ci --prefix frontend --no-audit --no-fund
+          npm run build --prefix frontend
+
+      - name: Upload frontend distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  build:
+    name: Build ${{ matrix.target }} deb and rpm packages
+    runs-on: ubuntu-latest
+    needs: build-frontend
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            cross_linker: ''
+            cross_packages: ''
+          - target: aarch64-unknown-linux-gnu
+            cross_linker: aarch64-linux-gnu-gcc
+            cross_packages: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          - target: powerpc64le-unknown-linux-gnu
+            cross_linker: powerpc64le-linux-gnu-gcc
+            cross_packages: gcc-powerpc64le-linux-gnu g++-powerpc64le-linux-gnu
+          - target: riscv64gc-unknown-linux-gnu
+            cross_linker: riscv64-linux-gnu-gcc
+            cross_packages: gcc-riscv64-linux-gnu g++-riscv64-linux-gnu
+          - target: s390x-unknown-linux-gnu
+            cross_linker: s390x-linux-gnu-gcc
+            cross_packages: gcc-s390x-linux-gnu g++-s390x-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download frontend distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
 
       - name: Validate requested version
         id: version
@@ -59,10 +112,13 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@1.96
 
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
       - name: Install build and packaging dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libssl-dev rpm
+          sudo apt-get install -y build-essential pkg-config libssl-dev rpm ${{ matrix.cross_packages }}
           curl -fsSL -o /tmp/nfpm.tar.gz \
             https://github.com/goreleaser/nfpm/releases/download/v2.48.0/nfpm_2.48.0_Linux_x86_64.tar.gz
           sudo tar -xzf /tmp/nfpm.tar.gz -C /usr/local/bin nfpm
@@ -71,18 +127,21 @@ jobs:
       - name: Build packages
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          CROSS_LINKER: ${{ matrix.cross_linker }}
+          SKIP_FRONTEND_BUILD: '1'
         run: bash scripts/build-linux-packages.sh
 
       - name: Inspect packages
         run: |
-          dpkg-deb --info dist/packages/*.deb
-          rpm -qip dist/packages/*.rpm
-          sha256sum -c dist/packages/SHA256SUMS
+          dpkg-deb --info dist/packages/${{ matrix.target }}/*.deb
+          rpm -qip dist/packages/${{ matrix.target }}/*.rpm
+          sha256sum -c dist/packages/${{ matrix.target }}/SHA256SUMS
 
       - name: Upload packages
         uses: actions/upload-artifact@v4
         with:
-          name: relay-panel-linux-packages-${{ github.sha }}
-          path: dist/packages/
+          name: relay-panel-linux-packages-${{ matrix.target }}-${{ github.sha }}
+          path: dist/packages/${{ matrix.target }}/
           if-no-files-found: error
           retention-days: 30
