@@ -1,5 +1,5 @@
 # ---- Build stage for the React frontend ----
-FROM node:20-alpine AS frontend-build
+FROM node:26-alpine AS frontend-build
 WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm install --no-audit --no-fund || npm install --no-audit --no-fund

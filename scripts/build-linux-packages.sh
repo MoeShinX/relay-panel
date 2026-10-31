@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build installable Debian and RPM packages from the current checkout.
-# Prerequisites: Rust (from rust-toolchain.toml), Node 20+, dpkg-deb, and/or
+# Prerequisites: Rust (from rust-toolchain.toml), Node 26+, dpkg-deb, and/or
 # rpmbuild. Packages are built with the native Debian/RPM tools, not nFPM.
 # Supported targets are built on matching native GitHub runners; cross builds
 # are intentionally not supported by this packaging script.
