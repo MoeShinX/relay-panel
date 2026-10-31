@@ -1,0 +1,36 @@
+name: relay-panel
+arch: amd64
+platform: linux
+version: ${VERSION}
+section: net
+priority: optional
+maintainer: MoeShinX
+description: Self-hosted TCP/UDP forwarding management panel.
+vendor: MoeShinX
+homepage: https://github.com/MoeShinX/relay-panel
+license: Apache-2.0
+
+depends:
+  - ca-certificates
+
+contents:
+  - src: ./dist/package-root/usr/bin/relay-panel
+    dst: /usr/bin/relay-panel
+    file_info:
+      mode: 0755
+  - src: ./dist/package-root/usr/share/relay-panel/public
+    dst: /usr/share/relay-panel/public
+  - src: ./dist/package-root/usr/lib/systemd/system/relaypanel.service
+    dst: /usr/lib/systemd/system/relaypanel.service
+    file_info:
+      mode: 0644
+  - src: ./dist/package-root/etc/relay-panel/relay-panel.env
+    dst: /etc/relay-panel/relay-panel.env
+    type: config|noreplace
+    file_info:
+      mode: 0640
+
+scripts:
+  preinstall: ./packaging/scripts/preinstall.sh
+  postinstall: ./packaging/scripts/postinstall.sh
+  postremove: ./packaging/scripts/postremove.sh
