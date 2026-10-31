@@ -8,9 +8,20 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-version="${VERSION:-$(awk -F '"' '/^version = / { print $2; exit }' crates/panel/Cargo.toml)}"
-if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "VERSION must be a stable semver (for example 1.2.18); got: $version" >&2
+# A release tag on HEAD is authoritative. Development packages are tied to
+# their exact source commit while remaining valid Debian/RPM version strings.
+if [ -n "${VERSION:-}" ]; then
+    version="$VERSION"
+else
+    release_tag="$(git tag --points-at HEAD --list 'v[0-9]*' | sort -V | tail -n 1)"
+    if [ -n "$release_tag" ]; then
+        version="${release_tag#v}"
+    else
+        version="0.0.0+git.$(git rev-parse --short=12 HEAD)"
+    fi
+fi
+if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+][0-9A-Za-z.]+)?$ ]]; then
+    echo "VERSION must be a release semver or commit version; got: $version" >&2
     exit 2
 fi
 
