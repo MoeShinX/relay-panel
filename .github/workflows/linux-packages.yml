@@ -129,7 +129,8 @@ jobs:
           rpm -qp --qf 'Name: %{NAME}\nVersion: %{VERSION}\nRelease: %{RELEASE}\nArchitecture: %{ARCH}\nVendor: %{VENDOR}\nSummary: %{SUMMARY}\n' "$RPM"
           dpkg-deb --contents "$DEB"
           rpm -qpl "$RPM"
-          sha256sum -c dist/packages/${{ matrix.target }}/SHA256SUMS
+          cd dist/packages/${{ matrix.target }}
+          sha256sum -c SHA256SUMS
 
       # GitHub wraps every workflow artifact in ZIP. Keeping the DEB and RPM
       # uploads separate makes each architecture/package type easy to find,

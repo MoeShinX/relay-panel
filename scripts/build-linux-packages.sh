@@ -175,7 +175,10 @@ EOF
     cp "$rpm_topdir/RPMS/$rpm_arch"/*.rpm "$output_dir/"
 fi
 
-find "$output_dir" -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
-    | sort -z \
-    | xargs -0 sha256sum > "$output_dir/SHA256SUMS"
+(
+    cd "$output_dir"
+    find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+        | sort -z \
+        | xargs -0 sha256sum
+) > "$output_dir/SHA256SUMS"
 printf 'Packages written to %s\n' "$output_dir"
