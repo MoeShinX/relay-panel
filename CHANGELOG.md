@@ -10,6 +10,13 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+## [1.2.19] - 2026-11-01
+
+Panel only; no node release, and the config protocol is unchanged at version 4.
+No schema change.
+
+Upgrading: "Update now" on the dashboard, or `git pull --quiet && ./deploy.sh`.
+
 ### Changed
 
 - **Naming a node moved to the device-group page.** In a group's node list an
