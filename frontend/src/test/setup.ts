@@ -16,6 +16,20 @@ if (!globalThis.ResizeObserver) {
   };
 }
 
+// Node 25+ has localStorage / sessionStorage globals of its own, which do not
+// work unless Node is started with --localstorage-file, and vitest keeps a
+// global Node already has instead of jsdom's. Use jsdom's storage.
+const dom = (globalThis as { jsdom?: { window: Window } }).jsdom;
+if (dom) {
+  for (const key of ['localStorage', 'sessionStorage'] as const) {
+    Object.defineProperty(globalThis, key, {
+      configurable: true,
+      writable: true,
+      value: dom.window[key],
+    });
+  }
+}
+
 if (!window.matchMedia) {
   window.matchMedia = (query: string) =>
     ({

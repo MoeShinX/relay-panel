@@ -10,6 +10,12 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Changed
+
+- **The panel's web page is built with Node.js 26** (the current LTS) instead of
+  Node.js 20, which has reached end of life. Only the build changes; running
+  panels are not affected.
+
 ## [1.2.19] - 2026-11-01
 
 Panel only; no node release, and the config protocol is unchanged at version 4.
