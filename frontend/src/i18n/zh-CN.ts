@@ -206,6 +206,7 @@ export const zhCN = {
   profileNoneForTls: 'TLS Simple 传输必须选择模板',
   profileClearedByProtocol: '已清除传输模板 — WS/TLS Simple 仅支持 TCP',
   tabBasic: '基础',
+  ruleFormInvalid: '有内容没填对，请检查标红的字段',
   tabForward: '转发',
   inboundGroup: '出口分组',
   outboundGroup: '出口分组',

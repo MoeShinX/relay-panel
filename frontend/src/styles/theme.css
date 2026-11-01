@@ -351,3 +351,16 @@ html, body, #root {
     margin-inline-start: 0;
   }
 }
+
+/* The pencil beside a node's label: there to be found, not to draw the eye. A
+   light grey a shade darker than the page, and the usual link colour only when
+   the pointer is on it. */
+.rp-node-label .ant-typography-edit {
+  color: #c2c7cf;
+  font-size: 12px;
+  transition: color 0.15s;
+}
+.rp-node-label .ant-typography-edit:hover,
+.rp-node-label .ant-typography-edit:focus-visible {
+  color: var(--rp-text-tertiary);
+}

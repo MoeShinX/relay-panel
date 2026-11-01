@@ -61,6 +61,19 @@ function downloadText(filename: string, text: string) {
 /** v1.2.15: page sizes for the rules table, and where the choice is kept. */
 const RULE_PAGE_SIZES = [20, 50, 100, 200, 500];
 const RULE_PAGE_SIZE_KEY = 'relaypanel_rules_page_size';
+
+type RuleTab = 'basic' | 'forward';
+
+/** The fields on the 基础 tab; everything else in the rule form is on 转发. */
+const BASIC_TAB_FIELDS = new Set(['name', 'owner_uid', 'listen_port', 'protocol', 'public_transport', 'forward_mode', 'device_group_in']);
+
+/** Where a failed save should look: the tab of the first field that failed. A
+ *  field on the tab that is not showing used to fail silently — the button did
+ *  nothing and the red text was on a page you could not see. */
+function tabOfFirstError(errorFields: { name: (string | number)[] }[]): RuleTab {
+  const first = errorFields[0]?.name[0];
+  return typeof first === 'string' && BASIC_TAB_FIELDS.has(first) ? 'basic' : 'forward';
+}
 function storedRulePageSize(): number {
   try {
     const v = Number(localStorage.getItem(RULE_PAGE_SIZE_KEY));
@@ -107,6 +120,10 @@ export default function Rules() {
   const [selfQuota, setSelfQuota] = useState<{ used: number; limit: number } | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  // Which tab of the create / edit dialog is showing. Held here so a failed save
+  // can bring the tab with the error to the front (see onSaveFailed).
+  const [createTab, setCreateTab] = useState<RuleTab>('basic');
+  const [editTab, setEditTab] = useState<RuleTab>('basic');
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState('');
   const [importGroupId, setImportGroupId] = useState<number | undefined>(undefined);
@@ -354,8 +371,19 @@ export default function Rules() {
       proxy_protocol_accept: r.proxy_protocol_accept ?? false,
       proxy_protocol_trusted: r.proxy_protocol_trusted ?? '',
     });
+    setEditTab('basic');
     setEditOpen(true);
   };
+
+  /** A save was refused by the form's own checks. Show the tab that has the
+   *  problem and say what it is, instead of leaving the dialog looking as if the
+   *  button did nothing. */
+  const onSaveFailed = (setTab: (tab: RuleTab) => void) =>
+    ({ errorFields }: { errorFields: { name: (string | number)[]; errors: string[] }[] }) => {
+      if (errorFields.length === 0) return;
+      setTab(tabOfFirstError(errorFields));
+      message.error(errorFields[0].errors[0] || t('ruleFormInvalid'));
+    };
 
   /** Copy: open the create modal pre-filled with the rule's values, but with
    *  a "-copy" name suffix and no listen_port (auto-assign). */
@@ -380,6 +408,7 @@ export default function Rules() {
       proxy_protocol_accept: r.proxy_protocol_accept ?? false,
       proxy_protocol_trusted: r.proxy_protocol_trusted ?? '',
     });
+    setCreateTab('basic');
     setCreateOpen(true);
   };
 
@@ -1192,7 +1221,7 @@ const IMPORT_DEFAULTS = {
           <Dropdown menu={{ items: exportMenuItems }}>
             <Button icon={<DownloadOutlined />}>{t('exportImport')}</Button>
           </Dropdown>
-          <Button type="primary" icon={<PlusOutlined />} disabled={!isAdmin && sharedLoadFailed} onClick={() => { createForm.resetFields(); setCreateOpen(true); }}>{t('addRule')}</Button>
+          <Button type="primary" icon={<PlusOutlined />} disabled={!isAdmin && sharedLoadFailed} onClick={() => { createForm.resetFields(); setCreateTab('basic'); setCreateOpen(true); }}>{t('addRule')}</Button>
         </Space>
       </div>
       {/* v0.4.20: admin viewing another user's rules — show who. */}
@@ -1235,8 +1264,8 @@ const IMPORT_DEFAULTS = {
       />
 
       <Modal title={t('addRule')} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={() => createForm.submit()} okText={t('create')} cancelText={t('cancel')} width={620}>
-        <Form form={createForm} onFinish={handleCreate} layout="vertical" className="rp-rule-form">
-          <Tabs items={[
+        <Form form={createForm} onFinish={handleCreate} onFinishFailed={onSaveFailed(setCreateTab)} layout="vertical" className="rp-rule-form">
+          <Tabs activeKey={createTab} onChange={(k) => setCreateTab(k as RuleTab)} items={[
             {
               key: 'basic',
               label: t('tabBasic'),
@@ -1296,8 +1325,8 @@ const IMPORT_DEFAULTS = {
       </Modal>
 
       <Modal title={t('editRule')} open={editOpen} onCancel={() => setEditOpen(false)} onOk={() => editForm.submit()} okText={t('save')} cancelText={t('cancel')} width={620}>
-        <Form form={editForm} onFinish={handleUpdate} layout="vertical" className="rp-rule-form">
-          <Tabs items={[
+        <Form form={editForm} onFinish={handleUpdate} onFinishFailed={onSaveFailed(setEditTab)} layout="vertical" className="rp-rule-form">
+          <Tabs activeKey={editTab} onChange={(k) => setEditTab(k as RuleTab)} items={[
             {
               key: 'basic',
               label: t('tabBasic'),

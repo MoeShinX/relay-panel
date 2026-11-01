@@ -10,6 +10,22 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Changed
+
+- **Naming a node moved to the device-group page.** In a group's node list an
+  admin edits the 备注 in place (blank clears it). The node status page no longer
+  has an edit control or an "add label" prompt: it shows the name read-only, in a
+  column that appears only once some node has one, so a panel that names nothing
+  looks exactly as before.
+
+### Fixed
+
+- **A rule dialog that refuses to save now shows why.** When a field on the
+  tab you were not looking at failed its check (create or edit rule), the save
+  button seemed to do nothing and the red text sat on the other tab, so a
+  changed port could only be saved after clicking 转发. The dialog now switches
+  to the tab with the problem and says what it is.
+
 ## [1.2.18] - 2026-10-30
 
 Panel only; no node release, and the config protocol is unchanged at version 4.

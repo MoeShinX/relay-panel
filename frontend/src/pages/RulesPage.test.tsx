@@ -359,6 +359,64 @@ describe('import', () => {
   });
 });
 
+describe('editing a rule', () => {
+  it('saves a changed port without ever opening the 转发 tab', async () => {
+    mockPut.mockReset();
+    mockPut.mockResolvedValue(ok(null));
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'edit hk-web' }));
+
+    const port = await screen.findByLabelText('listenPort');
+    await user.clear(port);
+    await user.type(port, '10555');
+    await user.click(screen.getByRole('button', { name: /^save$/ }));
+
+    await waitFor(() => expect(mockPut).toHaveBeenCalledTimes(1));
+    expect(mockPut).toHaveBeenCalledWith('/rules/1', { listen_port: 10555 });
+  });
+});
+
+describe('a save the form refuses', () => {
+  // A rule whose scheduled restart is below the floor (the API stores no such
+  // value today, but older rows may carry one): the field is on the 转发 tab.
+  const oddRule = () => rule({ auto_restart_minutes: 3 });
+
+  it('brings the tab with the problem to the front and says what it is, instead of doing nothing', async () => {
+    mockPut.mockReset();
+    routes({ rules: ok([oddRule()]), groups: ok([group()]) });
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'edit hk-web' }));
+
+    // Only the port is touched, on the 基础 tab, and that is where the user is.
+    expect(await screen.findByRole('tab', { name: 'tabBasic', selected: true })).toBeInTheDocument();
+    const port = await screen.findByLabelText('listenPort');
+    await user.clear(port);
+    await user.type(port, '10555');
+    await user.click(screen.getByRole('button', { name: /^save$/ }));
+
+    // The 转发 tab comes forward, with the error showing, and nothing was sent.
+    expect(await screen.findByRole('tab', { name: 'tabForward', selected: true })).toBeInTheDocument();
+    expect(await screen.findAllByText(/autoRestartTooSmall/)).not.toHaveLength(0);
+    expect(mockPut).not.toHaveBeenCalled();
+  });
+
+  it('opens on the 基础 tab again for the next rule', async () => {
+    routes({ rules: ok([oddRule()]), groups: ok([group()]) });
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'edit hk-web' }));
+    await user.click(await screen.findByRole('tab', { name: 'tabForward' }));
+    await user.click(screen.getByRole('button', { name: /^cancel$/ }));
+    await user.click(screen.getByRole('button', { name: 'edit hk-web' }));
+    expect(await screen.findByRole('tab', { name: 'tabBasic', selected: true })).toBeInTheDocument();
+  });
+});
+
 describe('diagnosis names a node by its label', () => {
   const diagnose = (node_labels?: Record<string, string>) => ok({
     request_id: 'r', rule_id: 1, node_labels,

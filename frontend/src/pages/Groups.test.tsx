@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const { mockGet, mockPost, mockPut, mockDelete } = vi.hoisted(() => ({
@@ -164,6 +164,26 @@ describe('monitor-only groups hide the forwarding fields', () => {
     await user.click(screen.getByRole('button', { name: /^save$/i }));
     await waitFor(() => expect(screen.queryByText('connectHostInvalid')).toBeNull());
     expect(mockPut).not.toHaveBeenCalled();
+  });
+
+  it('names a node of the group: PUT to the node, then the page is read again', async () => {
+    const user = userEvent.setup();
+    const node = { group_id: 1, node_id: 'abc123def456', online: true, node_version: '1.2.10', last_seen: '2026-10-30T03:18:55Z' };
+    mockGet.mockImplementation((url: string) =>
+      Promise.resolve(url === '/groups' ? ok([group()]) : url === '/nodes' ? ok([node]) : ok([])));
+    mockPut.mockResolvedValue(ok('蓝希云 1号'));
+    render(<Groups />);
+
+    await user.click(await screen.findByRole('button', { name: /expand|展开/i }));
+    await user.click(await screen.findByRole('button', { name: 'nodeLabelEdit' }));
+    const box = await screen.findByRole('textbox');
+    await user.type(box, '蓝希云 1号');
+    fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
+    fireEvent.keyUp(box, { key: 'Enter', keyCode: 13 });
+
+    await waitFor(() => expect(mockPut).toHaveBeenCalledTimes(1));
+    expect(mockPut).toHaveBeenCalledWith('/nodes/1/label/abc123def456', { label: '蓝希云 1号' });
+    await waitFor(() => expect(mockGet.mock.calls.filter((c) => c[0] === '/nodes').length).toBeGreaterThan(1));
   });
 
   it('leaves the stored forwarding fields alone when converting a group to monitor', async () => {
