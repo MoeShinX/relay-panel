@@ -207,6 +207,7 @@ export const enUS: Dict = {
   profileNoneForTls: 'Required for TLS Simple transport',
   profileClearedByProtocol: 'Cleared the transport profile — WS/TLS Simple only supports TCP.',
   tabBasic: 'Basic',
+  ruleFormInvalid: 'Something is not filled in correctly — check the fields marked in red',
   tabForward: 'Forwarding',
   inboundGroup: 'Listener Group',
   outboundGroup: 'Outbound Group',
