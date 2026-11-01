@@ -1,6 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { render, screen } from '@testing-library/react';
 
 const { mockGet, mockPut } = vi.hoisted(() => ({ mockGet: vi.fn(), mockPut: vi.fn() }));
 const { mockUseAuth } = vi.hoisted(() => ({ mockUseAuth: vi.fn() }));
@@ -25,25 +24,16 @@ beforeEach(() => {
   mockUseAuth.mockReset();
 });
 
-describe('naming a node from the node status page', () => {
-  it('an admin edits the label: PUT to the node, then the list is read again', async () => {
+describe('node names on the node status page', () => {
+  it('an admin sees no editing here: naming a machine is done on the device-group page', async () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
     mockGet.mockImplementation((url: string) =>
       Promise.resolve(url === '/nodes' ? ok([node()]) : url === '/system/version' ? version : ok([])));
-    mockPut.mockResolvedValue(ok('蓝希云 1号'));
-    const user = userEvent.setup();
     render(<NodeStatus />);
-
-    await user.click(await screen.findByRole('button', { name: /编辑备注|nodeLabelEdit/ }));
-    const box = await screen.findByRole('textbox');
-    await user.type(box, '蓝希云 1号');
-    fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
-    fireEvent.keyUp(box, { key: 'Enter', keyCode: 13 });
-
-    await waitFor(() => expect(mockPut).toHaveBeenCalledTimes(1));
-    expect(mockPut).toHaveBeenCalledWith('/nodes/11/label/abc123', { label: '蓝希云 1号' });
-    await waitFor(() =>
-      expect(mockGet.mock.calls.filter((c) => c[0] === '/nodes').length).toBeGreaterThan(1));
+    await screen.findByText('JTTI-HK');
+    expect(screen.queryByRole('button', { name: /编辑备注|nodeLabelEdit/ })).toBeNull();
+    expect(screen.queryByText(/添加备注|nodeLabelAdd/)).toBeNull();
+    expect(mockPut).not.toHaveBeenCalled();
   });
 
   it('shows the saved name', async () => {

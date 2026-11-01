@@ -81,27 +81,25 @@ describe('NodeLabelCell', () => {
   });
 });
 
-describe('the label column', () => {
+describe('the label column on the node status page', () => {
   const props = { panelProtocol: 0, latestNodeVersion: '1.1.0', nodeVersionCheckFailed: false, isMobile: false, t, openDetail: vi.fn() };
   const header = () => Array.from(document.querySelectorAll('.ant-table-thead th')).map((th) => th.textContent);
 
-  it('is always there for an admin, so a node can be named', () => {
-    render(<NodeGroupSection {...props} rows={[row({ online: true })]} onSetLabel={vi.fn()} />);
-    expect(header()).toContain('nodeLabel');
+  it('is not there while no node has a name, so the page looks as it always did', () => {
+    render(<NodeGroupSection {...props} rows={[row({ online: true })]} />);
+    expect(header()).not.toContain('nodeLabel');
   });
 
-  it('is there for a user only once some node has a label to show', () => {
-    const { unmount } = render(<NodeGroupSection {...props} rows={[row({ online: true })]} />);
-    expect(header()).not.toContain('nodeLabel');
-    unmount();
-
+  it('appears, read-only, once some node has a name', () => {
     render(<NodeGroupSection {...props} rows={[row({ online: true, label: 'HK-1' })]} />);
     expect(header()).toContain('nodeLabel');
     expect(screen.getByText('HK-1')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'nodeLabelEdit' })).toBeNull();
   });
 
-  it('puts the name on each mobile card too', () => {
-    render(<NodeGroupSection {...props} isMobile rows={[row({ online: true, label: 'HK-1' })]} />);
+  it('puts the name on each mobile card too, and shows no "add" prompt on an unnamed one', () => {
+    render(<NodeGroupSection {...props} isMobile rows={[row({ online: true, label: 'HK-1' }), row({ node_id: 'n2', online: true })]} />);
     expect(screen.getByText('HK-1')).toBeInTheDocument();
+    expect(screen.queryByText('nodeLabelAdd')).toBeNull();
   });
 });

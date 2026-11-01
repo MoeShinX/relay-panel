@@ -32,16 +32,12 @@ interface Props {
    *  offline rows — deleting an online node's record achieves nothing, because
    *  the next report (within ~10s) recreates it. Absent for the user view. */
   onDelete?: (row: NodeDisplayRow) => void;
-  /** Admin-only: save one node's label ('' clears it). Makes the 备注 column
-   *  editable. Absent for the user view, where the column only appears when
-   *  some node has a label to show. */
-  onSetLabel?: (row: NodeDisplayRow, label: string) => Promise<boolean>;
 }
 
 /** Desktop table for one group's nodes. Both admin and user share the same
  *  columns — the permission difference is in the data source (admin reads
  *  /nodes, user reads /nodes/shared) and the detail drawer. */
-export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeVersionCheckFailed, t, openDetail, showUpgrade, onDelete, onSetLabel }: Props) {
+export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeVersionCheckFailed, t, openDetail, showUpgrade, onDelete }: Props) {
   const labels = { d: t('uptimeDay'), h: t('uptimeHour'), m: t('uptimeMinute'), s: t('uptimeSecond') };
 
   const columns = [
@@ -63,10 +59,12 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
       },
     },
     // The admin's name for each machine, so a group's several nodes can be told
-    // apart at a glance. Shown to a regular user only when a node has one.
-    ...(onSetLabel || rows.some((r) => r.label) ? [{
+    // apart at a glance. Read-only here (it is edited on the device-group page),
+    // and the column only exists once some node has a name, so a panel that
+    // names nothing looks exactly as it did.
+    ...(rows.some((r) => r.label) ? [{
       title: t('nodeLabel'), key: 'label', width: 168,
-      render: (_: unknown, r: NodeDisplayRow) => <NodeLabelCell row={r} t={t} onSave={onSetLabel} />,
+      render: (_: unknown, r: NodeDisplayRow) => <NodeLabelCell row={r} t={t} />,
     }] : []),
     // v1.0.10: node version moved forward, with the upgrade action right after it.
     // v1.2: compared against the latest NODE release (latestNodeVersion), not
