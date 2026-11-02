@@ -20,6 +20,13 @@ use std::time::Duration;
 /// container or snapshot mounts rather than disks anyone wants listed.
 pub const MAX_DISKS: usize = 16;
 
+/// Smallest disk listed besides `/`: 10 GiB. A real system or data disk is
+/// bigger than this; what is smaller is a recovery or boot partition, or one of
+/// the many small volumes a container host mounts, and none of that is a disk
+/// anyone wants in the list. `/` is always listed, whatever its size. The panel
+/// applies the same floor to what older nodes report (frontend `MIN_EXTRA_DISK_BYTES`).
+pub const MIN_EXTRA_DISK_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+
 /// Filesystems that live on a disk of this machine and are worth listing.
 /// `vfat` is mostly the EFI partition, so [`is_listed`] only lets it through
 /// outside /boot. `fuseblk` is how ntfs-3g / exfat-fuse show a block device.
@@ -176,8 +183,9 @@ pub fn select_disk_mounts(
 }
 
 /// Turn mountinfo text into the disk list: choose the mounts, ask `stat` for
-/// each one's (total, used) bytes, and drop those it cannot answer for or that
-/// report no size. At most `max` are returned, and `stat` is not asked about
+/// each one's (total, used) bytes, and drop those it cannot answer for, that
+/// report no size, or (other than `/`) that are smaller than
+/// [`MIN_EXTRA_DISK_BYTES`]. At most `max` are returned, and `stat` is not asked about
 /// more than it takes to fill them.
 pub fn pick_disks(
     mountinfo: &str,
@@ -191,7 +199,10 @@ pub fn pick_disks(
             break;
         }
         if let Some((total, used)) = stat(&e.mount) {
-            if total > 0 {
+            // `/` is the primary disk and always shows; any other one has to be
+            // a disk worth the name (see MIN_EXTRA_DISK_BYTES).
+            let big_enough = e.mount == "/" || total >= MIN_EXTRA_DISK_BYTES;
+            if total > 0 && big_enough {
                 out.push(DiskUsage {
                     mount: e.mount,
                     fs_type: e.fs_type,
@@ -202,6 +213,22 @@ pub fn pick_disks(
         }
     }
     out
+}
+
+/// (total, used) bytes from a filesystem's block counts, the way `df` shows
+/// them: the size is every block, and the used space is every block that is not
+/// free (`blocks - bfree`).
+///
+/// It is NOT `total - bavail` (what an ordinary user can still write). The two
+/// differ by the blocks a filesystem keeps back for root — 5% on a default
+/// ext4 — and counting those as used made an empty 4 TB data disk show about
+/// 200 GB in use, and left that much on the page after everything on it had been
+/// deleted.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn usage_from_counts(unit: u64, blocks: u64, bfree: u64) -> (u64, u64) {
+    let total = unit.saturating_mul(blocks);
+    let free = unit.saturating_mul(bfree).min(total);
+    (total, total - free)
 }
 
 /// Every real local disk of this machine, `/` first. Empty when it cannot be
@@ -307,10 +334,8 @@ mod platform {
         v.into()
     }
 
-    /// (total, used) bytes of the filesystem mounted at `path`, worked out the
-    /// way the primary disk's figures are (sysinfo's: block size times blocks,
-    /// and used = total - available to an ordinary user). None when the kernel
-    /// will not say.
+    /// (total, used) bytes of the filesystem mounted at `path`, as `df` shows
+    /// them (see [`super::usage_from_counts`]). None when the kernel will not say.
     pub fn statvfs_usage(path: &str) -> Option<(u64, u64)> {
         let cpath = CString::new(path).ok()?;
         // SAFETY: `st` is plain data the kernel fills in, and `cpath` is a
@@ -322,10 +347,17 @@ mod platform {
             }
             st
         };
-        let bsize = wide(st.f_bsize);
-        let total = bsize.saturating_mul(wide(st.f_blocks));
-        let avail = bsize.saturating_mul(wide(st.f_bavail));
-        Some((total, total.saturating_sub(avail)))
+        // The block counts are in units of the fragment size; the block size is
+        // only the fallback for a filesystem that does not report one.
+        let unit = match wide(st.f_frsize) {
+            0 => wide(st.f_bsize),
+            n => n,
+        };
+        Some(super::usage_from_counts(
+            unit,
+            wide(st.f_blocks),
+            wide(st.f_bfree),
+        ))
     }
 }
 
@@ -558,6 +590,8 @@ mod tests {
         );
     }
 
+    const GIB: u64 = 1024 * 1024 * 1024;
+
     #[test]
     fn pick_disks_reports_sizes_and_drops_empty_or_unanswered_ones() {
         let text = "\
@@ -572,9 +606,9 @@ mod tests {
             |_| true,
             |m| match m {
                 "/" => Some((100, 40)),
-                "/data" => Some((1000, 250)),
+                "/data" => Some((1000 * GIB, 250 * GIB)),
                 "/empty" => Some((0, 0)),
-                "/odd" => Some((10, 99)),
+                "/odd" => Some((20 * GIB, 99 * GIB)),
                 _ => None,
             },
             MAX_DISKS,
@@ -589,11 +623,49 @@ mod tests {
             disks,
             vec![
                 disk("/", "ext4", 100, 40),
-                disk("/data", "xfs", 1000, 250),
+                disk("/data", "xfs", 1000 * GIB, 250 * GIB),
                 // used is never reported as more than the total
-                disk("/odd", "ext4", 10, 10),
+                disk("/odd", "ext4", 20 * GIB, 20 * GIB),
             ]
         );
+    }
+
+    /// A 20 GB system disk and a 100 GB data disk are what the list is for; the
+    /// small partitions and the little volumes of a container host are not.
+    #[test]
+    fn small_partitions_are_not_listed_but_root_always_is() {
+        let text = "\
+1 0 8:2 / / rw - ext4 /dev/vda1 rw
+2 0 8:16 / /data rw - ext4 /dev/vdb1 rw
+3 0 8:32 / /mnt/hdd rw - xfs /dev/sdb1 rw
+4 0 8:48 / /recovery rw - ext4 /dev/vda2 rw
+5 0 8:64 / /srv/volumes/tenant-4 rw - ext4 /dev/loop4 rw
+6 0 8:80 / /srv/volumes/tenant-5 rw - ext4 /dev/loop5 rw
+";
+        let sizes = |m: &str| match m {
+            "/" => Some((20 * GIB, 6 * GIB)),
+            "/data" => Some((100 * GIB, 40 * GIB)),
+            "/mnt/hdd" => Some((10 * GIB, GIB)), // exactly the floor: listed
+            "/recovery" => Some((512 * 1024 * 1024, 100)),
+            "/srv/volumes/tenant-4" => Some((10 * GIB - 1, 0)), // just under: not
+            "/srv/volumes/tenant-5" => Some((9 * GIB + 800 * 1024 * 1024, 1)), // "9.75 GB"
+            _ => None,
+        };
+        let mounts: Vec<String> = pick_disks(text, |_| true, sizes, MAX_DISKS)
+            .into_iter()
+            .map(|d| d.mount)
+            .collect();
+        assert_eq!(mounts, vec!["/", "/data", "/mnt/hdd"]);
+
+        // A tiny `/` is still the primary disk.
+        let only_root = pick_disks(
+            "1 0 8:2 / / rw - ext4 /dev/vda1 rw\n",
+            |_| true,
+            |_| Some((2 * GIB, GIB)),
+            MAX_DISKS,
+        );
+        assert_eq!(only_root.len(), 1);
+        assert_eq!(only_root[0].mount, "/");
     }
 
     #[test]
@@ -611,7 +683,7 @@ mod tests {
             |_| true,
             |_| {
                 asked += 1;
-                Some((10, 1))
+                Some((50 * GIB, GIB))
             },
             MAX_DISKS,
         );
@@ -622,8 +694,43 @@ mod tests {
     }
 
     #[test]
+    fn used_space_is_what_df_shows_not_what_is_left_for_ordinary_users() {
+        // The 12 GiB ext4 I measured: 3145728 blocks of 4 KiB, 157286 of them
+        // reserved for root, and nothing written to it but the filesystem's own
+        // bookkeeping.
+        let blocks = 3_145_728;
+        let reserved = 157_286;
+        let bfree = blocks - 6; // all but a few blocks of metadata
+        let (total, used) = usage_from_counts(4096, blocks, bfree);
+        assert_eq!(total, 12 * GIB);
+        assert_eq!(used, 6 * 4096, "an empty disk is empty");
+        // The old figure (total - available-to-users) would have said this much:
+        let old_used = total - 4096 * (bfree - reserved);
+        assert!(
+            old_used > GIB / 2,
+            "the reserved blocks, wrongly counted as used"
+        );
+    }
+
+    #[test]
+    fn counts_that_make_no_sense_cannot_make_used_exceed_total_or_underflow() {
+        assert_eq!(usage_from_counts(4096, 100, 100), (409_600, 0));
+        assert_eq!(
+            usage_from_counts(4096, 100, 250),
+            (409_600, 0),
+            "free is capped at the size"
+        );
+        assert_eq!(usage_from_counts(4096, 0, 0), (0, 0));
+        assert_eq!(
+            usage_from_counts(u64::MAX, 4, 1),
+            (u64::MAX, 0),
+            "saturates, never panics"
+        );
+    }
+
+    #[test]
     fn nothing_to_report_is_an_empty_list() {
-        assert!(pick_disks("", |_| true, |_| Some((1, 1)), MAX_DISKS).is_empty());
+        assert!(pick_disks("", |_| true, |_| Some((50 * GIB, GIB)), MAX_DISKS).is_empty());
     }
 
     fn one_disk(mount: &str) -> Vec<DiskUsage> {

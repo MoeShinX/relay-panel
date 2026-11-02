@@ -450,9 +450,16 @@ export default function Groups() {
           scroll={tableScroll}
           size="small"
           columns={[
-            // The admin's name for the machine (set on the node status page) leads;
+            // The admin's name for the machine (edited right here, in this column) leads;
             // the id stays for matching it to a node's own node-id file.
-            { title: t('nodeLabel'), dataIndex: 'label', key: 'label', width: 200, render: (_: unknown, n: NodeStatus) => <NodeLabelCell row={n} t={t} onSave={handleSetNodeLabel} /> },
+            { title: t('nodeLabel'), dataIndex: 'label', key: 'label', width: 200, render: (_: unknown, n: NodeStatus) => (
+              <div>
+                <NodeLabelCell row={n} t={t} onSave={handleSetNodeLabel} />
+                {/* The address under the name: with a dozen machines in a group the
+                    name alone is not always enough to tell which box is which. */}
+                <NodeAddresses node={n} />
+              </div>
+            ) },
             { title: 'ID', dataIndex: 'node_id', key: 'node_id', width: 120, render: (v: string | undefined) => v ? <Text code style={{ fontSize: 11 }}>{v.slice(0, 8)}...{v.slice(-4)}</Text> : '-' },
             { title: t('status'), dataIndex: 'online', key: 'online', width: 80, render: (v: boolean) => <Tag color={v ? 'green' : 'default'}>{v ? t('online') : t('offline')}</Tag> },
             { title: t('nodeVersion'), dataIndex: 'node_version', key: 'version', width: 90, render: (v: string | undefined) => v ? <span className="rp-mono" style={{ fontSize: 12 }}>{v}</span> : '-' },
@@ -600,5 +607,17 @@ export default function Groups() {
         )}
       </Modal>
     </>
+  );
+}
+
+/** A node's public address(es), small and grey under its name: IPv4 first, then
+ *  IPv6 when it has one. Nothing when the node has not reported an address yet. */
+function NodeAddresses({ node }: { node: { public_ipv4?: string | null; public_ip?: string | null; public_ipv6?: string | null } }) {
+  const addrs = [node.public_ipv4 ?? node.public_ip, node.public_ipv6].filter((a): a is string => !!a);
+  if (addrs.length === 0) return null;
+  return (
+    <div className="rp-mono" style={{ fontSize: 11, lineHeight: '16px', color: 'var(--rp-text-tertiary)' }}>
+      {addrs.map((a) => <div key={a}>{a}</div>)}
+    </div>
   );
 }

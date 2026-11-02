@@ -100,7 +100,7 @@ describe('NodeDetailDrawer disks', () => {
   const GB = 1024 ** 3;
   const primary = { disk_usage_percent: 40, disk_used: 4 * GB, disk_total: 10 * GB, disk_mount: '/' };
   const root = { mount: '/', fs_type: 'ext4', total: 10 * GB, used: 4 * GB };
-  const data = { mount: '/data', fs_type: 'xfs', total: 4 * GB, used: GB };
+  const data = { mount: '/data', fs_type: 'xfs', total: 100 * GB, used: 25 * GB };
   const renderZh = (row: NodeDisplayRow) =>
     render(
       <I18nContext.Provider value={zh}>
@@ -114,8 +114,38 @@ describe('NodeDetailDrawer disks', () => {
     const r = diskRow();
     expect(within(r).getByText('/data')).toBeInTheDocument();
     expect(within(r).getByText(/xfs/)).toBeInTheDocument();
-    expect(within(r).getByText('1.00 GB / 4.00 GB (25.0%)')).toBeInTheDocument();
+    expect(within(r).getByText('25.00 GB / 100.00 GB (25.0%)')).toBeInTheDocument();
     expect(within(r).getByText('4.00 GB / 10.00 GB (40.0%)')).toBeInTheDocument();
+  });
+
+  // The list is of disks, not of every partition and volume a machine mounts:
+  // `/` always, any other one only from 10 GiB up.
+  it('leaves out small partitions and container volumes, from nodes that still report them', () => {
+    const small = [
+      { mount: '/recovery', fs_type: 'ext4', total: GB / 2, used: 100 },
+      { mount: '/srv/volumes/tenant-4', fs_type: 'ext4', total: 9.75 * GB, used: 0.04 * GB },
+      { mount: '/srv/volumes/tenant-5', fs_type: 'ext4', total: 9.75 * GB, used: 0.07 * GB },
+    ];
+    renderZh({ ...baseRow, ...primary, disks: [root, ...small, data] });
+    const r = diskRow();
+    expect(within(r).getByText('/data')).toBeInTheDocument();
+    expect(within(r).queryByText('/recovery')).toBeNull();
+    expect(within(r).queryByText(/tenant/)).toBeNull();
+  });
+
+  it('is the one-line summary when only small partitions are left besides /', () => {
+    const small = { mount: '/boot2', fs_type: 'ext4', total: 2 * GB, used: GB };
+    renderZh({ ...baseRow, ...primary, disks: [root, small] });
+    expect(within(diskRow()).getByText('40.0% (4.00 GB/10.00 GB)')).toBeInTheDocument();
+    expect(within(diskRow()).queryByText('/boot2')).toBeNull();
+  });
+
+  it('shows a disk exactly 10 GiB big, and a small / still shows', () => {
+    const edge = { mount: '/hdd', fs_type: 'ext4', total: 10 * GB, used: GB };
+    renderZh({ ...baseRow, ...primary, disks: [{ ...root, total: 2 * GB, used: GB }, edge] });
+    const r = diskRow();
+    expect(within(r).getByText('/hdd')).toBeInTheDocument();
+    expect(within(r).getByText('/')).toBeInTheDocument();
   });
 
   it('keeps the one-line summary for a single disk', () => {
