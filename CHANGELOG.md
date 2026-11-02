@@ -10,14 +10,23 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+## [1.2.20] - 2026-11-02
+
+Ships alongside `node-v1.2.11`. The config protocol is unchanged at version 4.
+No schema change.
+
+Upgrading: "Update now" on the dashboard, or `git pull --quiet && ./deploy.sh`.
+Used space that matches `df` needs the node on `node-v1.2.11`; everything else
+here is the panel alone.
+
 ### Changed
 
 - **The disk list shows disks, not every partition or volume.** On the node
   status page the disk tooltip and the detail drawer list `/` and any other
   disk of at least 10 GiB; smaller partitions and the small volumes of a
   container host are left out. This applies to what nodes already report, so
-  it takes effect with no node upgrade; a node from the next node release also
-  stops sending them.
+  it takes effect with no node upgrade; from `node-v1.2.11` the node also stops
+  sending them.
 - **A group's node list shows each node's address under its name**, small and
   grey (IPv4, then IPv6 when there is one), so a long list of named machines is
   still easy to tell apart.
@@ -27,8 +36,8 @@ independent `v*` / `node-v*` tracks since this release).
 
 ### Fixed
 
-- **A disk's used space no longer includes the space reserved for root** (from
-  the next node release): an empty disk showed about 5% in use, and deleting
+- **A disk's used space no longer includes the space reserved for root** (needs
+  `node-v1.2.11`): an empty disk showed about 5% in use, and deleting
   data left that much on the page. It now matches `df`. Nodes already running
   keep reporting the old figure until they are upgraded.
 

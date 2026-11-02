@@ -13,6 +13,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.2.11] - 2026-11-02
+
+Runs against any current panel (still protocol version 4). Upgrade only if you
+want used space to match `df`; panel 1.2.20 already hides the small partitions
+that older nodes report.
+
 ### Fixed
 
 - **Used space now matches `df`.** The node counted a disk's used space as
