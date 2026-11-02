@@ -450,7 +450,7 @@ export default function Groups() {
           scroll={tableScroll}
           size="small"
           columns={[
-            // The admin's name for the machine (set on the node status page) leads;
+            // The admin's name for the machine (edited right here, in this column) leads;
             // the id stays for matching it to a node's own node-id file.
             { title: t('nodeLabel'), dataIndex: 'label', key: 'label', width: 200, render: (_: unknown, n: NodeStatus) => (
               <div>
