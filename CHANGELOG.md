@@ -10,6 +10,13 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A disk's used space no longer includes the space reserved for root** (from
+  the next node release): an empty disk showed about 5% in use, and deleting
+  data left that much on the page. It now matches `df`. Nodes already running
+  keep reporting the old figure until they are upgraded.
+
 ### Changed
 
 - **The disk list shows disks, not every partition or volume.** On the node

@@ -1099,6 +1099,22 @@ impl NodeMetrics {
             .collect(crate::disks::collect_disks, Duration::from_secs(3))
             .await;
 
+        // The primary disk's figures come from the same reading as that list when
+        // `/` is in it, so the bar and the list's `/` row cannot disagree, and
+        // both are `df`'s: sysinfo's "total - available" counts the space a
+        // filesystem keeps back for root (5% on ext4) as used. A container's `/`
+        // is not in the list (it is an overlay), and keeps sysinfo's figures.
+        let (disk_total, disk_used, disk_usage_percent, disk_mount) =
+            match disk_list.iter().find(|d| d.mount == "/" && d.total > 0) {
+                Some(d) => (
+                    Some(d.total),
+                    Some(d.used),
+                    Some((d.used as f64 / d.total as f64 * 100.0) as f32),
+                    Some(d.mount.clone()),
+                ),
+                None => (disk_total, disk_used, disk_usage_percent, disk_mount),
+            };
+
         // --- Network: real-time rate + cumulative, for the SELECTED NIC only ---
         // v0.4.6: sample_networks returns the selected interface's total_*
         // (since-boot cumulative). The cumulative field is that value directly;

@@ -13,6 +13,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Used space now matches `df`.** The node counted a disk's used space as
+  "total minus what an ordinary user can still write", which includes the space
+  a filesystem keeps back for root (5% on a default ext4). An empty 12 GB disk
+  showed 0.62 GB in use, an empty 4 TB data disk about 200 GB, and after you
+  deleted everything on a disk that much stayed on the page. Used is now the
+  blocks that are not free, as `df` shows it, for `/` and every other disk
+  alike (they used to be worked out two ways). Block counts are read in the
+  filesystem's own fragment size.
+
 ### Changed
 
 - **The disk list shows disks, not every partition.** Besides `/`, a filesystem

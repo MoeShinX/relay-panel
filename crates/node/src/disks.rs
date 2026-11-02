@@ -215,6 +215,22 @@ pub fn pick_disks(
     out
 }
 
+/// (total, used) bytes from a filesystem's block counts, the way `df` shows
+/// them: the size is every block, and the used space is every block that is not
+/// free (`blocks - bfree`).
+///
+/// It is NOT `total - bavail` (what an ordinary user can still write). The two
+/// differ by the blocks a filesystem keeps back for root — 5% on a default
+/// ext4 — and counting those as used made an empty 4 TB data disk show about
+/// 200 GB in use, and left that much on the page after everything on it had been
+/// deleted.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn usage_from_counts(unit: u64, blocks: u64, bfree: u64) -> (u64, u64) {
+    let total = unit.saturating_mul(blocks);
+    let free = unit.saturating_mul(bfree).min(total);
+    (total, total - free)
+}
+
 /// Every real local disk of this machine, `/` first. Empty when it cannot be
 /// found out (not Linux, /proc unreadable); never an error, so a failure here
 /// cannot hold up the rest of a status report.
@@ -318,10 +334,8 @@ mod platform {
         v.into()
     }
 
-    /// (total, used) bytes of the filesystem mounted at `path`, worked out the
-    /// way the primary disk's figures are (sysinfo's: block size times blocks,
-    /// and used = total - available to an ordinary user). None when the kernel
-    /// will not say.
+    /// (total, used) bytes of the filesystem mounted at `path`, as `df` shows
+    /// them (see [`super::usage_from_counts`]). None when the kernel will not say.
     pub fn statvfs_usage(path: &str) -> Option<(u64, u64)> {
         let cpath = CString::new(path).ok()?;
         // SAFETY: `st` is plain data the kernel fills in, and `cpath` is a
@@ -333,10 +347,17 @@ mod platform {
             }
             st
         };
-        let bsize = wide(st.f_bsize);
-        let total = bsize.saturating_mul(wide(st.f_blocks));
-        let avail = bsize.saturating_mul(wide(st.f_bavail));
-        Some((total, total.saturating_sub(avail)))
+        // The block counts are in units of the fragment size; the block size is
+        // only the fallback for a filesystem that does not report one.
+        let unit = match wide(st.f_frsize) {
+            0 => wide(st.f_bsize),
+            n => n,
+        };
+        Some(super::usage_from_counts(
+            unit,
+            wide(st.f_blocks),
+            wide(st.f_bfree),
+        ))
     }
 }
 
@@ -670,6 +691,41 @@ mod tests {
         assert_eq!(disks[0].mount, "/");
         assert_eq!(disks[1].mount, "/mnt/d00");
         assert_eq!(asked, MAX_DISKS, "no statvfs beyond what is reported");
+    }
+
+    #[test]
+    fn used_space_is_what_df_shows_not_what_is_left_for_ordinary_users() {
+        // The 12 GiB ext4 I measured: 3145728 blocks of 4 KiB, 157286 of them
+        // reserved for root, and nothing written to it but the filesystem's own
+        // bookkeeping.
+        let blocks = 3_145_728;
+        let reserved = 157_286;
+        let bfree = blocks - 6; // all but a few blocks of metadata
+        let (total, used) = usage_from_counts(4096, blocks, bfree);
+        assert_eq!(total, 12 * GIB);
+        assert_eq!(used, 6 * 4096, "an empty disk is empty");
+        // The old figure (total - available-to-users) would have said this much:
+        let old_used = total - 4096 * (bfree - reserved);
+        assert!(
+            old_used > GIB / 2,
+            "the reserved blocks, wrongly counted as used"
+        );
+    }
+
+    #[test]
+    fn counts_that_make_no_sense_cannot_make_used_exceed_total_or_underflow() {
+        assert_eq!(usage_from_counts(4096, 100, 100), (409_600, 0));
+        assert_eq!(
+            usage_from_counts(4096, 100, 250),
+            (409_600, 0),
+            "free is capped at the size"
+        );
+        assert_eq!(usage_from_counts(4096, 0, 0), (0, 0));
+        assert_eq!(
+            usage_from_counts(u64::MAX, 4, 1),
+            (u64::MAX, 0),
+            "saturates, never panics"
+        );
     }
 
     #[test]
