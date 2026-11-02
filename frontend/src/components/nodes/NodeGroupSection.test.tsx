@@ -262,7 +262,7 @@ describe('every disk in the disk tooltip', () => {
   const GB = 1024 ** 3;
   const primary = { disk_usage_percent: 40, disk_used: 4 * GB, disk_total: 10 * GB, disk_mount: '/' };
   const root = { mount: '/', fs_type: 'ext4', total: 10 * GB, used: 4 * GB };
-  const data = { mount: '/data', fs_type: 'xfs', total: 4 * GB, used: GB };
+  const data = { mount: '/data', fs_type: 'xfs', total: 100 * GB, used: 25 * GB };
   const section = (r: NodeDisplayRow, isMobile: boolean) =>
     render(
       <NodeGroupSection rows={[r]} panelProtocol={0} latestNodeVersion="1.1.0" nodeVersionCheckFailed={false} isMobile={isMobile} t={t} openDetail={vi.fn()} />,
@@ -277,7 +277,7 @@ describe('every disk in the disk tooltip', () => {
       await userEvent.setup().hover(diskBar(container));
       expect(await screen.findByText('/data')).toBeInTheDocument();
       expect(screen.getByText('/')).toBeInTheDocument();
-      expect(screen.getByText(/1\.00 GB \/ 4\.00 GB \(25\.0%\)/)).toBeInTheDocument();
+      expect(screen.getByText(/25\.00 GB \/ 100\.00 GB \(25\.0%\)/)).toBeInTheDocument();
       expect(screen.getByText(/4\.00 GB \/ 10\.00 GB \(40\.0%\)/)).toBeInTheDocument();
     });
 

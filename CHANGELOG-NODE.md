@@ -13,6 +13,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+
+- **The disk list shows disks, not every partition.** Besides `/`, a filesystem
+  is listed only when it is at least 10 GiB: a 20 GB system disk and a 100 GB
+  data disk, not a recovery partition or the many 9.75 GB volumes a container
+  host mounts. `/` is always listed, whatever its size.
+
 ## [1.2.10] - 2026-10-24
 
 Runs against any current panel (still protocol version 4). Panel 1.2.16 and

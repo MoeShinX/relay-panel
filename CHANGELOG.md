@@ -12,6 +12,15 @@ independent `v*` / `node-v*` tracks since this release).
 
 ### Changed
 
+- **The disk list shows disks, not every partition or volume.** On the node
+  status page the disk tooltip and the detail drawer list `/` and any other
+  disk of at least 10 GiB; smaller partitions and the small volumes of a
+  container host are left out. This applies to what nodes already report, so
+  it takes effect with no node upgrade; a node from the next node release also
+  stops sending them.
+
+### Changed
+
 - **The panel's web page is built with Node.js 26** (the current LTS) instead of
   Node.js 20, which has reached end of life. Only the build changes; running
   panels are not affected.
