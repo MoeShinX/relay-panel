@@ -12,9 +12,18 @@ independent `v*` / `node-v*` tracks since this release).
 
 ### Changed
 
+- **The disk list shows disks, not every partition or volume.** On the node
+  status page the disk tooltip and the detail drawer list `/` and any other
+  disk of at least 10 GiB; smaller partitions and the small volumes of a
+  container host are left out. This applies to what nodes already report, so
+  it takes effect with no node upgrade; a node from the next node release also
+  stops sending them.
 - **A group's node list shows each node's address under its name**, small and
   grey (IPv4, then IPv6 when there is one), so a long list of named machines is
   still easy to tell apart.
+- **The panel's web page is built with Node.js 26** (the current LTS) instead of
+  Node.js 20, which has reached end of life. Only the build changes; running
+  panels are not affected.
 
 ### Fixed
 
@@ -22,21 +31,6 @@ independent `v*` / `node-v*` tracks since this release).
   the next node release): an empty disk showed about 5% in use, and deleting
   data left that much on the page. It now matches `df`. Nodes already running
   keep reporting the old figure until they are upgraded.
-
-### Changed
-
-- **The disk list shows disks, not every partition or volume.** On the node
-  status page the disk tooltip and the detail drawer list `/` and any other
-  disk of at least 10 GiB; smaller partitions and the small volumes of a
-  container host are left out. This applies to what nodes already report, so
-  it takes effect with no node upgrade; a node from the next node release also
-  stops sending them.
-
-### Changed
-
-- **The panel's web page is built with Node.js 26** (the current LTS) instead of
-  Node.js 20, which has reached end of life. Only the build changes; running
-  panels are not affected.
 
 ## [1.2.19] - 2026-11-01
 
