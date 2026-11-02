@@ -10,6 +10,12 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Changed
+
+- **A group's node list shows each node's address under its name**, small and
+  grey (IPv4, then IPv6 when there is one), so a long list of named machines is
+  still easy to tell apart.
+
 ### Fixed
 
 - **A disk's used space no longer includes the space reserved for root** (from

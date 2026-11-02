@@ -186,6 +186,26 @@ describe('monitor-only groups hide the forwarding fields', () => {
     await waitFor(() => expect(mockGet.mock.calls.filter((c) => c[0] === '/nodes').length).toBeGreaterThan(1));
   });
 
+  it('shows the node\'s address under its name', async () => {
+    const user = userEvent.setup();
+    const nodes = [
+      { group_id: 1, node_id: 'aaa111', online: true, label: 'HK-1', public_ipv4: '160.79.106.22', public_ipv6: '2001:db8::5' },
+      { group_id: 1, node_id: 'bbb222', online: true, public_ip: '203.0.113.9' }, // an older node: legacy field only
+      { group_id: 1, node_id: 'ccc333', online: true }, // has not reported an address
+    ];
+    mockGet.mockImplementation((url: string) =>
+      Promise.resolve(url === '/groups' ? ok([group()]) : url === '/nodes' ? ok(nodes) : ok([])));
+    render(<Groups />);
+    await user.click(await screen.findByRole('button', { name: /expand|展开/i }));
+
+    expect(await screen.findByText('160.79.106.22')).toBeInTheDocument();
+    expect(screen.getByText('2001:db8::5')).toBeInTheDocument();
+    expect(screen.getByText('203.0.113.9')).toBeInTheDocument();
+    // The name stays editable, and an unnamed node still offers to be named.
+    expect(screen.getByText('HK-1')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'nodeLabelEdit' })).toHaveLength(3);
+  });
+
   it('leaves the stored forwarding fields alone when converting a group to monitor', async () => {
     // Wiping them would destroy what you need to convert the group back, and
     // flipping the type to look at something has to be a safe round trip.
