@@ -364,3 +364,12 @@ html, body, #root {
 .rp-node-label .ant-typography-edit:focus-visible {
   color: var(--rp-text-tertiary);
 }
+
+/* The box a label turns into while it is edited. antd slides it 12px left so the
+   text inside lines up with the text it replaces; in a table cell that put the
+   box's left edge past the cell's, where the table clips it. It starts at the
+   same edge as the name and the header above it instead. */
+.rp-node-label.ant-typography-edit-content,
+.rp-node-label .ant-typography-edit-content {
+  inset-inline-start: 0 !important;
+}
