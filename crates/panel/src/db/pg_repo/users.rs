@@ -351,6 +351,7 @@ impl UserRepository for PgRepository {
             .bind(uid)
             .execute(&mut *tx)
             .await?;
+        super::latency::purge_owner_latency(&mut tx, uid).await?;
         sqlx::query("DELETE FROM device_groups WHERE uid = $1")
             .bind(uid)
             .execute(&mut *tx)

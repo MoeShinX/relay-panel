@@ -1,8 +1,8 @@
-import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, message, Popconfirm, Typography, Tag, Tooltip, Alert, Switch } from 'antd';
-import { PlusOutlined, ReloadOutlined, CopyOutlined, EditOutlined, CloudServerOutlined, CodeOutlined, ApiOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
+import { Table, Button, Modal, Drawer, Form, Input, InputNumber, Select, Space, message, Popconfirm, Typography, Tag, Tooltip, Alert, Switch } from 'antd';
+import { PlusOutlined, ReloadOutlined, CopyOutlined, EditOutlined, CloudServerOutlined, CodeOutlined, ApiOutlined, SafetyCertificateOutlined, LineChartOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import api from '../api/client';
-import type { ApiEnvelope, DeviceGroup, User, NodeStatus } from '../api/types';
+import type { ApiEnvelope, DeviceGroup, LatencyGroupCount, User, NodeStatus } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { useTableScroll } from '../hooks/useIsMobile';
 import { copyText } from '../utils/clipboard';
@@ -10,6 +10,7 @@ import { formatDateTime } from '../utils/format';
 import { buildInstallCommand } from '../utils/installCommand';
 import { useAuth } from '../auth/useAuth';
 import ConnectHostsEditor from '../components/ConnectHostsEditor';
+import LatencySettings from '../components/LatencySettings';
 import { NodeLabelCell } from '../components/nodes/NodeLabelCell';
 import HostSummary from '../components/HostSummary';
 import { joinHosts, splitHosts } from '../utils/connectHosts';
@@ -50,6 +51,10 @@ export default function Groups() {
   const [rotating, setRotating] = useState<DeviceGroup | null>(null);
   const [confirmName, setConfirmName] = useState('');
   const [rotateBusy, setRotateBusy] = useState(false);
+  // v1.2.21: the group whose latency monitoring is open in the drawer, and how
+  // many targets each group has (shown on the button; absent = none).
+  const [latencyGroup, setLatencyGroup] = useState<DeviceGroup | null>(null);
+  const [latencyCounts, setLatencyCounts] = useState<Map<number, number>>(new Map());
   // See load(): a failed read must not be shown as an empty group list.
   const [loadFailed, setLoadFailed] = useState(false);
   const [createForm] = Form.useForm();
@@ -90,6 +95,11 @@ export default function Groups() {
           const n = await api.get<unknown, ApiEnvelope<NodeStatus[]>>('/nodes');
           setNodes(n.data || []);
         } catch { setNodes([]); }
+        // v1.2.21: which groups have latency targets, for the button's count.
+        try {
+          const l = await api.get<unknown, ApiEnvelope<LatencyGroupCount[]>>('/admin/latency/groups');
+          setLatencyCounts(new Map(l.code === 0 ? (l.data || []).map((c) => [c.group_id, c.targets]) : []));
+        } catch { setLatencyCounts(new Map()); }
       } else {
         setUsers([]);
         try {
@@ -387,6 +397,20 @@ export default function Groups() {
       render: (_: unknown, g: DeviceGroup) => (
         <Space size={0} wrap style={{ minWidth: 150 }}>
           <Button size="small" type="text" icon={<EditOutlined />} onClick={() => handleEdit(g)}>{t('edit')}</Button>
+          {isAdmin && (
+            <Tooltip title={t('latencyMonitorHint')}>
+              <Button
+                size="small"
+                type="text"
+                icon={<LineChartOutlined />}
+                data-testid={`latency-config-${g.id}`}
+                onClick={() => setLatencyGroup(g)}
+              >
+                {t('latencyMonitor')}
+                {latencyCounts.get(g.id) ? ` (${latencyCounts.get(g.id)})` : ''}
+              </Button>
+            </Tooltip>
+          )}
           <Tooltip title={t('rotateTokenHint')}>
             <Button
               size="small"
@@ -566,6 +590,28 @@ export default function Groups() {
           )}
         </Form>
       </Modal>
+
+      {/* v1.2.21: the group's latency targets and probe interval. Remounted per
+          group (and on every open) so it always starts from what is saved. */}
+      <Drawer
+        title={latencyGroup ? `${t('latencyMonitor')} · ${latencyGroup.name}` : t('latencyMonitor')}
+        open={latencyGroup !== null}
+        onClose={() => setLatencyGroup(null)}
+        size={760}
+        destroyOnHidden
+      >
+        {latencyGroup && (
+          <LatencySettings
+            key={latencyGroup.id}
+            groupId={latencyGroup.id}
+            onSaved={(count) => setLatencyCounts((cur) => {
+              const next = new Map(cur);
+              if (count > 0) next.set(latencyGroup.id, count); else next.delete(latencyGroup.id);
+              return next;
+            })}
+          />
+        )}
+      </Drawer>
 
       <Modal title={cmdModalContent.title} open={cmdModalOpen} onCancel={() => setCmdModalOpen(false)} footer={null} width={580}>
         {cmdModalContent.body}

@@ -292,6 +292,47 @@ CREATE TABLE IF NOT EXISTS traffic_batches (
 );
 CREATE INDEX IF NOT EXISTS idx_traffic_batches_created ON traffic_batches(created_at);
 
+-- v1.2.21: latency monitor. Mirrors SQLite Migration 48 and PG revision 31; see
+-- the SQLite SCHEMA_SQL comment for the design (no FKs, NULL min/max when every
+-- probe was lost). Brand-new tables, so their indexes are safe here as well as
+-- in revision 31.
+CREATE TABLE IF NOT EXISTS latency_targets (
+    id BIGSERIAL PRIMARY KEY,
+    group_id BIGINT NOT NULL,
+    name TEXT NOT NULL,
+    carrier TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    host TEXT NOT NULL,
+    port INTEGER,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_latency_targets_group ON latency_targets(group_id, sort_order);
+CREATE TABLE IF NOT EXISTS latency_minute (
+    node_id TEXT NOT NULL,
+    target_id BIGINT NOT NULL,
+    minute_ts BIGINT NOT NULL,
+    sent BIGINT NOT NULL,
+    lost BIGINT NOT NULL,
+    rtt_sum_ms DOUBLE PRECISION NOT NULL,
+    rtt_min_ms DOUBLE PRECISION,
+    rtt_max_ms DOUBLE PRECISION,
+    PRIMARY KEY (node_id, target_id, minute_ts)
+);
+CREATE INDEX IF NOT EXISTS idx_latency_minute_ts ON latency_minute(minute_ts);
+CREATE TABLE IF NOT EXISTS latency_hourly (
+    node_id TEXT NOT NULL,
+    target_id BIGINT NOT NULL,
+    hour_ts BIGINT NOT NULL,
+    sent BIGINT NOT NULL,
+    lost BIGINT NOT NULL,
+    rtt_sum_ms DOUBLE PRECISION NOT NULL,
+    rtt_min_ms DOUBLE PRECISION,
+    rtt_max_ms DOUBLE PRECISION,
+    PRIMARY KEY (node_id, target_id, hour_ts)
+);
+CREATE INDEX IF NOT EXISTS idx_latency_hourly_ts ON latency_hourly(hour_ts);
+
 -- v1.0.9: plan ↔ device_group grant map (mirrors SQLite baseline + Migration 35).
 CREATE TABLE IF NOT EXISTS plan_device_groups (
     plan_id BIGINT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
@@ -398,7 +439,7 @@ INSERT INTO schema_version (version) VALUES (1) ON CONFLICT (version) DO NOTHING
 /// The schema revision this build's baseline `PG_SCHEMA_SQL` represents. When a
 /// future release adds a column/table, bump this and add a matching arm in
 /// `run_pg_migrations`. `apply_pg_schema` seeds `schema_version` with revision 1.
-pub const PG_SCHEMA_VERSION: i32 = 30;
+pub const PG_SCHEMA_VERSION: i32 = 31;
 
 /// Apply PG_SCHEMA_SQL to a pool. PostgreSQL's prepared-statement protocol
 /// rejects multi-statement strings ("cannot insert multiple commands into a
@@ -1537,6 +1578,59 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         .await?;
         tx.commit().await?;
         tracing::info!("PG migration 30: device_groups.sort_order column present");
+    }
+
+    // v1.2.21 revision 31: latency monitor tables. Mirrors SQLite Migration 48;
+    // new tables, nothing to backfill.
+    if current < 31 {
+        let mut tx = pool.begin().await?;
+        for ddl in [
+            "CREATE TABLE IF NOT EXISTS latency_targets (
+                id BIGSERIAL PRIMARY KEY,
+                group_id BIGINT NOT NULL,
+                name TEXT NOT NULL,
+                carrier TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                host TEXT NOT NULL,
+                port INTEGER,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )",
+            "CREATE INDEX IF NOT EXISTS idx_latency_targets_group ON latency_targets(group_id, sort_order)",
+            "CREATE TABLE IF NOT EXISTS latency_minute (
+                node_id TEXT NOT NULL,
+                target_id BIGINT NOT NULL,
+                minute_ts BIGINT NOT NULL,
+                sent BIGINT NOT NULL,
+                lost BIGINT NOT NULL,
+                rtt_sum_ms DOUBLE PRECISION NOT NULL,
+                rtt_min_ms DOUBLE PRECISION,
+                rtt_max_ms DOUBLE PRECISION,
+                PRIMARY KEY (node_id, target_id, minute_ts)
+            )",
+            "CREATE INDEX IF NOT EXISTS idx_latency_minute_ts ON latency_minute(minute_ts)",
+            "CREATE TABLE IF NOT EXISTS latency_hourly (
+                node_id TEXT NOT NULL,
+                target_id BIGINT NOT NULL,
+                hour_ts BIGINT NOT NULL,
+                sent BIGINT NOT NULL,
+                lost BIGINT NOT NULL,
+                rtt_sum_ms DOUBLE PRECISION NOT NULL,
+                rtt_min_ms DOUBLE PRECISION,
+                rtt_max_ms DOUBLE PRECISION,
+                PRIMARY KEY (node_id, target_id, hour_ts)
+            )",
+            "CREATE INDEX IF NOT EXISTS idx_latency_hourly_ts ON latency_hourly(hour_ts)",
+        ] {
+            sqlx::query(ddl).execute(&mut *tx).await?;
+        }
+        sqlx::query(
+            "INSERT INTO schema_version (version) VALUES (31) ON CONFLICT (version) DO NOTHING",
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        tracing::info!("PG migration 31: latency monitor tables present");
     }
 
     Ok(())

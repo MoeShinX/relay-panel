@@ -6738,6 +6738,907 @@ async fn pg_migration_30_adds_group_sort_order() {
     cleanup(&db).await;
 }
 
+// ── v1.2.21: latency monitor ──
+
+fn lat_input(id: Option<i64>, name: &str, host: &str) -> LatencyTargetInput {
+    LatencyTargetInput {
+        id,
+        name: name.to_string(),
+        carrier: "telecom".to_string(),
+        kind: "tcp".to_string(),
+        host: host.to_string(),
+        port: Some(443),
+    }
+}
+
+fn lat_row(
+    target_id: i64,
+    minute_ts: i64,
+    sent: i64,
+    lost: i64,
+    sum: f64,
+    min: Option<f64>,
+    max: Option<f64>,
+) -> LatencyMinuteRow {
+    LatencyMinuteRow {
+        target_id,
+        minute_ts,
+        sent,
+        lost,
+        rtt_sum_ms: sum,
+        rtt_min_ms: min,
+        rtt_max_ms: max,
+    }
+}
+
+/// An hour's single bucket for one target, read back from the hourly table.
+async fn pg_lat_hour(db: &PgRepository, node: &str, target_id: i64, hour_ts: i64) -> LatencyBucket {
+    let mut rows = db
+        .query_latency_buckets(node, LatencyGranularity::Hour1, hour_ts, hour_ts + 3600)
+        .await
+        .unwrap();
+    rows.retain(|b| b.target_id == target_id);
+    assert_eq!(rows.len(), 1, "one hourly row for the target");
+    rows.remove(0)
+}
+
+/// Replacing the list keeps ids of the targets that stay, writes the new
+/// order, deletes what is not named together with its history, and never hands
+/// a deleted id to a later target.
+#[tokio::test]
+async fn pg_latency_targets_replace_keeps_ids_orders_and_deletes_history() {
+    let Some(db) = repo("lat_replace").await else {
+        return;
+    };
+    let first = db
+        .replace_latency_targets(
+            1,
+            "2026-01-01 00:00:00",
+            &[
+                lat_input(None, "A", "192.0.2.1"),
+                lat_input(None, "B", "192.0.2.2"),
+                lat_input(None, "C", "192.0.2.3"),
+            ],
+        )
+        .await
+        .unwrap()
+        .expect("all new");
+    let ids: Vec<i64> = first.iter().map(|t| t.id).collect();
+    assert_eq!(
+        first.iter().map(|t| t.sort_order).collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+    let (a, b, c) = (ids[0], ids[1], ids[2]);
+
+    db.record_latency_minutes(
+        "n1",
+        &[
+            lat_row(a, 36000, 6, 0, 60.0, Some(9.0), Some(11.0)),
+            lat_row(b, 36000, 6, 0, 60.0, Some(9.0), Some(11.0)),
+        ],
+    )
+    .await
+    .unwrap();
+
+    // Drop A, reorder C before B, rename C.
+    let second = db
+        .replace_latency_targets(
+            1,
+            "2026-01-02 00:00:00",
+            &[
+                lat_input(Some(c), "C2", "192.0.2.3"),
+                lat_input(Some(b), "B", "192.0.2.2"),
+            ],
+        )
+        .await
+        .unwrap()
+        .expect("known ids");
+    assert_eq!(
+        second
+            .iter()
+            .map(|t| (t.id, t.name.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(c, "C2"), (b, "B")]
+    );
+    assert_eq!(
+        second[0].created_at, "2026-01-01 00:00:00",
+        "an update keeps created_at"
+    );
+
+    // A's history is gone from both tables, B's is not.
+    let minutes = db
+        .query_latency_buckets("n1", LatencyGranularity::Minute1, 0, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        minutes.iter().map(|m| m.target_id).collect::<Vec<_>>(),
+        vec![b]
+    );
+    let hours = db
+        .query_latency_buckets("n1", LatencyGranularity::Hour1, 0, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        hours.iter().map(|m| m.target_id).collect::<Vec<_>>(),
+        vec![b]
+    );
+
+    // A new target never takes A's id back.
+    let third = db
+        .replace_latency_targets(
+            1,
+            "2026-01-03 00:00:00",
+            &[
+                lat_input(Some(c), "C2", "192.0.2.3"),
+                lat_input(Some(b), "B", "192.0.2.2"),
+                lat_input(None, "D", "192.0.2.4"),
+            ],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let d = third[2].id;
+    assert!(
+        d != a && d > c,
+        "ids are never reused (got {d}, deleted was {a})"
+    );
+    assert_eq!(db.list_latency_targets(1).await.unwrap(), third);
+    cleanup(&db).await;
+}
+
+/// Pointing a kept target at another host, port or kind starts its history
+/// over; renaming it or changing its carrier keeps the history.
+#[tokio::test]
+async fn pg_latency_target_moved_elsewhere_drops_its_history() {
+    let Some(db) = repo("lat_moved").await else {
+        return;
+    };
+    let seeded = db
+        .replace_latency_targets(
+            1,
+            "2026-01-01 00:00:00",
+            &[
+                lat_input(None, "A", "192.0.2.1"),
+                lat_input(None, "B", "192.0.2.2"),
+                lat_input(None, "C", "192.0.2.3"),
+            ],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let (a, b, c) = (seeded[0].id, seeded[1].id, seeded[2].id);
+    let rows: Vec<LatencyMinuteRow> = [a, b, c]
+        .iter()
+        .map(|id| lat_row(*id, 36000, 6, 0, 60.0, Some(9.0), Some(11.0)))
+        .collect();
+    db.record_latency_minutes("n1", &rows).await.unwrap();
+
+    // A: renamed and re-carriered only. B: new host. C: same host, new port.
+    let mut renamed = lat_input(Some(a), "A2", "192.0.2.1");
+    renamed.carrier = "unicom".to_string();
+    let mut new_port = lat_input(Some(c), "C", "192.0.2.3");
+    new_port.port = Some(80);
+    db.replace_latency_targets(
+        1,
+        "2026-01-02 00:00:00",
+        &[renamed, lat_input(Some(b), "B", "192.0.2.20"), new_port],
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    for g in [LatencyGranularity::Minute1, LatencyGranularity::Hour1] {
+        let left = db.query_latency_buckets("n1", g, 0, 100_000).await.unwrap();
+        assert_eq!(
+            left.iter().map(|m| m.target_id).collect::<Vec<_>>(),
+            vec![a],
+            "only the renamed target keeps its history"
+        );
+    }
+}
+
+/// An input naming an id that does not exist changes nothing at all — not even
+/// the deletions the same request would have made.
+#[tokio::test]
+async fn pg_latency_targets_replace_with_an_unknown_id_changes_nothing() {
+    let Some(db) = repo("lat_unknown").await else {
+        return;
+    };
+    let seeded = db
+        .replace_latency_targets(
+            1,
+            "2026-01-01 00:00:00",
+            &[lat_input(None, "A", "192.0.2.1")],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let a = seeded[0].id;
+    db.record_latency_minutes(
+        "n1",
+        &[lat_row(a, 36000, 6, 0, 60.0, Some(9.0), Some(11.0))],
+    )
+    .await
+    .unwrap();
+
+    let out = db
+        .replace_latency_targets(
+            1,
+            "2026-01-02 00:00:00",
+            &[lat_input(Some(a + 100), "ghost", "192.0.2.9")],
+        )
+        .await
+        .unwrap();
+    assert!(out.is_none());
+    assert_eq!(
+        db.list_latency_targets(1).await.unwrap(),
+        seeded,
+        "A was not deleted"
+    );
+    let still = db
+        .query_latency_buckets("n1", LatencyGranularity::Minute1, 0, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(still.len(), 1, "A's history was not deleted");
+    cleanup(&db).await;
+}
+
+/// A minute stored again replaces the stored one, and the hour it falls in is
+/// rebuilt from its minutes — a re-sent report must never count twice.
+#[tokio::test]
+async fn pg_latency_minute_resend_is_idempotent_and_does_not_double_the_hour() {
+    let Some(db) = repo("lat_idem").await else {
+        return;
+    };
+    let m0 = lat_row(1, 36000, 6, 0, 60.0, Some(8.0), Some(14.0));
+    let m1 = lat_row(1, 36060, 6, 1, 50.0, Some(9.0), Some(20.0));
+    db.record_latency_minutes("n1", &[m0.clone(), m1.clone()])
+        .await
+        .unwrap();
+
+    let h = pg_lat_hour(&db, "n1", 1, 36000).await;
+    assert_eq!((h.sent, h.lost, h.rtt_sum_ms), (12, 1, 110.0));
+    assert_eq!((h.rtt_min_ms, h.rtt_max_ms), (Some(8.0), Some(20.0)));
+
+    // The very same report again, twice: nothing moves.
+    for _ in 0..2 {
+        db.record_latency_minutes("n1", &[m0.clone(), m1.clone()])
+            .await
+            .unwrap();
+    }
+    let h = pg_lat_hour(&db, "n1", 1, 36000).await;
+    assert_eq!((h.sent, h.lost, h.rtt_sum_ms), (12, 1, 110.0));
+
+    // A later report of the same minute with different figures: the newest wins,
+    // in the minute row and in the hour (the old figures leave it).
+    let m0b = lat_row(1, 36000, 6, 3, 30.0, Some(9.0), Some(11.0));
+    db.record_latency_minutes("n1", &[m0b]).await.unwrap();
+    let minutes = db
+        .query_latency_buckets("n1", LatencyGranularity::Minute1, 36000, 36120)
+        .await
+        .unwrap();
+    assert_eq!(minutes.len(), 2);
+    assert_eq!((minutes[0].lost, minutes[0].rtt_sum_ms), (3, 30.0));
+    let h = pg_lat_hour(&db, "n1", 1, 36000).await;
+    assert_eq!((h.sent, h.lost, h.rtt_sum_ms), (12, 4, 80.0));
+    assert_eq!((h.rtt_min_ms, h.rtt_max_ms), (Some(9.0), Some(20.0)));
+
+    // Another node's identical minute is its own series.
+    db.record_latency_minutes("n2", &[m0]).await.unwrap();
+    let h = pg_lat_hour(&db, "n1", 1, 36000).await;
+    assert_eq!(h.sent, 12);
+    assert_eq!(pg_lat_hour(&db, "n2", 1, 36000).await.sent, 6);
+    cleanup(&db).await;
+}
+
+/// The hour keeps the peak and the lost count its average would hide, and a
+/// minute that lost everything cannot drag the hour's minimum to nothing.
+#[tokio::test]
+async fn pg_latency_hour_keeps_peak_and_loss_and_ignores_all_lost_minutes_for_min() {
+    let Some(db) = repo("lat_peak").await else {
+        return;
+    };
+    let mut rows: Vec<LatencyMinuteRow> = (0..58)
+        .map(|i| lat_row(1, 36000 + i * 60, 6, 0, 60.0, Some(10.0), Some(10.0)))
+        .collect();
+    rows.push(lat_row(
+        1,
+        36000 + 58 * 60,
+        6,
+        0,
+        1000.0,
+        Some(10.0),
+        Some(900.0),
+    ));
+    rows.push(lat_row(1, 36000 + 59 * 60, 6, 6, 0.0, None, None));
+    db.record_latency_minutes("n1", &rows).await.unwrap();
+
+    let h = pg_lat_hour(&db, "n1", 1, 36000).await;
+    assert_eq!((h.sent, h.lost), (360, 6));
+    assert_eq!(h.rtt_max_ms, Some(900.0), "the spike survives the rollup");
+    assert_eq!(
+        h.rtt_min_ms,
+        Some(10.0),
+        "an all-lost minute has no minimum"
+    );
+    let answered = (h.sent - h.lost) as f64;
+    assert!(
+        (h.rtt_sum_ms / answered - 4480.0 / 354.0).abs() < 1e-9,
+        "mean over answered only"
+    );
+
+    // A whole hour of loss: no round trip at all, not a zero one.
+    db.record_latency_minutes("n1", &[lat_row(2, 39600, 6, 6, 0.0, None, None)])
+        .await
+        .unwrap();
+    let h = pg_lat_hour(&db, "n1", 2, 39600).await;
+    assert_eq!((h.lost, h.rtt_min_ms, h.rtt_max_ms), (6, None, None));
+    cleanup(&db).await;
+}
+
+/// Five-minute buckets add up their minutes, the series split by target, and
+/// the window is `[since, until)`.
+#[tokio::test]
+async fn pg_latency_buckets_group_five_minutes_and_respect_the_window() {
+    let Some(db) = repo("lat_bucket").await else {
+        return;
+    };
+    let mut rows = Vec::new();
+    for k in 0..6 {
+        let m = 3000 + k * 60; // 3000..3300 is one 5-minute bucket, 3300 the next
+        rows.push(lat_row(
+            1,
+            m,
+            6,
+            0,
+            60.0 + k as f64,
+            Some(9.0 + k as f64),
+            Some(11.0),
+        ));
+        rows.push(lat_row(2, m, 6, 1, 50.0, Some(20.0), Some(30.0 + k as f64)));
+    }
+    db.record_latency_minutes("n1", &rows).await.unwrap();
+
+    let five = db
+        .query_latency_buckets("n1", LatencyGranularity::Minute5, 3000, 3600)
+        .await
+        .unwrap();
+    assert_eq!(
+        five.iter().map(|b| (b.ts, b.target_id)).collect::<Vec<_>>(),
+        vec![(3000, 1), (3000, 2), (3300, 1), (3300, 2)]
+    );
+    assert_eq!((five[0].sent, five[0].lost), (30, 0));
+    assert_eq!(five[0].rtt_sum_ms, 60.0 + 61.0 + 62.0 + 63.0 + 64.0);
+    assert_eq!(
+        (five[0].rtt_min_ms, five[0].rtt_max_ms),
+        (Some(9.0), Some(11.0))
+    );
+    assert_eq!(
+        (five[1].sent, five[1].lost, five[1].rtt_max_ms),
+        (30, 5, Some(34.0))
+    );
+    assert_eq!(five[2].sent, 6, "the second bucket holds one minute");
+
+    // 1-minute view: every row; until is exclusive, since inclusive.
+    let all = db
+        .query_latency_buckets("n1", LatencyGranularity::Minute1, 3000, 3600)
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 12);
+    let windowed = db
+        .query_latency_buckets("n1", LatencyGranularity::Minute1, 3060, 3120)
+        .await
+        .unwrap();
+    assert_eq!(
+        windowed.iter().map(|b| b.ts).collect::<Vec<_>>(),
+        vec![3060, 3060]
+    );
+    assert!(db
+        .query_latency_buckets("other", LatencyGranularity::Minute1, 0, 100_000)
+        .await
+        .unwrap()
+        .is_empty());
+    cleanup(&db).await;
+}
+
+/// Each target's newest minute inside the window, and nothing for a node or
+/// window without data.
+#[tokio::test]
+async fn pg_latency_latest_is_the_newest_minute_per_target_in_the_window() {
+    let Some(db) = repo("lat_latest").await else {
+        return;
+    };
+    db.record_latency_minutes(
+        "n1",
+        &[
+            lat_row(1, 600, 6, 0, 60.0, Some(9.0), Some(11.0)),
+            lat_row(1, 660, 6, 0, 66.0, Some(9.0), Some(12.0)),
+            lat_row(1, 720, 6, 6, 0.0, None, None),
+            lat_row(2, 100, 6, 0, 60.0, Some(9.0), Some(11.0)),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let recent = db.query_latest_latency("n1", 500).await.unwrap();
+    assert_eq!(recent.len(), 1);
+    assert_eq!(
+        (recent[0].target_id, recent[0].minute_ts, recent[0].lost),
+        (1, 720, 6)
+    );
+    assert_eq!(recent[0].rtt_min_ms, None);
+
+    let wide = db.query_latest_latency("n1", 0).await.unwrap();
+    assert_eq!(
+        wide.iter()
+            .map(|r| (r.target_id, r.minute_ts))
+            .collect::<Vec<_>>(),
+        vec![(1, 720), (2, 100)]
+    );
+    assert!(db.query_latest_latency("n2", 0).await.unwrap().is_empty());
+    cleanup(&db).await;
+}
+
+/// The two tables age out on their own cutoffs, and only past them.
+#[tokio::test]
+async fn pg_latency_prune_deletes_each_table_by_its_own_cutoff() {
+    let Some(db) = repo("lat_prune").await else {
+        return;
+    };
+    db.record_latency_minutes(
+        "n1",
+        &[
+            lat_row(1, 1020, 6, 0, 60.0, Some(9.0), Some(11.0)),
+            lat_row(1, 5040, 6, 0, 60.0, Some(9.0), Some(11.0)),
+        ],
+    )
+    .await
+    .unwrap();
+
+    // The minute row at 1020 and the hourly row of hour 0 are past their cutoffs.
+    let n = db.prune_latency_history(2000, 3600).await.unwrap();
+    assert_eq!(n, 2);
+    let minutes = db
+        .query_latency_buckets("n1", LatencyGranularity::Minute1, 0, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(minutes.iter().map(|b| b.ts).collect::<Vec<_>>(), vec![5040]);
+    let hours = db
+        .query_latency_buckets("n1", LatencyGranularity::Hour1, 0, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(hours.iter().map(|b| b.ts).collect::<Vec<_>>(), vec![3600]);
+
+    // Nothing else is past a cutoff of zero.
+    assert_eq!(db.prune_latency_history(0, 0).await.unwrap(), 0);
+    cleanup(&db).await;
+}
+
+/// Revision 31 gives a database from before the latency monitor its tables,
+/// with the keys the idempotent store relies on, and re-running is a no-op.
+#[tokio::test]
+async fn pg_migration_31_adds_latency_tables() {
+    let Some(db) = repo("mig31_latency").await else {
+        return;
+    };
+    // Back to the pre-31 shape.
+    for t in ["latency_hourly", "latency_minute", "latency_targets"] {
+        sqlx::query(&format!("DROP TABLE {t}"))
+            .execute(&db.pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query("DELETE FROM schema_version WHERE version >= 31")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    crate::db::pg_schema::run_pg_migrations(&db.pool)
+        .await
+        .expect("revision 31 must apply to an older database");
+    let v: i32 = sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM schema_version")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(v, crate::db::pg_schema::PG_SCHEMA_VERSION);
+
+    // A target belongs to a device group: the column is required.
+    let no_group = sqlx::query(
+        "INSERT INTO latency_targets (name, carrier, kind, host, sort_order, created_at)          VALUES ('t', 'other', 'icmp', '192.0.2.1', 0, 'now')",
+    )
+    .execute(&db.pool)
+    .await;
+    assert!(no_group.is_err(), "group_id is NOT NULL");
+    let idx: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pg_indexes WHERE indexname = 'idx_latency_targets_group'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(idx, 1);
+
+    let row = LatencyMinuteRow {
+        target_id: 1,
+        minute_ts: 600,
+        sent: 6,
+        lost: 0,
+        rtt_sum_ms: 60.0,
+        rtt_min_ms: Some(9.0),
+        rtt_max_ms: Some(11.0),
+    };
+    db.record_latency_minutes("n1", std::slice::from_ref(&row))
+        .await
+        .unwrap();
+    db.record_latency_minutes("n1", &[row]).await.unwrap();
+    let rows = db
+        .query_latency_buckets("n1", LatencyGranularity::Minute1, 0, 10_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "the table keys make a re-sent minute replace"
+    );
+
+    crate::db::pg_schema::run_pg_migrations(&db.pool)
+        .await
+        .expect("re-run is a no-op");
+    cleanup(&db).await;
+}
+
+/// One group's targets are its own: another group's list, ids and history are
+/// untouched by a replace, an id of another group is as unknown as a deleted
+/// one (nothing changes), and the per-group counts follow.
+#[tokio::test]
+async fn pg_latency_targets_belong_to_one_group_each() {
+    let Some(db) = repo("lat_group_own").await else {
+        return;
+    };
+    pg_seed_group(&db, 1).await;
+    pg_seed_group(&db, 2).await;
+    let a = db
+        .replace_latency_targets(
+            1,
+            "2026-01-01 00:00:00",
+            &[lat_input(None, "A", "192.0.2.1")],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let b = db
+        .replace_latency_targets(
+            2,
+            "2026-01-01 00:00:00",
+            &[
+                lat_input(None, "B1", "192.0.2.2"),
+                lat_input(None, "B2", "192.0.2.3"),
+            ],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(a.iter().all(|t| t.group_id == 1));
+    assert!(b.iter().all(|t| t.group_id == 2));
+    assert_eq!(db.list_latency_targets(1).await.unwrap(), a);
+    assert_eq!(db.list_latency_targets(2).await.unwrap(), b);
+    assert!(db.list_latency_targets(3).await.unwrap().is_empty());
+    assert_eq!(
+        db.count_latency_targets_by_group().await.unwrap(),
+        vec![
+            LatencyGroupCount {
+                group_id: 1,
+                targets: 1
+            },
+            LatencyGroupCount {
+                group_id: 2,
+                targets: 2
+            },
+        ]
+    );
+    db.record_latency_minutes(
+        "n1",
+        &[
+            lat_row(a[0].id, 36000, 6, 0, 60.0, Some(9.0), Some(11.0)),
+            lat_row(b[0].id, 36000, 6, 0, 60.0, Some(9.0), Some(11.0)),
+        ],
+    )
+    .await
+    .unwrap();
+
+    // Group 1 naming one of group 2's ids: refused, and not even its own
+    // deletion goes through.
+    let out = db
+        .replace_latency_targets(
+            1,
+            "2026-01-02 00:00:00",
+            &[lat_input(Some(b[0].id), "stolen", "192.0.2.9")],
+        )
+        .await
+        .unwrap();
+    assert!(out.is_none());
+    assert_eq!(db.list_latency_targets(1).await.unwrap(), a);
+    assert_eq!(db.list_latency_targets(2).await.unwrap(), b);
+
+    // Emptying group 1 removes only group 1's targets and their history.
+    let out = db
+        .replace_latency_targets(1, "2026-01-02 00:00:00", &[])
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(out.is_empty());
+    assert_eq!(db.list_latency_targets(2).await.unwrap(), b);
+    let left = db
+        .query_latency_buckets("n1", LatencyGranularity::Minute1, 0, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        left.iter().map(|m| m.target_id).collect::<Vec<_>>(),
+        vec![b[0].id]
+    );
+    assert_eq!(
+        db.count_latency_targets_by_group().await.unwrap(),
+        vec![LatencyGroupCount {
+            group_id: 2,
+            targets: 2
+        }]
+    );
+    cleanup(&db).await;
+}
+
+/// The comparison queries: totals per node and target over a window, and one
+/// target's series per node, from the minute or the hourly table, for the
+/// nodes and the target asked for only.
+#[tokio::test]
+async fn pg_latency_group_queries_total_and_split_by_node() {
+    let Some(db) = repo("lat_group_queries").await else {
+        return;
+    };
+    let rows = |mean: f64, lost: i64| {
+        vec![
+            lat_row(
+                1,
+                3000,
+                6,
+                lost,
+                mean * (6 - lost) as f64,
+                Some(mean - 1.0),
+                Some(mean + 4.0),
+            ),
+            lat_row(1, 3060, 6, 0, 60.0, Some(9.0), Some(11.0)),
+            lat_row(2, 3000, 6, 0, 120.0, Some(19.0), Some(21.0)),
+        ]
+    };
+    db.record_latency_minutes("n1", &rows(10.0, 0))
+        .await
+        .unwrap();
+    db.record_latency_minutes("n2", &rows(30.0, 3))
+        .await
+        .unwrap();
+    db.record_latency_minutes("other", &rows(99.0, 0))
+        .await
+        .unwrap();
+    let nodes = vec!["n1".to_string(), "n2".to_string(), "ghost".to_string()];
+
+    let totals = db
+        .query_latency_totals(&nodes, &[1, 2], false, 0, 100_000)
+        .await
+        .unwrap();
+    let key = |t: &LatencyNodeTotal| (t.node_id.clone(), t.target_id);
+    assert_eq!(
+        totals.iter().map(key).collect::<Vec<_>>(),
+        vec![
+            ("n1".to_string(), 1),
+            ("n1".to_string(), 2),
+            ("n2".to_string(), 1),
+            ("n2".to_string(), 2)
+        ],
+        "only the nodes asked for, one row per node and target"
+    );
+    let n1t1 = &totals[0];
+    assert_eq!((n1t1.sent, n1t1.lost, n1t1.rtt_sum_ms), (12, 0, 120.0));
+    let n2t1 = &totals[2];
+    assert_eq!((n2t1.sent, n2t1.lost, n2t1.rtt_sum_ms), (12, 3, 150.0));
+
+    // only the targets asked for; the window is [since, until)
+    let t2 = db
+        .query_latency_totals(&nodes, &[2], false, 0, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(t2.len(), 2);
+    assert!(t2.iter().all(|t| t.target_id == 2));
+    let first_minute = db
+        .query_latency_totals(&nodes, &[1], false, 3060, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(first_minute[0].sent, 6, "since is inclusive of 3060 only");
+    assert!(db
+        .query_latency_totals(&nodes, &[1], false, 0, 3000)
+        .await
+        .unwrap()
+        .is_empty());
+    // the hourly table holds the same sums
+    let hourly = db
+        .query_latency_totals(&nodes, &[1, 2], true, 0, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(hourly.len(), 4);
+    assert_eq!(
+        (hourly[0].sent, hourly[0].lost, hourly[0].rtt_sum_ms),
+        (12, 0, 120.0)
+    );
+    // nothing to ask about is nothing back
+    assert!(db
+        .query_latency_totals(&[], &[1], false, 0, 100_000)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(db
+        .query_latency_totals(&nodes, &[], false, 0, 100_000)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // one target's series, a line per node, oldest bucket first
+    let series = db
+        .query_latency_target_series(&nodes, 1, LatencyGranularity::Minute1, 0, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        series
+            .iter()
+            .map(|b| (b.ts, b.node_id.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(3000, "n1"), (3000, "n2"), (3060, "n1"), (3060, "n2")]
+    );
+    let five = db
+        .query_latency_target_series(&nodes, 1, LatencyGranularity::Minute5, 0, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(five.len(), 2, "both minutes fall in one 5-minute bucket");
+    let n2 = five.iter().find(|b| b.node_id == "n2").unwrap();
+    assert_eq!((n2.sent, n2.lost, n2.rtt_sum_ms), (12, 3, 150.0));
+    assert_eq!((n2.rtt_min_ms, n2.rtt_max_ms), (Some(9.0), Some(34.0)));
+    let hour = db
+        .query_latency_target_series(&nodes, 1, LatencyGranularity::Hour1, 0, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(hour.iter().map(|b| b.ts).collect::<Vec<_>>(), vec![0, 0]);
+    assert!(db
+        .query_latency_target_series(&[], 1, LatencyGranularity::Minute1, 0, 100_000)
+        .await
+        .unwrap()
+        .is_empty());
+    cleanup(&db).await;
+}
+
+/// Deleting a device group removes its latency targets and their minute and
+/// hourly history in the same step; another group's stay.
+#[tokio::test]
+async fn pg_deleting_a_group_removes_its_latency_targets_and_history() {
+    let Some(db) = repo("lat_group_delete").await else {
+        return;
+    };
+    pg_seed_group(&db, 1).await;
+    pg_seed_group(&db, 2).await;
+    let a = db
+        .replace_latency_targets(
+            1,
+            "2026-01-01 00:00:00",
+            &[lat_input(None, "A", "192.0.2.1")],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let b = db
+        .replace_latency_targets(
+            2,
+            "2026-01-01 00:00:00",
+            &[lat_input(None, "B", "192.0.2.2")],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    db.record_latency_minutes(
+        "n1",
+        &[
+            lat_row(a[0].id, 36000, 6, 0, 60.0, Some(9.0), Some(11.0)),
+            lat_row(b[0].id, 36000, 6, 0, 60.0, Some(9.0), Some(11.0)),
+        ],
+    )
+    .await
+    .unwrap();
+
+    // The wrong owner deletes nothing, latency data included.
+    let n = db.delete_group(1, &ResourceScope::Owner(77)).await.unwrap();
+    assert_eq!(n, 0);
+    assert_eq!(db.list_latency_targets(1).await.unwrap().len(), 1);
+
+    let n = db.delete_group(1, &ResourceScope::All).await.unwrap();
+    assert_eq!(n, 1);
+    assert!(db.list_latency_targets(1).await.unwrap().is_empty());
+    assert_eq!(db.list_latency_targets(2).await.unwrap(), b);
+    for g in [LatencyGranularity::Minute1, LatencyGranularity::Hour1] {
+        let left = db.query_latency_buckets("n1", g, 0, 100_000).await.unwrap();
+        assert_eq!(
+            left.iter().map(|x| x.target_id).collect::<Vec<_>>(),
+            vec![b[0].id],
+            "only the surviving group's history is left"
+        );
+    }
+    // A group that was not there changes nothing.
+    assert_eq!(db.delete_group(1, &ResourceScope::All).await.unwrap(), 0);
+    assert_eq!(db.list_latency_targets(2).await.unwrap(), b);
+    cleanup(&db).await;
+}
+
+/// Removing a user's account takes their groups' latency targets and history
+/// with it (cascade and bulk group delete alike); other users' groups keep
+/// theirs.
+#[tokio::test]
+async fn pg_deleting_a_user_removes_the_latency_data_of_their_groups() {
+    let Some(db) = repo("lat_user_delete").await else {
+        return;
+    };
+    db.insert_user("alice", "h", 1).await.unwrap();
+    db.insert_user("bob", "h", 1).await.unwrap();
+    let alice = db.find_by_username("alice").await.unwrap().unwrap().id;
+    let bob = db.find_by_username("bob").await.unwrap().unwrap().id;
+    for (g, uid) in [(1_i64, alice), (2, bob), (3, 1)] {
+        sqlx::query(
+            "INSERT INTO device_groups (id, name, group_type, token, uid) VALUES ($1, $2, 'in', $3, $4)",
+        )
+        .bind(g)
+        .bind(format!("g{g}"))
+        .bind(format!("tok-{g}"))
+        .bind(uid)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+    let mut ids = Vec::new();
+    for g in [1_i64, 2, 3] {
+        let t = db
+            .replace_latency_targets(
+                g,
+                "2026-01-01 00:00:00",
+                &[lat_input(None, "T", "192.0.2.1")],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        db.record_latency_minutes(
+            &format!("n{g}"),
+            &[lat_row(t[0].id, 36000, 6, 0, 60.0, Some(9.0), Some(11.0))],
+        )
+        .await
+        .unwrap();
+        ids.push(t[0].id);
+    }
+
+    assert_eq!(db.delete_user_cascade(alice).await.unwrap(), 1);
+    assert!(db.list_latency_targets(1).await.unwrap().is_empty());
+    assert_eq!(db.list_latency_targets(2).await.unwrap().len(), 1, "bob's");
+    assert_eq!(
+        db.list_latency_targets(3).await.unwrap().len(),
+        1,
+        "admin's"
+    );
+    let hours = db
+        .query_latency_buckets("n1", LatencyGranularity::Hour1, 0, 100_000)
+        .await
+        .unwrap();
+    assert!(hours.is_empty(), "alice's history went with her group");
+
+    assert_eq!(db.delete_groups_by_uid(bob).await.unwrap(), 1);
+    assert!(db.list_latency_targets(2).await.unwrap().is_empty());
+    assert_eq!(db.list_latency_targets(3).await.unwrap().len(), 1);
+    let left = db
+        .query_latency_buckets("n3", LatencyGranularity::Minute1, 0, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(left.len(), 1, "the admin's history is untouched");
+}
+
 // ── v1.2.21: free plans can be self-claimed once per user ──
 
 /// Call buy_plan_self_service for plan `pid` with fixed plan attributes.

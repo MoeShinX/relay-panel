@@ -1,3 +1,4 @@
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
@@ -29,7 +30,7 @@ describe('node names on the node status page', () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
     mockGet.mockImplementation((url: string) =>
       Promise.resolve(url === '/nodes' ? ok([node()]) : url === '/system/version' ? version : ok([])));
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await screen.findByText('JTTI-HK');
     expect(screen.queryByRole('button', { name: /编辑备注|nodeLabelEdit/ })).toBeNull();
     expect(screen.queryByText(/添加备注|nodeLabelAdd/)).toBeNull();
@@ -40,7 +41,7 @@ describe('node names on the node status page', () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
     mockGet.mockImplementation((url: string) =>
       Promise.resolve(url === '/nodes' ? ok([node({ label: 'HK-1 备用' })]) : url === '/system/version' ? version : ok([])));
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     expect(await screen.findByText('HK-1 备用')).toBeInTheDocument();
   });
 
@@ -48,7 +49,7 @@ describe('node names on the node status page', () => {
     mockUseAuth.mockReturnValue({ isAdmin: false });
     mockGet.mockImplementation((url: string) =>
       Promise.resolve(url === '/nodes/shared' ? ok([node({ label: 'HK-1' })]) : ok([])));
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     expect(await screen.findByText('HK-1')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /编辑备注|nodeLabelEdit/ })).toBeNull();
   });

@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import type { ReactNode } from 'react';
-import { Tag, Tooltip, Typography } from 'antd';
+import { Button, Tag, Tooltip, Typography } from 'antd';
+import { LineChartOutlined } from '@ant-design/icons';
 import type { Tfn } from './types';
 import type { NodeDisplayRow } from '../../api/types';
 import { CountryFlag } from './CountryFlag';
@@ -64,20 +65,47 @@ export function rateSummary(rows: NodeDisplayRow[]) {
 /** Dual-stack network cell — IPv4 line + IPv6 line. Each line shows the
  *  CountryFlag pill (SVG, no Emoji) followed by the IP. No country name and
  *  no regionUnknown text: unknown regions render "--". */
-export function NetworkCell({ row }: { row: NodeDisplayRow; t: Tfn }) {
+export function NetworkCell({ row, t, onOpenLatency }: { row: NodeDisplayRow; t: Tfn; onOpenLatency?: () => void }) {
   const v4 = row.public_ipv4 ?? row.public_ip;
   const v6 = row.public_ipv6;
-  if (!v4 && !v6) return <Text type="secondary">-</Text>;
-  const line = (ip: string, code: string | null | undefined) => (
+  // v1.2.21: admins get a small monitor icon beside the first address, opening
+  // the node's latency page. Only offered for a node that has an id (the page
+  // is keyed by it); the caller leaves `onOpenLatency` unset for everyone else.
+  const latencyButton = onOpenLatency && row.node_id ? (
+    <Tooltip title={t('latencyIconTip')}>
+      <Button
+        type="text"
+        size="small"
+        data-testid="latency-link"
+        aria-label={t('latencyIconTip')}
+        icon={<LineChartOutlined />}
+        style={{ height: 18, width: 18, minWidth: 18, padding: 0, fontSize: 12 }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onOpenLatency();
+        }}
+      />
+    </Tooltip>
+  ) : null;
+  if (!v4 && !v6) {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <Text type="secondary">-</Text>
+        {latencyButton}
+      </span>
+    );
+  }
+  const line = (ip: string, code: string | null | undefined, extra: ReactNode) => (
     <div key={ip} style={{ fontSize: 12, lineHeight: '18px', display: 'flex', alignItems: 'center', gap: 6 }}>
       <CountryFlag code={code} />
       <span className="rp-mono" style={{ whiteSpace: 'nowrap' }}>{ip}</span>
+      {extra}
     </div>
   );
   return (
     <>
-      {v4 ? line(v4, row.ipv4_country_code) : null}
-      {v6 ? line(v6, row.ipv6_country_code) : null}
+      {v4 ? line(v4, row.ipv4_country_code, latencyButton) : null}
+      {v6 ? line(v6, row.ipv6_country_code, v4 ? null : latencyButton) : null}
     </>
   );
 }

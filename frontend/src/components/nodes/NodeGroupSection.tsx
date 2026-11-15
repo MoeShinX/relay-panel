@@ -1,7 +1,7 @@
  
 import { useRef, type HTMLAttributes, type ReactNode } from 'react';
-import { Tag, Typography, Collapse } from 'antd';
-import { ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
+import { Button, Tag, Typography, Collapse } from 'antd';
+import { ArrowUpOutlined, ArrowDownOutlined, LineChartOutlined } from '@ant-design/icons';
 import type { NodeDisplayRow } from '../../api/types';
 import type { Tfn } from './types';
 import { NodeDesktopTable } from './NodeDesktopTable';
@@ -26,6 +26,13 @@ interface Props {
   t: Tfn;
   openDetail: (row: NodeDisplayRow) => void;
   onDelete?: (row: NodeDisplayRow) => void;
+  /** v1.2.21: admin-only. Opens the node's latency page; the monitor icon beside
+   *  the node's IP is drawn only when this is set (and the row has a node id). */
+  onOpenLatency?: (row: NodeDisplayRow) => void;
+  /** v1.2.21: admin-only, and only for a group that has latency targets. Opens
+   *  the group's comparison page; the header's "monitor" button is drawn only
+   *  when this is set. */
+  onOpenGroupLatency?: () => void;
   /** Admin-only drag handle for reordering the groups, shown at the start of
    *  the header. The caller supplies it (it needs the sortable context). */
   dragHandle?: ReactNode;
@@ -41,7 +48,7 @@ interface Props {
 /** One group block: header bar (name · ID · online/total · aggregate ↑↓) +
  *  either a desktop table or mobile list. Collapsible. A group with only a
  *  placeholder row shows "no node reporting". */
-export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeVersionCheckFailed, isMobile, t, openDetail, onDelete, dragHandle, dragHeaderProps, onBatchUpgraded }: Props) {
+export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeVersionCheckFailed, isMobile, t, openDetail, onDelete, onOpenLatency, onOpenGroupLatency, dragHandle, dragHeaderProps, onBatchUpgraded }: Props) {
   // The upgrade column / badge is the admin view, like the batch buttons.
   const showUpgrade = !!onBatchUpgraded;
   const head = rows[0];
@@ -84,6 +91,21 @@ export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeV
             />
           </UpgradeSlot>
         )}
+        {onOpenGroupLatency && (
+          <Button
+            size="small"
+            icon={<LineChartOutlined />}
+            data-testid={`group-latency-${head.group_id}`}
+            data-upgrade-obstacle=""
+            // The header folds the group on a click or Enter and starts a drag
+            // on a press: the button must do none of those.
+            onClick={(e) => { e.stopPropagation(); onOpenGroupLatency(); }}
+            onKeyDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            {t('latencyGroupMonitor')}
+          </Button>
+        )}
         <span className="rp-mono" data-upgrade-obstacle="">
           <Text type="secondary" style={{ fontSize: 12 }}>
             <ArrowUpOutlined /> {formatBps(up)} <ArrowDownOutlined /> {formatBps(down)}
@@ -107,10 +129,11 @@ export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeV
         t={t}
         openDetail={openDetail}
         showUpgrade={showUpgrade}
+        onOpenLatency={onOpenLatency}
       />
     </div>
   ) : (
-    <NodeDesktopTable rows={rows} panelProtocol={panelProtocol} latestNodeVersion={latestNodeVersion} nodeVersionCheckFailed={nodeVersionCheckFailed} t={t} openDetail={openDetail} showUpgrade={showUpgrade} onDelete={onDelete} />
+    <NodeDesktopTable rows={rows} panelProtocol={panelProtocol} latestNodeVersion={latestNodeVersion} nodeVersionCheckFailed={nodeVersionCheckFailed} t={t} openDetail={openDetail} showUpgrade={showUpgrade} onDelete={onDelete} onOpenLatency={onOpenLatency} />
   );
 
   return (

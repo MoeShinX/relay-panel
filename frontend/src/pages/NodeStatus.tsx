@@ -15,8 +15,9 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { LineChartOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
-import type { ApiEnvelope, NodeStatus, SharedNodeSummary, NodeDisplayRow, NodeLiveRate } from '../api/types';
+import type { ApiEnvelope, LatencyGroupCount, NodeStatus, SharedNodeSummary, NodeDisplayRow, NodeLiveRate } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { useAuth } from '../auth/useAuth';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -67,8 +68,11 @@ export default function NodeStatus() {
   const { t } = useI18n();
   const { isAdmin } = useAuth();
   const isMobile = useIsMobile();
+  const navigate = useNavigate();
 
   const [adminRows, setAdminRows] = useState<NodeStatus[] | null>(null);
+  // v1.2.21: the device groups that have latency targets configured.
+  const [latencyGroups, setLatencyGroups] = useState<Set<number>>(new Set());
   const [userRows, setUserRows] = useState<SharedNodeSummary[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   // v1.2: nodes compare against the latest NODE release (latest_node_version),
@@ -153,6 +157,16 @@ export default function NodeStatus() {
     } catch { /* ignore */ }
   };
 
+  // v1.2.21: the latency button and icon only mean something for a group the
+  // admin has set targets for (on the device-group page); one request says
+  // which, and a group without targets shows neither.
+  const loadLatencyGroups = async () => {
+    try {
+      const res = await api.get<unknown, ApiEnvelope<LatencyGroupCount[]>>('/admin/latency/groups');
+      setLatencyGroups(new Set(res.code === 0 ? (res.data || []).map((g) => g.group_id) : []));
+    } catch { setLatencyGroups(new Set()); }
+  };
+
   const refresh = async () => {
     // Skip this tick if the previous request is still outstanding.
     if (inFlightRef.current) return;
@@ -170,7 +184,10 @@ export default function NodeStatus() {
   // load* fns), so a transient poll failure no longer flashes the error page
   // back to stale data every 5s.
   useEffect(() => {
-    if (isAdmin) loadVersion();
+    if (isAdmin) {
+      loadVersion();
+      loadLatencyGroups();
+    }
     refresh();
     const ti = setInterval(refresh, 5000);
     return () => clearInterval(ti);
@@ -298,6 +315,17 @@ export default function NodeStatus() {
       t,
       openDetail: setDetailRow,
       onDelete: isAdmin ? handleDelete : undefined,
+      // v1.2.21: the monitor icon beside the IP and the group header's monitor
+      // button — admins only, only for a group that has latency targets, and
+      // the icon only for a node that has an id (its page is keyed by it).
+      onOpenLatency: isAdmin && latencyGroups.has(gid)
+        ? (row: NodeDisplayRow) => {
+            if (row.node_id) navigate(`/nodes/${encodeURIComponent(row.node_id)}/latency`);
+          }
+        : undefined,
+      onOpenGroupLatency: isAdmin && latencyGroups.has(gid)
+        ? () => navigate(`/groups/${gid}/latency`)
+        : undefined,
       onBatchUpgraded: isAdmin ? refresh : undefined,
     };
     return canReorder && hasGroupOrder(groupRows)

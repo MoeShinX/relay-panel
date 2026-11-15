@@ -1210,9 +1210,14 @@ pub async fn report_status(
     start_time: Instant,
     node_id: &str,
     listener_errors: Vec<ListenerError>,
+    latency: &crate::latency::LatencyMonitor,
 ) {
     let snap = metrics.snapshot().await;
     let active_connections = connections.current().await;
+    // node-v1.2.12: finished latency minutes not yet acknowledged. They stay in
+    // the monitor until a report carrying them is accepted (below), so a failed
+    // report just sends them again with the next one.
+    let latency_samples = latency.pending();
 
     let report = StatusReport {
         cpu_usage: snap.cpu,
@@ -1262,6 +1267,7 @@ pub async fn report_status(
         mem_used: (snap.mem_total > 0).then_some(snap.mem_used),
         // After node-v1.2.9: every local disk, not just `/`.
         disks: snap.disk_list,
+        latency: latency_samples.clone(),
     };
 
     // debug, not info: this runs every poll cycle (default 10s). Keeping it
@@ -1306,6 +1312,8 @@ pub async fn report_status(
             }
             match r.json::<ApiResponse<()>>().await {
                 Ok(resp) if resp.code == 0 => {
+                    // Accepted: the panel has these minutes now.
+                    latency.ack(&latency_samples);
                     tracing::info!("report_status HTTP {} code 0", status);
                 }
                 Ok(resp) => {
@@ -1781,7 +1789,10 @@ mod tests {
                 proxy_protocol: Default::default(),
             })
             .collect();
-        let cfg = NodeConfigResponse { listeners };
+        let cfg = NodeConfigResponse {
+            listeners,
+            latency: None,
+        };
 
         // apply_config should return promptly even for 1000 rules — the diff
         // is O(n) and binding happens in spawned tasks, not inline.

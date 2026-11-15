@@ -36,6 +36,7 @@ const ACTIONS = [
   'redeem_code',
   'update_notify_settings',
   'update_site_settings',
+  'update_latency_config',
   'create_announcement',
   'update_announcement',
   'delete_announcement',

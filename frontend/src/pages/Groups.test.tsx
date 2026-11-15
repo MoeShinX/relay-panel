@@ -292,3 +292,60 @@ describe('deleting a group', () => {
     expect(await screen.findByText('groupDeleted')).toBeInTheDocument();
   });
 });
+
+// ── v1.2.21: per-group latency monitoring, configured from the group's row ──
+describe('latency monitoring on the device group page', () => {
+  const config = (targets: number) => ok({
+    interval_secs: 10,
+    targets: Array.from({ length: targets }, (_, i) => ({
+      id: i + 1, group_id: 1, name: `target ${i + 1}`, carrier: 'telecom', kind: 'tcp',
+      host: `192.0.2.${i + 1}`, port: 443, sort_order: i, created_at: '',
+    })),
+  });
+
+  beforeEach(() => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/groups') return Promise.resolve(ok([group(), group({ id: 2, name: 'g2', token: 'tok2'.padEnd(36, 'y') })]));
+      if (url === '/admin/latency/groups') return Promise.resolve(ok([{ group_id: 2, targets: 3 }]));
+      if (url === '/admin/groups/2/latency/config') return Promise.resolve(config(3));
+      if (url === '/admin/groups/1/latency/config') return Promise.resolve(config(0));
+      return Promise.resolve(ok([]));
+    });
+  });
+
+  it('every group row has a button, counting the targets it already has', async () => {
+    render(<Groups />);
+    const withTargets = await screen.findByTestId('latency-config-2');
+    expect(withTargets).toHaveTextContent('latencyMonitor (3)');
+    expect(screen.getByTestId('latency-config-1')).not.toHaveTextContent('(');
+  });
+
+  it('a regular user has no such button', async () => {
+    mockUseAuth.mockReturnValue({ isAdmin: false });
+    render(<Groups />);
+    await screen.findByText('g1');
+    expect(screen.queryByTestId('latency-config-1')).toBeNull();
+    expect(mockGet).not.toHaveBeenCalledWith('/admin/latency/groups');
+  });
+
+  it('opens that group\'s configuration in a drawer, and saving updates the count', async () => {
+    const user = userEvent.setup();
+    mockPut.mockImplementation((_url: string, body: { interval_secs: number; targets: object[] }) =>
+      Promise.resolve(ok({
+        interval_secs: body.interval_secs,
+        targets: body.targets.map((t, i) => ({ id: i + 1, group_id: 1, sort_order: i, created_at: '', ...t })),
+      })));
+    render(<Groups />);
+    await user.click(await screen.findByTestId('latency-config-1'));
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith('/admin/groups/1/latency/config'));
+    // nothing configured yet: add one target and save
+    await user.click(await screen.findByRole('button', { name: /latencyAddTarget/ }));
+    const row = await screen.findByTestId('latency-row-0');
+    fireEvent.change(within(row).getByLabelText('name'), { target: { value: 'Beijing' } });
+    fireEvent.change(within(row).getByLabelText('latencyHost'), { target: { value: 'probe.example.com' } });
+    await user.click(screen.getByTestId('latency-save'));
+    await waitFor(() => expect(mockPut).toHaveBeenCalledTimes(1));
+    expect(mockPut.mock.calls[0][0]).toBe('/admin/groups/1/latency/config');
+    await waitFor(() => expect(screen.getByTestId('latency-config-1')).toHaveTextContent('latencyMonitor (1)'));
+  });
+});

@@ -197,7 +197,20 @@ pub async fn delete_group(
             rule_count: count,
         }));
     }
-    Ok(db.delete_group(id, &ResourceScope::All).await? > 0)
+    let deleted = db.delete_group(id, &ResourceScope::All).await? > 0;
+    if deleted {
+        // v1.2.21: the group's latency targets and their history went with it
+        // inside `delete_group`; what is left is its probe interval. A stale
+        // one is harmless, so a failure here is only logged.
+        if let Err(e) = crate::service::latency::forget_group(db, id).await {
+            tracing::warn!(
+                "delete_group {}: removing its latency interval failed: {}",
+                id,
+                e
+            );
+        }
+    }
+    Ok(deleted)
 }
 
 /// Delete a rule within `scope` (owner-scoped for regular users, All for

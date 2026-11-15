@@ -286,6 +286,27 @@ pub fn routes() -> Router<AppState> {
             "/admin/settings/notify/test",
             axum::routing::post(notify::test_notify),
         )
+        // v1.2.21: latency monitor. Configured per device group: the group's
+        // target list + probe interval (GET to read, PUT replaces the whole
+        // configuration), the groups that have any, the group's node-by-target
+        // comparison, and one node's series. Admin-only inside the handlers.
+        .route(
+            "/admin/groups/{id}/latency/config",
+            axum::routing::get(admin::get_group_latency_config)
+                .put(admin::put_group_latency_config),
+        )
+        .route(
+            "/admin/groups/{id}/latency",
+            axum::routing::get(admin::get_group_latency),
+        )
+        .route(
+            "/admin/latency/groups",
+            axum::routing::get(admin::get_latency_groups),
+        )
+        .route(
+            "/admin/nodes/{node_id}/latency",
+            axum::routing::get(admin::get_node_latency),
+        )
         // Stats & monitoring
         .route("/stats", axum::routing::get(stats::get_stats))
         // v1.2.0: traffic-history chart data. Owner-scoped inside the handler

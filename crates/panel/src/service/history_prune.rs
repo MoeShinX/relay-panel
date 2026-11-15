@@ -44,9 +44,11 @@ pub fn spawn(state: AppState) {
         let mut ticker = tokio::time::interval(TICK);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         tracing::info!(
-            "history sweeper started (traffic {}d, node metrics {}d, audit {}d, tick {}s)",
+            "history sweeper started (traffic {}d, node metrics {}d, latency {}h/{}d, audit {}d, tick {}s)",
             RETENTION_DAYS,
             METRICS_RETENTION_DAYS,
+            crate::service::latency::MINUTE_RETENTION_SECS / 3600,
+            crate::service::latency::HOURLY_RETENTION_SECS / 86_400,
             crate::service::audit::RETENTION_DAYS,
             TICK.as_secs()
         );
@@ -76,6 +78,22 @@ pub fn spawn(state: AppState) {
                     metrics_cutoff
                 ),
                 Err(e) => tracing::error!("node-metrics: prune failed: {}", e),
+            }
+
+            // v1.2.21: latency monitor — minute rows 48 hours, hourly rows 30
+            // days. Independent of the sweeps above, like each of them.
+            let now_ts = chrono::Utc::now().timestamp();
+            match state
+                .db
+                .prune_latency_history(
+                    now_ts - crate::service::latency::MINUTE_RETENTION_SECS,
+                    now_ts - crate::service::latency::HOURLY_RETENTION_SECS,
+                )
+                .await
+            {
+                Ok(0) => {}
+                Ok(n) => tracing::info!("latency-history: pruned {} rows", n),
+                Err(e) => tracing::error!("latency-history: prune failed: {}", e),
             }
 
             // v1.2.4: the audit trail, on its own much longer cutoff. Swept in

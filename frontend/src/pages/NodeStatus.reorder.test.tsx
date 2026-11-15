@@ -1,3 +1,4 @@
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, fireEvent } from '@testing-library/react';
 import { message } from 'antd';
@@ -84,7 +85,7 @@ describe('group order on the node-status page', () => {
   it('lists the groups in the server order, not by id', async () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
     serve([node(1, 3), node(2, 1), node(3, 2)]);
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     expect(shownOrder()).toEqual([2, 3, 1]);
   });
@@ -92,7 +93,7 @@ describe('group order on the node-status page', () => {
   it('a regular user sees the same order, without handles', async () => {
     mockUseAuth.mockReturnValue({ isAdmin: false });
     serve([node(1, 3), node(2, 1), node(3, 2)], { shared: true });
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     expect(shownOrder()).toEqual([2, 3, 1]);
     expect(handles()).toHaveLength(0);
@@ -102,7 +103,7 @@ describe('group order on the node-status page', () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
     mockIsMobile.mockReturnValue(true);
     serve([node(1, 2), node(2, 1)]);
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     expect(shownOrder()).toEqual([2, 1]);
     expect(handles()).toHaveLength(0);
@@ -111,7 +112,7 @@ describe('group order on the node-status page', () => {
   it('only an admin on a wide screen gets a handle, one per group', async () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
     serve([node(1, 1), node(2, 2)]);
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     expect(handles()).toHaveLength(2);
   });
@@ -119,7 +120,7 @@ describe('group order on the node-status page', () => {
   it('a leftover record of a deleted group goes last and cannot be dragged', async () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
     serve([node(5, undefined), node(1, 2), node(2, 1)]);
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     expect(shownOrder()).toEqual([2, 1, 5]);
     expect(handles()).toHaveLength(2);
@@ -128,7 +129,7 @@ describe('group order on the node-status page', () => {
   it('a click on the handle does not fold the group; a click on the title does', async () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
     serve([node(1, 1)]);
-    const { container } = render(<NodeStatus />);
+    const { container } = render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     const item = () => container.querySelector('.ant-collapse-item')!;
     expect(item().className).toContain('ant-collapse-item-active');
@@ -143,7 +144,7 @@ describe('group order on the node-status page', () => {
   it('the handle takes no room until the keyboard reaches it', async () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
     serve([node(1, 1)]);
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     const handle = handles()[0];
     expect(handle.style.width).toBe('0px');
@@ -156,7 +157,7 @@ describe('group order on the node-status page', () => {
   it('Enter on the handle does not fold the group', async () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
     serve([node(1, 1)]);
-    const { container } = render(<NodeStatus />);
+    const { container } = render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     fireEvent.keyDown(handles()[0], { key: 'Enter', code: 'Enter' });
     expect(container.querySelector('.ant-collapse-item')!.className).toContain(
@@ -172,7 +173,7 @@ describe('dropping a group', () => {
     // is third; it must still be third after the shown groups are rearranged.
     serve([node(1, 1), node(2, 2), node(3, 4), node(4, 5)], { allGroups: [1, 2, 9, 3, 4] });
     mockPut.mockResolvedValue(ok(null));
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     expect(shownOrder()).toEqual([1, 2, 3, 4]);
 
@@ -186,7 +187,7 @@ describe('dropping a group', () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
     serve([node(1, 1), node(2, 2)], { allGroups: [1, 2] });
     mockPut.mockResolvedValue(ok(null));
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     await drop(2, 1);
     expect(shownOrder()).toEqual([2, 1]);
@@ -202,7 +203,7 @@ describe('dropping a group', () => {
     serve([node(1, 1), node(2, 2)], { allGroups: [1, 2] });
     mockPut.mockRejectedValue(new Error('network'));
     const errorSpy = vi.spyOn(message, 'error').mockImplementation(() => ({}) as never);
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
 
     await drop(2, 1);
@@ -215,7 +216,7 @@ describe('dropping a group', () => {
     serve([node(1, 1), node(2, 2)], { allGroups: [1, 2] });
     mockPut.mockResolvedValue({ code: 400, message: 'bad', data: null });
     const errorSpy = vi.spyOn(message, 'error').mockImplementation(() => ({}) as never);
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
 
     await drop(2, 1);
@@ -226,7 +227,7 @@ describe('dropping a group', () => {
   it('does nothing when a group is dropped on itself or outside the list', async () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
     serve([node(1, 1), node(2, 2)], { allGroups: [1, 2] });
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
 
     await drop(1, 1);

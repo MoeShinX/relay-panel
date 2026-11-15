@@ -13,6 +13,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+Runs against any current panel (still protocol version 4). The feature below
+needs panel 1.2.21 or newer to be configured; an older panel simply never
+sends the targets, so the node probes nothing.
+
+### Added
+
+- **Latency monitor.** When the panel sends a list of targets (the ones set for
+  the node's device group), the node probes
+  each one every few seconds (the interval is the group's setting, 5–60 s) and
+  reports the latency and packet loss to the panel, one summary per target and
+  whole minute, in its normal status report. TCP targets are timed by the
+  connect handshake, which is closed straight away; ICMP targets get an echo
+  request. At most 8 probes run at once with a 3-second timeout, outside the
+  forwarder, so they count no traffic, no connection and no rate. Domain names
+  are resolved every 10 minutes at most, IPv4 first. Minutes that could not be
+  reported are kept (5 at most) and sent again with the next report. With no
+  targets the node probes nothing.
+  ICMP needs an ICMP socket: the node tries an unprivileged ping socket, then
+  a raw socket, so it works when the node runs as root. In a container without
+  `NET_RAW` it cannot, and the node tells the panel so instead of reporting
+  100% loss; TCP targets are unaffected.
+
 ### Fixed
 
 - **A debug log line could crash the control channel.** With the log level set

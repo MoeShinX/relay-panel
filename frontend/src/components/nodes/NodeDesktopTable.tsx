@@ -28,6 +28,8 @@ interface Props {
   /** Admin view: show the upgrade column (each node's state; upgrading itself
    *  is done from the group / page header buttons). */
   showUpgrade?: boolean;
+  /** v1.2.21: admin-only. Opens the node's latency page (see NetworkCell). */
+  onOpenLatency?: (row: NodeDisplayRow) => void;
   /** v1.2.5: admin-only. Removes this node's status record. Offered ONLY for
    *  offline rows — deleting an online node's record achieves nothing, because
    *  the next report (within ~10s) recreates it. Absent for the user view. */
@@ -37,7 +39,7 @@ interface Props {
 /** Desktop table for one group's nodes. Both admin and user share the same
  *  columns — the permission difference is in the data source (admin reads
  *  /nodes, user reads /nodes/shared) and the detail drawer. */
-export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeVersionCheckFailed, t, openDetail, showUpgrade, onDelete }: Props) {
+export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeVersionCheckFailed, t, openDetail, showUpgrade, onDelete, onOpenLatency }: Props) {
   const labels = { d: t('uptimeDay'), h: t('uptimeHour'), m: t('uptimeMinute'), s: t('uptimeSecond') };
 
   const columns = [
@@ -129,7 +131,7 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
     }] : []),
     {
       title: t('network'), key: 'network', width: 300,
-      render: (_: unknown, r: NodeDisplayRow) => <NetworkCell row={r} t={t} />,
+      render: (_: unknown, r: NodeDisplayRow) => <NetworkCell row={r} t={t} onOpenLatency={onOpenLatency ? () => onOpenLatency(r) : undefined} />,
     },
     {
       title: t('connections'), dataIndex: 'connections', key: 'connections', width: 70,

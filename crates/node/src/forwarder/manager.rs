@@ -148,6 +148,10 @@ pub struct ForwarderManager {
     /// drain, and a config push arriving then would otherwise rebind the very
     /// ports shutdown just closed.
     shutting_down: bool,
+    /// node-v1.2.12: where the panel's latency probe plan goes. Every config
+    /// path (cache at startup, HTTP poll, WS snapshot, WS re-fetch) ends in
+    /// `apply_config`, so handing the plan over there covers them all.
+    latency: Option<Arc<crate::latency::LatencyMonitor>>,
 }
 
 impl ForwarderManager {
@@ -164,7 +168,13 @@ impl ForwarderManager {
             listen_ipv6: "::".into(),
             source_ipv4: None,
             shutting_down: false,
+            latency: None,
         }
+    }
+
+    /// node-v1.2.12: connect the latency monitor that `apply_config` feeds.
+    pub fn set_latency_monitor(&mut self, monitor: Arc<crate::latency::LatencyMonitor>) {
+        self.latency = Some(monitor);
     }
 
     /// v1.2.5: first step of a graceful shutdown. Closes every listener so no
@@ -263,6 +273,12 @@ impl ForwarderManager {
         if self.shutting_down {
             tracing::debug!("apply_config: ignored, node is shutting down");
             return;
+        }
+        // The probe plan is independent of the listeners below: hand it over
+        // first, so a listener that fails to bind never keeps the monitor on an
+        // old plan.
+        if let Some(monitor) = &self.latency {
+            monitor.set_plan(config.latency.clone());
         }
         // ── Step 1: recover dead listeners ──
         // v0.3.6: a listener task that exited (bind failure, unrecoverable
@@ -900,6 +916,7 @@ mod tests {
     /// exercise hot-update pass explicit targets.
     fn one_rule(port: u16, proto: Protocol, transport: NodeTransport) -> NodeConfigResponse {
         NodeConfigResponse {
+            latency: None,
             listeners: vec![ListenerConfig {
                 rule_id: 1,
                 port,
@@ -924,6 +941,7 @@ mod tests {
         ws_path: Option<&str>,
     ) -> NodeConfigResponse {
         NodeConfigResponse {
+            latency: None,
             listeners: vec![ListenerConfig {
                 rule_id: 1,
                 port,
@@ -1233,8 +1251,11 @@ mod tests {
         );
 
         // Removing the rule drops its runtime (which cancels its connections).
-        mgr.apply_config(&NodeConfigResponse { listeners: vec![] })
-            .await;
+        mgr.apply_config(&NodeConfigResponse {
+            listeners: vec![],
+            latency: None,
+        })
+        .await;
         assert!(
             !mgr.rule_runtime.contains_key(&1),
             "a removed rule must not leak its runtime"
@@ -1245,6 +1266,7 @@ mod tests {
     async fn raw_tcp_and_udp_are_scheduled() {
         let mut mgr = fresh_mgr();
         let c = NodeConfigResponse {
+            latency: None,
             listeners: vec![
                 ListenerConfig {
                     rule_id: 1,
@@ -1327,6 +1349,7 @@ mod tests {
     async fn same_port_tcp_and_udp_are_distinct_listeners() {
         let mut mgr = fresh_mgr();
         let c = NodeConfigResponse {
+            latency: None,
             listeners: vec![
                 ListenerConfig {
                     rule_id: 1,
@@ -1463,6 +1486,7 @@ mod tests {
     async fn strategy_change_restarts_listener() {
         let mut mgr = fresh_mgr();
         let mk = |strategy: LoadBalanceStrategy| NodeConfigResponse {
+            latency: None,
             listeners: vec![ListenerConfig {
                 rule_id: 1,
                 port: 40065,
@@ -1497,6 +1521,7 @@ mod tests {
     async fn transport_change_to_disabled_stops_listener() {
         let mut mgr = fresh_mgr();
         let mk = |transport: NodeTransport| NodeConfigResponse {
+            latency: None,
             listeners: vec![ListenerConfig {
                 rule_id: 1,
                 port: 40066,
@@ -1548,8 +1573,11 @@ mod tests {
         mgr.apply_config(&c1).await;
         assert_eq!(mgr.listener_keys().len(), 1);
         // Empty config = rule removed.
-        mgr.apply_config(&NodeConfigResponse { listeners: vec![] })
-            .await;
+        mgr.apply_config(&NodeConfigResponse {
+            listeners: vec![],
+            latency: None,
+        })
+        .await;
         assert!(mgr.listener_keys().is_empty(), "removed rule must stop");
     }
 
@@ -1560,6 +1588,7 @@ mod tests {
     async fn unrelated_change_does_not_restart_other_listeners() {
         let mut mgr = fresh_mgr();
         let c1 = NodeConfigResponse {
+            latency: None,
             listeners: vec![
                 ListenerConfig {
                     rule_id: 1,
@@ -1595,6 +1624,7 @@ mod tests {
             .unwrap();
         // Change rule 2's target only; rule 1 (port 40070) must be untouched.
         let c2 = NodeConfigResponse {
+            latency: None,
             listeners: vec![
                 ListenerConfig {
                     rule_id: 1,
@@ -1853,6 +1883,7 @@ mod tests {
             }
         }
         mgr.apply_config(&NodeConfigResponse {
+            latency: None,
             listeners: Vec::new(),
         })
         .await;
@@ -1879,6 +1910,7 @@ mod tests {
 
         // tcp_udp rule: two listeners share rule_id 1.
         let tcp_udp_cfg = NodeConfigResponse {
+            latency: None,
             listeners: vec![
                 ListenerConfig {
                     rule_id: 1,
@@ -1914,6 +1946,7 @@ mod tests {
 
         // Change to tcp-only: remove the UDP listener for rule 1.
         let tcp_cfg = NodeConfigResponse {
+            latency: None,
             listeners: vec![ListenerConfig {
                 rule_id: 1,
                 port: 40004,
@@ -1963,6 +1996,7 @@ mod tests {
 
         // Apply empty config — step 1 finds the dead listener and removes it.
         mgr.apply_config(&NodeConfigResponse {
+            latency: None,
             listeners: Vec::new(),
         })
         .await;
