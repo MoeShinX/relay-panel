@@ -46,9 +46,10 @@ pub async fn build_node_config(
     db: &dyn Repository,
     group_id: i64,
 ) -> Result<NodeConfigResponse, DbError> {
-    // The latency monitor's probe plan goes to every node, whatever its group's
-    // type: probing is a property of the machine, not of the rules it carries.
-    let latency = crate::service::latency::current_probe_plan(db).await?;
+    // The latency monitor's probe plan is the group's own (a group with no
+    // targets gets none) and goes to its nodes whatever the group's type:
+    // probing is a property of the machine, not of the rules it carries.
+    let latency = crate::service::latency::current_probe_plan(db, group_id).await?;
 
     // 1. Group + "in" gate. Non-`in` groups (out / monitor / chained_outbound)
     //    never receive listeners — they are egress/observation only.

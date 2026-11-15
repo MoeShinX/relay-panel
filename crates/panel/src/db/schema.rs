@@ -422,8 +422,8 @@ CREATE TABLE IF NOT EXISTS traffic_batches (
 );
 CREATE INDEX IF NOT EXISTS idx_traffic_batches_created ON traffic_batches(created_at);
 
--- v1.2.21: latency monitor. Targets are global (the admin lists what every
--- node probes); results are stored per node, per target, per minute, and rolled
+-- v1.2.21: latency monitor. Targets belong to a device group (the admin lists
+-- what the nodes of each group probe); results are stored per node, per target, per minute, and rolled
 -- up into hours so a 7- or 30-day chart does not need 30 days of minute rows.
 -- AUTOINCREMENT so a deleted target's id is never handed out again: a late
 -- report that still names it must not land on a different target.
@@ -441,6 +441,7 @@ CREATE INDEX IF NOT EXISTS idx_traffic_batches_created ON traffic_batches(create
 -- Brand-new tables, so their indexes are safe here as well as in Migration 48.
 CREATE TABLE IF NOT EXISTS latency_targets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL,
     name TEXT NOT NULL,
     carrier TEXT NOT NULL,
     kind TEXT NOT NULL,
@@ -449,6 +450,7 @@ CREATE TABLE IF NOT EXISTS latency_targets (
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_latency_targets_group ON latency_targets(group_id, sort_order);
 CREATE TABLE IF NOT EXISTS latency_minute (
     node_id TEXT NOT NULL,
     target_id INTEGER NOT NULL,
@@ -1942,6 +1944,7 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
     for ddl in [
         "CREATE TABLE IF NOT EXISTS latency_targets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
             name TEXT NOT NULL,
             carrier TEXT NOT NULL,
             kind TEXT NOT NULL,
@@ -1950,6 +1953,7 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
             sort_order INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
         )",
+        "CREATE INDEX IF NOT EXISTS idx_latency_targets_group ON latency_targets(group_id, sort_order)",
         "CREATE TABLE IF NOT EXISTS latency_minute (
             node_id TEXT NOT NULL,
             target_id INTEGER NOT NULL,
@@ -2907,6 +2911,28 @@ mod tests {
         for t in ["latency_targets", "latency_minute", "latency_hourly"] {
             assert!(table_exists(&pool, t).await, "{t} must exist");
         }
+
+        // A target belongs to a device group: the column is required, and the
+        // (group, order) index the per-group listing reads through is there.
+        let no_group = sqlx::query(
+            "INSERT INTO latency_targets (name, carrier, kind, host, sort_order, created_at)              VALUES ('t', 'other', 'icmp', '192.0.2.1', 0, 'now')",
+        )
+        .execute(&pool)
+        .await;
+        assert!(no_group.is_err(), "group_id is NOT NULL");
+        sqlx::query(
+            "INSERT INTO latency_targets (group_id, name, carrier, kind, host, sort_order, created_at)              VALUES (7, 't', 'other', 'icmp', '192.0.2.1', 0, 'now')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (idx,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_latency_targets_group'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(idx, 1);
 
         // The primary keys are what make a re-sent minute replace, not repeat.
         sqlx::query("INSERT INTO latency_minute VALUES ('n1', 1, 600, 6, 0, 60.0, 9.0, 11.0)")

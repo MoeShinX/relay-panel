@@ -321,8 +321,9 @@ pub async fn report_status(
             _ => format!("node_status:{}", g.id), // legacy fallback
         };
         let node_id_for_json = req.node_id.clone();
-        // v1.2.21: latency-monitor samples. Screened against the current
-        // targets before anything is stored; the targets the node says it
+        // v1.2.21: latency-monitor samples. Screened against the targets of
+        // the node's own group (a target id of another group is dropped like
+        // an unknown one) before anything is stored; the targets the node says it
         // cannot probe go into the status below (the latency page reads them
         // from there), the rest are stored after it. Skipped for a node with
         // no node_id — its series would have no owner.
@@ -332,7 +333,7 @@ pub async fn report_status(
             .map(str::trim)
             .filter(|s| !s.is_empty());
         let screened = match (latency_node_id, req.latency.is_empty()) {
-            (Some(_), false) => match state.db.list_latency_targets().await {
+            (Some(_), false) => match state.db.list_latency_targets(g.id).await {
                 Ok(targets) => crate::service::latency::screen_samples(
                     &targets,
                     &req.latency,

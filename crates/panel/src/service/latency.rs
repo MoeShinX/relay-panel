@@ -1,14 +1,15 @@
-//! v1.2.21: latency monitor — the admin's list of targets, the plan pushed to
-//! the nodes, and what the panel accepts back from them.
+//! v1.2.21: latency monitor — each device group's list of targets, the plan
+//! pushed to its nodes, and what the panel accepts back from them.
 //!
 //! The nodes do the measuring (see `crates/node/src/latency.rs`); the panel
 //! only holds the configuration, validates and stores what nodes report, and
 //! answers the admin's chart queries.
 //!
-//! Configuration lives in two places: the target list in `latency_targets`
-//! (rows that history refers to), and the probe interval as a small JSON value
-//! in the kvs table, like the site and notification settings — one number does
-//! not earn a table.
+//! Configuration is per device group and lives in two places: the group's
+//! target list in `latency_targets` (rows that history refers to), and its
+//! probe interval as a small JSON value in the kvs table under
+//! `latency:interval:<group_id>`, like the site and notification settings —
+//! one number does not earn a column. A group with no targets probes nothing.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
@@ -17,8 +18,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::error::DbError;
 use crate::db::repo::{
-    LatencyBucket, LatencyGranularity, LatencyMinuteRow, LatencyTarget, LatencyTargetInput,
-    Repository,
+    LatencyBucket, LatencyGranularity, LatencyMinuteRow, LatencyNodeBucket, LatencyNodeTotal,
+    LatencyTarget, LatencyTargetInput, Repository,
 };
 use relay_shared::protocol::{
     LatencyKind, LatencyProbeConfig, LatencyProbeTarget, LatencySample,
@@ -26,8 +27,13 @@ use relay_shared::protocol::{
     LATENCY_MAX_TARGETS, LATENCY_MIN_INTERVAL_SECS,
 };
 
-/// kvs key of the global settings blob.
-pub const CONFIG_KEY: &str = "latency:config";
+/// kvs key prefix of a group's probe interval.
+pub const INTERVAL_KEY_PREFIX: &str = "latency:interval:";
+
+/// kvs key of one group's probe interval.
+pub fn interval_key(group_id: i64) -> String {
+    format!("{INTERVAL_KEY_PREFIX}{group_id}")
+}
 
 /// Minute rows are kept 48 hours, hourly rows 30 days.
 pub const MINUTE_RETENTION_SECS: i64 = 48 * 3600;
@@ -58,10 +64,10 @@ struct StoredConfig {
     interval_secs: u32,
 }
 
-/// The configured probe interval, or the default when none was ever saved (or
-/// the stored value is damaged / out of range).
-pub async fn get_interval(db: &dyn Repository) -> Result<u32, DbError> {
-    let raw = db.get(CONFIG_KEY).await?;
+/// A group's configured probe interval, or the default when none was ever
+/// saved (or the stored value is damaged / out of range).
+pub async fn get_interval(db: &dyn Repository, group_id: i64) -> Result<u32, DbError> {
+    let raw = db.get(&interval_key(group_id)).await?;
     Ok(raw
         .and_then(|r| serde_json::from_str::<StoredConfig>(&r).ok())
         .map(|c| c.interval_secs)
@@ -69,25 +75,35 @@ pub async fn get_interval(db: &dyn Repository) -> Result<u32, DbError> {
         .unwrap_or(LATENCY_DEFAULT_INTERVAL_SECS))
 }
 
-async fn set_interval(db: &dyn Repository, secs: u32) -> Result<(), DbError> {
+async fn set_interval(db: &dyn Repository, group_id: i64, secs: u32) -> Result<(), DbError> {
     let json = serde_json::to_string(&StoredConfig {
         interval_secs: secs,
     })
     .expect("a plain struct serialises");
-    db.set(CONFIG_KEY, &json).await
+    db.set(&interval_key(group_id), &json).await
 }
 
-/// What the admin sees and edits: the interval and the target list.
+/// Drop a deleted group's interval. Its targets and history are removed by the
+/// repository in the same transaction as the group itself; this is the one
+/// leftover that lives in the kvs table. Best-effort for the caller: a stale
+/// interval is harmless (it is only read for a group that has targets, and
+/// saving targets always writes the interval again).
+pub async fn forget_group(db: &dyn Repository, group_id: i64) -> Result<(), DbError> {
+    db.delete(&interval_key(group_id)).await.map(|_| ())
+}
+
+/// What the admin sees and edits for one group: the interval and the target
+/// list.
 #[derive(Debug, Clone, Serialize)]
 pub struct LatencyConfigView {
     pub interval_secs: u32,
     pub targets: Vec<LatencyTarget>,
 }
 
-pub async fn get_config(db: &dyn Repository) -> Result<LatencyConfigView, DbError> {
+pub async fn get_config(db: &dyn Repository, group_id: i64) -> Result<LatencyConfigView, DbError> {
     Ok(LatencyConfigView {
-        interval_secs: get_interval(db).await?,
-        targets: db.list_latency_targets().await?,
+        interval_secs: get_interval(db, group_id).await?,
+        targets: db.list_latency_targets(group_id).await?,
     })
 }
 
@@ -232,15 +248,17 @@ pub fn probe_plan(interval_secs: u32, targets: &[LatencyTarget]) -> Option<Laten
     })
 }
 
-/// The plan for the current configuration (what `build_node_config` attaches).
+/// The plan for one group's current configuration (what `build_node_config`
+/// attaches to that group's nodes).
 pub async fn current_probe_plan(
     db: &dyn Repository,
+    group_id: i64,
 ) -> Result<Option<LatencyProbeConfig>, DbError> {
-    let targets = db.list_latency_targets().await?;
+    let targets = db.list_latency_targets(group_id).await?;
     if targets.is_empty() {
         return Ok(None);
     }
-    Ok(probe_plan(get_interval(db).await?, &targets))
+    Ok(probe_plan(get_interval(db, group_id).await?, &targets))
 }
 
 #[derive(Debug)]
@@ -263,18 +281,22 @@ pub struct ConfigSaved {
     pub removed: usize,
 }
 
-/// Replace the whole configuration. Validates first; the target list and the
-/// interval are then written, and the caller broadcasts when `plan_changed`.
+/// Replace one group's whole configuration. Validates first; the target list
+/// and the interval are then written, and the caller tells the group's nodes
+/// when `plan_changed`.
 pub async fn save_config(
     db: &dyn Repository,
+    group_id: i64,
     now: &str,
     req: &PutConfigRequest,
 ) -> Result<ConfigSaved, ConfigError> {
     let (interval, inputs) = validate_config(req).map_err(ConfigError::Invalid)?;
 
-    let before = current_probe_plan(db).await.map_err(ConfigError::Db)?;
+    let before = current_probe_plan(db, group_id)
+        .await
+        .map_err(ConfigError::Db)?;
     let before_ids: BTreeSet<i64> = db
-        .list_latency_targets()
+        .list_latency_targets(group_id)
         .await
         .map_err(ConfigError::Db)?
         .iter()
@@ -282,11 +304,13 @@ pub async fn save_config(
         .collect();
 
     let targets = db
-        .replace_latency_targets(now, &inputs)
+        .replace_latency_targets(group_id, now, &inputs)
         .await
         .map_err(ConfigError::Db)?
         .ok_or(ConfigError::UnknownTarget)?;
-    set_interval(db, interval).await.map_err(ConfigError::Db)?;
+    set_interval(db, group_id, interval)
+        .await
+        .map_err(ConfigError::Db)?;
 
     let after = probe_plan(interval, &targets);
     let after_ids: BTreeSet<i64> = targets.iter().map(|t| t.id).collect();
@@ -540,20 +564,26 @@ pub fn align_down(ts: i64, bucket_secs: i64) -> i64 {
     ts.div_euclid(bucket_secs) * bucket_secs
 }
 
-/// A node's stored status JSON, found by node id alone (the key also carries
-/// the group). When the node has records under several groups the freshest
-/// report wins.
+/// A node's stored status JSON and the group its record sits under, found by
+/// node id alone (the key `node_status:<group>:<node>` carries both). When the
+/// node has records under several groups the freshest report wins.
 pub async fn find_node_status(
     db: &dyn Repository,
     node_id: &str,
-) -> Result<Option<serde_json::Value>, DbError> {
+) -> Result<Option<(i64, serde_json::Value)>, DbError> {
     let rows = db.scan_prefix("node_status:").await?;
-    let mut best: Option<(String, serde_json::Value)> = None;
+    let mut best: Option<(String, i64, serde_json::Value)> = None;
     for (key, value) in rows {
         let Some(rest) = key.strip_prefix("node_status:") else {
             continue;
         };
-        if rest.split_once(':').map(|(_, n)| n) != Some(node_id) {
+        let Some((gid, nid)) = rest.split_once(':') else {
+            continue;
+        };
+        let Ok(group_id) = gid.parse::<i64>() else {
+            continue;
+        };
+        if nid != node_id {
             continue;
         }
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&value) else {
@@ -564,11 +594,134 @@ pub async fn find_node_status(
             .and_then(|s| s.as_str())
             .unwrap_or("")
             .to_string();
-        if best.as_ref().is_none_or(|(b, _)| seen > *b) {
-            best = Some((seen, v));
+        if best.as_ref().is_none_or(|(b, _, _)| seen > *b) {
+            best = Some((seen, group_id, v));
         }
     }
-    Ok(best.map(|(_, v)| v))
+    Ok(best.map(|(_, g, v)| (g, v)))
+}
+
+/// One node of a group as the comparison page lists it.
+#[derive(Debug, Serialize, PartialEq)]
+pub struct GroupNode {
+    pub node_id: String,
+    /// The admin's name for the node, when it has one.
+    pub label: Option<String>,
+    pub public_ip: Option<String>,
+    pub node_version: Option<String>,
+    /// Whether the node's version runs the monitor at all (node-v1.2.12+).
+    pub supported: bool,
+    /// The group's targets this node reported it cannot probe.
+    pub unsupported_targets: Vec<i64>,
+    pub last_seen: Option<String>,
+}
+
+/// Every node with a status record under `group_id`, ordered by node id. The
+/// legacy per-group record (a node that never sent an id) has no series to
+/// show and is left out.
+pub async fn list_group_nodes(
+    db: &dyn Repository,
+    group_id: i64,
+    targets: &[LatencyTarget],
+) -> Result<Vec<GroupNode>, DbError> {
+    let prefix = format!("node_status:{group_id}:");
+    let labels = crate::service::node_labels::all_labels(db).await?;
+    let mut nodes: Vec<GroupNode> = Vec::new();
+    for (key, value) in db.scan_prefix(&prefix).await? {
+        let Some(node_id) = key.strip_prefix(&prefix) else {
+            continue;
+        };
+        if node_id.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&value) else {
+            continue;
+        };
+        let text = |name: &str| {
+            v.get(name)
+                .and_then(|x| x.as_str())
+                .map(str::to_string)
+                .filter(|s| !s.is_empty())
+        };
+        let node_version = text("node_version");
+        let unsupported_targets = v
+            .get("latency_unsupported")
+            .and_then(|x| x.as_array())
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|i| i.as_i64())
+                    .filter(|id| targets.iter().any(|t| t.id == *id))
+                    .collect()
+            })
+            .unwrap_or_default();
+        nodes.push(GroupNode {
+            node_id: node_id.to_string(),
+            label: labels.get(&format!("{group_id}:{node_id}")).cloned(),
+            public_ip: text("public_ipv4").or_else(|| text("public_ip")),
+            supported: relay_shared::protocol::node_supports_latency(node_version.as_deref()),
+            node_version,
+            unsupported_targets,
+            last_seen: text("last_seen"),
+        });
+    }
+    nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+    Ok(nodes)
+}
+
+/// One cell of the comparison table: a node's figures for one target over the
+/// range. Absent from the list when the node has no data for the target.
+#[derive(Debug, Serialize, PartialEq)]
+pub struct MatrixCell {
+    pub node_id: String,
+    pub target_id: i64,
+    /// Mean round trip of the answered probes; null when all were lost.
+    pub avg: Option<f64>,
+    /// Percent of probes lost, 0 to 100.
+    pub loss: f64,
+    pub sent: i64,
+}
+
+pub fn build_matrix(totals: &[LatencyNodeTotal]) -> Vec<MatrixCell> {
+    totals
+        .iter()
+        .filter(|t| t.sent > 0)
+        .map(|t| MatrixCell {
+            node_id: t.node_id.clone(),
+            target_id: t.target_id,
+            avg: mean(t.rtt_sum_ms, t.sent, t.lost),
+            loss: loss_percent(t.sent, t.lost),
+            sent: t.sent,
+        })
+        .collect()
+}
+
+/// One node's line for the selected target.
+#[derive(Debug, Serialize, PartialEq)]
+pub struct NodeSeries {
+    pub node_id: String,
+    pub points: Vec<SeriesPoint>,
+}
+
+/// One line per node (a node with no data still gets an empty one), points
+/// oldest first.
+pub fn build_group_series(nodes: &[GroupNode], buckets: &[LatencyNodeBucket]) -> Vec<NodeSeries> {
+    nodes
+        .iter()
+        .map(|n| NodeSeries {
+            node_id: n.node_id.clone(),
+            points: buckets
+                .iter()
+                .filter(|b| b.node_id == n.node_id)
+                .map(|b| SeriesPoint {
+                    ts: b.ts,
+                    avg: mean(b.rtt_sum_ms, b.sent, b.lost),
+                    min: b.rtt_min_ms,
+                    max: b.rtt_max_ms,
+                    loss: loss_percent(b.sent, b.lost),
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -578,6 +731,7 @@ mod tests {
     fn target(id: i64) -> LatencyTarget {
         LatencyTarget {
             id,
+            group_id: 1,
             name: format!("t{id}"),
             carrier: "telecom".into(),
             kind: "tcp".into(),

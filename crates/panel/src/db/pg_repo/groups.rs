@@ -258,22 +258,33 @@ impl GroupRepository for PgRepository {
     }
 
     async fn delete_group(&self, id: i64, scope: &ResourceScope) -> Result<u64, DbError> {
+        // One transaction: the group's latency targets and their history go
+        // with it (v1.2.21), or neither does.
+        let mut tx = self.pool.begin().await?;
         let result = match scope.owner_id() {
             None => sqlx::query("DELETE FROM device_groups WHERE id = $1").bind(id),
             Some(uid) => sqlx::query("DELETE FROM device_groups WHERE id = $1 AND uid = $2")
                 .bind(id)
                 .bind(uid),
         }
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
-        Ok(result.rows_affected())
+        let n = result.rows_affected();
+        if n > 0 {
+            super::latency::purge_group_latency(&mut tx, id).await?;
+        }
+        tx.commit().await?;
+        Ok(n)
     }
 
     async fn delete_groups_by_uid(&self, uid: i64) -> Result<u64, DbError> {
+        let mut tx = self.pool.begin().await?;
+        super::latency::purge_owner_latency(&mut tx, uid).await?;
         let result = sqlx::query("DELETE FROM device_groups WHERE uid = $1")
             .bind(uid)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(result.rows_affected())
     }
 

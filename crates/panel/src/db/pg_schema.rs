@@ -298,6 +298,7 @@ CREATE INDEX IF NOT EXISTS idx_traffic_batches_created ON traffic_batches(create
 -- in revision 31.
 CREATE TABLE IF NOT EXISTS latency_targets (
     id BIGSERIAL PRIMARY KEY,
+    group_id BIGINT NOT NULL,
     name TEXT NOT NULL,
     carrier TEXT NOT NULL,
     kind TEXT NOT NULL,
@@ -306,6 +307,7 @@ CREATE TABLE IF NOT EXISTS latency_targets (
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_latency_targets_group ON latency_targets(group_id, sort_order);
 CREATE TABLE IF NOT EXISTS latency_minute (
     node_id TEXT NOT NULL,
     target_id BIGINT NOT NULL,
@@ -1585,6 +1587,7 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         for ddl in [
             "CREATE TABLE IF NOT EXISTS latency_targets (
                 id BIGSERIAL PRIMARY KEY,
+                group_id BIGINT NOT NULL,
                 name TEXT NOT NULL,
                 carrier TEXT NOT NULL,
                 kind TEXT NOT NULL,
@@ -1593,6 +1596,7 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             )",
+            "CREATE INDEX IF NOT EXISTS idx_latency_targets_group ON latency_targets(group_id, sort_order)",
             "CREATE TABLE IF NOT EXISTS latency_minute (
                 node_id TEXT NOT NULL,
                 target_id BIGINT NOT NULL,

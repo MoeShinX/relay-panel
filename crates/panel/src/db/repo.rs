@@ -1115,10 +1115,12 @@ pub struct TrafficHistoryBucket {
 
 // ── Latency monitor (v1.2.21) ──
 
-/// One probe target of the latency monitor (global, not per node).
+/// One probe target of the latency monitor. Targets belong to a device group:
+/// every node of the group probes them, and a group with none probes nothing.
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow, serde::Serialize)]
 pub struct LatencyTarget {
     pub id: i64,
+    pub group_id: i64,
     pub name: String,
     /// "telecom" | "unicom" | "mobile" | "other".
     pub carrier: String,
@@ -1193,19 +1195,57 @@ pub struct LatencyBucket {
     pub rtt_max_ms: Option<f64>,
 }
 
+/// How many targets a device group has probing configured.
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow, serde::Serialize)]
+pub struct LatencyGroupCount {
+    pub group_id: i64,
+    pub targets: i64,
+}
+
+/// One node's totals for one target over a whole range (the comparison
+/// table's cell). Sums, not means: the caller derives mean and loss.
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct LatencyNodeTotal {
+    pub node_id: String,
+    pub target_id: i64,
+    pub sent: i64,
+    pub lost: i64,
+    pub rtt_sum_ms: f64,
+}
+
+/// One bucket of one node's series for one target (the group chart's lines).
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct LatencyNodeBucket {
+    pub node_id: String,
+    /// Unix seconds of the bucket start.
+    pub ts: i64,
+    pub sent: i64,
+    pub lost: i64,
+    pub rtt_sum_ms: f64,
+    pub rtt_min_ms: Option<f64>,
+    pub rtt_max_ms: Option<f64>,
+}
+
 #[async_trait]
 pub trait LatencyRepository: Send + Sync {
-    /// Every target, in display order (`sort_order`, then id).
-    async fn list_latency_targets(&self) -> Result<Vec<LatencyTarget>, DbError>;
+    /// The targets of one device group, in display order (`sort_order`, then
+    /// id). Also what a report is screened against: a target id outside the
+    /// reporting node's group is simply not in this list.
+    async fn list_latency_targets(&self, group_id: i64) -> Result<Vec<LatencyTarget>, DbError>;
 
-    /// Make the target list exactly `inputs`, in one transaction: inputs
-    /// without an id are inserted, those with one are updated in place, and
-    /// every existing target not named is deleted together with its minute and
-    /// hourly history (no orphan rows). `sort_order` is the position in
-    /// `inputs`. Returns the new list, or `None` — nothing changed — when an
-    /// input names an id that does not exist.
+    /// Every group that has targets, with how many, ordered by group id.
+    async fn count_latency_targets_by_group(&self) -> Result<Vec<LatencyGroupCount>, DbError>;
+
+    /// Make one group's target list exactly `inputs`, in one transaction:
+    /// inputs without an id are inserted, those with one are updated in place,
+    /// and every existing target of the group not named is removed together
+    /// with its minute and hourly history (no orphan rows). `sort_order` is
+    /// the position in `inputs`. Other groups' targets are never touched.
+    /// Returns the group's new list, or `None` (nothing changed) when an
+    /// input names an id that does not exist or belongs to another group.
     async fn replace_latency_targets(
         &self,
+        group_id: i64,
         now: &str,
         inputs: &[LatencyTargetInput],
     ) -> Result<Option<Vec<LatencyTarget>>, DbError>;
@@ -1237,6 +1277,30 @@ pub trait LatencyRepository: Send + Sync {
         node_id: &str,
         since_ts: i64,
     ) -> Result<Vec<LatencyMinuteRow>, DbError>;
+
+    /// Totals per (node, target) over `[since_ts, until_ts)` for the given
+    /// nodes and targets, in one query. Reads the hourly table when `hourly`,
+    /// the minute table otherwise. Pairs without data are absent.
+    async fn query_latency_totals(
+        &self,
+        node_ids: &[String],
+        target_ids: &[i64],
+        hourly: bool,
+        since_ts: i64,
+        until_ts: i64,
+    ) -> Result<Vec<LatencyNodeTotal>, DbError>;
+
+    /// One target's series for several nodes over `[since_ts, until_ts)`, one
+    /// row per (node, bucket), oldest first. Same table choice as
+    /// `query_latency_buckets`.
+    async fn query_latency_target_series(
+        &self,
+        node_ids: &[String],
+        target_id: i64,
+        granularity: LatencyGranularity,
+        since_ts: i64,
+        until_ts: i64,
+    ) -> Result<Vec<LatencyNodeBucket>, DbError>;
 
     /// Delete minute rows older than `minute_before` and hourly rows older
     /// than `hourly_before` (unix seconds). Returns rows deleted. The sweeper

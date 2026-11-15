@@ -6534,6 +6534,7 @@ async fn latency_targets_replace_keeps_ids_orders_and_deletes_history() {
     let db = repo().await;
     let first = db
         .replace_latency_targets(
+            1,
             "2026-01-01 00:00:00",
             &[
                 lat_input(None, "A", "192.0.2.1"),
@@ -6564,6 +6565,7 @@ async fn latency_targets_replace_keeps_ids_orders_and_deletes_history() {
     // Drop A, reorder C before B, rename C.
     let second = db
         .replace_latency_targets(
+            1,
             "2026-01-02 00:00:00",
             &[
                 lat_input(Some(c), "C2", "192.0.2.3"),
@@ -6606,6 +6608,7 @@ async fn latency_targets_replace_keeps_ids_orders_and_deletes_history() {
     // A new target never takes A's id back.
     let third = db
         .replace_latency_targets(
+            1,
             "2026-01-03 00:00:00",
             &[
                 lat_input(Some(c), "C2", "192.0.2.3"),
@@ -6621,7 +6624,7 @@ async fn latency_targets_replace_keeps_ids_orders_and_deletes_history() {
         d != a && d > c,
         "ids are never reused (got {d}, deleted was {a})"
     );
-    assert_eq!(db.list_latency_targets().await.unwrap(), third);
+    assert_eq!(db.list_latency_targets(1).await.unwrap(), third);
 }
 
 /// Pointing a kept target at another host, port or kind starts its history
@@ -6631,6 +6634,7 @@ async fn latency_target_moved_elsewhere_drops_its_history() {
     let db = repo().await;
     let seeded = db
         .replace_latency_targets(
+            1,
             "2026-01-01 00:00:00",
             &[
                 lat_input(None, "A", "192.0.2.1"),
@@ -6654,6 +6658,7 @@ async fn latency_target_moved_elsewhere_drops_its_history() {
     let mut new_port = lat_input(Some(c), "C", "192.0.2.3");
     new_port.port = Some(80);
     db.replace_latency_targets(
+        1,
         "2026-01-02 00:00:00",
         &[renamed, lat_input(Some(b), "B", "192.0.2.20"), new_port],
     )
@@ -6677,7 +6682,11 @@ async fn latency_target_moved_elsewhere_drops_its_history() {
 async fn latency_targets_replace_with_an_unknown_id_changes_nothing() {
     let db = repo().await;
     let seeded = db
-        .replace_latency_targets("2026-01-01 00:00:00", &[lat_input(None, "A", "192.0.2.1")])
+        .replace_latency_targets(
+            1,
+            "2026-01-01 00:00:00",
+            &[lat_input(None, "A", "192.0.2.1")],
+        )
         .await
         .unwrap()
         .unwrap();
@@ -6691,6 +6700,7 @@ async fn latency_targets_replace_with_an_unknown_id_changes_nothing() {
 
     let out = db
         .replace_latency_targets(
+            1,
             "2026-01-02 00:00:00",
             &[lat_input(Some(a + 100), "ghost", "192.0.2.9")],
         )
@@ -6698,7 +6708,7 @@ async fn latency_targets_replace_with_an_unknown_id_changes_nothing() {
         .unwrap();
     assert!(out.is_none());
     assert_eq!(
-        db.list_latency_targets().await.unwrap(),
+        db.list_latency_targets(1).await.unwrap(),
         seeded,
         "A was not deleted"
     );
@@ -6923,4 +6933,337 @@ async fn latency_prune_deletes_each_table_by_its_own_cutoff() {
 
     // Nothing else is past a cutoff of zero.
     assert_eq!(db.prune_latency_history(0, 0).await.unwrap(), 0);
+}
+
+/// One group's targets are its own: another group's list, ids and history are
+/// untouched by a replace, an id of another group is as unknown as a deleted
+/// one (nothing changes), and the per-group counts follow.
+#[tokio::test]
+async fn latency_targets_belong_to_one_group_each() {
+    let db = repo().await;
+    seed_group(&db, 1).await;
+    seed_group(&db, 2).await;
+    let a = db
+        .replace_latency_targets(
+            1,
+            "2026-01-01 00:00:00",
+            &[lat_input(None, "A", "192.0.2.1")],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let b = db
+        .replace_latency_targets(
+            2,
+            "2026-01-01 00:00:00",
+            &[
+                lat_input(None, "B1", "192.0.2.2"),
+                lat_input(None, "B2", "192.0.2.3"),
+            ],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(a.iter().all(|t| t.group_id == 1));
+    assert!(b.iter().all(|t| t.group_id == 2));
+    assert_eq!(db.list_latency_targets(1).await.unwrap(), a);
+    assert_eq!(db.list_latency_targets(2).await.unwrap(), b);
+    assert!(db.list_latency_targets(3).await.unwrap().is_empty());
+    assert_eq!(
+        db.count_latency_targets_by_group().await.unwrap(),
+        vec![
+            LatencyGroupCount {
+                group_id: 1,
+                targets: 1
+            },
+            LatencyGroupCount {
+                group_id: 2,
+                targets: 2
+            },
+        ]
+    );
+    db.record_latency_minutes(
+        "n1",
+        &[
+            lat_row(a[0].id, 36000, 6, 0, 60.0, Some(9.0), Some(11.0)),
+            lat_row(b[0].id, 36000, 6, 0, 60.0, Some(9.0), Some(11.0)),
+        ],
+    )
+    .await
+    .unwrap();
+
+    // Group 1 naming one of group 2's ids: refused, and not even its own
+    // deletion goes through.
+    let out = db
+        .replace_latency_targets(
+            1,
+            "2026-01-02 00:00:00",
+            &[lat_input(Some(b[0].id), "stolen", "192.0.2.9")],
+        )
+        .await
+        .unwrap();
+    assert!(out.is_none());
+    assert_eq!(db.list_latency_targets(1).await.unwrap(), a);
+    assert_eq!(db.list_latency_targets(2).await.unwrap(), b);
+
+    // Emptying group 1 removes only group 1's targets and their history.
+    let out = db
+        .replace_latency_targets(1, "2026-01-02 00:00:00", &[])
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(out.is_empty());
+    assert_eq!(db.list_latency_targets(2).await.unwrap(), b);
+    let left = db
+        .query_latency_buckets("n1", LatencyGranularity::Minute1, 0, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        left.iter().map(|m| m.target_id).collect::<Vec<_>>(),
+        vec![b[0].id]
+    );
+    assert_eq!(
+        db.count_latency_targets_by_group().await.unwrap(),
+        vec![LatencyGroupCount {
+            group_id: 2,
+            targets: 2
+        }]
+    );
+}
+
+/// The comparison queries: totals per node and target over a window, and one
+/// target's series per node, from the minute or the hourly table, for the
+/// nodes and the target asked for only.
+#[tokio::test]
+async fn latency_group_queries_total_and_split_by_node() {
+    let db = repo().await;
+    let rows = |mean: f64, lost: i64| {
+        vec![
+            lat_row(
+                1,
+                3000,
+                6,
+                lost,
+                mean * (6 - lost) as f64,
+                Some(mean - 1.0),
+                Some(mean + 4.0),
+            ),
+            lat_row(1, 3060, 6, 0, 60.0, Some(9.0), Some(11.0)),
+            lat_row(2, 3000, 6, 0, 120.0, Some(19.0), Some(21.0)),
+        ]
+    };
+    db.record_latency_minutes("n1", &rows(10.0, 0))
+        .await
+        .unwrap();
+    db.record_latency_minutes("n2", &rows(30.0, 3))
+        .await
+        .unwrap();
+    db.record_latency_minutes("other", &rows(99.0, 0))
+        .await
+        .unwrap();
+    let nodes = vec!["n1".to_string(), "n2".to_string(), "ghost".to_string()];
+
+    let totals = db
+        .query_latency_totals(&nodes, &[1, 2], false, 0, 100_000)
+        .await
+        .unwrap();
+    let key = |t: &LatencyNodeTotal| (t.node_id.clone(), t.target_id);
+    assert_eq!(
+        totals.iter().map(key).collect::<Vec<_>>(),
+        vec![
+            ("n1".to_string(), 1),
+            ("n1".to_string(), 2),
+            ("n2".to_string(), 1),
+            ("n2".to_string(), 2)
+        ],
+        "only the nodes asked for, one row per node and target"
+    );
+    let n1t1 = &totals[0];
+    assert_eq!((n1t1.sent, n1t1.lost, n1t1.rtt_sum_ms), (12, 0, 120.0));
+    let n2t1 = &totals[2];
+    assert_eq!((n2t1.sent, n2t1.lost, n2t1.rtt_sum_ms), (12, 3, 150.0));
+
+    // only the targets asked for; the window is [since, until)
+    let t2 = db
+        .query_latency_totals(&nodes, &[2], false, 0, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(t2.len(), 2);
+    assert!(t2.iter().all(|t| t.target_id == 2));
+    let first_minute = db
+        .query_latency_totals(&nodes, &[1], false, 3060, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(first_minute[0].sent, 6, "since is inclusive of 3060 only");
+    assert!(db
+        .query_latency_totals(&nodes, &[1], false, 0, 3000)
+        .await
+        .unwrap()
+        .is_empty());
+    // the hourly table holds the same sums
+    let hourly = db
+        .query_latency_totals(&nodes, &[1, 2], true, 0, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(hourly.len(), 4);
+    assert_eq!(
+        (hourly[0].sent, hourly[0].lost, hourly[0].rtt_sum_ms),
+        (12, 0, 120.0)
+    );
+    // nothing to ask about is nothing back
+    assert!(db
+        .query_latency_totals(&[], &[1], false, 0, 100_000)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(db
+        .query_latency_totals(&nodes, &[], false, 0, 100_000)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // one target's series, a line per node, oldest bucket first
+    let series = db
+        .query_latency_target_series(&nodes, 1, LatencyGranularity::Minute1, 0, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        series
+            .iter()
+            .map(|b| (b.ts, b.node_id.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(3000, "n1"), (3000, "n2"), (3060, "n1"), (3060, "n2")]
+    );
+    let five = db
+        .query_latency_target_series(&nodes, 1, LatencyGranularity::Minute5, 0, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(five.len(), 2, "both minutes fall in one 5-minute bucket");
+    let n2 = five.iter().find(|b| b.node_id == "n2").unwrap();
+    assert_eq!((n2.sent, n2.lost, n2.rtt_sum_ms), (12, 3, 150.0));
+    assert_eq!((n2.rtt_min_ms, n2.rtt_max_ms), (Some(9.0), Some(34.0)));
+    let hour = db
+        .query_latency_target_series(&nodes, 1, LatencyGranularity::Hour1, 0, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(hour.iter().map(|b| b.ts).collect::<Vec<_>>(), vec![0, 0]);
+    assert!(db
+        .query_latency_target_series(&[], 1, LatencyGranularity::Minute1, 0, 100_000)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+/// Deleting a device group removes its latency targets and their minute and
+/// hourly history in the same step; another group's stay.
+#[tokio::test]
+async fn deleting_a_group_removes_its_latency_targets_and_history() {
+    let db = repo().await;
+    seed_group(&db, 1).await;
+    seed_group(&db, 2).await;
+    let a = db
+        .replace_latency_targets(
+            1,
+            "2026-01-01 00:00:00",
+            &[lat_input(None, "A", "192.0.2.1")],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let b = db
+        .replace_latency_targets(
+            2,
+            "2026-01-01 00:00:00",
+            &[lat_input(None, "B", "192.0.2.2")],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    db.record_latency_minutes(
+        "n1",
+        &[
+            lat_row(a[0].id, 36000, 6, 0, 60.0, Some(9.0), Some(11.0)),
+            lat_row(b[0].id, 36000, 6, 0, 60.0, Some(9.0), Some(11.0)),
+        ],
+    )
+    .await
+    .unwrap();
+
+    // The wrong owner deletes nothing, latency data included.
+    let n = db.delete_group(1, &ResourceScope::Owner(77)).await.unwrap();
+    assert_eq!(n, 0);
+    assert_eq!(db.list_latency_targets(1).await.unwrap().len(), 1);
+
+    let n = db.delete_group(1, &ResourceScope::All).await.unwrap();
+    assert_eq!(n, 1);
+    assert!(db.list_latency_targets(1).await.unwrap().is_empty());
+    assert_eq!(db.list_latency_targets(2).await.unwrap(), b);
+    for g in [LatencyGranularity::Minute1, LatencyGranularity::Hour1] {
+        let left = db.query_latency_buckets("n1", g, 0, 100_000).await.unwrap();
+        assert_eq!(
+            left.iter().map(|x| x.target_id).collect::<Vec<_>>(),
+            vec![b[0].id],
+            "only the surviving group's history is left"
+        );
+    }
+    // A group that was not there changes nothing.
+    assert_eq!(db.delete_group(1, &ResourceScope::All).await.unwrap(), 0);
+    assert_eq!(db.list_latency_targets(2).await.unwrap(), b);
+}
+
+/// Removing a user's account takes their groups' latency targets and history
+/// with it (cascade and bulk group delete alike); other users' groups keep
+/// theirs.
+#[tokio::test]
+async fn deleting_a_user_removes_the_latency_data_of_their_groups() {
+    let db = repo().await;
+    db.insert_user("alice", "h", 1).await.unwrap();
+    db.insert_user("bob", "h", 1).await.unwrap();
+    let alice = db.find_by_username("alice").await.unwrap().unwrap().id;
+    let bob = db.find_by_username("bob").await.unwrap().unwrap().id;
+    for (g, uid) in [(1_i64, alice), (2, bob), (3, 1)] {
+        seed_group_typed(&db, g, uid, "in").await;
+    }
+    let mut ids = Vec::new();
+    for g in [1_i64, 2, 3] {
+        let t = db
+            .replace_latency_targets(
+                g,
+                "2026-01-01 00:00:00",
+                &[lat_input(None, "T", "192.0.2.1")],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        db.record_latency_minutes(
+            &format!("n{g}"),
+            &[lat_row(t[0].id, 36000, 6, 0, 60.0, Some(9.0), Some(11.0))],
+        )
+        .await
+        .unwrap();
+        ids.push(t[0].id);
+    }
+
+    assert_eq!(db.delete_user_cascade(alice).await.unwrap(), 1);
+    assert!(db.list_latency_targets(1).await.unwrap().is_empty());
+    assert_eq!(db.list_latency_targets(2).await.unwrap().len(), 1, "bob's");
+    assert_eq!(
+        db.list_latency_targets(3).await.unwrap().len(),
+        1,
+        "admin's"
+    );
+    let hours = db
+        .query_latency_buckets("n1", LatencyGranularity::Hour1, 0, 100_000)
+        .await
+        .unwrap();
+    assert!(hours.is_empty(), "alice's history went with her group");
+
+    assert_eq!(db.delete_groups_by_uid(bob).await.unwrap(), 1);
+    assert!(db.list_latency_targets(2).await.unwrap().is_empty());
+    assert_eq!(db.list_latency_targets(3).await.unwrap().len(), 1);
+    let left = db
+        .query_latency_buckets("n3", LatencyGranularity::Minute1, 0, 100_000)
+        .await
+        .unwrap();
+    assert_eq!(left.len(), 1, "the admin's history is untouched");
 }

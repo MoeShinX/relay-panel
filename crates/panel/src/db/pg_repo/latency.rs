@@ -2,18 +2,78 @@ use super::PgRepository;
 use crate::db::error::DbError;
 use crate::db::repo::*;
 use async_trait::async_trait;
+use sqlx::PgConnection;
 use std::collections::BTreeSet;
 
 // ── LatencyRepository ──
 //
 // Same contract as the SQLite implementation; see `LatencyRepository`.
 
+/// Remove the latency targets matching `target_filter` (a condition on
+/// `latency_targets.group_id` with one `$1`) together with their minute and
+/// hourly history. Runs inside the caller's transaction, so a group and what
+/// it measured go together or not at all.
+async fn purge_latency_where(
+    conn: &mut PgConnection,
+    target_filter: &str,
+    bind: i64,
+) -> Result<(), sqlx::Error> {
+    for table in ["latency_minute", "latency_hourly"] {
+        sqlx::query(&format!(
+            "DELETE FROM {table} WHERE target_id IN
+                 (SELECT id FROM latency_targets WHERE {target_filter})"
+        ))
+        .bind(bind)
+        .execute(&mut *conn)
+        .await?;
+    }
+    sqlx::query(&format!(
+        "DELETE FROM latency_targets WHERE {target_filter}"
+    ))
+    .bind(bind)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// A device group is going away: its targets and their history go with it.
+pub(super) async fn purge_group_latency(
+    conn: &mut PgConnection,
+    group_id: i64,
+) -> Result<(), sqlx::Error> {
+    purge_latency_where(conn, "group_id = $1", group_id).await
+}
+
+/// Every group of a user is going away (account deletion). Must run before the
+/// groups are deleted: it finds them through `device_groups`.
+pub(super) async fn purge_owner_latency(
+    conn: &mut PgConnection,
+    uid: i64,
+) -> Result<(), sqlx::Error> {
+    purge_latency_where(
+        conn,
+        "group_id IN (SELECT id FROM device_groups WHERE uid = $1)",
+        uid,
+    )
+    .await
+}
+
 #[async_trait]
 impl LatencyRepository for PgRepository {
-    async fn list_latency_targets(&self) -> Result<Vec<LatencyTarget>, DbError> {
+    async fn list_latency_targets(&self, group_id: i64) -> Result<Vec<LatencyTarget>, DbError> {
         Ok(sqlx::query_as(
-            "SELECT id, name, carrier, kind, host, port, sort_order, created_at
-             FROM latency_targets ORDER BY sort_order, id",
+            "SELECT id, group_id, name, carrier, kind, host, port, sort_order, created_at
+             FROM latency_targets WHERE group_id = $1 ORDER BY sort_order, id",
+        )
+        .bind(group_id)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    async fn count_latency_targets_by_group(&self) -> Result<Vec<LatencyGroupCount>, DbError> {
+        Ok(sqlx::query_as(
+            "SELECT group_id, COUNT(*) AS targets FROM latency_targets
+             GROUP BY group_id ORDER BY group_id",
         )
         .fetch_all(&self.pool)
         .await?)
@@ -21,15 +81,20 @@ impl LatencyRepository for PgRepository {
 
     async fn replace_latency_targets(
         &self,
+        group_id: i64,
         now: &str,
         inputs: &[LatencyTargetInput],
     ) -> Result<Option<Vec<LatencyTarget>>, DbError> {
         let mut tx = self.pool.begin().await?;
 
-        // Lock the rows being edited so two concurrent replaces take turns.
-        let existing: Vec<(i64,)> = sqlx::query_as("SELECT id FROM latency_targets FOR UPDATE")
-            .fetch_all(&mut *tx)
-            .await?;
+        // Lock the group's rows so two concurrent replaces take turns. Only
+        // this group's targets count as existing: an id that belongs to
+        // another group is as unknown here as one that was deleted.
+        let existing: Vec<(i64,)> =
+            sqlx::query_as("SELECT id FROM latency_targets WHERE group_id = $1 FOR UPDATE")
+                .bind(group_id)
+                .fetch_all(&mut *tx)
+                .await?;
         let existing: BTreeSet<i64> = existing.into_iter().map(|(id,)| id).collect();
         let kept: BTreeSet<i64> = inputs.iter().filter_map(|i| i.id).collect();
         if kept.iter().any(|id| !existing.contains(id)) {
@@ -94,9 +159,10 @@ impl LatencyRepository for PgRepository {
                 None => {
                     sqlx::query(
                         "INSERT INTO latency_targets
-                             (name, carrier, kind, host, port, sort_order, created_at)
-                         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                             (group_id, name, carrier, kind, host, port, sort_order, created_at)
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
                     )
+                    .bind(group_id)
                     .bind(&input.name)
                     .bind(&input.carrier)
                     .bind(&input.kind)
@@ -111,9 +177,10 @@ impl LatencyRepository for PgRepository {
         }
 
         let list: Vec<LatencyTarget> = sqlx::query_as(
-            "SELECT id, name, carrier, kind, host, port, sort_order, created_at
-             FROM latency_targets ORDER BY sort_order, id",
+            "SELECT id, group_id, name, carrier, kind, host, port, sort_order, created_at
+             FROM latency_targets WHERE group_id = $1 ORDER BY sort_order, id",
         )
+        .bind(group_id)
         .fetch_all(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -240,6 +307,80 @@ impl LatencyRepository for PgRepository {
         .bind(since_ts)
         .fetch_all(&self.pool)
         .await?)
+    }
+
+    async fn query_latency_totals(
+        &self,
+        node_ids: &[String],
+        target_ids: &[i64],
+        hourly: bool,
+        since_ts: i64,
+        until_ts: i64,
+    ) -> Result<Vec<LatencyNodeTotal>, DbError> {
+        if node_ids.is_empty() || target_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (table, col) = if hourly {
+            ("latency_hourly", "hour_ts")
+        } else {
+            ("latency_minute", "minute_ts")
+        };
+        let sql = format!(
+            "SELECT node_id, target_id,
+                    CAST(SUM(sent) AS BIGINT) AS sent,
+                    CAST(SUM(lost) AS BIGINT) AS lost,
+                    SUM(rtt_sum_ms) AS rtt_sum_ms
+             FROM {table}
+             WHERE node_id = ANY($1) AND target_id = ANY($2) AND {col} >= $3 AND {col} < $4
+             GROUP BY node_id, target_id
+             ORDER BY node_id, target_id"
+        );
+        Ok(sqlx::query_as(&sql)
+            .bind(node_ids)
+            .bind(target_ids)
+            .bind(since_ts)
+            .bind(until_ts)
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
+    async fn query_latency_target_series(
+        &self,
+        node_ids: &[String],
+        target_id: i64,
+        granularity: LatencyGranularity,
+        since_ts: i64,
+        until_ts: i64,
+    ) -> Result<Vec<LatencyNodeBucket>, DbError> {
+        if node_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (table, col, bucket) = match granularity {
+            LatencyGranularity::Minute1 => ("latency_minute", "minute_ts", "minute_ts"),
+            LatencyGranularity::Minute5 => {
+                ("latency_minute", "minute_ts", "(minute_ts / 300) * 300")
+            }
+            LatencyGranularity::Hour1 => ("latency_hourly", "hour_ts", "hour_ts"),
+        };
+        let sql = format!(
+            "SELECT node_id, {bucket} AS ts,
+                    CAST(SUM(sent) AS BIGINT) AS sent,
+                    CAST(SUM(lost) AS BIGINT) AS lost,
+                    SUM(rtt_sum_ms) AS rtt_sum_ms,
+                    MIN(rtt_min_ms) AS rtt_min_ms,
+                    MAX(rtt_max_ms) AS rtt_max_ms
+             FROM {table}
+             WHERE node_id = ANY($1) AND target_id = $2 AND {col} >= $3 AND {col} < $4
+             GROUP BY node_id, {bucket}
+             ORDER BY ts, node_id"
+        );
+        Ok(sqlx::query_as(&sql)
+            .bind(node_ids)
+            .bind(target_id)
+            .bind(since_ts)
+            .bind(until_ts)
+            .fetch_all(&self.pool)
+            .await?)
     }
 
     async fn prune_latency_history(
