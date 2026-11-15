@@ -157,6 +157,8 @@ systemctl status relay-node   # 应显示 active (running)
 | `POLL_INTERVAL` | HTTP 轮询 / 状态上报间隔（秒） | `10` |
 | `PUBLIC_IP_CHECK_URL` | 检测节点公网出口 IP 用的地址 | `https://api.ipify.org` |
 | `NETWORK_INTERFACE` | 统计整机流量的网卡，`auto` 读默认路由 | `auto` |
+| `UDP_MAX_SESSIONS` | 所有规则合计最多同时存在的 UDP 会话数（按来源地址计）；超出后新会话被拒绝，伪造来源无法耗尽文件描述符 | fd 上限的一半（安装脚本的 `LimitNOFILE=65536` 下为 32768） |
+| `UDP_MAX_SESSIONS_PER_IP` | 同一个来源地址在所有规则上合计最多同时占用的 UDP 会话数（IPv6 来源按 /64 前缀合并计数，IPv4 映射的 IPv6 地址按其 IPv4 地址计）；超出后该地址的新会话被拒绝，避免一台机器占满 `UDP_MAX_SESSIONS` 或耗尽内存。如果有大量真实用户共用一个出口地址（NAT），可适当调大 | `1024` |
 | `RUST_LOG` | 日志级别：`error` / `warn` / `info` / `debug` | `info` |
 
 说明：

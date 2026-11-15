@@ -168,6 +168,7 @@ export them before launching.
 | `OUTBOUND_INTERFACE` | NIC for outbound IPv4 egress; `auto` = system routing (no source bind) | `auto` |
 | `OUTBOUND_BIND_IPV4` | Exact IPv4 source for outbound TCP/UDP; overrides `OUTBOUND_INTERFACE` | (unset) |
 | `UDP_MAX_SESSIONS` | Most concurrent UDP sessions (client addresses) across all rules; new ones beyond it are refused, so forged sources cannot exhaust file descriptors | half the fd limit (32768 under the installer's `LimitNOFILE=65536`) |
+| `UDP_MAX_SESSIONS_PER_IP` | Most concurrent UDP sessions one source address may hold across all rules (an IPv6 source counts per /64, an IPv4-mapped IPv6 address as its IPv4 address); new ones beyond it are refused, so one machine cannot fill `UDP_MAX_SESSIONS` or exhaust memory. Raise it if many real clients share one address (NAT) | `1024` |
 | `RUST_LOG` | Log level: `error` / `warn` / `info` / `debug` | `info` |
 
 Notes:

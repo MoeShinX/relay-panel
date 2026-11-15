@@ -4459,11 +4459,13 @@ async fn buy_plan_pauses_newest_rules_above_new_max_without_auto_resume() {
 
 // ── v1.0.7: admin directly edits a user's plan association + expiry ──
 
+/// Only the expiry is written: the plan the user is on at the moment of the
+/// UPDATE stays, even if it changed after the caller last read the user (a
+/// purchase landing between the admin's read and write).
 #[tokio::test]
-async fn admin_set_user_plan_clears_and_adjusts_expiry() {
+async fn admin_set_user_plan_expiry_leaves_plan_id_alone() {
     let db = repo().await;
     let (alice, pid) = seed_buyer_and_plan(&db, "100.00", 0, "5.00", 30, false).await;
-    // Start with a plan + expiry on alice.
     sqlx::query(
         "UPDATE users SET plan_id = ?, plan_expire_at = '2030-01-01 00:00:00' WHERE id = ?",
     )
@@ -4473,9 +4475,9 @@ async fn admin_set_user_plan_clears_and_adjusts_expiry() {
     .await
     .unwrap();
 
-    // Adjust expiry, keep the plan_id.
+    // Adjust expiry: plan_id is kept.
     assert_eq!(
-        db.admin_set_user_plan(alice, Some(pid), Some("2099-12-31 00:00:00".into()))
+        db.admin_set_user_plan_expiry(alice, Some("2099-12-31 00:00:00".into()))
             .await
             .unwrap(),
         1
@@ -4489,8 +4491,14 @@ async fn admin_set_user_plan_clears_and_adjusts_expiry() {
     assert_eq!(plan_id, Some(pid));
     assert_eq!(expire.as_deref(), Some("2099-12-31 00:00:00"));
 
-    // Clear: both columns go NULL.
-    db.admin_set_user_plan(alice, None, None).await.unwrap();
+    // The plan changes underneath (here: removed by another path); a later
+    // expiry edit must not bring any plan_id back. None = never expires.
+    sqlx::query("UPDATE users SET plan_id = NULL WHERE id = ?")
+        .bind(alice)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(db.admin_set_user_plan_expiry(alice, None).await.unwrap(), 1);
     let (plan_id2, expire2): (Option<i64>, Option<String>) =
         sqlx::query_as("SELECT plan_id, plan_expire_at FROM users WHERE id = ?")
             .bind(alice)
@@ -4502,11 +4510,11 @@ async fn admin_set_user_plan_clears_and_adjusts_expiry() {
 }
 
 #[tokio::test]
-async fn admin_set_user_plan_skips_admin_users() {
+async fn admin_set_user_plan_expiry_skips_admin_users() {
     let db = repo().await;
     // The baseline seeds admin user id 1. Editing an admin's plan must be a no-op.
     let affected = db
-        .admin_set_user_plan(1, None, Some("2099-12-31 00:00:00".into()))
+        .admin_set_user_plan_expiry(1, Some("2099-12-31 00:00:00".into()))
         .await
         .unwrap();
     assert_eq!(affected, 0, "admin users must be skipped (WHERE admin = 0)");

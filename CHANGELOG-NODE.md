@@ -35,6 +35,34 @@ sends the targets, so the node probes nothing.
   `NET_RAW` it cannot, and the node tells the panel so instead of reporting
   100% loss; TCP targets are unaffected.
 
+### Fixed
+
+- **A debug log line could crash the control channel.** With the log level set
+  to debug, the node shortened each text message it received to 100 bytes for
+  the log by cutting at a fixed byte offset. When that offset landed inside a
+  multi-byte character (any Chinese text, for example) the cut panicked, and
+  the WebSocket task died and was not restarted. The cut now always falls on a
+  character boundary.
+- **A crash while saving the config cache could leave the node unable to start
+  its listeners.** `config-cache.json` was rewritten in place, so a crash or
+  power loss mid-write left a truncated file; a node restarted while the panel
+  was unreachable then found no usable cache and started nothing, which is the
+  one situation the cache exists for. It is now written to a temporary file in
+  the same directory, flushed to disk, and renamed over the old one, so the
+  previous good copy is kept until the new one is complete.
+- **One source address can no longer fill the UDP session limit.** Every new
+  source address and port opens a session with its own socket and a 64 KB
+  reply buffer, so a single machine sending one packet from many source ports
+  could use up the node's session limit (32768 under the installer's service
+  settings). A small-memory VPS could run out of memory, and once the limit
+  was full no other UDP rule could open a session. Each source address, across
+  all rules on the node, is now limited to 1024 concurrent UDP sessions (an
+  IPv6 source counts per /64, an IPv4-mapped IPv6 address as its IPv4
+  address). Beyond that, new sessions from that address are refused and its
+  existing sessions carry on; the log warns at most once every 10 seconds.
+  Set `UDP_MAX_SESSIONS_PER_IP` in `relay-node.env` if many real clients share
+  one address (a campus or carrier NAT in front of a game server, say).
+
 ## [1.2.11] - 2026-11-02
 
 Runs against any current panel (still protocol version 4). Upgrade only if you

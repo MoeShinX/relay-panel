@@ -46,6 +46,15 @@ PostgreSQL revision 31). Targets belong to a device group (`group_id`).
   shows "this node cannot do ICMP" rather than reporting loss. Minute data is
   kept 48 hours and hourly data 30 days; removing a target removes its history.
 
+### Fixed
+
+- **Changing a user's expiry time could put back a plan they had just
+  replaced.** The admin "edit plan" action read the user's current plan and
+  then wrote that plan and the new expiry together. If the user bought another
+  plan in between, the old plan was written back while the traffic allowance,
+  rule count and route access were already the new plan's. Only the expiry is
+  written now, and the plan is left as it is.
+
 ## [1.2.20] - 2026-11-02
 
 Ships alongside `node-v1.2.11`. The config protocol is unchanged at version 4.
