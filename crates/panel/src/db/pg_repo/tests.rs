@@ -7181,7 +7181,7 @@ async fn pg_migration_31_adds_latency_tables() {
         rtt_min_ms: Some(9.0),
         rtt_max_ms: Some(11.0),
     };
-    db.record_latency_minutes("n1", &[row.clone()])
+    db.record_latency_minutes("n1", std::slice::from_ref(&row))
         .await
         .unwrap();
     db.record_latency_minutes("n1", &[row]).await.unwrap();

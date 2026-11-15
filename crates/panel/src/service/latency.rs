@@ -728,7 +728,7 @@ mod tests {
         assert_eq!(NOW % 60, 0);
         let targets = [target(1)];
         let good = sample(1, NOW - 120);
-        let r = screen_samples(&targets, &[good.clone()], NOW);
+        let r = screen_samples(&targets, std::slice::from_ref(&good), NOW);
         assert_eq!(r.accepted.len(), 1);
         assert_eq!(r.accepted[0].lost, 1);
         assert_eq!(r.accepted[0].rtt_min_ms, Some(8.0));
