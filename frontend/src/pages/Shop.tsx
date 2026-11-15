@@ -58,7 +58,13 @@ export default function Shop() {
     setSubmitting(true);
     try {
       const res = await api.post<unknown, ApiEnvelope<null>>('/user/buy-plan', { plan_id: buying.id });
-      if (res.code !== 0) { message.error(res.message); return; }
+      if (res.code !== 0) {
+        message.error(res.message);
+        // A rejected one-time claim means our list is stale; refresh it so the
+        // card flips to "claimed".
+        if (res.code === 409) { setBuying(null); load(); }
+        return;
+      }
       message.success(t('purchaseSuccess'));
       setBuying(null);
       load();
@@ -191,8 +197,16 @@ export default function Shop() {
                 )}
                 {p.reset_traffic && <div><Tag color="green">{t('planResetTraffic')}</Tag></div>}
               </div>
-              <Button type="primary" block style={{ marginTop: 16 }} onClick={() => setBuying(p)}>
-                {t('buyNow')}
+              {/* Free plans can be claimed once per user (server-enforced);
+                  the list marks the ones this user already has. */}
+              <Button
+                type="primary"
+                block
+                style={{ marginTop: 16 }}
+                disabled={p.claimed === true}
+                onClick={() => setBuying(p)}
+              >
+                {p.claimed === true ? t('planClaimed') : t('buyNow')}
               </Button>
             </Card>
           </Col>

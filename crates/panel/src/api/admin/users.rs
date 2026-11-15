@@ -490,6 +490,8 @@ pub async fn admin_buy_plan_for_user(
             Json(ApiResponse::success(()))
         }
         Err(BuyPlanError::InsufficientBalance) => Json(err(400, "余额不足")),
+        // Admin assignment is not limited, so this cannot occur; map it anyway.
+        Err(BuyPlanError::FreePlanAlreadyClaimed) => Json(err(409, "免费套餐每人只能领取一次")),
         Err(BuyPlanError::Database(e)) => {
             tracing::error!("admin_buy_plan_for_user {}: db error: {}", id, e);
             Json(err(500, "数据库错误"))

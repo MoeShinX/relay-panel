@@ -6726,3 +6726,151 @@ async fn pg_migration_30_adds_group_sort_order() {
         .expect("re-run is a no-op");
     cleanup(&db).await;
 }
+
+// ── v1.2.21: free plans can be self-claimed once per user ──
+
+/// Call buy_plan_self_service for plan `pid` with fixed plan attributes.
+async fn pg_self_buy(
+    db: &PgRepository,
+    user: i64,
+    pid: i64,
+    price_cents: i64,
+) -> Result<(), BuyPlanError> {
+    db.buy_plan_self_service(
+        user,
+        pid,
+        "p1",
+        price_cents,
+        1_000,
+        10,
+        0,
+        false,
+        false,
+        &[],
+        &[],
+    )
+    .await
+}
+
+async fn pg_user_snapshot(db: &PgRepository, user: i64) -> (String, i64, usize) {
+    let (balance, traffic_limit): (String, i64) =
+        sqlx::query_as("SELECT balance, traffic_limit FROM users WHERE id = $1")
+            .bind(user)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    let orders = db.list_orders_by_user(user).await.unwrap().len();
+    (balance, traffic_limit, orders)
+}
+
+#[tokio::test]
+async fn pg_buy_plan_free_plan_can_be_self_claimed_only_once() {
+    let Some(db) = repo("free_once").await else {
+        return;
+    };
+    let (alice, pid) = seed_buyer_and_plan(&db, "7.00", 1_000, "0.00", 0, false).await;
+
+    pg_self_buy(&db, alice, pid, 0).await.unwrap();
+    let after_first = pg_user_snapshot(&db, alice).await;
+    assert_eq!(after_first, ("7".to_string(), 1_000, 1));
+
+    let err = pg_self_buy(&db, alice, pid, 0).await.unwrap_err();
+    assert!(matches!(err, BuyPlanError::FreePlanAlreadyClaimed));
+    assert_eq!(
+        pg_user_snapshot(&db, alice).await,
+        after_first,
+        "a refused claim must not change balance, traffic or orders"
+    );
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_buy_plan_paid_plan_can_be_self_bought_repeatedly() {
+    let Some(db) = repo("free_paid").await else {
+        return;
+    };
+    let (alice, pid) = seed_buyer_and_plan(&db, "100.00", 1_000, "10.00", 0, false).await;
+
+    pg_self_buy(&db, alice, pid, 1000).await.unwrap();
+    pg_self_buy(&db, alice, pid, 1000).await.unwrap();
+    let (balance, traffic_limit, orders) = pg_user_snapshot(&db, alice).await;
+    assert_eq!(balance, "80");
+    assert_eq!(traffic_limit, 2_000, "renewal stacks traffic");
+    assert_eq!(orders, 2);
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_buy_plan_registration_default_plan_does_not_count_as_a_claim() {
+    let Some(db) = repo("free_reg").await else {
+        return;
+    };
+    let (alice, pid) = seed_buyer_and_plan(&db, "0.00", 1_000, "0.00", 0, false).await;
+    // Registration grants the default plan by setting users.plan_id + quota
+    // directly, without writing an order.
+    sqlx::query("UPDATE users SET plan_id = $1, traffic_limit = 1000 WHERE id = $2")
+        .bind(pid)
+        .bind(alice)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(pg_user_snapshot(&db, alice).await.2, 0);
+
+    pg_self_buy(&db, alice, pid, 0).await.unwrap();
+    assert_eq!(pg_user_snapshot(&db, alice).await.2, 1);
+    let err = pg_self_buy(&db, alice, pid, 0).await.unwrap_err();
+    assert!(matches!(err, BuyPlanError::FreePlanAlreadyClaimed));
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_buy_plan_free_claim_counts_earlier_paid_order_of_same_plan() {
+    let Some(db) = repo("free_prior").await else {
+        return;
+    };
+    let (alice, pid) = seed_buyer_and_plan(&db, "50.00", 1_000, "5.00", 0, false).await;
+    // Bought while it cost money; the plan later became free.
+    pg_self_buy(&db, alice, pid, 500).await.unwrap();
+    let before = pg_user_snapshot(&db, alice).await;
+
+    let err = pg_self_buy(&db, alice, pid, 0).await.unwrap_err();
+    assert!(matches!(err, BuyPlanError::FreePlanAlreadyClaimed));
+    assert_eq!(pg_user_snapshot(&db, alice).await, before);
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_buy_plan_admin_assignment_is_not_limited_for_free_plans() {
+    let Some(db) = repo("free_admin").await else {
+        return;
+    };
+    let (alice, pid) = seed_buyer_and_plan(&db, "0.00", 1_000, "0.00", 0, false).await;
+
+    for _ in 0..2 {
+        db.buy_plan(alice, pid, "p1", 0, 1_000, 10, 0, false, false, &[], &[])
+            .await
+            .unwrap();
+    }
+    assert_eq!(pg_user_snapshot(&db, alice).await.2, 2);
+    cleanup(&db).await;
+}
+
+#[tokio::test]
+async fn pg_buy_plan_concurrent_free_claims_only_one_succeeds() {
+    let Some(db) = repo("free_race").await else {
+        return;
+    };
+    let (alice, pid) = seed_buyer_and_plan(&db, "0.00", 1_000, "0.00", 0, false).await;
+
+    let (a, b) = tokio::join!(
+        pg_self_buy(&db, alice, pid, 0),
+        pg_self_buy(&db, alice, pid, 0)
+    );
+    let oks = [&a, &b].iter().filter(|r| r.is_ok()).count();
+    assert_eq!(oks, 1, "exactly one concurrent free claim may win");
+    assert!([&a, &b]
+        .iter()
+        .any(|r| matches!(r, Err(BuyPlanError::FreePlanAlreadyClaimed))));
+    assert_eq!(pg_user_snapshot(&db, alice).await.2, 1);
+    cleanup(&db).await;
+}

@@ -17,7 +17,7 @@ use relay_shared::protocol::*;
 /// GET /plans — public list of purchasable plans (hidden excluded). v1.0.9:
 /// each plan carries its `device_group_ids` so the shop can show "包含线路".
 pub async fn list_public_plans(
-    _user: AuthUser,
+    user: AuthUser,
     State(state): State<AppState>,
 ) -> Json<ApiResponse<Vec<PlanWithGroups>>> {
     let plans: Vec<Plan> = match state.db.list_visible_plans().await {
@@ -29,8 +29,20 @@ pub async fn list_public_plans(
             return Json(err(500, "数据库错误"));
         }
     };
+    // Free plans can be self-claimed once per user; flag the ones this user
+    // already has an order for so the shop can disable them.
+    let claimed_plan_ids: std::collections::HashSet<i64> =
+        match state.db.list_orders_by_user(user.user_id).await {
+            Ok(orders) => orders.into_iter().filter_map(|o| o.plan_id).collect(),
+            Err(e) => {
+                tracing::error!("list_public_plans: list_orders_by_user failed: {}", e);
+                return Json(err(500, "数据库错误"));
+            }
+        };
     let mut out = Vec::with_capacity(plans.len());
     for plan in plans {
+        let claimed = (relay_shared::money::balance_to_cents(&plan.price) == Some(0))
+            .then(|| claimed_plan_ids.contains(&plan.id));
         // grant_all_groups plans grant everything — the explicit list is moot,
         // so skip the lookup and return an empty list (the card shows "全部线路").
         let device_group_ids = if plan.grant_all_groups {
@@ -63,6 +75,7 @@ pub async fn list_public_plans(
             plan,
             device_group_ids,
             device_group_names,
+            claimed,
         });
     }
     Json(ApiResponse::success(out))
@@ -158,7 +171,7 @@ pub async fn buy_plan(
 
     match state
         .db
-        .buy_plan(
+        .buy_plan_self_service(
             user.user_id,
             plan.id,
             &plan.name,
@@ -184,6 +197,7 @@ pub async fn buy_plan(
             Json(ApiResponse::success(()))
         }
         Err(BuyPlanError::InsufficientBalance) => Json(err(400, "余额不足")),
+        Err(BuyPlanError::FreePlanAlreadyClaimed) => Json(err(409, "免费套餐每人只能领取一次")),
         Err(BuyPlanError::Database(e)) => {
             tracing::error!("buy_plan {}: db error: {}", plan.id, e);
             Json(err(500, "数据库错误"))

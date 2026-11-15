@@ -10,6 +10,19 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A free plan can be claimed only once per user.** Until now the shop let a
+  user buy a price-0 plan (the built-in `free` plan, for one) as many times as
+  they liked, and every purchase stacked another full quota of traffic onto
+  the account (100 GiB each for the default plan). The first purchase works as
+  before; later ones are refused with a message saying a free plan can be
+  claimed once per user, and the shop shows the card as "已领取" (claimed) and
+  disabled. Any earlier order for that plan counts, whatever it cost at the
+  time; the plan a new account gets at registration does not. Paid plans are
+  unchanged, and an admin assigning a plan to a user is not limited. Traffic
+  already stacked through repeated claims is not taken back.
+
 ## [1.2.20] - 2026-11-02
 
 Ships alongside `node-v1.2.11`. The config protocol is unchanged at version 4.

@@ -423,6 +423,9 @@ export interface Plan {
    *  these directly — it can't resolve ids for groups the buyer isn't
    *  authorized for yet (the shared-group list only returns visible groups). */
   device_group_names?: string[];
+  /** v1.2.21: shop list only, and only on free (price 0) plans: the current
+   *  user has already claimed it. Free plans can be self-claimed once. */
+  claimed?: boolean;
   created_at: string;
 }
 
