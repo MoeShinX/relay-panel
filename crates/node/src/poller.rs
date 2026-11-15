@@ -84,8 +84,11 @@ pub async fn fetch_config(config: &NodeConfig) -> FetchResult {
 /// Load cached config from config-cache.json.
 /// Returns None if file doesn't exist or is corrupt.
 pub fn load_cache() -> Option<NodeConfigResponse> {
-    let path = cache_path();
-    let data = std::fs::read_to_string(&path).ok()?;
+    load_cache_at(&cache_path())
+}
+
+fn load_cache_at(path: &std::path::Path) -> Option<NodeConfigResponse> {
+    let data = std::fs::read_to_string(path).ok()?;
     let resp: NodeConfigResponse = serde_json::from_str(&data).ok()?;
     tracing::info!(
         "Loaded cached config from {} ({} listeners)",
@@ -97,10 +100,13 @@ pub fn load_cache() -> Option<NodeConfigResponse> {
 
 /// Save config to config-cache.json (next to the binary or in working dir).
 fn save_cache(config: &NodeConfigResponse) {
-    let path = cache_path();
+    save_cache_at(&cache_path(), config);
+}
+
+fn save_cache_at(path: &std::path::Path, config: &NodeConfigResponse) {
     match serde_json::to_string_pretty(config) {
         Ok(json) => {
-            if let Err(e) = std::fs::write(&path, json) {
+            if let Err(e) = write_atomic(path, json.as_bytes()) {
                 tracing::warn!("Failed to write config cache to {}: {}", path.display(), e);
             }
         }
@@ -108,6 +114,52 @@ fn save_cache(config: &NodeConfigResponse) {
             tracing::warn!("Failed to serialize config cache: {}", e);
         }
     }
+}
+
+/// Serialises `write_atomic`: the cache is saved from the startup fetch and
+/// from the control channel's refresh, and both use the same temp file name.
+static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Replace `path` with `data` so a crash or power loss at any point leaves
+/// either the old file or the new one, never a half-written file: write a
+/// sibling temp file, `sync_all` it, then rename it over the target (which
+/// replaces an existing file on Unix and on Windows alike). The old file is
+/// only ever touched by the final rename, so any failure before it keeps the
+/// previous good copy.
+fn write_atomic(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let _guard = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut tmp_name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "no file name"))?
+        .to_os_string();
+    tmp_name.push(".tmp");
+    let tmp = path.with_file_name(tmp_name);
+
+    let written = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(data)?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, path)
+    })();
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+
+    // Make the rename itself durable. Best effort: the new content is already
+    // in place, so a failure here only costs durability across a power cut.
+    #[cfg(unix)]
+    {
+        let dir = match path.parent() {
+            Some(d) if !d.as_os_str().is_empty() => d,
+            _ => std::path::Path::new("."),
+        };
+        if let Err(e) = std::fs::File::open(dir).and_then(|d| d.sync_all()) {
+            tracing::warn!("Failed to fsync directory {}: {}", dir.display(), e);
+        }
+    }
+    Ok(())
 }
 
 fn cache_path() -> PathBuf {
@@ -234,6 +286,76 @@ mod tests {
         };
         assert_eq!(state_dir(None), legacy);
         assert_eq!(state_dir(Some("".into())), legacy);
+    }
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "relaypanel-test-{}-{}-{}",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn cfg_with_port(port: u16) -> NodeConfigResponse {
+        serde_json::from_str(&format!(
+            r#"{{"listeners":[{{"rule_id":1,"port":{port},"protocol":"tcp","targets":["127.0.0.1:80"]}}]}}"#
+        ))
+        .expect("minimal listener config parses")
+    }
+
+    #[test]
+    fn config_cache_round_trips_and_replaces_old_copy() {
+        let dir = scratch_dir("cache-roundtrip");
+        let path = dir.join(CACHE_FILE);
+        assert!(load_cache_at(&path).is_none(), "no file yet");
+
+        save_cache_at(&path, &cfg_with_port(1111));
+        assert_eq!(load_cache_at(&path).unwrap().listeners[0].port, 1111);
+        // Saving again replaces the existing file.
+        save_cache_at(&path, &cfg_with_port(2222));
+        assert_eq!(load_cache_at(&path).unwrap().listeners[0].port, 2222);
+        // No temp file is left behind after a successful save.
+        assert!(!dir.join(format!("{CACHE_FILE}.tmp")).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A temp file left by a crash mid-write must not affect loading, and the
+    /// next save must overwrite it and succeed.
+    #[test]
+    fn stale_temp_file_does_not_affect_cache() {
+        let dir = scratch_dir("cache-stale-tmp");
+        let path = dir.join(CACHE_FILE);
+        let tmp = dir.join(format!("{CACHE_FILE}.tmp"));
+        save_cache_at(&path, &cfg_with_port(3333));
+        std::fs::write(&tmp, b"{\"listeners\":[{\"rule_").unwrap();
+        assert_eq!(load_cache_at(&path).unwrap().listeners[0].port, 3333);
+
+        save_cache_at(&path, &cfg_with_port(4444));
+        assert_eq!(load_cache_at(&path).unwrap().listeners[0].port, 4444);
+        assert!(!tmp.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// When the final rename fails, the temp file is cleaned up and nothing
+    /// the target path held is lost (here the target is a non-empty directory,
+    /// which no platform lets a file be renamed over).
+    #[test]
+    fn failed_write_leaves_existing_target_and_no_temp() {
+        let dir = scratch_dir("cache-fail");
+        let path = dir.join(CACHE_FILE);
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("keep"), b"x").unwrap();
+
+        assert!(write_atomic(&path, b"data").is_err());
+        assert!(path.join("keep").exists());
+        assert!(!dir.join(format!("{CACHE_FILE}.tmp")).exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A node_id generated once must be reused verbatim on every subsequent
