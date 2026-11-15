@@ -27,6 +27,8 @@ function point(ts: number, avg: number | null, loss = 0) {
 function response(over: Partial<NodeLatencyResponse> = {}): NodeLatencyResponse {
   return {
     node_id: 'n1',
+    group_id: 7,
+    group_name: 'edge-group',
     node_version: '1.2.12',
     supported: true,
     interval_secs: 10,
@@ -89,15 +91,26 @@ afterEach(() => {
 });
 
 describe('NodeLatency empty and gated states', () => {
-  it('with no targets configured it says so and links to the settings page', async () => {
+  it('with no targets in its group it says so and links to the device groups page', async () => {
     serve(() => ok(response({ series: [], summary: [], unsupported_targets: [] })));
     renderPage();
     await flush();
     expect(screen.getByText('latencyNoTargets')).toBeInTheDocument();
     expect(screen.queryByTestId('chart')).toBeNull();
-    fireEvent.click(screen.getByText('latencyGoSettings'));
+    fireEvent.click(screen.getByText('latencyGoGroups'));
     await flush();
-    expect(screen.getByTestId('where')).toHaveTextContent('/settings');
+    expect(screen.getByTestId('where')).toHaveTextContent('/groups');
+  });
+
+  it('names the node\'s device group and links to that group\'s comparison', async () => {
+    serve(() => ok(response()));
+    renderPage();
+    await flush();
+    const link = screen.getByTestId('latency-group-link');
+    expect(link).toHaveTextContent('edge-group');
+    fireEvent.click(link);
+    await flush();
+    expect(screen.getByTestId('where')).toHaveTextContent('/groups/7/latency');
   });
 
   it('a node older than node-v1.2.12 is told to upgrade, not shown an empty chart', async () => {

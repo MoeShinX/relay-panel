@@ -943,7 +943,7 @@ export const zhCN = {
 
   // Latency monitor (v1.2.21)
   latencyMonitor: '延迟监控',
-  latencyMonitorHint: '由各节点定时探测下面的目标（TCP 连接耗时或 ICMP ping），统计延迟与丢包。仅管理员可见；没有目标时节点不做任何探测。',
+  latencyMonitorHint: '本分组的每台节点会定时探测下面的目标（TCP 连接耗时或 ICMP ping），统计延迟与丢包。仅管理员可见；分组没有目标时，其节点不做任何探测。',
   latencyInterval: '探测间隔（秒）',
   latencyIntervalHint: '每个目标每隔这么久探测一次，5–60 秒。',
   latencyTargets: '探测目标',
@@ -988,8 +988,8 @@ export const zhCN = {
   latencyCardHint: '点击卡片只看该目标，再点一次回到全部目标。',
   latencyNoData: '暂无数据',
   latencyAllLost: '全部丢失',
-  latencyNoTargets: '还没有配置探测目标。',
-  latencyGoSettings: '去系统设置添加目标',
+  latencyNoTargets: '该节点所在的设备分组还没有配置探测目标。',
+  latencyGoGroups: '去设备分组配置',
   latencyNodeTooOld: '这个节点的版本过旧，需要节点升级到 node-v1.2.12 才能做延迟监控。',
   latencyNodeVersion: '当前版本',
   latencyIcmpUnsupported: '该节点不支持 ICMP',
@@ -1005,6 +1005,17 @@ export const zhCN = {
   latencyLoadFailed: '加载延迟数据失败',
   latencyNodeNotFound: '找不到这个节点。',
   latencyIconTip: '三网延迟',
+  latencyGroupMonitor: '监控',
+  latencyGroupTitle: '分组延迟对比',
+  latencyGroupLink: '查看该分组的延迟对比',
+  latencyGroupNotFound: '没有找到这个设备分组。',
+  latencyGroupNoTargets: '这个设备分组还没有配置探测目标。',
+  latencyGroupNoNodes: '这个分组还没有节点上报。',
+  latencyGroupNodeCol: '节点',
+  latencyGroupNeedUpgrade: '需要升级',
+  latencyGroupUnsupported: '不支持',
+  latencyGroupTableHint: '格子是所选时间范围内的平均延迟和丢包率。点列头或格子，下方趋势图切换到该目标；点节点名查看该节点的详细图。',
+  latencyGroupChartFor: '趋势图：',
 };
 
 export type Dict = typeof zhCN;

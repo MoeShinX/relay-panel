@@ -21,6 +21,7 @@ const realT = {
 function target(id: number, over: Partial<LatencyTarget> = {}): LatencyTarget {
   return {
     id,
+    group_id: 5,
     name: `target ${id}`,
     carrier: 'telecom',
     kind: 'tcp',
@@ -36,11 +37,13 @@ function config(targets: LatencyTarget[], interval = 10): LatencyConfig {
   return { interval_secs: interval, targets };
 }
 
+const onSaved = vi.fn();
+
 async function renderSettings(cfg: LatencyConfig) {
   mockGet.mockResolvedValue(ok(cfg));
   const view = render(
     <I18nContext.Provider value={realT}>
-      <LatencySettings />
+      <LatencySettings groupId={5} onSaved={onSaved} />
     </I18nContext.Provider>,
   );
   await screen.findByTestId('latency-row-0').catch(() => screen.findByText(zhCN.latencyNoTargetsYet));
@@ -62,6 +65,7 @@ const clickSave = () => userEvent.click(screen.getByTestId("latency-save"));
 beforeEach(() => {
   mockGet.mockReset();
   mockPut.mockReset();
+  onSaved.mockReset();
   mockPut.mockImplementation((_url: string, body: { interval_secs: number; targets: unknown[] }) =>
     Promise.resolve(ok(config(
       body.targets.map((t, i) => ({ ...target(i + 1), ...(t as object) }) as LatencyTarget),
@@ -70,6 +74,16 @@ beforeEach(() => {
 });
 
 describe('LatencySettings', () => {
+  it('reads and writes the configuration of the group it is given', async () => {
+    await renderSettings(config([target(1)]));
+    expect(mockGet).toHaveBeenCalledWith('/admin/groups/5/latency/config');
+    await clickSave();
+    await waitFor(() => expect(mockPut).toHaveBeenCalledTimes(1));
+    expect(mockPut.mock.calls[0][0]).toBe('/admin/groups/5/latency/config');
+    // the page that opened it learns how many targets the group now has
+    expect(onSaved).toHaveBeenCalledWith(1);
+  });
+
   it('starts empty with the default interval and nothing to save but the interval', async () => {
     await renderSettings(config([]));
     expect(screen.getByText(zhCN.latencyNoTargetsYet)).toBeInTheDocument();
@@ -95,7 +109,7 @@ describe('LatencySettings', () => {
 
     await waitFor(() => expect(mockPut).toHaveBeenCalledTimes(1));
     const [url, body] = mockPut.mock.calls[0];
-    expect(url).toBe('/admin/latency/config');
+    expect(url).toBe('/admin/groups/5/latency/config');
     expect(body.interval_secs).toBe(10);
     expect(body.targets).toEqual([
       { id: 7, name: 'Old', carrier: 'telecom', kind: 'tcp', host: '192.0.2.7', port: 443 },
@@ -197,7 +211,7 @@ describe('LatencySettings', () => {
     mockGet.mockResolvedValue({ code: 500, message: 'x', data: null });
     render(
       <I18nContext.Provider value={realT}>
-        <LatencySettings />
+        <LatencySettings groupId={5} />
       </I18nContext.Provider>,
     );
     expect(await screen.findByText(zhCN.settingsLoadFailed)).toBeInTheDocument();

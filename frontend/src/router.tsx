@@ -25,6 +25,7 @@ const Groups = lazy(() => import('./pages/Groups'));
 const Users = lazy(() => import('./pages/Users'));
 const NodeStatus = lazy(() => import('./pages/NodeStatus'));
 const NodeLatency = lazy(() => import('./pages/NodeLatency'));
+const GroupLatency = lazy(() => import('./pages/GroupLatency'));
 const Account = lazy(() => import('./pages/Account'));
 const SystemSettings = lazy(() => import('./pages/SystemSettings'));
 const Plans = lazy(() => import('./pages/Plans'));
@@ -80,6 +81,10 @@ export const router = createBrowserRouter([
       // v1.2.21: one node's latency to the admin's targets. Reached from the icon
       // beside the node's IP; deliberately not a menu entry.
       { path: 'nodes/:nodeId/latency', element: <RequireAdmin><NodeLatency /></RequireAdmin> },
+      // v1.2.21: a device group's nodes side by side against its targets.
+      // Reached from the monitor button on the group's header on the node
+      // status page; not a menu entry either.
+      { path: 'groups/:groupId/latency', element: <RequireAdmin><GroupLatency /></RequireAdmin> },
       // v1.0.8: self-service shop (plan purchase + order history).
       { path: 'shop', element: <Shop /> },
       // v1.0.8: admin plan management (CRUD).

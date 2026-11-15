@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Empty, Input, InputNumber, Select, Space, Spin, Tooltip, Typography, message } from 'antd';
+import { Alert, Button, Empty, Input, InputNumber, Select, Space, Spin, Tooltip, Typography, message } from 'antd';
 import { DeleteOutlined, HolderOutlined, PlusOutlined } from '@ant-design/icons';
 import {
   DndContext,
@@ -179,13 +179,21 @@ function SortableTargetRow({ row, index, showErrors, onChange, onRemove }: RowPr
   );
 }
 
+interface SettingsProps {
+  /** The device group whose targets and interval these are. */
+  groupId: number;
+  /** Called with the group's target count after every successful save. */
+  onSaved?: (targets: number) => void;
+}
+
 /**
- * v1.2.21: the "latency monitoring" section of the system settings — the probe
- * interval and the list of targets every node probes. Saving replaces the whole
- * configuration; targets that keep their row keep their history, a removed one
- * takes its history with it (the hint says so).
+ * v1.2.21: one device group's latency monitoring — the probe interval and the
+ * list of targets every node of the group probes (a group with none probes
+ * nothing). Shown in a drawer on the device-group page. Saving replaces the
+ * group's whole configuration; targets that keep their row keep their history,
+ * a removed one takes its history with it (the hint says so).
  */
-export default function LatencySettings() {
+export default function LatencySettings({ groupId, onSaved }: SettingsProps) {
   const { t } = useI18n();
   const [interval, setIntervalSecs] = useState<number | null>(LATENCY_DEFAULT_INTERVAL);
   const [rows, setRows] = useState<TargetRow[]>([]);
@@ -200,7 +208,7 @@ export default function LatencySettings() {
     setLoading(true);
     setLoadFailed(false);
     try {
-      const res = await api.get<unknown, ApiEnvelope<LatencyConfig>>('/admin/latency/config');
+      const res = await api.get<unknown, ApiEnvelope<LatencyConfig>>(`/admin/groups/${groupId}/latency/config`);
       if (res.code !== 0 || !res.data) {
         setLoadFailed(true);
         return;
@@ -213,7 +221,7 @@ export default function LatencySettings() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [groupId]);
 
   useEffect(() => {
     load();
@@ -278,7 +286,7 @@ export default function LatencySettings() {
     setSaving(true);
     try {
       const res = await api.put<unknown, ApiEnvelope<LatencyConfig>>(
-        '/admin/latency/config',
+        `/admin/groups/${groupId}/latency/config`,
         toPayload(interval, rows),
       );
       if (res.code !== 0 || !res.data) {
@@ -290,6 +298,7 @@ export default function LatencySettings() {
       setShowErrors(false);
       setRemovedSaved(false);
       message.success(t('settingsSaved'));
+      onSaved?.(res.data.targets.length);
     } catch {
       message.error(t('settingsSaveFailed'));
     } finally {
@@ -300,15 +309,13 @@ export default function LatencySettings() {
   const full = rows.length >= LATENCY_MAX_TARGETS;
 
   return (
-    <Card
-      title={t('latencyMonitor')}
-      style={{ marginTop: 16 }}
-      extra={<Button type="primary" data-testid="latency-save" loading={saving} disabled={loading || loadFailed} onClick={save}>{t('save')}</Button>}
-      data-testid="latency-settings"
-    >
-      <Text type="secondary" style={{ display: 'block', marginBottom: 12, fontSize: 12 }}>
-        {t('latencyMonitorHint')}
-      </Text>
+    <div data-testid="latency-settings">
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 12 }}>
+        <Text type="secondary" style={{ flex: 1, fontSize: 12 }}>
+          {t('latencyMonitorHint')}
+        </Text>
+        <Button type="primary" data-testid="latency-save" loading={saving} disabled={loading || loadFailed} onClick={save}>{t('save')}</Button>
+      </div>
       {loading ? (
         <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div>
       ) : loadFailed ? (
@@ -370,6 +377,6 @@ export default function LatencySettings() {
           </Space>
         </>
       )}
-    </Card>
+    </div>
   );
 }

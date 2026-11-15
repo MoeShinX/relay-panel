@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { LatencySeries } from '../api/types';
-import { chartPoints, formatLoss, formatMs, lossMarkers } from './latencyChart';
+import { chartPoints, formatLoss, formatMs, groupChartPoints, lossMarkers, nodeDisplayName } from './latencyChart';
 
 const series: LatencySeries[] = [
   {
@@ -58,5 +58,38 @@ describe('formatting', () => {
     expect(formatLoss(0)).toBe('0%');
     expect(formatLoss(0.25)).toBe('0.25%');
     expect(formatLoss(16.666)).toBe('16.7%');
+  });
+});
+
+describe('the group chart', () => {
+  const nodes = [
+    { node_id: 'n1', label: 'HK-1' },
+    { node_id: '0123456789abcdef', label: null },
+    { node_id: 'short', label: null },
+  ];
+
+  it('names a node by its label, else by its id (shortened when long)', () => {
+    expect(nodeDisplayName(nodes[0])).toBe('HK-1');
+    expect(nodeDisplayName(nodes[1])).toBe('01234567…def');
+    expect(nodeDisplayName(nodes[2])).toBe('short');
+  });
+
+  it('draws a line per node, keyed by node id and named for it, gaps kept as null', () => {
+    const pts = groupChartPoints(
+      [
+        { node_id: 'n1', points: [{ ts: 600, avg: 10, min: 8, max: 14, loss: 0 }] },
+        { node_id: '0123456789abcdef', points: [{ ts: 600, avg: null, min: null, max: null, loss: 100 }] },
+        { node_id: 'gone', points: [{ ts: 660, avg: 5, min: 4, max: 6, loss: 0 }] },
+      ],
+      nodes as never,
+    );
+    expect(pts.map((p) => [p.key, p.name, p.value])).toEqual([
+      ['n1', 'HK-1', 10],
+      ['0123456789abcdef', '01234567…def', null],
+      // a node the table no longer lists still plots, under its id
+      ['gone', 'gone', 5],
+    ]);
+    expect(pts[0].time.getTime()).toBe(600_000);
+    expect(lossMarkers(pts).map((m) => m.key)).toEqual(['0123456789abcdef']);
   });
 });

@@ -17,7 +17,7 @@ import {
 import { LineChartOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
-import type { ApiEnvelope, LatencyConfig, NodeStatus, SharedNodeSummary, NodeDisplayRow, NodeLiveRate } from '../api/types';
+import type { ApiEnvelope, LatencyGroupCount, NodeStatus, SharedNodeSummary, NodeDisplayRow, NodeLiveRate } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { useAuth } from '../auth/useAuth';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -71,7 +71,8 @@ export default function NodeStatus() {
   const navigate = useNavigate();
 
   const [adminRows, setAdminRows] = useState<NodeStatus[] | null>(null);
-  const [latencyEnabled, setLatencyEnabled] = useState(false);
+  // v1.2.21: the device groups that have latency targets configured.
+  const [latencyGroups, setLatencyGroups] = useState<Set<number>>(new Set());
   const [userRows, setUserRows] = useState<SharedNodeSummary[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   // v1.2: nodes compare against the latest NODE release (latest_node_version),
@@ -156,13 +157,14 @@ export default function NodeStatus() {
     } catch { /* ignore */ }
   };
 
-  // v1.2.21: the latency icon only means something once the admin has set up
-  // targets in System Settings; until then there is nothing to look at.
-  const loadLatencyEnabled = async () => {
+  // v1.2.21: the latency button and icon only mean something for a group the
+  // admin has set targets for (on the device-group page); one request says
+  // which, and a group without targets shows neither.
+  const loadLatencyGroups = async () => {
     try {
-      const res = await api.get<unknown, ApiEnvelope<LatencyConfig>>('/admin/latency/config');
-      setLatencyEnabled(res.code === 0 && (res.data?.targets?.length ?? 0) > 0);
-    } catch { setLatencyEnabled(false); }
+      const res = await api.get<unknown, ApiEnvelope<LatencyGroupCount[]>>('/admin/latency/groups');
+      setLatencyGroups(new Set(res.code === 0 ? (res.data || []).map((g) => g.group_id) : []));
+    } catch { setLatencyGroups(new Set()); }
   };
 
   const refresh = async () => {
@@ -184,7 +186,7 @@ export default function NodeStatus() {
   useEffect(() => {
     if (isAdmin) {
       loadVersion();
-      loadLatencyEnabled();
+      loadLatencyGroups();
     }
     refresh();
     const ti = setInterval(refresh, 5000);
@@ -313,13 +315,16 @@ export default function NodeStatus() {
       t,
       openDetail: setDetailRow,
       onDelete: isAdmin ? handleDelete : undefined,
-      // v1.2.21: the monitor icon beside the IP — admins only, only once
-      // latency targets are configured, and only for a node that has an id
-      // (the latency page is keyed by it).
-      onOpenLatency: isAdmin && latencyEnabled
+      // v1.2.21: the monitor icon beside the IP and the group header's monitor
+      // button — admins only, only for a group that has latency targets, and
+      // the icon only for a node that has an id (its page is keyed by it).
+      onOpenLatency: isAdmin && latencyGroups.has(gid)
         ? (row: NodeDisplayRow) => {
             if (row.node_id) navigate(`/nodes/${encodeURIComponent(row.node_id)}/latency`);
           }
+        : undefined,
+      onOpenGroupLatency: isAdmin && latencyGroups.has(gid)
+        ? () => navigate(`/groups/${gid}/latency`)
         : undefined,
       onBatchUpgraded: isAdmin ? refresh : undefined,
     };

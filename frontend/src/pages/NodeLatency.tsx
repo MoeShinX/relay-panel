@@ -1,17 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Card, Empty, Radio, Result, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
+import { Alert, Button, Card, Empty, Result, Space, Spin, Tag, Tooltip, Typography } from 'antd';
 import { ArrowLeftOutlined, DownloadOutlined, UndoOutlined } from '@ant-design/icons';
-import { Line } from '@ant-design/charts';
 import { useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
 import type { ApiEnvelope, LatencySeries, LatencySummary, NodeLatencyResponse, NodeStatus } from '../api/types';
 import { useI18n } from '../i18n/context';
-import { SERIES_COLORS_LIGHT } from '../utils/trafficBuckets';
+import LatencyChart, { type LatencyChartHandle } from '../components/LatencyChart';
+import LatencyControls from '../components/LatencyControls';
 import {
   AUTO_REFRESH_MS,
-  GRANULARITIES,
   LEVEL_COLORS,
-  RANGES,
   autoRefreshes,
   granularityAllowed,
   latencyLevel,
@@ -20,10 +18,8 @@ import {
 } from '../utils/latency';
 import {
   chartPoints,
-  formatChartTime,
   formatLoss,
   formatMs,
-  lossMarkers,
   type ChartPoint,
 } from '../utils/latencyChart';
 
@@ -38,30 +34,10 @@ const CARRIER_KEY = {
   other: 'carrierOther',
 } as const;
 
-const GRAN_LABEL = {
-  auto: 'latencyGranDefault',
-  '1m': 'latencyGran1m',
-  '5m': 'latencyGran5m',
-  '1h': 'latencyGran1h',
-} as const;
-
-const RANGE_LABEL = {
-  '1h': 'latencyRange1h',
-  '6h': 'latencyRange6h',
-  '24h': 'latencyRange24h',
-  '7d': 'latencyRange7d',
-  '30d': 'latencyRange30d',
-} as const;
-
-/** The subset of the chart instance this page uses (see @ant-design/plots). */
-interface ChartHandle {
-  downloadImage?: (name?: string, type?: string) => string;
-}
-
 /**
- * v1.2.21: one node's latency to the admin's targets — a card per target and a
- * line chart. Admin-only (the route is wrapped in RequireAdmin, and every call
- * here is AdminOnly on the server).
+ * v1.2.21: one node's latency to the targets of its device group — a card per
+ * target and a line chart. Admin-only (the route is wrapped in RequireAdmin, and
+ * every call here is AdminOnly on the server).
  *
  * The page never decides whether data is "good": the cards are coloured by
  * fixed thresholds (utils/latency.ts), and a bucket that lost every probe shows
@@ -81,7 +57,7 @@ export default function NodeLatency() {
   // Bumped to remount the chart, which is how "reset zoom" returns the slider
   // to the full range.
   const [chartKey, setChartKey] = useState(0);
-  const chartRef = useRef<ChartHandle | null>(null);
+  const chartRef = useRef<LatencyChartHandle | null>(null);
   // Only the newest request may write the page: a slow answer for a range the
   // admin has since left must not overwrite the one they are looking at.
   const requestRef = useRef(0);
@@ -163,7 +139,6 @@ export default function NodeLatency() {
   const onlyId = selectedSeries ? selectedSeries.target_id : null;
 
   const points: ChartPoint[] = useMemo(() => chartPoints(series, onlyId), [series, onlyId]);
-  const markers = useMemo(() => lossMarkers(points), [points]);
   const names = useMemo(() => new Map(series.map((s) => [String(s.target_id), s.name])), [series]);
   const colorDomain = useMemo(() => series.map((s) => String(s.target_id)), [series]);
   const withDate = range !== '1h' && range !== '6h';
@@ -180,32 +155,21 @@ export default function NodeLatency() {
           {node?.name ? ` · ${node.name}` : ''}
         </Title>
         {node?.ip ? <Text type="secondary" className="rp-mono">{node.ip}</Text> : null}
+        {/* The group whose targets these are; a way back to its comparison. */}
+        {data?.group_name ? (
+          <Tooltip title={t('latencyGroupLink')}>
+            <Tag
+              color="blue"
+              data-testid="latency-group-link"
+              style={{ cursor: 'pointer', marginInlineEnd: 0 }}
+              onClick={() => navigate(`/groups/${data.group_id}/latency`)}
+            >
+              {data.group_name}
+            </Tag>
+          </Tooltip>
+        ) : null}
       </Space>
-      <Space wrap size={[12, 8]}>
-        <Space size={6}>
-          <Text type="secondary">{t('latencyGranularity')}</Text>
-          <Select
-            aria-label={t('latencyGranularity')}
-            data-testid="latency-granularity"
-            value={granularity}
-            onChange={(g) => setGranularity(g)}
-            style={{ width: 110 }}
-            options={GRANULARITIES.map((g) => ({
-              value: g,
-              label: t(GRAN_LABEL[g]),
-              disabled: !granularityAllowed(range, g),
-            }))}
-          />
-        </Space>
-        <Radio.Group
-          data-testid="latency-range"
-          optionType="button"
-          buttonStyle="solid"
-          value={range}
-          onChange={(e) => onRange(e.target.value as LatencyRange)}
-          options={RANGES.map((r) => ({ value: r, label: t(RANGE_LABEL[r]) }))}
-        />
-      </Space>
+      <LatencyControls range={range} granularity={granularity} onRange={onRange} onGranularity={setGranularity} />
     </div>
   );
 
@@ -259,7 +223,7 @@ export default function NodeLatency() {
         <Result
           icon={<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />}
           title={t('latencyNoTargets')}
-          extra={<Button type="primary" onClick={() => navigate('/settings')}>{t('latencyGoSettings')}</Button>}
+          extra={<Button type="primary" onClick={() => navigate('/groups')}>{t('latencyGoGroups')}</Button>}
         />
       </>
     );
@@ -370,59 +334,13 @@ export default function NodeLatency() {
         {!hasPoints ? (
           <Empty description={t('latencyChartEmpty')} image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : (
-          <Line
+          <LatencyChart
             key={chartKey}
-            /* @ant-design/charts v2 (G2 v5) options. The x scale is a time
-               scale over real Dates, so buckets keep their true spacing and a
-               gap in the data shows as a gap. */
-            height={340}
-            data={points}
-            xField="time"
-            yField="value"
-            colorField="key"
-            scale={{
-              x: { type: 'time' },
-              y: { nice: true },
-              color: { domain: colorDomain, range: SERIES_COLORS_LIGHT },
-            }}
-            slider={{ x: {} }}
-            legend={{
-              color: {
-                position: 'top',
-                layout: { justifyContent: 'flex-end' },
-                labelFormatter: (k: string) => names.get(k) ?? k,
-              },
-            }}
-            axis={{
-              x: {
-                title: false,
-                labelAutoHide: true,
-                labelAutoRotate: false,
-                labelFormatter: (d: Date | number) => formatChartTime(new Date(d), withDate),
-              },
-              y: { title: false, labelFormatter: (v: number) => `${v} ms` },
-            }}
-            // Buckets that lost probes get a marker on the baseline, so a
-            // brief drop is as visible as an outage.
-            annotations={[
-              {
-                type: 'point',
-                data: markers,
-                encode: { x: 'time', y: () => 0 },
-                style: { fill: '#ff4d4f', stroke: '#ff4d4f', r: 3, fillOpacity: 0.85 },
-                tooltip: false,
-              },
-            ]}
-            tooltip={{
-              title: (d: ChartPoint) => formatChartTime(d.time, true),
-              items: [
-                (d: ChartPoint) => ({ name: `${d.name} · ${t('latencyTipAvg')}`, value: d.value == null ? t('latencyAllLost') : formatMs(d.value) }),
-                (d: ChartPoint) => ({ name: t('latencyTipMin'), value: formatMs(d.min) }),
-                (d: ChartPoint) => ({ name: t('latencyTipMax'), value: formatMs(d.max) }),
-                (d: ChartPoint) => ({ name: t('latencyTipLoss'), value: formatLoss(d.loss) }),
-              ],
-            }}
-            onReady={(chart: ChartHandle) => {
+            points={points}
+            colorDomain={colorDomain}
+            names={names}
+            withDate={withDate}
+            onReady={(chart) => {
               chartRef.current = chart;
             }}
           />

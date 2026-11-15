@@ -3,7 +3,6 @@ import { useEffect, useState } from 'react';
 import api from '../api/client';
 import type { ApiEnvelope, Plan, RegistrationSettings } from '../api/types';
 import { useI18n } from '../i18n/context';
-import LatencySettings from '../components/LatencySettings';
 
 const { Text } = Typography;
 
@@ -109,7 +108,6 @@ export default function SystemSettings() {
   const planOptions = plans.map((p) => ({ value: p.id, label: `${p.name} (${p.max_rules} ${t('rules')})` }));
 
   return (
-    <>
     <Card
       title={t('basicSettings')}
       extra={<Button type="primary" loading={saving} onClick={onSave}>{t('save')}</Button>}
@@ -163,7 +161,5 @@ export default function SystemSettings() {
         </Text>
       </Form>
     </Card>
-    <LatencySettings />
-    </>
   );
 }

@@ -779,9 +779,10 @@ export interface NodeDisplayRow {
 
 // ── Latency monitor (v1.2.21) ──
 
-/** One probe target (GET /admin/latency/config). */
+/** One probe target of a device group (GET /admin/groups/{id}/latency/config). */
 export interface LatencyTarget {
   id: number;
+  group_id: number;
   name: string;
   carrier: 'telecom' | 'unicom' | 'mobile' | 'other';
   kind: 'tcp' | 'icmp';
@@ -826,9 +827,12 @@ export interface LatencySummary {
   loss: number | null;
 }
 
-/** GET /admin/nodes/{node_id}/latency. */
+/** GET /admin/nodes/{node_id}/latency. The targets are those of the node's own
+ *  device group. */
 export interface NodeLatencyResponse {
   node_id: string;
+  group_id: number;
+  group_name: string | null;
   node_version: string | null;
   /** false: the node's version is older than node-v1.2.12. */
   supported: boolean;
@@ -842,4 +846,59 @@ export interface NodeLatencyResponse {
   summary: LatencySummary[];
   /** Targets this node reported it cannot probe (ICMP without privilege). */
   unsupported_targets: number[];
+}
+
+/** GET /admin/latency/groups: a device group that has targets, and how many. */
+export interface LatencyGroupCount {
+  group_id: number;
+  targets: number;
+}
+
+/** One node of a group on the comparison page. */
+export interface GroupLatencyNode {
+  node_id: string;
+  /** The admin's name for the node, when it has one. */
+  label: string | null;
+  public_ip: string | null;
+  node_version: string | null;
+  /** false: the node's version is older than node-v1.2.12. */
+  supported: boolean;
+  /** The group's targets this node reported it cannot probe. */
+  unsupported_targets: number[];
+  last_seen: string | null;
+}
+
+/** One cell of the comparison table; a pair with no data has none. */
+export interface GroupLatencyCell {
+  node_id: string;
+  target_id: number;
+  /** Mean over the answered probes of the range; null when all were lost. */
+  avg: number | null;
+  /** Percent lost over the range, 0-100. */
+  loss: number;
+  sent: number;
+}
+
+/** One node's line for the selected target. */
+export interface GroupLatencySeries {
+  node_id: string;
+  points: LatencyPoint[];
+}
+
+/** GET /admin/groups/{id}/latency. */
+export interface GroupLatencyResponse {
+  group_id: number;
+  group_name: string;
+  interval_secs: number;
+  range: string;
+  granularity: '1m' | '5m' | '1h';
+  bucket_secs: number;
+  since: number;
+  until: number;
+  targets: LatencyTarget[];
+  nodes: GroupLatencyNode[];
+  matrix: GroupLatencyCell[];
+  /** The target `series` is for; null when the group has none. */
+  target_id: number | null;
+  series: GroupLatencySeries[];
 }

@@ -138,7 +138,7 @@ export function intervalValid(v: number | null | undefined): v is number {
   return v != null && Number.isInteger(v) && v >= LATENCY_MIN_INTERVAL && v <= LATENCY_MAX_INTERVAL;
 }
 
-/** The body of PUT /admin/latency/config. */
+/** The body of PUT /admin/groups/{id}/latency/config. */
 export function toPayload(interval: number, rows: TargetRow[]) {
   return {
     interval_secs: interval,
