@@ -13,6 +13,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A debug log line could crash the control channel.** With the log level set
+  to debug, the node shortened each text message it received to 100 bytes for
+  the log by cutting at a fixed byte offset. When that offset landed inside a
+  multi-byte character (any Chinese text, for example) the cut panicked, and
+  the WebSocket task died and was not restarted. The cut now always falls on a
+  character boundary.
+
 ## [1.2.11] - 2026-11-02
 
 Runs against any current panel (still protocol version 4). Upgrade only if you
