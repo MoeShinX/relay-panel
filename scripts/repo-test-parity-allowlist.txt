@@ -11,6 +11,8 @@ migration_adds_password_columns  # SQLite-only: Migration 26 idempotency test
 # PG-only revision test — the SQLite side is covered by its own migration list.
 migration_30_adds_group_sort_order  # PG-only: revision 30 adds device_groups.sort_order
 
+migration_31_adds_latency_tables  # PG-only: revision 31 adds the latency monitor tables (SQLite: migration_48_* in db/schema.rs)
+
 # PG-only schema-seed guard — SQLite bootstraps via SCHEMA_SQL without a seed-version table.
 apply_schema_seeds_baseline_version  # PG-only: schema_version seed baseline check
 

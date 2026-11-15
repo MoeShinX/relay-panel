@@ -3,6 +3,7 @@ use serde::Serialize;
 
 mod auth;
 mod groups;
+mod latency;
 mod nodes;
 mod password;
 mod plans;
@@ -13,6 +14,7 @@ mod shop;
 mod users;
 
 pub use groups::*;
+pub use latency::*;
 pub use password::*;
 pub use plans::*;
 pub use profiles::*;

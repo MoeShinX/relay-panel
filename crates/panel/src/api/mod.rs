@@ -286,6 +286,17 @@ pub fn routes() -> Router<AppState> {
             "/admin/settings/notify/test",
             axum::routing::post(notify::test_notify),
         )
+        // v1.2.21: latency monitor. The target list + probe interval (GET to
+        // read, PUT replaces the whole configuration), and one node's series.
+        // Admin-only inside the handlers.
+        .route(
+            "/admin/latency/config",
+            axum::routing::get(admin::get_latency_config).put(admin::put_latency_config),
+        )
+        .route(
+            "/admin/nodes/{node_id}/latency",
+            axum::routing::get(admin::get_node_latency),
+        )
         // Stats & monitoring
         .route("/stats", axum::routing::get(stats::get_stats))
         // v1.2.0: traffic-history chart data. Owner-scoped inside the handler

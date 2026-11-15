@@ -29,6 +29,7 @@ use sqlx::PgPool;
 mod announcements;
 mod groups;
 mod kvs;
+mod latency;
 mod orders;
 mod profiles;
 mod redeem;

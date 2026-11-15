@@ -63,7 +63,11 @@ pub async fn get_config(State(state): State<AppState>, headers: HeaderMap) -> Re
     // "no matching group" and return an empty config (NOT an error: a node
     // that hasn't been assigned a group yet should keep its cached config).
     let Some(token) = extract_node_token(&headers) else {
-        return Json(NodeConfigResponse { listeners: vec![] }).into_response();
+        return Json(NodeConfigResponse {
+            listeners: vec![],
+            latency: None,
+        })
+        .into_response();
     };
 
     // Find device group by token.
@@ -80,7 +84,11 @@ pub async fn get_config(State(state): State<AppState>, headers: HeaderMap) -> Re
     };
 
     let Some(group) = group else {
-        return Json(NodeConfigResponse { listeners: vec![] }).into_response();
+        return Json(NodeConfigResponse {
+            listeners: vec![],
+            latency: None,
+        })
+        .into_response();
     };
 
     // v0.3.6: delegate to the shared `build_node_config`. This path and the WS
@@ -313,6 +321,30 @@ pub async fn report_status(
             _ => format!("node_status:{}", g.id), // legacy fallback
         };
         let node_id_for_json = req.node_id.clone();
+        // v1.2.21: latency-monitor samples. Screened against the current
+        // targets before anything is stored; the targets the node says it
+        // cannot probe go into the status below (the latency page reads them
+        // from there), the rest are stored after it. Skipped for a node with
+        // no node_id — its series would have no owner.
+        let latency_node_id = req
+            .node_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let screened = match (latency_node_id, req.latency.is_empty()) {
+            (Some(_), false) => match state.db.list_latency_targets().await {
+                Ok(targets) => crate::service::latency::screen_samples(
+                    &targets,
+                    &req.latency,
+                    chrono::Utc::now().timestamp(),
+                ),
+                Err(e) => {
+                    tracing::warn!("report_status: latency targets failed: {}", e);
+                    Default::default()
+                }
+            },
+            _ => Default::default(),
+        };
         // Store every reported metric in the status JSON. New optional fields
         // are only included when the node actually reported them (older nodes
         // omit them and the panel renders "-" for missing values).
@@ -374,6 +406,10 @@ pub async fn report_status(
             // primary-disk fields above are untouched. Always an array so the
             // frontend can tell "older node, none" from nothing by its length.
             "disks": clean_disks(&req.disks),
+            // v1.2.21: targets this node cannot probe (e.g. ICMP without the
+            // privilege). Recomputed from every report, so it clears itself
+            // once the node can.
+            "latency_unsupported": screened.unsupported,
         });
         // Status persistence is best-effort: the original used .ok() to swallow
         // any DB error so a transient failure never broke the report cycle.
@@ -412,6 +448,14 @@ pub async fn report_status(
                 .record_node_metrics(&sample)
                 .await
                 .map_err(|e| tracing::warn!("report_status: node metrics failed: {}", e));
+        }
+
+        if let (Some(nid), false) = (latency_node_id, screened.accepted.is_empty()) {
+            let _ = state
+                .db
+                .record_latency_minutes(nid, &screened.accepted)
+                .await
+                .map_err(|e| tracing::warn!("report_status: latency store failed: {}", e));
         }
 
         // v0.4.19: async GeoIP enrichment — fire-and-forget, never blocks the
@@ -800,6 +844,7 @@ mod tests {
             mem_total: None,
             mem_used: None,
             disks: Vec::new(),
+            latency: Vec::new(),
         };
         let Json(resp) = report_status(State(state.clone()), h, Json(req)).await;
         assert_eq!(resp.code, 401, "missing token → business 401, not HTTP 401");
@@ -895,6 +940,7 @@ mod tests {
             mem_total: None,
             mem_used: None,
             disks: Vec::new(),
+            latency: Vec::new(),
         };
         let Json(resp) =
             report_status(State(state.clone()), auth_headers("tok-A"), Json(req)).await;

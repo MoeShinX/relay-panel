@@ -46,13 +46,22 @@ pub async fn build_node_config(
     db: &dyn Repository,
     group_id: i64,
 ) -> Result<NodeConfigResponse, DbError> {
+    // The latency monitor's probe plan goes to every node, whatever its group's
+    // type: probing is a property of the machine, not of the rules it carries.
+    let latency = crate::service::latency::current_probe_plan(db).await?;
+
     // 1. Group + "in" gate. Non-`in` groups (out / monitor / chained_outbound)
     //    never receive listeners — they are egress/observation only.
     // find_by_id exists on both UserRepository and GroupRepository; we want the
     // group one, so qualify the call.
     let group = match GroupRepository::find_by_id(db, group_id, &ResourceScope::All).await? {
         Some(g) if g.group_type == "in" => g,
-        _ => return Ok(NodeConfigResponse { listeners: vec![] }),
+        _ => {
+            return Ok(NodeConfigResponse {
+                listeners: vec![],
+                latency,
+            })
+        }
     };
 
     // 2. Filtered rule query. The JOIN on users is the fix for the v0.3.5 WS
@@ -123,7 +132,7 @@ pub async fn build_node_config(
         ));
     }
 
-    Ok(NodeConfigResponse { listeners })
+    Ok(NodeConfigResponse { listeners, latency })
 }
 
 /// Resolve a rule's target address list.

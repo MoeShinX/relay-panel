@@ -422,6 +422,58 @@ CREATE TABLE IF NOT EXISTS traffic_batches (
 );
 CREATE INDEX IF NOT EXISTS idx_traffic_batches_created ON traffic_batches(created_at);
 
+-- v1.2.21: latency monitor. Targets are global (the admin lists what every
+-- node probes); results are stored per node, per target, per minute, and rolled
+-- up into hours so a 7- or 30-day chart does not need 30 days of minute rows.
+-- AUTOINCREMENT so a deleted target's id is never handed out again: a late
+-- report that still names it must not land on a different target.
+--
+-- No foreign keys, deliberately — same reasoning as traffic_history: node_id is
+-- a string the node invents, and deleting a target removes its rows explicitly
+-- (replace_latency_targets) instead of by cascade. history_prune is what ages
+-- the rest out (minutes 48 hours, hours 30 days).
+--
+-- rtt_min_ms / rtt_max_ms are NULL when every probe of the period was lost, so
+-- a fully-lost minute cannot pull an hour's minimum down to 0. The hour keeps
+-- its own max and its lost count: an hourly average alone would smooth away the
+-- spike (and the outage) a 7- or 30-day view is opened to find.
+--
+-- Brand-new tables, so their indexes are safe here as well as in Migration 48.
+CREATE TABLE IF NOT EXISTS latency_targets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    carrier TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    host TEXT NOT NULL,
+    port INTEGER,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS latency_minute (
+    node_id TEXT NOT NULL,
+    target_id INTEGER NOT NULL,
+    minute_ts INTEGER NOT NULL,
+    sent INTEGER NOT NULL,
+    lost INTEGER NOT NULL,
+    rtt_sum_ms REAL NOT NULL,
+    rtt_min_ms REAL,
+    rtt_max_ms REAL,
+    PRIMARY KEY (node_id, target_id, minute_ts)
+);
+CREATE INDEX IF NOT EXISTS idx_latency_minute_ts ON latency_minute(minute_ts);
+CREATE TABLE IF NOT EXISTS latency_hourly (
+    node_id TEXT NOT NULL,
+    target_id INTEGER NOT NULL,
+    hour_ts INTEGER NOT NULL,
+    sent INTEGER NOT NULL,
+    lost INTEGER NOT NULL,
+    rtt_sum_ms REAL NOT NULL,
+    rtt_min_ms REAL,
+    rtt_max_ms REAL,
+    PRIMARY KEY (node_id, target_id, hour_ts)
+);
+CREATE INDEX IF NOT EXISTS idx_latency_hourly_ts ON latency_hourly(hour_ts);
+
 
 
 -- v1.0.9: plan ↔ device_group grant map. Buying a plan (with grant_all_groups=0)
@@ -1885,6 +1937,48 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
     .await?;
     tracing::info!("Migration 47: device_groups.sort_order column present");
 
+    // ── Migration 48: v1.2.21 latency monitor ──
+    // See SCHEMA_SQL. Three new tables, nothing to backfill.
+    for ddl in [
+        "CREATE TABLE IF NOT EXISTS latency_targets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            carrier TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            host TEXT NOT NULL,
+            port INTEGER,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        )",
+        "CREATE TABLE IF NOT EXISTS latency_minute (
+            node_id TEXT NOT NULL,
+            target_id INTEGER NOT NULL,
+            minute_ts INTEGER NOT NULL,
+            sent INTEGER NOT NULL,
+            lost INTEGER NOT NULL,
+            rtt_sum_ms REAL NOT NULL,
+            rtt_min_ms REAL,
+            rtt_max_ms REAL,
+            PRIMARY KEY (node_id, target_id, minute_ts)
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_latency_minute_ts ON latency_minute(minute_ts)",
+        "CREATE TABLE IF NOT EXISTS latency_hourly (
+            node_id TEXT NOT NULL,
+            target_id INTEGER NOT NULL,
+            hour_ts INTEGER NOT NULL,
+            sent INTEGER NOT NULL,
+            lost INTEGER NOT NULL,
+            rtt_sum_ms REAL NOT NULL,
+            rtt_min_ms REAL,
+            rtt_max_ms REAL,
+            PRIMARY KEY (node_id, target_id, hour_ts)
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_latency_hourly_ts ON latency_hourly(hour_ts)",
+    ] {
+        sqlx::query(ddl).execute(pool).await?;
+    }
+    tracing::info!("Migration 48: latency monitor tables present");
+
     Ok(())
 }
 
@@ -2778,5 +2872,67 @@ mod tests {
     async fn fresh_db_has_group_sort_order() {
         let pool = fresh_pool().await;
         assert_column(&pool, "device_groups", "sort_order").await;
+    }
+
+    async fn table_exists(pool: &SqlitePool, name: &str) -> bool {
+        let (n,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
+                .bind(name)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        n == 1
+    }
+
+    /// Migration 48: a database from before the latency monitor gets its three
+    /// tables on the next boot (baseline, then migrations), with the unique
+    /// keys the idempotent upsert relies on; re-running changes nothing.
+    #[tokio::test]
+    async fn migration_48_adds_the_latency_tables() {
+        let pool = fresh_pool().await;
+        // Back to the pre-48 shape.
+        for t in ["latency_hourly", "latency_minute", "latency_targets"] {
+            sqlx::query(&format!("DROP TABLE {t}"))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        assert!(!table_exists(&pool, "latency_minute").await);
+
+        sqlx::query(SCHEMA_SQL)
+            .execute(&pool)
+            .await
+            .expect("baseline on an old database");
+        run_migrations(&pool).await.expect("migrate old database");
+        for t in ["latency_targets", "latency_minute", "latency_hourly"] {
+            assert!(table_exists(&pool, t).await, "{t} must exist");
+        }
+
+        // The primary keys are what make a re-sent minute replace, not repeat.
+        sqlx::query("INSERT INTO latency_minute VALUES ('n1', 1, 600, 6, 0, 60.0, 9.0, 11.0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let dup =
+            sqlx::query("INSERT INTO latency_minute VALUES ('n1', 1, 600, 6, 0, 60.0, 9.0, 11.0)")
+                .execute(&pool)
+                .await;
+        assert!(dup.is_err(), "(node, target, minute) must be unique");
+
+        run_migrations(&pool).await.expect("re-run migrations");
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM latency_minute")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "re-running must not touch the data");
+    }
+
+    /// A new database has the tables from the baseline.
+    #[tokio::test]
+    async fn fresh_db_has_the_latency_tables() {
+        let pool = fresh_pool().await;
+        for t in ["latency_targets", "latency_minute", "latency_hourly"] {
+            assert!(table_exists(&pool, t).await, "{t} must exist");
+        }
     }
 }
