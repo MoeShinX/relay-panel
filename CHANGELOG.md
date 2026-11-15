@@ -10,6 +10,11 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Changed
+
+- In a device group's latency-monitor drawer each target now fits on one row:
+  the port and the delete button no longer wrap onto a second line.
+
 ## [1.2.21] - 2026-11-15
 
 Ships alongside `node-v1.2.12`. The config protocol is unchanged at version 4
