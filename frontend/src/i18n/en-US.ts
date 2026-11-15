@@ -917,6 +917,7 @@ export const enUS: Dict = {
   planGrantGroupsPlaceholder: 'Select listener groups to grant',
   days: 'days',
   buyNow: 'Buy Now',
+  planClaimed: 'Claimed',
   confirmPurchase: 'Confirm Purchase',
   purchaseConfirmTitle: 'Confirm Purchase',
   purchaseSuccess: 'Purchase successful',

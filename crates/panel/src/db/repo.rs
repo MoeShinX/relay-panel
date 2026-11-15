@@ -1416,7 +1416,9 @@ pub trait PlanRepository: Send + Sync {
         device_group_ids: &[i64],
     ) -> Result<(), DbError>;
 
-    /// v1.0.8: atomically purchase a plan in ONE transaction (防双花):
+    /// v1.0.8: atomically purchase a plan in ONE transaction
+    /// (the single implementation point; callers use `buy_plan` /
+    /// `buy_plan_self_service`, which differ only in `once_if_free`) (防双花):
     ///   - lock + read the user's balance
     ///   - refuse if balance < price_cents (returns `BuyPlanError::InsufficientBalance`)
     ///   - balance -= price_cents, traffic_limit += traffic_to_add
@@ -1424,6 +1426,9 @@ pub trait PlanRepository: Send + Sync {
     ///   - reset traffic_used to 0 when `reset_traffic`
     ///   - plan_expire_at = max(now, current expiry) + duration_days (NULL when duration_days=0)
     ///   - insert an orders row (snapshots plan_name + price)
+    ///   - when `once_if_free` and price_cents == 0: refuse with
+    ///     `BuyPlanError::FreePlanAlreadyClaimed` if the user already has ANY
+    ///     order for this plan_id (whatever its price then)
     ///   - v1.0.9: grant device groups in the SAME tx. v1.0.8: purchase REPLACES
     ///     authorization — when `grant_all_groups` set all_device_groups=1 (and
     ///     clear explicit rows); else reset all_device_groups=0 and replace
@@ -1434,7 +1439,7 @@ pub trait PlanRepository: Send + Sync {
     /// resolved by the caller from the plan row (and re-checked hidden=0 there),
     /// so this method trusts them and only owns the atomic money + bookkeeping.
     #[allow(clippy::too_many_arguments)]
-    async fn buy_plan(
+    async fn buy_plan_checked(
         &self,
         user_id: i64,
         plan_id: i64,
@@ -1451,7 +1456,79 @@ pub trait PlanRepository: Send + Sync {
         // Computed by the caller: all inbound groups if grant_all_groups, else
         // device_group_ids (the plan's grants).
         new_authorized_group_ids: &[i64],
+        // v1.2.21: self-service purchases pass true: a free (price 0) plan may
+        // be bought only once per user. Checked against `orders` inside the
+        // same transaction (user row locked), so concurrent requests cannot
+        // both succeed. Admin assignment passes false.
+        once_if_free: bool,
     ) -> Result<(), BuyPlanError>;
+
+    /// Admin assignment: no per-user limit on free plans.
+    #[allow(clippy::too_many_arguments)]
+    async fn buy_plan(
+        &self,
+        user_id: i64,
+        plan_id: i64,
+        plan_name: &str,
+        price_cents: i64,
+        traffic_to_add: i64,
+        plan_max_rules: i32,
+        duration_days: i32,
+        reset_traffic: bool,
+        grant_all_groups: bool,
+        device_group_ids: &[i64],
+        new_authorized_group_ids: &[i64],
+    ) -> Result<(), BuyPlanError> {
+        self.buy_plan_checked(
+            user_id,
+            plan_id,
+            plan_name,
+            price_cents,
+            traffic_to_add,
+            plan_max_rules,
+            duration_days,
+            reset_traffic,
+            grant_all_groups,
+            device_group_ids,
+            new_authorized_group_ids,
+            false,
+        )
+        .await
+    }
+
+    /// Self-service purchase: a free plan can be claimed once per user
+    /// (`BuyPlanError::FreePlanAlreadyClaimed` afterwards).
+    #[allow(clippy::too_many_arguments)]
+    async fn buy_plan_self_service(
+        &self,
+        user_id: i64,
+        plan_id: i64,
+        plan_name: &str,
+        price_cents: i64,
+        traffic_to_add: i64,
+        plan_max_rules: i32,
+        duration_days: i32,
+        reset_traffic: bool,
+        grant_all_groups: bool,
+        device_group_ids: &[i64],
+        new_authorized_group_ids: &[i64],
+    ) -> Result<(), BuyPlanError> {
+        self.buy_plan_checked(
+            user_id,
+            plan_id,
+            plan_name,
+            price_cents,
+            traffic_to_add,
+            plan_max_rules,
+            duration_days,
+            reset_traffic,
+            grant_all_groups,
+            device_group_ids,
+            new_authorized_group_ids,
+            true,
+        )
+        .await
+    }
 }
 
 /// v1.2.0: redeem codes (balance top-up). Its own trait rather than more
@@ -1525,6 +1602,8 @@ pub trait RedeemRepository: Send + Sync {
 pub enum BuyPlanError {
     /// User balance < plan price. Caller → 400.
     InsufficientBalance,
+    /// v1.2.21: a free plan this user already claimed once. Caller → 409.
+    FreePlanAlreadyClaimed,
     /// DB error. Caller → 500.
     Database(DbError),
 }
