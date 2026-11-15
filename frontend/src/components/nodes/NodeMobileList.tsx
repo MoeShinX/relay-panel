@@ -27,12 +27,14 @@ interface Props {
    *  ladder (PR4), compared against the latest NODE release (PR5). */
   /** Admin view: show each node's version and upgrade state. */
   showUpgrade?: boolean;
+  /** v1.2.21: admin-only. Opens the node's latency page (see NetworkCell). */
+  onOpenLatency?: (row: NodeDisplayRow) => void;
 }
 
 /** Mobile-friendly compact list — one card per node. No wide table, no
  *  horizontal scroll. Shows: status + version + upgrade + network + speed +
  *  resource bars + uptime + a details button. */
-export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', nodeVersionCheckFailed = false, t, openDetail, showUpgrade }: Props) {
+export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', nodeVersionCheckFailed = false, t, openDetail, showUpgrade, onOpenLatency }: Props) {
   const labels = { d: t('uptimeDay'), h: t('uptimeHour'), m: t('uptimeMinute'), s: t('uptimeSecond') };
 
   return (
@@ -91,7 +93,7 @@ export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', no
                 </Button>
               </span>
             </div>
-            <NetworkCell row={r} t={t} />
+            <NetworkCell row={r} t={t} onOpenLatency={onOpenLatency ? () => onOpenLatency(r) : undefined} />
             {/* The rate/uptime line used a hardcoded #888 (3.5:1 on white,
                 under AA) and could not be greyed further on an offline card.
                 Both now come from the theme. */}

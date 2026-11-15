@@ -776,3 +776,70 @@ export interface NodeDisplayRow {
   region?: string | null;
   line_type?: string | null;
 }
+
+// ── Latency monitor (v1.2.21) ──
+
+/** One probe target (GET /admin/latency/config). */
+export interface LatencyTarget {
+  id: number;
+  name: string;
+  carrier: 'telecom' | 'unicom' | 'mobile' | 'other';
+  kind: 'tcp' | 'icmp';
+  host: string;
+  port: number | null;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface LatencyConfig {
+  interval_secs: number;
+  targets: LatencyTarget[];
+}
+
+/** One bucket of a series. `avg`/`min`/`max` are null when every probe in the
+ *  bucket was lost; `loss` is a percentage (0–100). `ts` is unix seconds. */
+export interface LatencyPoint {
+  ts: number;
+  avg: number | null;
+  min: number | null;
+  max: number | null;
+  loss: number;
+}
+
+export interface LatencySeries {
+  target_id: number;
+  name: string;
+  carrier: LatencyTarget['carrier'];
+  kind: LatencyTarget['kind'];
+  points: LatencyPoint[];
+}
+
+export interface LatencySummary {
+  target_id: number;
+  /** The newest minute's mean (null: none in the last ten minutes, or it lost
+   *  everything) and when it started. */
+  latest: number | null;
+  latest_ts: number | null;
+  latest_loss: number | null;
+  /** Over the whole range. */
+  avg: number | null;
+  loss: number | null;
+}
+
+/** GET /admin/nodes/{node_id}/latency. */
+export interface NodeLatencyResponse {
+  node_id: string;
+  node_version: string | null;
+  /** false: the node's version is older than node-v1.2.12. */
+  supported: boolean;
+  interval_secs: number;
+  range: string;
+  granularity: '1m' | '5m' | '1h';
+  bucket_secs: number;
+  since: number;
+  until: number;
+  series: LatencySeries[];
+  summary: LatencySummary[];
+  /** Targets this node reported it cannot probe (ICMP without privilege). */
+  unsupported_targets: number[];
+}

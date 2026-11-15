@@ -1,3 +1,4 @@
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, fireEvent } from '@testing-library/react';
 import { Modal, message } from 'antd';
@@ -64,7 +65,7 @@ describe('NodeStatus page data source', () => {
       return Promise.reject(new Error(`unexpected ${url}`));
     });
 
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
 
     expect(screen.getByText('admin-grp')).toBeInTheDocument();
@@ -85,7 +86,7 @@ describe('NodeStatus page data source', () => {
       return Promise.reject(new Error(`unexpected ${url}`));
     });
 
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
 
     expect(screen.getByText('shared-grp')).toBeInTheDocument();
@@ -104,7 +105,7 @@ describe('NodeStatus load-failure behavior', () => {
       return Promise.reject(new Error(`unexpected ${url}`));
     });
 
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
 
     expect(screen.getByText('loadFailed')).toBeInTheDocument();
@@ -124,7 +125,7 @@ describe('NodeStatus load-failure behavior', () => {
       return Promise.reject(new Error(`unexpected ${url}`));
     });
 
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     expect(screen.getByText('admin-grp')).toBeInTheDocument();
 
@@ -307,7 +308,7 @@ describe('NodeStatus rendered group order is stable across refreshes', () => {
       return Promise.reject(new Error(`unexpected ${url}`));
     });
 
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
 
     // The four group headers must appear in ascending group_id order in the DOM.
@@ -331,7 +332,7 @@ describe('NodeStatus rendered group order is stable across refreshes', () => {
       return Promise.reject(new Error(`unexpected ${url}`));
     });
 
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     const order = ['grp-one', 'grp-two', 'grp-three'];
     const isAscending = () => {
@@ -363,7 +364,7 @@ describe('NodeStatus rendered group order is stable across refreshes', () => {
       return Promise.reject(new Error(`unexpected ${url}`));
     });
 
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
 
     // The three IPs render in distinct table cells; the lowest-numbered IP
@@ -385,7 +386,7 @@ describe('NodeStatus rendered group order is stable across refreshes', () => {
       return Promise.reject(new Error(`unexpected ${url}`));
     });
 
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
 
     expect(isBefore(docOrderIdx('shared-one'), docOrderIdx('shared-two'))).toBe(true);
@@ -412,7 +413,7 @@ describe('NodeStatus live rate', () => {
     let live = [{ group_id: 1, node_id: 'n1', upload_bps: 3_650_000, download_bps: 128_930 }];
     serve(() => live);
 
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     expect(screen.getByText(throughput(3_650_000, 128_930))).toBeInTheDocument();
     expect(screen.queryByText(throughput(1_000, 2_000))).not.toBeInTheDocument();
@@ -424,7 +425,7 @@ describe('NodeStatus live rate', () => {
 
   it('falls back to the report when the node has no fresh pushed rate', async () => {
     serve(() => []);
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     expect(screen.getByText(throughput(1_000, 2_000))).toBeInTheDocument();
   });
@@ -433,7 +434,7 @@ describe('NodeStatus live rate', () => {
     serve(() => []);
     const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
     try {
-      render(<NodeStatus />);
+      render(<MemoryRouter><NodeStatus /></MemoryRouter>);
       await flush(10_000);
       const liveCalls = mockGet.mock.calls.filter((c) => c[0] === '/nodes/live-rates').length;
       expect(liveCalls).toBe(0);
@@ -463,7 +464,7 @@ describe('NodeStatus total rate of every online node', () => {
 
   it('pins the title and the total under the header bar', async () => {
     serve(nodes);
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     expect(screen.getByTestId('all-nodes-rate').closest('.rp-page-header')?.className)
       .toContain('rp-page-header-sticky');
@@ -471,7 +472,7 @@ describe('NodeStatus total rate of every online node', () => {
 
   it('sums the online nodes of every group and counts them, leaving offline ones out', async () => {
     serve(nodes);
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     const total = screen.getByTestId('all-nodes-rate').textContent ?? '';
     expect(total).toContain(formatBps(4_000));
@@ -486,7 +487,7 @@ describe('NodeStatus total rate of every online node', () => {
       { ...adminNode, group_id: 2, group_name: 'grp-2', node_id: 'm1', boot_upload_bytes: 4_000_000_000, boot_download_bytes: null },
     ];
     serve(withTotals);
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     const text = screen.getByTestId('all-nodes-traffic').textContent ?? '';
     expect(text).toContain(formatBytes(5_500_000_000));
@@ -495,14 +496,14 @@ describe('NodeStatus total rate of every online node', () => {
 
   it('leaves the cumulative figure out when no node reports it', async () => {
     serve(nodes);
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     expect(screen.queryByTestId('all-nodes-traffic')).toBeNull();
   });
 
   it('follows the pushed live rates, as the group headers do', async () => {
     serve(nodes, [{ group_id: 1, node_id: 'n1', upload_bps: 10_000, download_bps: 20_000 }]);
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     const total = screen.getByTestId('all-nodes-rate').textContent ?? '';
     expect(total).toContain(formatBps(13_000));
@@ -525,14 +526,14 @@ describe('NodeStatus control channel', () => {
    *  until an upgrade failed. It must be visible on the row itself. */
   it('marks an online node whose WS control channel is down', async () => {
     serveAdmin({ ...adminNode, ws_connected: false });
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     expect(screen.getByText('nodeWsDown')).toBeInTheDocument();
   });
 
   it('shows nothing extra when the control channel is up', async () => {
     serveAdmin({ ...adminNode, ws_connected: true });
-    render(<NodeStatus />);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
     expect(screen.queryByText('nodeWsDown')).not.toBeInTheDocument();
   });
@@ -565,7 +566,7 @@ describe('NodeStatus one-click upgrade', () => {
     });
   };
   const renderPage = () =>
-    render(<I18nContext.Provider value={realT}><NodeStatus /></I18nContext.Provider>);
+    render(<I18nContext.Provider value={realT}><MemoryRouter><NodeStatus /></MemoryRouter></I18nContext.Provider>);
 
   afterEach(() => {
     Modal.destroyAll();

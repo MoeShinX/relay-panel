@@ -15,6 +15,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { LineChartOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
 import type { ApiEnvelope, NodeStatus, SharedNodeSummary, NodeDisplayRow, NodeLiveRate } from '../api/types';
 import { useI18n } from '../i18n/context';
@@ -67,6 +68,7 @@ export default function NodeStatus() {
   const { t } = useI18n();
   const { isAdmin } = useAuth();
   const isMobile = useIsMobile();
+  const navigate = useNavigate();
 
   const [adminRows, setAdminRows] = useState<NodeStatus[] | null>(null);
   const [userRows, setUserRows] = useState<SharedNodeSummary[] | null>(null);
@@ -298,6 +300,13 @@ export default function NodeStatus() {
       t,
       openDetail: setDetailRow,
       onDelete: isAdmin ? handleDelete : undefined,
+      // v1.2.21: the monitor icon beside the IP — admins only, and only for a
+      // node that has an id (the latency page is keyed by it).
+      onOpenLatency: isAdmin
+        ? (row: NodeDisplayRow) => {
+            if (row.node_id) navigate(`/nodes/${encodeURIComponent(row.node_id)}/latency`);
+          }
+        : undefined,
       onBatchUpgraded: isAdmin ? refresh : undefined,
     };
     return canReorder && hasGroupOrder(groupRows)
