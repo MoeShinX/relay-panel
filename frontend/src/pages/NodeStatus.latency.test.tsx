@@ -19,6 +19,10 @@ const node = (over: Record<string, unknown> = {}) => ({
   last_seen: new Date().toISOString(), ...over,
 });
 const version = { current_version: '1.2.21', config_protocol_version: 4, latest_node_version: '1.2.12', node_version_check_failed: false };
+const withTargets = ok({ interval_secs: 10, targets: [{ id: 1, name: 'A', carrier: 'telecom', kind: 'tcp', host: '192.0.2.1', port: 443, sort_order: 0, created_at: '' }] });
+const noTargets = ok({ interval_secs: 10, targets: [] });
+const adminApi = (rows: unknown[], latency: unknown) => (url: string) =>
+  Promise.resolve(url === '/nodes' ? ok(rows) : url === '/system/version' ? version : url === '/admin/latency/config' ? latency : ok([]));
 
 function LatencyStub() {
   const { nodeId } = useParams();
@@ -44,8 +48,7 @@ beforeEach(() => {
 describe('the latency link on the node status page', () => {
   it('an admin gets a monitor icon beside the IP, and it opens that node\'s latency page', async () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
-    mockGet.mockImplementation((url: string) =>
-      Promise.resolve(url === '/nodes' ? ok([node()]) : url === '/system/version' ? version : ok([])));
+    mockGet.mockImplementation(adminApi([node()], withTargets));
     renderPage();
     await screen.findByText('192.0.2.20');
     const link = await screen.findByTestId('latency-link');
@@ -64,10 +67,18 @@ describe('the latency link on the node status page', () => {
 
   it('a node row with no node id (legacy status record) has no icon either', async () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
-    mockGet.mockImplementation((url: string) =>
-      Promise.resolve(url === '/nodes' ? ok([node({ node_id: null })]) : url === '/system/version' ? version : ok([])));
+    mockGet.mockImplementation(adminApi([node({ node_id: null })], withTargets));
     renderPage();
     await screen.findByText('edge-group');
+    expect(screen.queryByTestId('latency-link')).toBeNull();
+  });
+
+  it('an admin sees no icon until latency targets are configured', async () => {
+    mockUseAuth.mockReturnValue({ isAdmin: true });
+    mockGet.mockImplementation(adminApi([node()], noTargets));
+    renderPage();
+    await screen.findByText('192.0.2.20');
+    expect(mockGet).toHaveBeenCalledWith('/admin/latency/config');
     expect(screen.queryByTestId('latency-link')).toBeNull();
   });
 });

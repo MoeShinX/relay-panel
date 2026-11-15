@@ -17,7 +17,7 @@ import {
 import { LineChartOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
-import type { ApiEnvelope, NodeStatus, SharedNodeSummary, NodeDisplayRow, NodeLiveRate } from '../api/types';
+import type { ApiEnvelope, LatencyConfig, NodeStatus, SharedNodeSummary, NodeDisplayRow, NodeLiveRate } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { useAuth } from '../auth/useAuth';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -71,6 +71,7 @@ export default function NodeStatus() {
   const navigate = useNavigate();
 
   const [adminRows, setAdminRows] = useState<NodeStatus[] | null>(null);
+  const [latencyEnabled, setLatencyEnabled] = useState(false);
   const [userRows, setUserRows] = useState<SharedNodeSummary[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   // v1.2: nodes compare against the latest NODE release (latest_node_version),
@@ -155,6 +156,15 @@ export default function NodeStatus() {
     } catch { /* ignore */ }
   };
 
+  // v1.2.21: the latency icon only means something once the admin has set up
+  // targets in System Settings; until then there is nothing to look at.
+  const loadLatencyEnabled = async () => {
+    try {
+      const res = await api.get<unknown, ApiEnvelope<LatencyConfig>>('/admin/latency/config');
+      setLatencyEnabled(res.code === 0 && (res.data?.targets?.length ?? 0) > 0);
+    } catch { setLatencyEnabled(false); }
+  };
+
   const refresh = async () => {
     // Skip this tick if the previous request is still outstanding.
     if (inFlightRef.current) return;
@@ -172,7 +182,10 @@ export default function NodeStatus() {
   // load* fns), so a transient poll failure no longer flashes the error page
   // back to stale data every 5s.
   useEffect(() => {
-    if (isAdmin) loadVersion();
+    if (isAdmin) {
+      loadVersion();
+      loadLatencyEnabled();
+    }
     refresh();
     const ti = setInterval(refresh, 5000);
     return () => clearInterval(ti);
@@ -300,9 +313,10 @@ export default function NodeStatus() {
       t,
       openDetail: setDetailRow,
       onDelete: isAdmin ? handleDelete : undefined,
-      // v1.2.21: the monitor icon beside the IP — admins only, and only for a
-      // node that has an id (the latency page is keyed by it).
-      onOpenLatency: isAdmin
+      // v1.2.21: the monitor icon beside the IP — admins only, only once
+      // latency targets are configured, and only for a node that has an id
+      // (the latency page is keyed by it).
+      onOpenLatency: isAdmin && latencyEnabled
         ? (row: NodeDisplayRow) => {
             if (row.node_id) navigate(`/nodes/${encodeURIComponent(row.node_id)}/latency`);
           }
