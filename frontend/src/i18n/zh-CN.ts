@@ -1017,6 +1017,8 @@ export const zhCN = {
   latencyGroupUnsupported: '不支持',
   latencyGroupTableHint: '格子是所选时间范围内的平均延迟和丢包率。点列头或格子，下方趋势图切换到该目标；点节点名查看该节点的详细图。',
   latencyGroupChartFor: '趋势图：',
+  latencyStripsTitle: '近况',
+  latencyStripsLoss: '丢包率',
 };
 
 export type Dict = typeof zhCN;

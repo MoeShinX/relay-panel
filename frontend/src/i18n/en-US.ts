@@ -1019,4 +1019,6 @@ export const enUS: Dict = {
   latencyGroupUnsupported: 'Not supported',
   latencyGroupTableHint: 'Each cell is the average latency and packet loss over the selected range. Click a column header or a cell to show that target in the chart below; click a node name for its own page.',
   latencyGroupChartFor: 'Trend: ',
+  latencyStripsTitle: 'Recent status',
+  latencyStripsLoss: 'Packet loss',
 };

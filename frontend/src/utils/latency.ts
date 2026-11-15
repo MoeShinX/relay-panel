@@ -44,6 +44,21 @@ export const LEVEL_COLORS: Record<LatencyLevel, string> = {
   none: '#bfbfbf',
 };
 
+// ── Status strips ──
+
+/** How many equal slices the selected range is cut into for the strips. */
+export const STRIP_SEGMENTS = 30;
+/** A strip slice with loss under this (percent) is amber, from it red. */
+export const STRIP_LOSS_BAD_PCT = LATENCY_LOSS_BAD_PCT;
+
+/** Colour class of a loss strip slice: 0% green, above 0 and under 5% amber,
+ *  5% and up red, no data grey. */
+export function lossStripLevel(lossPct: number | null | undefined): LatencyLevel {
+  if (lossPct == null) return 'none';
+  if (lossPct <= 0) return 'good';
+  return lossPct < STRIP_LOSS_BAD_PCT ? 'warn' : 'bad';
+}
+
 // ── Range and granularity ──
 
 export const RANGES = ['1h', '6h', '24h', '7d', '30d'] as const;
