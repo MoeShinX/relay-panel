@@ -44,6 +44,21 @@ fn derive_ws_url(panel_url: &str) -> String {
     }
 }
 
+/// Longest prefix of `s` that is at most `max_bytes` long and ends on a char
+/// boundary. Slicing a `str` at a fixed byte offset panics when the offset
+/// falls inside a multi-byte character (any CJK text), which in the log line
+/// below would kill the whole control-channel task.
+fn truncate_for_log(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Run the WebSocket control channel with automatic reconnection.
 /// Exponential backoff: 1s initial, 30s max for transient errors.
 /// Permanent errors (426 protocol mismatch, 401/403 auth) use a 5-minute
@@ -435,7 +450,7 @@ async fn connect_and_run(
                                 });
                             }
                         } else {
-                            tracing::debug!("websocket: received text: {}", &text[..text.len().min(100)]);
+                            tracing::debug!("websocket: received text: {}", truncate_for_log(&text, 100));
                         }
                     }
                     Ok(Message::Pong(_)) => {
@@ -507,7 +522,7 @@ async fn connect_and_run(
 
 #[cfg(test)]
 mod tests {
-    use super::derive_ws_url;
+    use super::{derive_ws_url, truncate_for_log};
 
     /// v0.4.16: the WSS control-channel URL is derived from PANEL_URL. The
     /// https→wss mapping is the half that crosses the TLS provider, so pin it
@@ -586,5 +601,28 @@ mod tests {
             WsExit::Error(msg) => assert!(msg.contains("no handshake"), "unexpected error: {msg}"),
             _ => panic!("expected a timeout error"),
         }
+    }
+
+    #[test]
+    fn truncate_for_log_respects_char_boundaries() {
+        // Each CJK char is 3 bytes; byte 100 lands inside the 34th char
+        // (bytes 99..102), so a naive `[..100]` slice would panic.
+        let cjk = "中".repeat(50);
+        let cut = truncate_for_log(&cjk, 100);
+        assert_eq!(cut.len(), 99);
+        assert_eq!(cut, "中".repeat(33));
+
+        // Shorter than the limit: returned untouched.
+        assert_eq!(truncate_for_log("hello", 100), "hello");
+        assert_eq!(truncate_for_log("", 100), "");
+
+        // Pure ASCII: cut exactly at the limit.
+        let ascii = "a".repeat(250);
+        assert_eq!(truncate_for_log(&ascii, 100).len(), 100);
+
+        // Exactly on a boundary and exactly at the limit.
+        let exact = "中".repeat(10);
+        assert_eq!(truncate_for_log(&exact, 30), exact);
+        assert_eq!(truncate_for_log(&exact, 9), "中".repeat(3));
     }
 }

@@ -501,9 +501,9 @@ pub async fn admin_buy_plan_for_user(
 
 /// PUT /admin/users/{id}/plan — admin edits a user's plan association + expiry
 /// WITHOUT charging. Used to remove a plan (clear=true → both NULL) or adjust
-/// the expiry (clear=false → keep the user's current plan_id, set the expiry,
-/// where a null plan_expire_at means "never expires"). Admin targets are
-/// rejected (admin_set_user_plan also guards WHERE admin=false).
+/// the expiry (clear=false → only plan_expire_at is written, plan_id is left
+/// alone, where a null plan_expire_at means "never expires"). Admin targets
+/// are rejected (the UPDATE also guards WHERE admin=false).
 pub async fn admin_set_user_plan(
     _admin: AdminOnly,
     State(state): State<AppState>,
@@ -513,8 +513,9 @@ pub async fn admin_set_user_plan(
     // v1.0.9: the clear path (remove plan) is now ONE atomic op — null the
     // plan, revoke device-group authorization, and system-pause the user's
     // rules together, so a mid-operation failure can't leave a half-revoked
-    // user. The non-clear path just keeps the current plan_id and writes the
-    // new expiry (None = no expiry).
+    // user. The non-clear path writes only the new expiry (None = no expiry);
+    // it must not write plan_id, or a plan the user bought a moment ago would
+    // be reverted to the one read here.
     if req.clear {
         match state.db.clear_user_plan(id).await {
             Ok(0) => return Json(err(404, "用户不存在（或为管理员）")),
@@ -535,17 +536,19 @@ pub async fn admin_set_user_plan(
                 None => return Json(err(400, "到期时间格式应为 YYYY-MM-DD HH:MM:SS (UTC)")),
             },
         };
-        let (plan_id, expire) =
-            match crate::db::repo::UserRepository::find_by_id(state.db.as_ref(), id).await {
-                Ok(Some(u)) if u.admin => return Json(err(400, "无法修改管理员用户的套餐")),
-                Ok(Some(u)) => (u.plan_id, expire),
-                Ok(None) => return Json(err(404, "用户不存在")),
-                Err(e) => {
-                    tracing::error!("admin_set_user_plan {}: find_by_id failed: {}", id, e);
-                    return Json(err(500, "数据库错误"));
-                }
-            };
-        match state.db.admin_set_user_plan(id, plan_id, expire).await {
+        // Read only to tell "is an admin" (400) from "no such user" (404); the
+        // UPDATE below re-checks `admin = 0` and the row itself, so a change
+        // between the two cannot slip through.
+        match crate::db::repo::UserRepository::find_by_id(state.db.as_ref(), id).await {
+            Ok(Some(u)) if u.admin => return Json(err(400, "无法修改管理员用户的套餐")),
+            Ok(Some(_)) => {}
+            Ok(None) => return Json(err(404, "用户不存在")),
+            Err(e) => {
+                tracing::error!("admin_set_user_plan {}: find_by_id failed: {}", id, e);
+                return Json(err(500, "数据库错误"));
+            }
+        }
+        match state.db.admin_set_user_plan_expiry(id, expire).await {
             Ok(0) => return Json(err(404, "用户不存在（或为管理员）")),
             Ok(_) => {}
             Err(e) => {

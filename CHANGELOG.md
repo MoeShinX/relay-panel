@@ -12,6 +12,12 @@ independent `v*` / `node-v*` tracks since this release).
 
 ### Fixed
 
+- **Changing a user's expiry time could put back a plan they had just
+  replaced.** The admin "edit plan" action read the user's current plan and
+  then wrote that plan and the new expiry together. If the user bought another
+  plan in between, the old plan was written back while the traffic allowance,
+  rule count and route access were already the new plan's. Only the expiry is
+  written now, and the plan is left as it is.
 - **A free plan can be claimed only once per user.** Until now the shop let a
   user buy a price-0 plan (the built-in `free` plan, for one) as many times as
   they liked, and every purchase stacked another full quota of traffic onto
