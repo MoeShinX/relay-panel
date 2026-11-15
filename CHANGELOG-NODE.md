@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.2.12] - 2026-11-15
+
 Runs against any current panel (still protocol version 4). The feature below
 needs panel 1.2.21 or newer to be configured; an older panel simply never
 sends the targets, so the node probes nothing.
