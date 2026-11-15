@@ -14,24 +14,32 @@ Ships alongside `node-v1.2.12`. The config protocol is unchanged at version 4
 (both new fields are optional, so an older node or panel just ignores them).
 
 Schema: three new tables, added automatically on start (SQLite migration 48,
-PostgreSQL revision 31).
+PostgreSQL revision 31). Targets belong to a device group (`group_id`).
 
 ### Added
 
 - **Latency monitoring (administrators only).** Nodes can now measure and
   record their latency and packet loss to targets you choose, over TCP connect
-  time or ICMP ping, and the panel charts it per node. **System settings →
-  Latency monitoring** holds the probe interval (5–60 s, default 10) and up to
-  16 targets (name, carrier, TCP or ICMP, host, port), which can be reordered
-  by dragging. **There are no built-in targets**: until you add one, nodes
-  probe nothing. On the node status page an administrator sees a small monitor
-  icon beside a node's IP, opening that node's latency page: a card per target
-  (current, average and loss over the range, coloured by quality), a trend
-  chart with zoom, per-target switching and PNG download, ranges of 1 hour to
-  30 days and 1-minute, 5-minute or 1-hour granularity. Peaks and lost probes
-  are kept in the hourly roll-up, so the 7- and 30-day views do not smooth them
-  away. Regular users see none of it, and the API refuses them.
-  Needs `node-v1.2.12` on the nodes (the page says so for an older one). The
+  time or ICMP ping, and the panel charts it. It is configured **per device
+  group**: the **Latency monitoring** button on each row of the device groups
+  page opens that group's probe interval (5–60 s, default 10) and up to 16
+  targets (name, carrier, TCP or ICMP, host, port), which can be reordered by
+  dragging. Every node of the group probes those targets; a group with none
+  probes nothing, and **there are no built-in targets**. On the node status
+  page, the header of a group that has targets gets a **Monitor** button
+  opening the group's comparison page: a table of every node against every
+  target (average latency and loss over the chosen range, coloured by
+  quality), and below it a trend chart of one target with a line per node
+  (click a column or a cell to switch target; the legend toggles lines). An
+  administrator also sees a small monitor icon beside a node's IP, opening that
+  node's own page: a card per target (current, average and loss over the
+  range, coloured by quality) and a trend chart. Charts support zoom and PNG
+  download, ranges of 1 hour to 30 days and 1-minute, 5-minute or 1-hour
+  granularity. Peaks and lost probes are kept in the hourly roll-up, so the 7-
+  and 30-day views do not smooth them away. Regular users see none of it, and
+  the API refuses them. Deleting a device group deletes its targets and their
+  history.
+  Needs `node-v1.2.12` on the nodes (the pages say so for an older one). The
   node runs the probes itself, outside forwarding, so they count no traffic and
   no connections. ICMP is reliable when the node runs as root; in a container
   without raw-socket permission only TCP targets can be probed, and the page

@@ -19,8 +19,9 @@ sends the targets, so the node probes nothing.
 
 ### Added
 
-- **Latency monitor.** When the panel sends a list of targets, the node probes
-  each one every few seconds (the interval is the panel's setting, 5–60 s) and
+- **Latency monitor.** When the panel sends a list of targets (the ones set for
+  the node's device group), the node probes
+  each one every few seconds (the interval is the group's setting, 5–60 s) and
   reports the latency and packet loss to the panel, one summary per target and
   whole minute, in its normal status report. TCP targets are timed by the
   connect handshake, which is closed straight away; ICMP targets get an echo

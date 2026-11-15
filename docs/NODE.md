@@ -274,9 +274,9 @@ All three accept both v1 and v2; v2 is binary and a little smaller. The panel ch
 
 ## Latency monitoring (what the node probes)
 
-An administrator can list up to 16 targets in the panel under **System settings → Latency monitoring**. Needs node-v1.2.12 or later. With **no targets configured the node probes nothing**; there is no built-in target list.
+An administrator can list up to 16 targets for each device group in the panel, from the **Latency monitoring** button on the device groups page. Needs node-v1.2.12 or later. With **no targets configured for its device group the node probes nothing**; there is no built-in target list.
 
-Once targets exist, **every node** (whatever its device group) actively connects to each of them, once per interval (default every 10 seconds, 5–60 configurable), and records how long it took and whether it answered:
+Once its group has targets, **every node of that group** actively connects to each of them, once per interval (default every 10 seconds, 5–60 configurable), and records how long it took and whether it answered:
 
 - **TCP**: opens a connection to the target's host and port and closes it as soon as the handshake completes. Nothing is sent. The time taken is the latency.
 - **ICMP**: one echo request (ping) to the target, 3 seconds to answer.
