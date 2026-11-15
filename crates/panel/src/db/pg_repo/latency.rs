@@ -57,6 +57,24 @@ impl LatencyRepository for PgRepository {
             let order = pos as i32;
             match input.id {
                 Some(id) => {
+                    // Pointing a target somewhere else (another host, port or
+                    // kind) starts its history over: the old rows measured a
+                    // different thing and must not join the new line. A rename
+                    // or a new carrier keeps them.
+                    for table in ["latency_minute", "latency_hourly"] {
+                        sqlx::query(&format!(
+                            "DELETE FROM {table} WHERE target_id = $1 AND EXISTS (
+                                 SELECT 1 FROM latency_targets WHERE id = $1
+                                 AND (kind IS DISTINCT FROM $2 OR host IS DISTINCT FROM $3
+                                      OR port IS DISTINCT FROM $4))"
+                        ))
+                        .bind(id)
+                        .bind(&input.kind)
+                        .bind(&input.host)
+                        .bind(input.port)
+                        .execute(&mut *tx)
+                        .await?;
+                    }
                     sqlx::query(
                         "UPDATE latency_targets
                          SET name = $1, carrier = $2, kind = $3, host = $4, port = $5,

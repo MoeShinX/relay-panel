@@ -6872,6 +6872,55 @@ async fn pg_latency_targets_replace_keeps_ids_orders_and_deletes_history() {
     cleanup(&db).await;
 }
 
+/// Pointing a kept target at another host, port or kind starts its history
+/// over; renaming it or changing its carrier keeps the history.
+#[tokio::test]
+async fn pg_latency_target_moved_elsewhere_drops_its_history() {
+    let Some(db) = repo("lat_moved").await else {
+        return;
+    };
+    let seeded = db
+        .replace_latency_targets(
+            "2026-01-01 00:00:00",
+            &[
+                lat_input(None, "A", "192.0.2.1"),
+                lat_input(None, "B", "192.0.2.2"),
+                lat_input(None, "C", "192.0.2.3"),
+            ],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let (a, b, c) = (seeded[0].id, seeded[1].id, seeded[2].id);
+    let rows: Vec<LatencyMinuteRow> = [a, b, c]
+        .iter()
+        .map(|id| lat_row(*id, 36000, 6, 0, 60.0, Some(9.0), Some(11.0)))
+        .collect();
+    db.record_latency_minutes("n1", &rows).await.unwrap();
+
+    // A: renamed and re-carriered only. B: new host. C: same host, new port.
+    let mut renamed = lat_input(Some(a), "A2", "192.0.2.1");
+    renamed.carrier = "unicom".to_string();
+    let mut new_port = lat_input(Some(c), "C", "192.0.2.3");
+    new_port.port = Some(80);
+    db.replace_latency_targets(
+        "2026-01-02 00:00:00",
+        &[renamed, lat_input(Some(b), "B", "192.0.2.20"), new_port],
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    for g in [LatencyGranularity::Minute1, LatencyGranularity::Hour1] {
+        let left = db.query_latency_buckets("n1", g, 0, 100_000).await.unwrap();
+        assert_eq!(
+            left.iter().map(|m| m.target_id).collect::<Vec<_>>(),
+            vec![a],
+            "only the renamed target keeps its history"
+        );
+    }
+}
+
 /// An input naming an id that does not exist changes nothing at all — not even
 /// the deletions the same request would have made.
 #[tokio::test]
