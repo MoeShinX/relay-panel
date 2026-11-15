@@ -7,6 +7,7 @@ import type { ApiEnvelope, LatencySeries, LatencySummary, NodeLatencyResponse, N
 import { useI18n } from '../i18n/context';
 import LatencyChart, { type LatencyChartHandle } from '../components/LatencyChart';
 import LatencyControls from '../components/LatencyControls';
+import LatencyStrips, { type StripRow } from '../components/LatencyStrips';
 import {
   AUTO_REFRESH_MS,
   LEVEL_COLORS,
@@ -143,6 +144,23 @@ export default function NodeLatency() {
   const colorDomain = useMemo(() => series.map((s) => String(s.target_id)), [series]);
   const withDate = range !== '1h' && range !== '6h';
   const hasPoints = points.length > 0;
+
+  // One strip row per target, over the full range whatever card is selected.
+  // "Now" and the range loss are the cards' own figures.
+  const stripRows: StripRow[] = useMemo(
+    () =>
+      series.map((s) => {
+        const sum = summaryById.get(s.target_id);
+        const base = { key: String(s.target_id), name: s.name, points: s.points, current: null, loss: null };
+        if (unsupportedIds.has(s.target_id)) return { ...base, points: [], note: t('latencyIcmpUnsupported') };
+        return {
+          ...base,
+          current: sum?.latest_ts != null ? { ms: sum.latest, loss: sum.latest_loss } : null,
+          loss: sum?.loss ?? null,
+        };
+      }),
+    [series, summaryById, unsupportedIds, t],
+  );
 
   const header = (
     <div className="rp-page-header" style={{ flexWrap: 'wrap', gap: 8 }}>
@@ -346,6 +364,9 @@ export default function NodeLatency() {
           />
         )}
       </Card>
+      {data ? (
+        <LatencyStrips testId="latency-strips" rows={stripRows} since={data.since} until={data.until} withDate={withDate} />
+      ) : null}
     </>
   );
 }

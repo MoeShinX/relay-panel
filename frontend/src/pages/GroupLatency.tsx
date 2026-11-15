@@ -8,11 +8,13 @@ import type {
   GroupLatencyCell,
   GroupLatencyNode,
   GroupLatencyResponse,
+  GroupLatencySeries,
   LatencyTarget,
 } from '../api/types';
 import { useI18n } from '../i18n/context';
 import LatencyChart, { type LatencyChartHandle } from '../components/LatencyChart';
 import LatencyControls from '../components/LatencyControls';
+import LatencyStrips, { type StripRow } from '../components/LatencyStrips';
 import {
   AUTO_REFRESH_MS,
   LEVEL_COLORS,
@@ -145,6 +147,30 @@ export default function GroupLatency() {
   const colorDomain = useMemo(() => nodes.map((n) => n.node_id), [nodes]);
   const withDate = range !== '1h' && range !== '6h';
   const hasPoints = points.length > 0;
+
+  // One strip row per node for the target on show: the chosen target's own
+  // series, the table's range-wide loss, and the newest point as "now".
+  const stripRows: StripRow[] = useMemo(() => {
+    const byNode = new Map<string, GroupLatencySeries>();
+    for (const s of data?.series ?? []) byNode.set(s.node_id, s);
+    return nodes.map((n) => {
+      const name = nodeDisplayName(n);
+      const base = { key: n.node_id, name, points: [], current: null, loss: null };
+      if (!n.supported) return { ...base, note: t('latencyGroupNeedUpgrade') };
+      if (activeId != null && n.unsupported_targets.includes(activeId)) {
+        return { ...base, note: t('latencyGroupUnsupported') };
+      }
+      const pts = byNode.get(n.node_id)?.points ?? [];
+      const newest = pts.reduce<(typeof pts)[number] | null>((a, p) => (a == null || p.ts > a.ts ? p : a), null);
+      const c = activeId != null ? cells.get(cellKey(n.node_id, activeId)) : undefined;
+      return {
+        ...base,
+        points: pts,
+        current: newest ? { ms: newest.avg, loss: newest.loss } : null,
+        loss: c ? c.loss : null,
+      };
+    });
+  }, [data, nodes, cells, activeId, t]);
 
   const header = (
     <div className="rp-page-header" style={{ flexWrap: 'wrap', gap: 8 }}>
@@ -374,6 +400,15 @@ export default function GroupLatency() {
             />
           )}
         </Card>
+      )}
+      {nodes.length === 0 || !data ? null : (
+        <LatencyStrips
+          testId="latency-strips"
+          rows={stripRows}
+          since={data.since}
+          until={data.until}
+          withDate={withDate}
+        />
       )}
     </>
   );

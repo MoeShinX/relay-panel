@@ -358,3 +358,100 @@ describe('GroupLatency range and refresh', () => {
     expect(screen.queryByText('latencyLoadFailed')).toBeNull();
   });
 });
+
+describe('GroupLatency status strips', () => {
+  const stripLevel = (kind: 'lat' | 'loss', id: string, i: number) =>
+    screen.getByTestId(`strip-${kind}-${id}-${i}`).getAttribute('data-level');
+
+  it('draws a row per node, named like the table, with 30 slices for each of latency and loss', async () => {
+    serve();
+    renderPage();
+    await flush();
+    const strips = screen.getByTestId('latency-strips');
+    expect(within(strips).getByTestId('strip-row-n1')).toHaveTextContent('HK-1');
+    expect(within(strips).getByTestId('strip-row-n2')).toHaveTextContent('n2');
+    expect(within(strips).getByTestId('strip-row-0123456789abcdef')).toHaveTextContent('01234567…def');
+    for (const id of ['n1', 'n2', '0123456789abcdef']) {
+      expect(screen.getByTestId(`strip-lat-${id}`).children).toHaveLength(30);
+      expect(screen.getByTestId(`strip-loss-${id}`).children).toHaveLength(30);
+    }
+  });
+
+  it('shows the newest reading and the range loss, and colours the slices that hold data', async () => {
+    serve();
+    renderPage();
+    await flush();
+    // newest point of n1 is 22 ms; the range loss is the table cell's (0%)
+    expect(screen.getByTestId('strip-current-n1')).toHaveTextContent('22.0');
+    expect(screen.getByTestId('strip-current-n1')).toHaveAttribute('data-level', 'good');
+    expect(screen.getByTestId('strip-loss-value-n1')).toHaveTextContent('0%');
+    expect(screen.getByTestId('strip-loss-value-n1')).toHaveAttribute('data-level', 'good');
+    // n2: 30 ms but the table says 10% lost
+    expect(screen.getByTestId('strip-loss-value-n2')).toHaveTextContent('10.0%');
+    expect(screen.getByTestId('strip-loss-value-n2')).toHaveAttribute('data-level', 'bad');
+    // both points sit in the last slice of the hour; the rest has no data
+    expect(stripLevel('lat', 'n1', 29)).toBe('good');
+    expect(stripLevel('lat', 'n1', 0)).toBe('none');
+    expect(stripLevel('loss', 'n1', 29)).toBe('good');
+    expect(stripLevel('loss', 'n2', 29)).toBe('bad');
+    expect(stripLevel('loss', 'n2', 3)).toBe('none');
+    // a node with no points: grey strip, no reading
+    expect(stripLevel('lat', '0123456789abcdef', 29)).toBe('none');
+    expect(screen.getByTestId('strip-current-0123456789abcdef')).toHaveTextContent('latencyNoData');
+  });
+
+  it('names the time span, average and loss of a slice on hover', async () => {
+    serve();
+    renderPage();
+    await flush();
+    const slice = screen.getByTestId('strip-lat-n1-29');
+    expect(slice.getAttribute('title')).toMatch(/\d\d:\d\d - \d\d:\d\d/);
+    expect(slice.getAttribute('title')).toContain('21.0 ms');
+    expect(screen.getByTestId('strip-lat-n1-0').getAttribute('title')).toContain('latencyNoData');
+  });
+
+  it('a node that is too old gets a note and no slices', async () => {
+    serve();
+    renderPage();
+    await flush();
+    expect(screen.getByTestId('strip-note-old')).toHaveTextContent('latencyGroupNeedUpgrade');
+    expect(screen.queryByTestId('strip-lat-old')).toBeNull();
+    expect(screen.queryByTestId('strip-loss-old')).toBeNull();
+  });
+
+  it('follows the chosen target: rows and slices change when another column is picked', async () => {
+    serve((url) => {
+      const m = /target_id=(\d+)/.exec(url);
+      const id = m ? Number(m[1]) : 1;
+      if (id === 1) return ok(response());
+      return ok(
+        response({
+          target_id: 2,
+          series: [
+            { node_id: 'n1', points: [point(NOW - 120, 250)] },
+            { node_id: 'n2', points: [] },
+            { node_id: '0123456789abcdef', points: [point(NOW - 60, null, 100)] },
+            { node_id: 'old', points: [] },
+          ],
+        }),
+      );
+    });
+    renderPage();
+    await flush();
+    expect(screen.getByTestId('strip-current-n1')).toHaveTextContent('22.0');
+
+    fireEvent.click(screen.getByTestId('latency-col-2'));
+    await flush();
+    expect(screen.getByTestId('strip-current-n1')).toHaveTextContent('250');
+    expect(screen.getByTestId('strip-current-n1')).toHaveAttribute('data-level', 'bad');
+    expect(stripLevel('lat', 'n1', 29)).toBe('bad');
+    // the node that cannot probe target 2 is told so
+    expect(screen.getByTestId('strip-note-n2')).toHaveTextContent('latencyGroupUnsupported');
+    expect(screen.queryByTestId('strip-lat-n2')).toBeNull();
+    // everything lost: red, not grey
+    expect(screen.getByTestId('strip-current-0123456789abcdef')).toHaveTextContent('latencyAllLost');
+    expect(stripLevel('lat', '0123456789abcdef', 29)).toBe('bad');
+    expect(stripLevel('loss', '0123456789abcdef', 29)).toBe('bad');
+    expect(screen.getByTestId('strip-loss-value-0123456789abcdef')).toHaveTextContent('100.0%');
+  });
+});

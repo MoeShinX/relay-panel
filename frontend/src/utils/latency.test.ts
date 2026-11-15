@@ -4,6 +4,7 @@ import {
   granularityAllowed,
   intervalValid,
   latencyLevel,
+  lossStripLevel,
   rowError,
   toPayload,
   validHost,
@@ -118,5 +119,17 @@ describe('toPayload', () => {
         { name: 'Beijing', carrier: 'telecom', kind: 'icmp', host: '192.0.2.1', port: null },
       ],
     });
+  });
+});
+
+describe('lossStripLevel', () => {
+  it('0% green, under 5% amber, 5% and up red, no data grey', () => {
+    expect(lossStripLevel(0)).toBe('good');
+    expect(lossStripLevel(0.01)).toBe('warn');
+    expect(lossStripLevel(4.99)).toBe('warn');
+    expect(lossStripLevel(5)).toBe('bad');
+    expect(lossStripLevel(100)).toBe('bad');
+    expect(lossStripLevel(null)).toBe('none');
+    expect(lossStripLevel(undefined)).toBe('none');
   });
 });

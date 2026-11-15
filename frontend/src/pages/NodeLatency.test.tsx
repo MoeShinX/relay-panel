@@ -280,3 +280,70 @@ describe('NodeLatency auto-refresh', () => {
     expect(screen.queryByText('latencyLoadFailed')).toBeNull();
   });
 });
+
+describe('NodeLatency status strips', () => {
+  const stripLevel = (kind: 'lat' | 'loss', id: number, i: number) =>
+    screen.getByTestId(`strip-${kind}-${id}-${i}`).getAttribute('data-level');
+
+  it('draws a row per target with 30 latency and 30 loss slices', async () => {
+    serve(() => ok(response()));
+    renderPage();
+    await flush();
+    const strips = screen.getByTestId('latency-strips');
+    expect(within(strips).getByTestId('strip-row-1')).toHaveTextContent('Beijing Telecom');
+    expect(within(strips).getByTestId('strip-row-2')).toHaveTextContent('Shanghai Unicom');
+    expect(within(strips).getByTestId('strip-row-3')).toHaveTextContent('Guangzhou Mobile');
+    for (const id of [1, 2]) {
+      expect(screen.getByTestId(`strip-lat-${id}`).children).toHaveLength(30);
+      expect(screen.getByTestId(`strip-loss-${id}`).children).toHaveLength(30);
+    }
+  });
+
+  it('uses the cards own now and range-loss figures', async () => {
+    serve(() => ok(response()));
+    renderPage();
+    await flush();
+    // 30 ms with 10% loss in the newest minute: bad, exactly as the card is
+    expect(screen.getByTestId('strip-current-1')).toHaveTextContent('30.0');
+    expect(screen.getByTestId('strip-current-1')).toHaveAttribute('data-level', 'bad');
+    expect(screen.getByTestId('strip-loss-value-1')).toHaveTextContent('5.0%');
+    expect(screen.getByTestId('strip-loss-value-1')).toHaveAttribute('data-level', 'bad');
+    // the newest minute lost everything
+    expect(screen.getByTestId('strip-current-2')).toHaveTextContent('latencyAllLost');
+    expect(screen.getByTestId('strip-loss-value-2')).toHaveTextContent('50.0%');
+  });
+
+  it('colours slices by their own mean latency and loss; empty slices are grey', async () => {
+    serve(() => ok(response()));
+    renderPage();
+    await flush();
+    // target 1: 20 ms and 30 ms (10% lost) share the last slice -> 25 ms, 5% loss
+    expect(stripLevel('lat', 1, 29)).toBe('good');
+    expect(stripLevel('loss', 1, 29)).toBe('bad');
+    expect(stripLevel('lat', 1, 0)).toBe('none');
+    expect(stripLevel('loss', 1, 0)).toBe('none');
+    // target 2: 250 ms and one all-lost point -> the answered one is the mean
+    expect(stripLevel('lat', 2, 29)).toBe('bad');
+    expect(screen.getByTestId('strip-lat-1-29').getAttribute('title')).toContain('25.0 ms');
+  });
+
+  it('a target this node cannot probe gets a note and no slices', async () => {
+    serve(() => ok(response()));
+    renderPage();
+    await flush();
+    expect(screen.getByTestId('strip-note-3')).toHaveTextContent('latencyIcmpUnsupported');
+    expect(screen.queryByTestId('strip-lat-3')).toBeNull();
+    expect(screen.queryByTestId('strip-loss-3')).toBeNull();
+  });
+
+  it('selecting a card narrows the chart but keeps every target strip', async () => {
+    serve(() => ok(response()));
+    renderPage();
+    await flush();
+    fireEvent.click(screen.getByTestId('latency-card-2'));
+    expect(screen.getByTestId('chart').getAttribute('data-keys')).toBe('2');
+    expect(screen.getByTestId('strip-row-1')).toBeInTheDocument();
+    expect(screen.getByTestId('strip-row-2')).toBeInTheDocument();
+    expect(screen.getByTestId('strip-row-3')).toBeInTheDocument();
+  });
+});

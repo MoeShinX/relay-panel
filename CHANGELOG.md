@@ -14,6 +14,11 @@ independent `v*` / `node-v*` tracks since this release).
 
 - In a device group's latency-monitor drawer each target now fits on one row:
   the port and the delete button no longer wrap onto a second line.
+- The latency pages (a node's and a device group's) now show a "Recent status"
+  card under the trend chart: per node (group page, for the chosen target) or
+  per target (node page), the current latency and the range's packet loss, each
+  above a strip of 30 colour-coded slices of the selected range, with the
+  slice's time span, mean latency and loss on hover.
 
 ## [1.2.21] - 2026-11-15
 

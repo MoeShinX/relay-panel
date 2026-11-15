@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import type { LatencySeries } from '../api/types';
-import { chartPoints, formatLoss, formatMs, groupChartPoints, lossMarkers, nodeDisplayName } from './latencyChart';
+import {
+  chartPoints,
+  formatLoss,
+  formatMs,
+  groupChartPoints,
+  lossMarkers,
+  nodeDisplayName,
+  stripLatencyLevel,
+  stripSegments,
+} from './latencyChart';
+import type { LatencyPoint } from '../api/types';
 
 const series: LatencySeries[] = [
   {
@@ -91,5 +101,81 @@ describe('the group chart', () => {
     ]);
     expect(pts[0].time.getTime()).toBe(600_000);
     expect(lossMarkers(pts).map((m) => m.key)).toEqual(['0123456789abcdef']);
+  });
+});
+
+const pt = (ts: number, avg: number | null, loss = 0): LatencyPoint => ({
+  ts,
+  avg,
+  min: avg,
+  max: avg,
+  loss,
+});
+
+describe('stripSegments', () => {
+  it('always returns the asked number of slices, 30 by default, tiling the range', () => {
+    const segs = stripSegments([], 1000, 1000 + 3000);
+    expect(segs).toHaveLength(30);
+    expect(segs[0].start).toBe(1000);
+    expect(segs[0].end).toBe(1100);
+    expect(segs[29].end).toBe(4000);
+    for (let i = 1; i < segs.length; i += 1) expect(segs[i].start).toBe(segs[i - 1].end);
+  });
+
+  it('no points at all: every slice is no-data, not zero and not lost', () => {
+    for (const g of stripSegments([], 0, 3000)) {
+      expect(g).toMatchObject({ count: 0, avg: null, loss: null, allLost: false });
+    }
+  });
+
+  it('averages the points of a slice (null averages ignored) and their loss', () => {
+    const segs = stripSegments([pt(10, 20, 0), pt(20, 40, 10), pt(30, null, 100)], 0, 3000);
+    expect(segs[0].count).toBe(3);
+    expect(segs[0].avg).toBe(30);
+    expect(segs[0].loss).toBeCloseTo(110 / 3);
+    expect(segs[0].allLost).toBe(false);
+  });
+
+  it('leaves slices without points as no-data while others have values', () => {
+    const segs = stripSegments([pt(10, 20), pt(2950, 50)], 0, 3000);
+    expect(segs[0].avg).toBe(20);
+    expect(segs[1]).toMatchObject({ count: 0, avg: null, loss: null });
+    expect(segs[28]).toMatchObject({ count: 0, avg: null });
+    expect(segs[29].avg).toBe(50);
+  });
+
+  it('a slice whose points all lost every probe is all-lost, with its loss', () => {
+    const segs = stripSegments([pt(10, null, 100), pt(20, null, 100)], 0, 3000);
+    expect(segs[0]).toMatchObject({ count: 2, avg: null, loss: 100, allLost: true });
+  });
+
+  it('a point on an inner boundary belongs to the later slice', () => {
+    const segs = stripSegments([pt(100, 10), pt(99, 30)], 0, 3000);
+    expect(segs[0].avg).toBe(30);
+    expect(segs[1].avg).toBe(10);
+  });
+
+  it('a point at since is in the first slice, one at until in the last, others outside are ignored', () => {
+    const segs = stripSegments([pt(0, 11), pt(3000, 22), pt(-1, 99), pt(3001, 99)], 0, 3000);
+    expect(segs[0]).toMatchObject({ count: 1, avg: 11 });
+    expect(segs[29]).toMatchObject({ count: 1, avg: 22 });
+    expect(segs.reduce((a, g) => a + g.count, 0)).toBe(2);
+  });
+
+  it('an empty or inverted range yields no-data slices instead of dividing by zero', () => {
+    for (const segs of [stripSegments([pt(5, 10)], 5, 5), stripSegments([pt(5, 10)], 9, 5)]) {
+      expect(segs).toHaveLength(30);
+      expect(segs.every((g) => g.count === 0 && g.avg === null)).toBe(true);
+    }
+  });
+});
+
+describe('stripLatencyLevel', () => {
+  it('grey without data, red when all lost, otherwise by the latency thresholds', () => {
+    expect(stripLatencyLevel({ count: 0, avg: null, allLost: false })).toBe('none');
+    expect(stripLatencyLevel({ count: 2, avg: null, allLost: true })).toBe('bad');
+    expect(stripLatencyLevel({ count: 1, avg: 80, allLost: false })).toBe('good');
+    expect(stripLatencyLevel({ count: 1, avg: 120, allLost: false })).toBe('warn');
+    expect(stripLatencyLevel({ count: 1, avg: 201, allLost: false })).toBe('bad');
   });
 });
