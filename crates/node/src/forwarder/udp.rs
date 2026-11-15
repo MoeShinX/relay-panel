@@ -19,7 +19,7 @@
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use std::future::Future;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -114,13 +114,192 @@ impl Drop for SessionSlot {
     }
 }
 
-/// A session's outbound socket together with its place under the cap. The
-/// place is given back only when the socket itself closes — once the map
-/// entry, the reply reader and any in-flight send have all let go of it — so
-/// the cap bounds the sockets actually open, not just the map entries.
+/// Default for how many sessions one source address may hold at once.
+const DEFAULT_SESSIONS_PER_IP: usize = 1024;
+
+/// The per-source limit: `UDP_MAX_SESSIONS_PER_IP` if it is a positive
+/// number, otherwise `DEFAULT_SESSIONS_PER_IP`. Read once, on first use.
+fn udp_sessions_per_ip_cap() -> usize {
+    static CAP: OnceLock<usize> = OnceLock::new();
+    *CAP.get_or_init(|| {
+        let cap = per_ip_cap_from(std::env::var("UDP_MAX_SESSIONS_PER_IP").ok());
+        tracing::info!(
+            "UDP: at most {} concurrent sessions per source address",
+            cap
+        );
+        cap
+    })
+}
+
+fn per_ip_cap_from(env: Option<String>) -> usize {
+    env.and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_SESSIONS_PER_IP)
+}
+
+/// Whom a session is counted against: one IPv4 address, or one IPv6 /64 (a
+/// single subscriber or host is routinely handed a whole /64, so counting
+/// full IPv6 addresses would let it dodge the limit by rotating them).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum SourceKey {
+    V4(Ipv4Addr),
+    V6Prefix64(u64),
+}
+
+impl SourceKey {
+    fn of(ip: IpAddr) -> Self {
+        match ip {
+            IpAddr::V4(v4) => SourceKey::V4(v4),
+            // `::ffff:a.b.c.d` is how a dual-stack socket shows an IPv4
+            // client: the same host as a.b.c.d, not an IPv6 network.
+            IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+                Some(v4) => SourceKey::V4(v4),
+                None => SourceKey::V6Prefix64((u128::from(v6) >> 64) as u64),
+            },
+        }
+    }
+}
+
+/// Live UDP sessions per source, across all rules on this node. A source with
+/// no sessions left has no entry, so the table only holds sources that are
+/// currently active.
+struct SourceTable {
+    counts: OnceLock<DashMap<SourceKey, usize>>,
+}
+
+impl SourceTable {
+    const fn new() -> Self {
+        Self {
+            counts: OnceLock::new(),
+        }
+    }
+
+    fn map(&self) -> &DashMap<SourceKey, usize> {
+        self.counts.get_or_init(DashMap::new)
+    }
+}
+
+static UDP_SOURCES: SourceTable = SourceTable::new();
+
+/// One counted session for a source in `table`, given back on drop. Like
+/// `SessionSlot` it lives in the session's socket, so every way a session can
+/// end (idle eviction, reader failure, rule removal, listener teardown)
+/// releases it exactly once, when the socket really closes.
+struct SourceSlot {
+    table: &'static SourceTable,
+    key: SourceKey,
+}
+
+impl SourceSlot {
+    fn acquire(table: &'static SourceTable, key: SourceKey, cap: usize) -> Option<Self> {
+        // The shard lock held by `entry` makes check-and-increment atomic.
+        match table.map().entry(key) {
+            Entry::Occupied(mut e) => {
+                if *e.get() >= cap {
+                    return None;
+                }
+                *e.get_mut() += 1;
+            }
+            Entry::Vacant(e) => {
+                if cap == 0 {
+                    return None;
+                }
+                e.insert(1);
+            }
+        }
+        Some(SourceSlot { table, key })
+    }
+}
+
+impl Drop for SourceSlot {
+    fn drop(&mut self) {
+        if let Entry::Occupied(mut e) = self.table.map().entry(self.key) {
+            if *e.get() <= 1 {
+                e.remove();
+            } else {
+                *e.get_mut() -= 1;
+            }
+        }
+    }
+}
+
+/// Why a new session was not admitted.
+#[derive(Debug, PartialEq, Eq)]
+enum Refusal {
+    /// This source already holds its share of sessions.
+    PerSource,
+    /// The node-wide cap is reached.
+    NodeWide,
+}
+
+/// Claim the places a new session from `ip` needs: one under its source's
+/// limit, then one under the node-wide cap. The source is checked first so a
+/// refused source never takes a node-wide place, even briefly. Dropping the
+/// returned slots (or the first one, when the second is refused) gives them
+/// back.
+fn acquire_session_slots(
+    ip: IpAddr,
+    sources: &'static SourceTable,
+    per_ip_cap: usize,
+    node: &'static AtomicUsize,
+    node_cap: usize,
+) -> Result<(SessionSlot, SourceSlot), Refusal> {
+    let source =
+        SourceSlot::acquire(sources, SourceKey::of(ip), per_ip_cap).ok_or(Refusal::PerSource)?;
+    let slot = SessionSlot::acquire(node, node_cap).ok_or(Refusal::NodeWide)?;
+    Ok((slot, source))
+}
+
+/// Refused-per-source count since the last warning, and when that was.
+static REFUSED_PER_SOURCE: AtomicU64 = AtomicU64::new(0);
+static LAST_PER_SOURCE_WARNING: AtomicU64 = AtomicU64::new(0);
+const PER_SOURCE_WARNING_INTERVAL_SECS: u64 = 10;
+
+/// True (and records `now`) when at least `interval` seconds have passed since
+/// the last time this returned true for `last`.
+fn log_due(last: &AtomicU64, now: u64, interval: u64) -> bool {
+    let prev = last.load(Ordering::Relaxed);
+    now.saturating_sub(prev) >= interval
+        && last
+            .compare_exchange(prev, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+}
+
+/// Count a session refused by the per-source limit; warn at most once per
+/// `PER_SOURCE_WARNING_INTERVAL_SECS` node-wide, so a flood cannot flood the
+/// log either.
+fn note_source_refused(ip: IpAddr, port: u16) {
+    REFUSED_PER_SOURCE.fetch_add(1, Ordering::Relaxed);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    if log_due(
+        &LAST_PER_SOURCE_WARNING,
+        now,
+        PER_SOURCE_WARNING_INTERVAL_SECS,
+    ) {
+        tracing::warn!(
+            "UDP per-source session limit reached ({} sessions per address, IPv6 counted per /64); \
+             refused {} new session(s) since the last warning (latest from {} on port {}). \
+             Existing sessions are unaffected. If this is real traffic (many clients behind one \
+             address), raise UDP_MAX_SESSIONS_PER_IP.",
+            udp_sessions_per_ip_cap(),
+            REFUSED_PER_SOURCE.swap(0, Ordering::Relaxed),
+            ip,
+            port
+        );
+    }
+}
+
+/// A session's outbound socket together with its places under the node-wide
+/// cap and its source's limit. The places are given back only when the socket
+/// itself closes — once the map entry, the reply reader and any in-flight send
+/// have all let go of it — so the limits bound the sockets actually open, not
+/// just the map entries.
 struct SessionSocket {
     sock: UdpSocket,
     _slot: SessionSlot,
+    _source: SourceSlot,
 }
 
 impl std::ops::Deref for SessionSocket {
@@ -187,6 +366,17 @@ impl Drop for SessionsTeardown {
     }
 }
 
+/// Drop the sessions idle for longer than the timeout and return how many went.
+/// Dropping a session stops its reader; its socket (and with it its places
+/// under the limits) closes once the reader lets go.
+fn evict_expired(sessions: &Sessions) -> usize {
+    let before = sessions.len();
+    sessions.retain(|_, s| s.last_active.elapsed() < UDP_SESSION_TIMEOUT);
+    // saturating: len() is read across shards without a global lock, so a
+    // concurrent insert between the two reads must not underflow usize.
+    before.saturating_sub(sessions.len())
+}
+
 /// v1.0.4: serve an ALREADY-BOUND UDP socket. Binding happens in the manager
 /// (synchronously, so errors surface immediately and per-family success is
 /// known). This function only runs the receive loop.
@@ -239,11 +429,7 @@ pub async fn serve_udp_listener(
             // Drop our local outbound sockets for clients whose local entry is
             // older than the timeout. The tracker already stopped counting
             // them; here we release the socket resources too.
-            let before = sessions_clone.len();
-            sessions_clone.retain(|_, s| s.last_active.elapsed() < UDP_SESSION_TIMEOUT);
-            // saturating: len() is read across shards without a global lock, so a
-            // concurrent insert between the two reads must not underflow usize.
-            let removed = before.saturating_sub(sessions_clone.len());
+            let removed = evict_expired(&sessions_clone);
             if removed > 0 {
                 tracing::debug!(
                     "UDP port {}: cleaned up {} expired outbound sockets",
@@ -292,9 +478,24 @@ pub async fn serve_udp_listener(
         } else {
             // v1.2.12: a place under the node-wide cap first, before any
             // socket is opened. Refused: drop the datagram.
-            let Some(slot) = SessionSlot::acquire(&UDP_SESSIONS, udp_session_cap()) else {
-                note_session_refused(port);
-                continue;
+            // The source's own limit comes first: one address cannot fill the
+            // node-wide cap and lock every other client out.
+            let (slot, source) = match acquire_session_slots(
+                src.ip(),
+                &UDP_SOURCES,
+                udp_sessions_per_ip_cap(),
+                &UDP_SESSIONS,
+                udp_session_cap(),
+            ) {
+                Ok(slots) => slots,
+                Err(Refusal::PerSource) => {
+                    note_source_refused(src.ip(), port);
+                    continue;
+                }
+                Err(Refusal::NodeWide) => {
+                    note_session_refused(port);
+                    continue;
+                }
             };
             // New session: pick a target and give the session an ephemeral
             // outbound socket connected to it, all WITHOUT holding any map
@@ -332,7 +533,11 @@ pub async fn serve_udp_listener(
             else {
                 continue;
             };
-            let outbound = Arc::new(SessionSocket { sock, _slot: slot });
+            let outbound = Arc::new(SessionSocket {
+                sock,
+                _slot: slot,
+                _source: source,
+            });
 
             // Publish via the entry API (per-shard lock, sync — no .await while
             // the guard is held). Double-check for a concurrent datagram from the
@@ -743,23 +948,35 @@ mod tests {
     /// datagram already sent: the ICMP port-unreachable it provokes makes the
     /// socket's next `recv` fail, as a dead target does in production.
     async fn outbound_to_dead_port() -> Arc<SessionSocket> {
+        let sock = loopback_udp().await;
+        point_at_dead_port(&sock).await;
+        tracked(sock)
+    }
+
+    /// Connect `sock` to a port nobody listens on and send one datagram.
+    async fn point_at_dead_port(sock: &UdpSocket) {
         let dead = loopback_udp().await;
         let dead_addr = dead.local_addr().unwrap();
         drop(dead);
-        let sock = loopback_udp().await;
         sock.connect(dead_addr).await.unwrap();
         sock.send(b"ping").await.unwrap();
-        tracked(sock)
     }
 
     /// Slots for sessions built by these tests, apart from the node-wide count.
     static TEST_SLOTS: AtomicUsize = AtomicUsize::new(0);
+    static TEST_SOURCES: SourceTable = SourceTable::new();
 
-    /// A session socket counted under TEST_SLOTS.
+    /// A session socket counted under TEST_SLOTS and TEST_SOURCES.
     fn tracked(sock: UdpSocket) -> Arc<SessionSocket> {
         Arc::new(SessionSocket {
             sock,
             _slot: SessionSlot::acquire(&TEST_SLOTS, usize::MAX).unwrap(),
+            _source: SourceSlot::acquire(
+                &TEST_SOURCES,
+                SourceKey::of(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                usize::MAX,
+            )
+            .unwrap(),
         })
     }
 
@@ -828,9 +1045,12 @@ mod tests {
     #[tokio::test]
     async fn a_slot_is_held_until_the_socket_closes() {
         static SLOTS: AtomicUsize = AtomicUsize::new(0);
+        static SOURCES: SourceTable = SourceTable::new();
+        let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
         let outbound = Arc::new(SessionSocket {
             sock: loopback_udp().await,
             _slot: SessionSlot::acquire(&SLOTS, 1).unwrap(),
+            _source: SourceSlot::acquire(&SOURCES, SourceKey::of(ip), 1).unwrap(),
         });
         let reader_copy = outbound.clone(); // what a still-running reader holds
         let sessions: Arc<Sessions> = Arc::new(DashMap::new());
@@ -850,8 +1070,225 @@ mod tests {
             SessionSlot::acquire(&SLOTS, 1).is_none(),
             "the socket is still open, so its place is still taken"
         );
+        assert!(
+            SourceSlot::acquire(&SOURCES, SourceKey::of(ip), 1).is_none(),
+            "and so is its place under its source's limit"
+        );
         drop(reader_copy);
         assert!(SessionSlot::acquire(&SLOTS, 1).is_some());
+        assert!(SourceSlot::acquire(&SOURCES, SourceKey::of(ip), 1).is_some());
+    }
+
+    /// `UDP_MAX_SESSIONS_PER_IP`: a positive number, else the default.
+    #[test]
+    fn per_ip_cap_follows_setting_else_default() {
+        assert_eq!(per_ip_cap_from(Some("50".into())), 50);
+        assert_eq!(per_ip_cap_from(Some(" 7 ".into())), 7);
+        assert_eq!(per_ip_cap_from(None), 1024);
+        assert_eq!(per_ip_cap_from(Some("0".into())), 1024);
+        assert_eq!(per_ip_cap_from(Some("-3".into())), 1024);
+        assert_eq!(per_ip_cap_from(Some("many".into())), 1024);
+        assert_eq!(per_ip_cap_from(Some(String::new())), 1024);
+    }
+
+    fn key(s: &str) -> SourceKey {
+        SourceKey::of(s.parse().unwrap())
+    }
+
+    /// IPv4 is counted per address, IPv6 per /64, and an IPv4-mapped IPv6
+    /// address is the IPv4 host it names.
+    #[test]
+    fn sources_are_grouped_by_address_or_ipv6_64() {
+        assert_eq!(key("192.0.2.1"), key("192.0.2.1"));
+        assert_ne!(key("192.0.2.1"), key("192.0.2.2"));
+        // Same /64, different interface identifiers.
+        assert_eq!(
+            key("2001:db8:1:2::1"),
+            key("2001:db8:1:2:ffff:ffff:ffff:ffff")
+        );
+        // Different /64 (last bit of the prefix differs, or a different prefix).
+        assert_ne!(key("2001:db8:1:2::1"), key("2001:db8:1:3::1"));
+        assert_ne!(key("2001:db8:1:2::1"), key("2001:db8:2:2::1"));
+        // IPv4-mapped IPv6 collapses onto the IPv4 key.
+        assert_eq!(key("::ffff:192.0.2.1"), key("192.0.2.1"));
+        assert_ne!(key("::ffff:192.0.2.1"), key("::ffff:192.0.2.2"));
+        // Other low-valued IPv6 addresses are not mistaken for IPv4.
+        assert_ne!(key("::1"), key("0.0.0.1"));
+        assert!(matches!(key("::1"), SourceKey::V6Prefix64(0)));
+    }
+
+    /// One place per session for a source, up to its limit; another source is
+    /// unaffected; a source with nothing left has no entry in the table.
+    #[test]
+    fn source_slots_stop_at_the_limit_and_leave_no_entry_behind() {
+        static SOURCES: SourceTable = SourceTable::new();
+        let a = key("192.0.2.1");
+        let b = key("2001:db8::1");
+        let a1 = SourceSlot::acquire(&SOURCES, a, 2).expect("first");
+        let a2 = SourceSlot::acquire(&SOURCES, a, 2).expect("second");
+        assert!(
+            SourceSlot::acquire(&SOURCES, a, 2).is_none(),
+            "limit reached"
+        );
+        assert!(
+            SourceSlot::acquire(&SOURCES, b, 2).is_some(),
+            "another source has its own share"
+        );
+        assert_eq!(SOURCES.map().len(), 1, "b's slot was dropped right away");
+        drop(a1);
+        let a3 = SourceSlot::acquire(&SOURCES, a, 2).expect("a freed place is reusable");
+        drop(a2);
+        drop(a3);
+        assert!(SOURCES.map().is_empty());
+    }
+
+    /// The warning is allowed once per interval, however often it is asked.
+    #[test]
+    fn log_due_allows_one_per_interval() {
+        let last = AtomicU64::new(0);
+        assert!(log_due(&last, 100, 10));
+        assert!(!log_due(&last, 100, 10));
+        assert!(!log_due(&last, 109, 10));
+        assert!(log_due(&last, 110, 10));
+        assert!(!log_due(&last, 111, 10));
+        // A clock stepping back never panics and never opens the gate early.
+        assert!(!log_due(&last, 50, 10));
+    }
+
+    /// A refused source takes no node-wide place; a node-wide refusal gives
+    /// the source's place back.
+    #[tokio::test]
+    async fn refusals_hold_no_places() {
+        static SOURCES: SourceTable = SourceTable::new();
+        static NODE: AtomicUsize = AtomicUsize::new(0);
+        let a: IpAddr = "192.0.2.1".parse().unwrap();
+        let b: IpAddr = "192.0.2.2".parse().unwrap();
+
+        let first = acquire_session_slots(a, &SOURCES, 1, &NODE, 2).unwrap();
+        assert!(matches!(
+            acquire_session_slots(a, &SOURCES, 1, &NODE, 2),
+            Err(Refusal::PerSource)
+        ));
+        assert_eq!(NODE.load(Ordering::Acquire), 1);
+        let second = acquire_session_slots(b, &SOURCES, 1, &NODE, 2).unwrap();
+        // The node is full: c is refused for that, and keeps no place of its own.
+        let c: IpAddr = "192.0.2.3".parse().unwrap();
+        assert!(matches!(
+            acquire_session_slots(c, &SOURCES, 1, &NODE, 2),
+            Err(Refusal::NodeWide)
+        ));
+        assert!(SOURCES.map().get(&SourceKey::of(c)).is_none());
+        drop((first, second));
+        assert_eq!(NODE.load(Ordering::Acquire), 0);
+        assert!(SOURCES.map().is_empty());
+    }
+
+    /// Admit a session from `ip`, with a real socket, the way the receive loop does.
+    async fn open_session(
+        ip: IpAddr,
+        sources: &'static SourceTable,
+        per_ip_cap: usize,
+        node: &'static AtomicUsize,
+    ) -> Result<Arc<SessionSocket>, Refusal> {
+        let (slot, source) = acquire_session_slots(ip, sources, per_ip_cap, node, usize::MAX)?;
+        Ok(Arc::new(SessionSocket {
+            sock: loopback_udp().await,
+            _slot: slot,
+            _source: source,
+        }))
+    }
+
+    /// The per-source count is the number of sockets really open, whichever
+    /// way a session ends: idle eviction, a failing reader, or the listener
+    /// being torn down (rule removed or restarted). Refused sessions leave
+    /// nothing behind, and another source is never affected.
+    #[tokio::test]
+    async fn source_counts_return_to_zero_however_a_session_ends() {
+        static SOURCES: SourceTable = SourceTable::new();
+        static NODE: AtomicUsize = AtomicUsize::new(0);
+        const CAP: usize = 3;
+        let a: IpAddr = "192.0.2.1".parse().unwrap();
+        let b: IpAddr = "2001:db8::1".parse().unwrap();
+        let count = |ip: IpAddr| SOURCES.map().get(&SourceKey::of(ip)).map_or(0, |c| *c);
+
+        let sessions: Arc<Sessions> = Arc::new(DashMap::new());
+        let inbound = Arc::new(loopback_udp().await);
+        let at = |port: u16| SocketAddr::from(([127, 0, 0, 1], port));
+
+        let evictable = open_session(a, &SOURCES, CAP, &NODE).await.unwrap();
+        let failing = open_session(a, &SOURCES, CAP, &NODE).await.unwrap();
+        let torn_down_a = open_session(a, &SOURCES, CAP, &NODE).await.unwrap();
+        let torn_down_b = open_session(b, &SOURCES, CAP, &NODE).await.unwrap();
+        assert!(
+            matches!(
+                open_session(a, &SOURCES, CAP, &NODE).await,
+                Err(Refusal::PerSource)
+            ),
+            "a fourth session from one source is refused"
+        );
+        assert_eq!((count(a), count(b)), (3, 1));
+        assert_eq!(NODE.load(Ordering::Acquire), 4);
+        // A full source blocks nobody else, and another address in b's /64
+        // is counted as b.
+        let b_neighbour: IpAddr = "2001:db8::2".parse().unwrap();
+        let b_second = open_session(b_neighbour, &SOURCES, CAP, &NODE)
+            .await
+            .unwrap();
+        assert_eq!(count(b), 2);
+        drop(b_second);
+        assert_eq!(count(b), 1);
+
+        // 1. Idle eviction: the sweeper's own function drops the entry.
+        let (mut s, _stop) = session(&evictable);
+        s.last_active = tokio::time::Instant::now()
+            .checked_sub(UDP_SESSION_TIMEOUT + Duration::from_secs(1))
+            .expect("the clock has run longer than the session timeout");
+        sessions.insert(at(40001), s);
+        drop(evictable);
+        assert_eq!(count(a), 3, "still counted while the entry is in the map");
+        assert_eq!(evict_expired(&sessions), 1);
+        assert_eq!(count(a), 2);
+
+        // 2. A reader whose socket fails removes its own session.
+        point_at_dead_port(&failing).await;
+        let mut r = relay(failing.clone(), inbound.clone(), sessions.clone());
+        r.src = at(40002);
+        let (s, stop) = session(&failing);
+        sessions.insert(r.src, s);
+        drop(failing);
+        tokio::time::timeout(Duration::from_secs(5), r.run(stop))
+            .await
+            .expect("the dead target's error must end the reader");
+        assert!(sessions.get(&at(40002)).is_none());
+        assert_eq!(count(a), 1);
+
+        // 3. Listener teardown (rule removed or restarted) clears every
+        // session; their readers stop and the sockets close.
+        let mut readers = Vec::new();
+        for (port, outbound) in [(40003, torn_down_a), (40004, torn_down_b)] {
+            let mut r = relay(outbound.clone(), inbound.clone(), sessions.clone());
+            r.src = at(port);
+            let (s, stop) = session(&outbound);
+            sessions.insert(r.src, s);
+            drop(outbound);
+            readers.push(tokio::spawn(r.run(stop)));
+        }
+        drop(SessionsTeardown {
+            sessions: sessions.clone(),
+            sweeper: tokio::spawn(std::future::pending::<()>()).abort_handle(),
+        });
+        for reader in readers {
+            tokio::time::timeout(Duration::from_secs(2), reader)
+                .await
+                .expect("teardown must stop the readers")
+                .unwrap();
+        }
+
+        assert_eq!((count(a), count(b)), (0, 0));
+        assert!(SOURCES.map().is_empty(), "no entry is left behind");
+        assert_eq!(NODE.load(Ordering::Acquire), 0);
+        // The freed places are usable again.
+        assert!(open_session(a, &SOURCES, CAP, &NODE).await.is_ok());
     }
 
     /// v1.2.12: a reader waiting on the rate limit stops as soon as its

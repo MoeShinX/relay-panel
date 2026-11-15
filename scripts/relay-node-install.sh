@@ -789,6 +789,11 @@ if [ ! -f "$ENV_FILE" ]; then
 # every rule. Default: half the file-descriptor limit (32768 with this
 # service's LimitNOFILE=65536). Raise both for very busy UDP forwarding.
 #   UDP_MAX_SESSIONS=32768
+#
+# One source address may hold at most this many UDP sessions (all rules
+# together; IPv6 sources are counted per /64), so a single machine cannot fill
+# the limit above. Raise it if many real clients share one address (NAT).
+#   UDP_MAX_SESSIONS_PER_IP=1024
 ENVEOF
     chmod 600 "$ENV_FILE"
 fi
