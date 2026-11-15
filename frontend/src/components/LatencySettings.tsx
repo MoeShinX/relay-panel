@@ -116,7 +116,7 @@ function SortableTargetRow({ row, index, showErrors, onChange, onRemove }: RowPr
           status={bad.name ? 'error' : undefined}
           value={row.name}
           onChange={(e) => onChange(row.key, { name: e.target.value })}
-          style={{ width: 150 }}
+          style={{ width: 130 }}
         />
       </div>
       <Select
@@ -124,7 +124,7 @@ function SortableTargetRow({ row, index, showErrors, onChange, onRemove }: RowPr
         value={row.carrier}
         onChange={(carrier) => onChange(row.key, { carrier })}
         options={CARRIERS.map((c) => ({ value: c, label: t(CARRIER_KEY[c]) }))}
-        style={{ width: 100 }}
+        style={{ width: 90 }}
       />
       <Select
         aria-label={t('latencyKind')}
@@ -137,7 +137,7 @@ function SortableTargetRow({ row, index, showErrors, onChange, onRemove }: RowPr
           })
         }
         options={KINDS.map((k) => ({ value: k, label: t(k === 'tcp' ? 'kindTcp' : 'kindIcmp') }))}
-        style={{ width: 130 }}
+        style={{ width: 120 }}
       />
       <Input
         aria-label={t('latencyHost')}
@@ -145,7 +145,7 @@ function SortableTargetRow({ row, index, showErrors, onChange, onRemove }: RowPr
         status={bad.host ? 'error' : undefined}
         value={row.host}
         onChange={(e) => onChange(row.key, { host: e.target.value })}
-        style={{ width: 220, maxWidth: '100%' }}
+        style={{ flex: '1 1 140px', minWidth: 140 }}
       />
       <InputNumber
         aria-label={t('port')}
@@ -157,7 +157,7 @@ function SortableTargetRow({ row, index, showErrors, onChange, onRemove }: RowPr
         status={bad.port ? 'error' : undefined}
         value={row.kind === 'icmp' ? null : row.port}
         onChange={(v) => onChange(row.key, { port: v == null ? null : Math.trunc(Number(v)) })}
-        style={{ width: 90 }}
+        style={{ width: 80 }}
       />
       <Tooltip title={t('latencyRemoveTarget')}>
         <Button
