@@ -132,6 +132,92 @@ pub struct NodeConfigRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeConfigResponse {
     pub listeners: Vec<ListenerConfig>,
+    /// After node-v1.2.12: what the node should probe for the latency monitor.
+    /// Additive optional field — does NOT bump CONFIG_PROTOCOL_VERSION. `None`
+    /// (no targets configured) tells the node to probe nothing; older nodes
+    /// ignore the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency: Option<LatencyProbeConfig>,
+}
+
+/// Most targets the latency monitor holds (enforced by the panel).
+pub const LATENCY_MAX_TARGETS: usize = 16;
+/// Probe interval bounds and default, in seconds.
+pub const LATENCY_MIN_INTERVAL_SECS: u32 = 5;
+pub const LATENCY_MAX_INTERVAL_SECS: u32 = 60;
+pub const LATENCY_DEFAULT_INTERVAL_SECS: u32 = 10;
+/// Most probes one target can send in a minute (the panel drops a sample that
+/// claims more): the 5 s minimum interval gives 12, this leaves a wide margin.
+pub const LATENCY_MAX_SENT_PER_MINUTE: u32 = 60;
+
+/// How a latency target is probed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LatencyKind {
+    Tcp,
+    Icmp,
+}
+
+impl LatencyKind {
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "tcp" => Some(Self::Tcp),
+            "icmp" => Some(Self::Icmp),
+            _ => None,
+        }
+    }
+
+    pub fn to_db_str(self) -> &'static str {
+        match self {
+            Self::Tcp => "tcp",
+            Self::Icmp => "icmp",
+        }
+    }
+}
+
+/// The latency monitor's probe plan, pushed to every node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LatencyProbeConfig {
+    /// Seconds between two probes of the same target.
+    pub interval_secs: u32,
+    pub targets: Vec<LatencyProbeTarget>,
+}
+
+/// One thing to probe. Name and carrier stay on the panel: the node needs
+/// neither, and a report refers to a target by `id` alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LatencyProbeTarget {
+    pub id: i64,
+    pub kind: LatencyKind,
+    /// IP address or domain name.
+    pub host: String,
+    /// TCP port; absent for ICMP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+}
+
+/// One target's probe results for one whole minute, in a [`StatusReport`].
+///
+/// The panel keeps these idempotently per `(node, target, minute_ts)`, so a
+/// node may send the same minute again until a report goes through.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LatencySample {
+    pub target_id: i64,
+    /// Unix seconds of the start of the minute (a multiple of 60).
+    pub minute_ts: i64,
+    /// Probes sent, and how many of them got no answer in time.
+    pub sent: u32,
+    pub lost: u32,
+    /// Sum / extremes of the answered probes' round trip, in milliseconds.
+    /// All zero when every probe was lost.
+    pub rtt_sum_ms: f64,
+    pub rtt_min_ms: f64,
+    pub rtt_max_ms: f64,
+    /// The node cannot probe this target this way at all (ICMP without the
+    /// privilege to open a socket). Not packet loss: the panel stores no data
+    /// for it and only remembers that the node cannot do it.
+    #[serde(default)]
+    pub unsupported: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -677,6 +763,12 @@ pub struct StatusReport {
     /// ignore it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disks: Vec<DiskUsage>,
+    /// After node-v1.2.12: latency-monitor results — the last complete
+    /// minutes not yet acknowledged, plus an `unsupported` marker for each
+    /// target the node cannot probe. Additive optional field — does NOT bump
+    /// CONFIG_PROTOCOL_VERSION.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub latency: Vec<LatencySample>,
 }
 
 /// One mounted disk filesystem in a [`StatusReport`]: bytes, not a percentage,
@@ -977,6 +1069,13 @@ pub fn node_supports_restart_rule(version: Option<&str>) -> bool {
 /// connection. So the panel refuses to turn it on for a group with such a node.
 pub fn node_supports_proxy_protocol(version: Option<&str>) -> bool {
     node_version_at_least(version, (1, 2, 9))
+}
+
+/// Whether a node runs the latency monitor (node-v1.2.12+). An older node
+/// ignores the probe plan, so the panel tells the operator to upgrade rather
+/// than show an empty chart that looks like "no data yet".
+pub fn node_supports_latency(version: Option<&str>) -> bool {
+    node_version_at_least(version, (1, 2, 12))
 }
 
 /// Missing/malformed version → false (the conservative answer for a gate).
@@ -1918,5 +2017,75 @@ mod tests {
         let json = serde_json::to_string(&with).unwrap();
         let back: StatusReport = serde_json::from_str(&json).unwrap();
         assert_eq!(back.disks, with.disks);
+    }
+
+    #[test]
+    fn latency_needs_node_1_2_12() {
+        assert!(!node_supports_latency(None));
+        assert!(!node_supports_latency(Some("1.2.11")));
+        assert!(node_supports_latency(Some("1.2.12")));
+        assert!(node_supports_latency(Some("1.3.0")));
+        assert!(!node_supports_latency(Some("garbage")));
+    }
+
+    /// The probe plan is additive both ways: a config without it parses (an
+    /// older panel), one without targets is not sent with a null (an older
+    /// node), and a plan survives the wire.
+    #[test]
+    fn node_config_latency_is_optional_on_the_wire() {
+        let old: NodeConfigResponse = serde_json::from_str(r#"{"listeners":[]}"#).unwrap();
+        assert!(old.latency.is_none());
+        assert!(!serde_json::to_string(&old).unwrap().contains("latency"));
+
+        let plan = LatencyProbeConfig {
+            interval_secs: 10,
+            targets: vec![
+                LatencyProbeTarget {
+                    id: 3,
+                    kind: LatencyKind::Tcp,
+                    host: "192.0.2.10".into(),
+                    port: Some(443),
+                },
+                LatencyProbeTarget {
+                    id: 4,
+                    kind: LatencyKind::Icmp,
+                    host: "probe.example.com".into(),
+                    port: None,
+                },
+            ],
+        };
+        let json = serde_json::to_string(&NodeConfigResponse {
+            listeners: vec![],
+            latency: Some(plan.clone()),
+        })
+        .unwrap();
+        assert!(json.contains(r#""kind":"icmp""#), "{json}");
+        let back: NodeConfigResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.latency, Some(plan));
+    }
+
+    #[test]
+    fn status_report_latency_is_optional_on_the_wire() {
+        let base = r#"{"cpu_usage":1.0,"mem_usage":2.0,"active_connections":0,"uptime_secs":5}"#;
+        let old: StatusReport = serde_json::from_str(base).unwrap();
+        assert!(old.latency.is_empty());
+        assert!(!serde_json::to_string(&old).unwrap().contains("latency"));
+
+        // A sample without `unsupported` (the common case) reads as supported.
+        let json = r#"{"cpu_usage":1.0,"mem_usage":2.0,"active_connections":0,"uptime_secs":5,
+            "latency":[{"target_id":1,"minute_ts":1700000040,"sent":6,"lost":1,
+            "rtt_sum_ms":50.0,"rtt_min_ms":8.0,"rtt_max_ms":12.0}]}"#;
+        let r: StatusReport = serde_json::from_str(json).unwrap();
+        assert_eq!(r.latency.len(), 1);
+        assert!(!r.latency[0].unsupported);
+        assert_eq!(r.latency[0].lost, 1);
+    }
+
+    #[test]
+    fn latency_kind_db_strings_round_trip() {
+        for k in [LatencyKind::Tcp, LatencyKind::Icmp] {
+            assert_eq!(LatencyKind::from_db_str(k.to_db_str()), Some(k));
+        }
+        assert_eq!(LatencyKind::from_db_str("http"), None);
     }
 }

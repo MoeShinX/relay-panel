@@ -50,6 +50,11 @@ sha2 = "0.10"
 # compromised panel must not be able to roll a node back to an old, vulnerable
 # release).
 semver = "1"
+# v1.2.12: ICMP echo for the latency monitor. MIT, actively maintained; opens an
+# unprivileged ping socket where the kernel allows it and falls back to a raw
+# socket, so a node running as root can always ping and one in a restricted
+# container may only have TCP probes (reported as "unsupported", not as loss).
+surge-ping = "0.9"
 
 [dev-dependencies]
 # v0.4.16: test-only cert generator for the real WSS (wss://) regression test.

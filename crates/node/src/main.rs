@@ -3,6 +3,7 @@ mod cpuinfo;
 mod diagnose;
 mod disks;
 mod forwarder;
+mod latency;
 mod poller;
 mod reporter;
 mod shutdown;
@@ -200,6 +201,11 @@ async fn run() {
         }
     }
 
+    // node-v1.2.12: the latency monitor. Idle until the panel sends a plan.
+    let latency = latency::LatencyMonitor::new();
+    latency.spawn();
+    manager_inner.set_latency_monitor(latency.clone());
+
     let manager = Arc::new(Mutex::new(manager_inner));
 
     // Unified sampler: CPU/mem + disk + network rate + cumulative traffic.
@@ -331,6 +337,7 @@ async fn run() {
             start_time,
             &node_id,
             listener_errors,
+            &latency,
         )
         .await;
     }
