@@ -270,6 +270,21 @@ server {
 
 All three accept both v1 and v2; v2 is binary and a little smaller. The panel checks the node versions in the rule's inbound group and refuses to turn it on while any node there is older than 1.2.9 (an older node ignores the setting, which breaks every connection).
 
+---
+
+## Latency monitoring (what the node probes)
+
+An administrator can list up to 16 targets in the panel under **System settings → Latency monitoring**. Needs node-v1.2.12 or later. With **no targets configured the node probes nothing**; there is no built-in target list.
+
+Once targets exist, **every node** (whatever its device group) actively connects to each of them, once per interval (default every 10 seconds, 5–60 configurable), and records how long it took and whether it answered:
+
+- **TCP**: opens a connection to the target's host and port and closes it as soon as the handshake completes. Nothing is sent. The time taken is the latency.
+- **ICMP**: one echo request (ping) to the target, 3 seconds to answer.
+
+At most 8 probes run at once and a probe that is not answered within 3 seconds counts as lost. Probes are made by the node itself, outside forwarding: they belong to no rule, count no traffic and no connections, and are not rate-limited. Domain names are resolved at most every 10 minutes (IPv4 first); a name that does not resolve counts as lost. The node sums each finished minute up and sends it with its normal status report. The target can see these connection attempts, so list only hosts you are happy to have probed.
+
+ICMP needs a socket the operating system may refuse. The node first asks for an unprivileged ping socket, then a raw socket. **Run as root (the installer's systemd unit does) and ICMP works**; in a container, add `NET_RAW` or set `net.ipv4.ping_group_range`, otherwise only TCP targets can be probed. A node that can open neither reports its ICMP targets as "not supported", and the panel shows that on the node's latency page instead of counting it as packet loss.
+
 ## Verify it's working
 
 After install:
