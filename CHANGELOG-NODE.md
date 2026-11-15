@@ -21,6 +21,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   multi-byte character (any Chinese text, for example) the cut panicked, and
   the WebSocket task died and was not restarted. The cut now always falls on a
   character boundary.
+- **A crash while saving the config cache could leave the node unable to start
+  its listeners.** `config-cache.json` was rewritten in place, so a crash or
+  power loss mid-write left a truncated file; a node restarted while the panel
+  was unreachable then found no usable cache and started nothing, which is the
+  one situation the cache exists for. It is now written to a temporary file in
+  the same directory, flushed to disk, and renamed over the old one, so the
+  previous good copy is kept until the new one is complete.
 
 ## [1.2.11] - 2026-11-02
 
