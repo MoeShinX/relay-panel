@@ -914,6 +914,7 @@ export const zhCN = {
   planGrantGroupsPlaceholder: '选择授权的出口分组',
   days: '天',
   buyNow: '立即购买',
+  planClaimed: '已领取',
   confirmPurchase: '确认购买',
   purchaseConfirmTitle: '确认购买套餐',
   purchaseSuccess: '购买成功',

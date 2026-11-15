@@ -234,7 +234,7 @@ impl PlanRepository for SqliteRepository {
     // old deferred BEGIN failed outright when another write landed between
     // this read and its first write). (PG uses an explicit SELECT ... FOR
     // UPDATE row lock instead; see the PG impl.)
-    async fn buy_plan(
+    async fn buy_plan_checked(
         &self,
         user_id: i64,
         plan_id: i64,
@@ -251,6 +251,7 @@ impl PlanRepository for SqliteRepository {
         // Computed by the caller: all inbound groups if grant_all_groups, else
         // device_group_ids (the plan's grants).
         new_authorized_group_ids: &[i64],
+        once_if_free: bool,
     ) -> Result<(), BuyPlanError> {
         let mut tx = self.begin_write().await?;
 
@@ -280,6 +281,23 @@ impl PlanRepository for SqliteRepository {
                 );
                 BuyPlanError::Database(DbError::NotFound)
             })?;
+        // v1.2.21: a free plan can be self-claimed once per user. Any past
+        // order for this plan counts, whatever it cost then; registration's
+        // default plan writes no order, so it does not count. Runs under the
+        // user-row write lock (SQLite begin_write / PG FOR UPDATE), so two
+        // concurrent claims serialize and the second sees the first's order.
+        if once_if_free && price_cents == 0 {
+            let claimed: (i64,) =
+                sqlx::query_as("SELECT COUNT(*) FROM orders WHERE user_id = ? AND plan_id = ?")
+                    .bind(user_id)
+                    .bind(plan_id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            if claimed.0 > 0 {
+                let _ = tx.rollback().await;
+                return Err(BuyPlanError::FreePlanAlreadyClaimed);
+            }
+        }
         if balance_cents < price_cents {
             let _ = tx.rollback().await;
             return Err(BuyPlanError::InsufficientBalance);

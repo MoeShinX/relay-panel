@@ -28,6 +28,11 @@ pub struct PlanWithGroups {
     /// would fall back to "#<id>". Resolving server-side fixes that. Order is
     /// by name (not id); it's a display-only set.
     pub device_group_names: Vec<String>,
+    /// v1.2.21: only set by the shop list, and only on free (price 0) plans:
+    /// whether the calling user has already claimed it (free plans are
+    /// self-claimable once per user). Absent everywhere else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claimed: Option<bool>,
 }
 
 /// Validate the invariant fields shared by create + update. Returns the
@@ -133,6 +138,7 @@ pub async fn list_plans(
             plan,
             device_group_ids,
             device_group_names,
+            claimed: None,
         });
     }
     Json(ApiResponse::success(out))

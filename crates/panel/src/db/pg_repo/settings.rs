@@ -246,7 +246,7 @@ impl PlanRepository for PgRepository {
     // SELECT ... FOR UPDATE row lock is what prevents 防双花: a concurrent tx
     // trying to lock the same user row blocks until this commits, then reads
     // the post-deduction balance. The lock + the UPDATE run on the same tx.
-    async fn buy_plan(
+    async fn buy_plan_checked(
         &self,
         user_id: i64,
         plan_id: i64,
@@ -261,6 +261,7 @@ impl PlanRepository for PgRepository {
         // v1.0.8: the NEW authorized group set AFTER purchase. Used inside the
         // transaction to pause rules outside this set (replacement semantics).
         new_authorized_group_ids: &[i64],
+        once_if_free: bool,
     ) -> Result<(), BuyPlanError> {
         let mut tx = self.pool.begin().await?;
 
@@ -285,6 +286,23 @@ impl PlanRepository for PgRepository {
                 );
                 BuyPlanError::Database(DbError::NotFound)
             })?;
+        // v1.2.21: a free plan can be self-claimed once per user. Any past
+        // order for this plan counts, whatever it cost then; registration's
+        // default plan writes no order, so it does not count. Runs under the
+        // user-row write lock (SQLite begin_write / PG FOR UPDATE), so two
+        // concurrent claims serialize and the second sees the first's order.
+        if once_if_free && price_cents == 0 {
+            let claimed: (i64,) =
+                sqlx::query_as("SELECT COUNT(*) FROM orders WHERE user_id = $1 AND plan_id = $2")
+                    .bind(user_id)
+                    .bind(plan_id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            if claimed.0 > 0 {
+                let _ = tx.rollback().await;
+                return Err(BuyPlanError::FreePlanAlreadyClaimed);
+            }
+        }
         if balance_cents < price_cents {
             let _ = tx.rollback().await;
             return Err(BuyPlanError::InsufficientBalance);

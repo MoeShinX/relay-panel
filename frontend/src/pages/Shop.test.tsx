@@ -36,9 +36,65 @@ beforeEach(() => {
   });
 });
 
+const freePlan = (claimed?: boolean) => ({
+  id: 1,
+  name: 'free',
+  max_rules: 5,
+  traffic: 1024,
+  speed_limit: 0,
+  ip_limit: 0,
+  price: '0.00',
+  plan_type: 'data',
+  duration_days: 0,
+  grant_all_groups: false,
+  device_group_names: [],
+  ...(claimed === undefined ? {} : { claimed }),
+});
+
 const renderShop = async () => {
   await act(async () => { render(<Shop />); });
 };
+
+describe('Shop free-plan one-time claim', () => {
+  const withPlans = (plans: unknown[]) => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/plans') return Promise.resolve(ok(plans));
+      if (url === '/user/orders') return Promise.resolve(ok([]));
+      if (url === '/user/me') return Promise.resolve(ok(me('0')));
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+  };
+
+  it('disables an already-claimed free plan and labels it claimed', async () => {
+    withPlans([freePlan(true)]);
+    await renderShop();
+    const btn = screen.getByRole('button', { name: /planClaimed/ });
+    expect(btn).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /buyNow/ })).not.toBeInTheDocument();
+  });
+
+  it('keeps an unclaimed free plan buyable', async () => {
+    withPlans([freePlan(false)]);
+    await renderShop();
+    expect(screen.getByRole('button', { name: /buyNow/ })).toBeEnabled();
+  });
+
+  it('shows the backend message and refreshes when the claim is rejected', async () => {
+    const user = userEvent.setup();
+    withPlans([freePlan(false)]);
+    mockPost.mockResolvedValue({ code: 409, message: 'claimed-once-msg', data: null });
+    await renderShop();
+
+    await user.click(screen.getByRole('button', { name: /buyNow/ }));
+    // The list is re-fetched after the rejection and now reports it claimed.
+    withPlans([freePlan(true)]);
+    await user.click(screen.getByRole('button', { name: /confirmPurchase/ }));
+
+    expect(mockPost).toHaveBeenCalledWith('/user/buy-plan', { plan_id: 1 });
+    expect(await screen.findByText('claimed-once-msg')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /planClaimed/ })).toBeDisabled();
+  });
+});
 
 /**
  * The shop is where a user discovers they can't afford a plan. Users reported
