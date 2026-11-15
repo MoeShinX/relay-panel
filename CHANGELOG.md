@@ -10,11 +10,17 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+## [1.2.21] - 2026-11-15
+
 Ships alongside `node-v1.2.12`. The config protocol is unchanged at version 4
 (both new fields are optional, so an older node or panel just ignores them).
 
 Schema: three new tables, added automatically on start (SQLite migration 48,
 PostgreSQL revision 31). Targets belong to a device group (`group_id`).
+
+Upgrading: "Update now" on the dashboard, or `git pull --quiet && ./deploy.sh`.
+The latency monitor needs the nodes on `node-v1.2.12`; the other fixes here are
+the panel alone.
 
 ### Added
 
