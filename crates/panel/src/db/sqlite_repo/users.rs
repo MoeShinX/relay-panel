@@ -244,20 +244,16 @@ impl UserRepository for SqliteRepository {
         Ok(result.rows_affected())
     }
 
-    async fn admin_set_user_plan(
+    async fn admin_set_user_plan_expiry(
         &self,
         id: i64,
-        plan_id: Option<i64>,
         plan_expire_at: Option<String>,
     ) -> Result<u64, DbError> {
-        let result = sqlx::query(
-            "UPDATE users SET plan_id = ?, plan_expire_at = ? WHERE id = ? AND admin = 0",
-        )
-        .bind(plan_id)
-        .bind(plan_expire_at)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+        let result = sqlx::query("UPDATE users SET plan_expire_at = ? WHERE id = ? AND admin = 0")
+            .bind(plan_expire_at)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
         Ok(result.rows_affected())
     }
 
