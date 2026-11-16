@@ -1023,6 +1023,7 @@ export const zhCN = {
   seriesPickTargets: '显示目标',
   seriesPickMax: '最多同时显示 10 条',
   seriesPickAuto: '已自动选出最需要关注的 10 条',
+  seriesPickCount: '已显示 {shown}/{total}',
 };
 
 export type Dict = typeof zhCN;

@@ -1025,4 +1025,5 @@ export const enUS: Dict = {
   seriesPickTargets: 'Show targets',
   seriesPickMax: 'Up to 10 lines at once',
   seriesPickAuto: 'Showing the 10 that need attention most',
+  seriesPickCount: 'Showing {shown}/{total}',
 };

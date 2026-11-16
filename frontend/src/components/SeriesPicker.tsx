@@ -21,7 +21,8 @@ interface Props {
 /**
  * "Show which lines" for a line chart with more series than the palette has
  * colours. At most MAX_SERIES can be ticked, so the drawn lines always get ten
- * distinct colours; at the cap the other options are disabled. Rendered by the
+ * distinct colours; at the cap the other options are disabled. The closed
+ * control shows "drawn/total"; the open list ticks which. Rendered by the
  * chart only when it has more than MAX_SERIES series.
  */
 export default function SeriesPicker({ options, value, automatic, onChange, placeholder, testId }: Props) {
@@ -34,7 +35,12 @@ export default function SeriesPicker({ options, value, automatic, onChange, plac
       size="small"
       allowClear
       virtual={false}
-      maxTagCount="responsive"
+      /* Names are long ("group/node"), so the closed control states how many
+         lines are drawn instead of squeezing tags into it; the list says which. */
+      maxTagCount={0}
+      maxTagPlaceholder={() =>
+        t('seriesPickCount').replace('{shown}', String(value.length)).replace('{total}', String(options.length))
+      }
       data-testid={testId}
       aria-label={placeholder}
       placeholder={placeholder}
@@ -42,7 +48,9 @@ export default function SeriesPicker({ options, value, automatic, onChange, plac
       value={value}
       onChange={(v: string[]) => onChange(v.length > 0 ? v : null)}
       options={options.map((o) => ({ ...o, disabled: full && !value.includes(o.value) }))}
-      style={mobile ? { width: '100%' } : { width: 280 }}
+      // the closed control only says "drawn/total"; the list opens wider for the names
+      style={mobile ? { width: '100%' } : { width: 150 }}
+      popupMatchSelectWidth={mobile ? true : 260}
       popupRender={(menu) => (
         <>
           {menu}

@@ -551,6 +551,8 @@ describe('GroupLatency series picker', () => {
     renderPage();
     await flush();
     expect(picker()).toBeInTheDocument();
+    // the closed control states drawn/total rather than squeezing in long names
+    expect(picker()).toHaveTextContent('seriesPickCount');
     expect(domain()).toEqual(TOP1_DRAWN);
     expect(drawn()).toEqual(TOP1_DRAWN);
     expect(drawn()).not.toContain('n6');
