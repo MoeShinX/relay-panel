@@ -9,6 +9,7 @@ import {
   DashboardOutlined,
   ApiOutlined,
   CloudServerOutlined,
+  ClusterOutlined,
   UserOutlined,
   LogoutOutlined,
   LockOutlined,
@@ -82,7 +83,7 @@ export default function MainLayout() {
     { key: '/audit-log', label: t('auditLog') },
   ];
   const adminOnlyItems = [
-    { key: '/groups', icon: <CloudServerOutlined />, label: t('deviceGroups') },
+    { key: '/groups', icon: <ClusterOutlined />, label: t('deviceGroups') },
     {
       key: 'grp-billing',
       icon: <TeamOutlined />,

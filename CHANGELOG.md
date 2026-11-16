@@ -24,10 +24,15 @@ independent `v*` / `node-v*` tracks since this release).
   every minute like the shorter ranges. The "Recent status" strips get one slice
   per data bucket, at most 30, so hourly or 5-minute data no longer leaves grey
   gaps between slices.
-- Lines in the latency trend charts are easier to tell apart: ten distinct
-  colours instead of six (the old set had two greens and repeated from the
-  seventh node), filled dots in the legend instead of thin strokes, and
-  slightly thicker lines.
+- Chart lines are easier to tell apart. The dashboard's traffic and node
+  metrics charts and the latency trend charts share one palette of ten distinct
+  colours instead of six: the old set had two greens, and the node metrics
+  chart gave the seventh node the first colour again. The traffic chart now
+  folds lines into "Other" only after ten instead of six. The line charts'
+  legends show filled dots instead of thin strokes, and the lines are slightly
+  thicker.
+- The sidebar's "Device groups" entry has its own icon instead of reusing the
+  "Node status" one.
 
 ## [1.2.21] - 2026-11-15
 

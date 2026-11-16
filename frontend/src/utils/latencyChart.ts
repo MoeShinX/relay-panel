@@ -114,22 +114,6 @@ export interface StripSegment {
   allLost: boolean;
 }
 
-/** Line colours of the latency charts: ten well separated hues (Tableau 10
- *  order), so the lines of a group's nodes stay apart. The traffic charts'
- *  six-colour palette had two greens and repeated from the seventh node. */
-export const LATENCY_LINE_COLORS = [
-  '#4e79a7', // blue
-  '#f28e2b', // orange
-  '#59a14f', // green
-  '#b07aa1', // purple
-  '#76b7b2', // teal
-  '#edc948', // yellow
-  '#e15759', // red
-  '#ff9da7', // pink
-  '#9c755f', // brown
-  '#5c5c5c', // grey
-];
-
 /** How many strip slices a range gets: one per data bucket, at most
  *  STRIP_SEGMENTS. Slicing finer than the buckets would leave grey gaps between
  *  points (hourly data over a day, 5-minute data over an hour). */

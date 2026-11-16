@@ -12,45 +12,52 @@ export interface TrafficPoint {
 }
 
 /**
- * Categorical series colors in FIXED order — slot N is always the same hue, so
- * a line keeps its color when another line is filtered out or drops to zero.
+ * Categorical series colors in FIXED order, shared by every multi-line chart
+ * (traffic, node metrics, latency) — slot N is always the same hue, so a line
+ * keeps its color when another line is filtered out or drops to zero.
  *
- * Slot 1 is the panel's own indigo accent; the rest come from the reference
- * categorical theme. Validated with the dataviz palette checker in BOTH light
- * and dark (lightness band, chroma floor, CVD separation, normal-vision floor).
+ * Ten well separated hues in Tableau 10 order, so a dashboard or device group
+ * of up to ten nodes never repeats a color. (v1.2.21 and earlier had six, two
+ * of them greens; the seventh node took the first color again.)
  *
- * Two hues were deliberately dropped. Violet collides with our indigo. Red
- * failed the adjacent-pair check against orange — ΔE 7.1 for NORMAL vision,
- * well under the 15 floor — and is reserved for status anyway; a status color
- * must never double as "series 6".
+ * Red is left out on purpose: it is reserved for status (the latency charts'
+ * loss markers, error states) and must never double as "series N". Tableau's
+ * red slot is taken by olive instead. Violet stays out too.
  *
- * Three of the light steps sit below 3:1 against the surface, which the checker
- * flags as requiring relief. The legend and tooltip provide it: identity is
- * never carried by color alone here.
+ * A few steps sit below 3:1 against the surface; the legend and tooltip provide
+ * the relief — identity is never carried by color alone here.
  */
 export const SERIES_COLORS_LIGHT = [
-  '#6366f1', // indigo (panel accent)
-  '#008300', // green
-  '#e87ba4', // magenta
-  '#eda100', // yellow
-  '#1baf7a', // aqua
-  '#eb6834', // orange
+  '#4e79a7', // blue
+  '#f28e2b', // orange
+  '#59a14f', // green
+  '#b07aa1', // mauve
+  '#76b7b2', // teal
+  '#edc948', // yellow
+  '#ff9da7', // pink
+  '#9c755f', // brown
+  '#79706e', // grey
+  '#bcbd22', // olive
 ];
 
-/** Dark-mode steps of the same hues, validated against the dark surface. */
-export const SERIES_COLORS_DARK = [
-  '#6366f1',
-  '#008300',
-  '#d55181',
-  '#c98500',
-  '#199e70',
-  '#d95926',
-];
+/** The same hues on the dark surface (they hold up there as they are). */
+export const SERIES_COLORS_DARK = [...SERIES_COLORS_LIGHT];
+
+/** Legend style of the line charts: a filled dot instead of G2's thin default
+ *  stroke, big enough that each line's color reads at a glance. */
+export const LINE_LEGEND_ITEM = {
+  itemMarker: 'circle',
+  itemMarkerSize: 16,
+  itemLabelFontSize: 13,
+} as const;
+
+/** Stroke width of the lines in those charts. */
+export const LINE_WIDTH = 2;
 
 /**
  * Lines that get their own color before the tail folds into "Other".
  *
- * Past the palette a 7th hue would have to be generated, and a generated hue is
+ * Past the palette an 11th hue would have to be generated, and a generated hue is
  * indistinguishable from an existing one under CVD — which is the entire point
  * of validating the palette. Folding keeps the chart honest instead.
  */

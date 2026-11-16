@@ -1,8 +1,8 @@
 import { useMemo } from 'react';
 import { Line } from '@ant-design/charts';
 import { useI18n } from '../i18n/context';
+import { LINE_LEGEND_ITEM, LINE_WIDTH, SERIES_COLORS_LIGHT } from '../utils/trafficBuckets';
 import {
-  LATENCY_LINE_COLORS,
   formatChartTime,
   formatLoss,
   formatMs,
@@ -48,18 +48,15 @@ export default function LatencyChart({ points, colorDomain, names, withDate, onR
       scale={{
         x: { type: 'time' },
         y: { nice: true },
-        color: { domain: colorDomain, range: LATENCY_LINE_COLORS },
+        color: { domain: colorDomain, range: SERIES_COLORS_LIGHT },
       }}
-      style={{ lineWidth: 2 }}
+      style={{ lineWidth: LINE_WIDTH }}
       slider={{ x: {} }}
       legend={{
         color: {
           position: 'top',
           layout: { justifyContent: 'flex-end' },
-          // a filled dot, not the thin default stroke, so each line's colour reads at a glance
-          itemMarker: 'circle',
-          itemMarkerSize: 16,
-          itemLabelFontSize: 13,
+          ...LINE_LEGEND_ITEM,
           labelFormatter: (k: string) => names.get(k) ?? k,
         },
       }}

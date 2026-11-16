@@ -7,7 +7,6 @@ import {
   groupChartPoints,
   lossMarkers,
   nodeDisplayName,
-  LATENCY_LINE_COLORS,
   stripLatencyLevel,
   stripSegmentCount,
   stripSegments,
@@ -192,13 +191,6 @@ describe('stripSegmentCount', () => {
     const points = Array.from({ length: 25 }, (_, k) => ({ ts: k * 3600, avg: 20, min: 20, max: 20, loss: 0 })) as LatencyPoint[];
     const segs = stripSegments(points, since, until, n);
     expect(segs.every((g) => g.count === 1)).toBe(true);
-  });
-});
-
-describe('LATENCY_LINE_COLORS', () => {
-  it('has ten distinct colours, so a group of up to ten nodes never repeats one', () => {
-    expect(LATENCY_LINE_COLORS).toHaveLength(10);
-    expect(new Set(LATENCY_LINE_COLORS.map((c) => c.toLowerCase())).size).toBe(10);
   });
 });
 
