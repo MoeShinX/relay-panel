@@ -33,6 +33,13 @@ independent `v*` / `node-v*` tracks since this release).
   thicker.
 - The sidebar's "Device groups" entry has its own icon instead of reusing the
   "Node status" one.
+- The dashboard's node metrics chart and both latency trend charts now have a
+  "show which lines" picker once they have more than ten lines (a node's
+  targets, a device group's nodes, the dashboard's nodes), instead of reusing
+  colours for the eleventh line onward. Up to ten lines are drawn, each in its
+  own colour. Until you choose, the ten that need attention first are shown:
+  the highest mean of the current metric on the dashboard, the worst latency
+  and loss on the latency pages. At ten lines or fewer nothing changes.
 
 ## [1.2.21] - 2026-11-15
 

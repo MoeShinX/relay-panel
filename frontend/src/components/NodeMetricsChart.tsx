@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import api from '../api/client';
 import type { ApiEnvelope, NodeMetricsResponse } from '../api/types';
 import { useI18n } from '../i18n/context';
+import { useIsMobile } from '../hooks/useIsMobile';
+import { useSeriesPick } from '../hooks/useSeriesPick';
+import SeriesPicker from './SeriesPicker';
+import { meanOf, rankByScore } from '../utils/seriesPick';
 import { LINE_LEGEND_ITEM, LINE_WIDTH, parseUtcBucket, SERIES_COLORS_LIGHT } from '../utils/trafficBuckets';
 import type { Metric } from '../utils/nodeMetrics';
 import { formatMetric, multiNodeGroupNames, seriesName } from '../utils/nodeMetrics';
@@ -33,9 +37,13 @@ interface Point {
  *
  * The series plots the hourly AVERAGE; the tooltip carries the peak beside it.
  * An average alone flattens exactly the spike that caused the stall.
+ *
+ * Past ten nodes the palette runs out, so a picker chooses which lines to draw;
+ * until it is used, the ten with the highest mean of the current metric.
  */
 export default function NodeMetricsChart() {
   const { t } = useI18n();
+  const isMobile = useIsMobile();
   const [range, setRange] = useState<Range>('1d');
   const [metric, setMetric] = useState<Metric>('cpu');
   const [resp, setResp] = useState<NodeMetricsResponse | null>(null);
@@ -92,6 +100,35 @@ export default function NodeMetricsChart() {
     });
   }, [resp, metric, range, multiNodeGroups]);
 
+  // Lines in their normal order (first seen), and the same ranked by the mean
+  // of the current metric over the loaded range, highest first.
+  const nodeKeys = useMemo(() => Array.from(new Set(points.map(p => p.node))), [points]);
+  const ranked = useMemo(() => {
+    const vals = new Map<string, number[]>();
+    for (const p of points) {
+      const arr = vals.get(p.node);
+      if (arr) arr.push(p.value);
+      else vals.set(p.node, [p.value]);
+    }
+    return rankByScore(nodeKeys, k => meanOf(vals.get(k) ?? []));
+  }, [points, nodeKeys]);
+  const pick = useSeriesPick(nodeKeys, ranked);
+  const shownSet = useMemo(() => new Set(pick.shown), [pick.shown]);
+  const drawn = useMemo(
+    () => (pick.needsPicker ? points.filter(p => shownSet.has(p.node)) : points),
+    [pick.needsPicker, points, shownSet],
+  );
+  const picker = pick.needsPicker ? (
+    <SeriesPicker
+      testId="series-picker"
+      placeholder={t('seriesPickNodes')}
+      options={nodeKeys.map(k => ({ value: k, label: k }))}
+      value={pick.shown}
+      automatic={pick.automatic}
+      onChange={pick.setPicked}
+    />
+  ) : null;
+
   const hasData = points.length > 0;
 
   const fmt = (v: number) => formatMetric(metric, v);
@@ -119,9 +156,11 @@ export default function NodeMetricsChart() {
               { value: '7d', label: t('range7d') },
             ]}
           />
+          {isMobile ? null : picker}
         </Space>
       }
     >
+      {isMobile && picker ? <div style={{ marginBottom: 8 }}>{picker}</div> : null}
       <Spin spinning={loading}>
         {!loading && !hasData ? (
           <Empty description={t('noNodeMetricsYet')} image={Empty.PRESENTED_IMAGE_SIMPLE} />
@@ -132,11 +171,11 @@ export default function NodeMetricsChart() {
                document.visibilityState first: G2 draws on rAF and a hidden tab
                never fires it. */
             height={260}
-            data={points}
+            data={drawn}
             xField="label"
             yField="value"
             colorField="node"
-            scale={{ color: { range: SERIES_COLORS_LIGHT } }}
+            scale={{ color: pick.needsPicker ? { domain: pick.shown, range: SERIES_COLORS_LIGHT } : { range: SERIES_COLORS_LIGHT } }}
             style={{ lineWidth: LINE_WIDTH }}
             legend={{ color: { position: 'top', layout: { justifyContent: 'flex-end' }, ...LINE_LEGEND_ITEM } }}
             axis={{

@@ -8,8 +8,13 @@ vi.mock('../api/client', () => ({ default: { get: mockGet } }));
 // reports what it was asked to draw, so the page's choices can be asserted.
 vi.mock('@ant-design/charts', () => ({
   Column: () => null,
-  Line: (props: { data: { key: string }[] }) => (
-    <div data-testid="chart" data-keys={[...new Set(props.data.map((d) => d.key))].join(',')} data-n={props.data.length} />
+  Line: (props: { data: { key: string }[]; scale?: { color?: { domain?: string[] } } }) => (
+    <div
+      data-testid="chart"
+      data-keys={[...new Set(props.data.map((d) => d.key))].join(',')}
+      data-domain={(props.scale?.color?.domain ?? []).join(',')}
+      data-n={props.data.length}
+    />
   ),
 }));
 
@@ -345,5 +350,214 @@ describe('NodeLatency status strips', () => {
     expect(screen.getByTestId('strip-row-1')).toBeInTheDocument();
     expect(screen.getByTestId('strip-row-2')).toBeInTheDocument();
     expect(screen.getByTestId('strip-row-3')).toBeInTheDocument();
+  });
+});
+
+
+describe('NodeLatency series picker', () => {
+  /**
+   * Twelve targets T1..T12 (ids 1..12), ranked on the range's mean and loss:
+   *   T4 lost everything                      -> worst
+   *   bad:  T6 30 ms 10% loss, T3 500 ms, T11 300 ms
+   *   warn: T5 20 ms 3% loss, T2 150 ms
+   *   good: T10 60 ms, T12 40 ms, T1 20 ms, T9 10 ms
+   *   nothing: T8 (no reading), then T7 (this node cannot probe it, whatever the
+   *   summary says)
+   * so the default ten are 4 6 3 11 5 2 10 12 1 9 and T7, T8 are left out.
+   * T8 has points anyway, so a drawn T8 would show.
+   */
+  const TOP = [4, 6, 3, 11, 5, 2, 10, 12, 1, 9];
+  const ALL = Array.from({ length: 12 }, (_, i) => i + 1);
+  const inOrder = (xs: number[]) => ALL.filter((i) => xs.includes(i)).map(String);
+
+  const SUMMARY: Record<number, { avg: number | null; loss: number | null }> = {
+    1: { avg: 20, loss: 0 },
+    2: { avg: 150, loss: 0 },
+    3: { avg: 500, loss: 0 },
+    4: { avg: null, loss: 100 },
+    5: { avg: 20, loss: 3 },
+    6: { avg: 30, loss: 10 },
+    7: { avg: 999, loss: 50 },
+    8: { avg: null, loss: null },
+    9: { avg: 10, loss: 0 },
+    10: { avg: 60, loss: 0 },
+    11: { avg: 300, loss: 0 },
+    12: { avg: 40, loss: 0 },
+  };
+
+  function many(count = 12): NodeLatencyResponse {
+    const ids = ALL.slice(0, count);
+    return response({
+      series: ids.map((id) => ({
+        target_id: id,
+        name: `T${id}`,
+        carrier: 'telecom',
+        kind: 'tcp',
+        points: id === 7 ? [] : [point(NOW - 120, 20), point(NOW - 60, 25)],
+      })),
+      summary: ids.map((id) => ({
+        target_id: id,
+        latest: 20,
+        latest_ts: NOW - 60,
+        latest_loss: 0,
+        avg: SUMMARY[id].avg,
+        loss: SUMMARY[id].loss,
+      })),
+      unsupported_targets: [7],
+    });
+  }
+
+  const drawn = () => (screen.getByTestId('chart').getAttribute('data-keys') ?? '').split(',').filter(Boolean);
+  const domain = () => (screen.getByTestId('chart').getAttribute('data-domain') ?? '').split(',').filter(Boolean);
+  const picker = () => screen.getByTestId('series-picker');
+  const option = (label: string) =>
+    document.querySelector(`.ant-select-item-option[title="${label}"]`) as HTMLElement;
+  const isDisabled = (label: string) => option(label).classList.contains('ant-select-item-option-disabled');
+  const isSelected = (label: string) => option(label).classList.contains('ant-select-item-option-selected');
+  const openPicker = async () => {
+    fireEvent.mouseDown(within(picker()).getByRole('combobox'));
+    await flush();
+  };
+  const click = async (el: HTMLElement) => {
+    fireEvent.click(el);
+    await flush();
+  };
+
+  it('ten targets or fewer: no picker and the colour domain is every target, as before', async () => {
+    serve(() => ok(response()));
+    renderPage();
+    await flush();
+    expect(screen.queryByTestId('series-picker')).toBeNull();
+    expect(screen.getByTestId('chart').getAttribute('data-domain')).toBe('1,2,3');
+  });
+
+  it('exactly ten targets: still no picker', async () => {
+    serve(() => ok(many(10)));
+    renderPage();
+    await flush();
+    expect(screen.queryByTestId('series-picker')).toBeNull();
+    expect(domain()).toEqual(inOrder(ALL.slice(0, 10)));
+  });
+
+  it('more than ten: the ten that need attention first are drawn', async () => {
+    serve(() => ok(many()));
+    renderPage();
+    await flush();
+    expect(picker()).toBeInTheDocument();
+    expect(domain()).toEqual(inOrder(TOP));
+    expect(drawn()).toEqual(inOrder(TOP));
+    expect(drawn()).not.toContain('8');
+    // the cards still list every target
+    expect(screen.getByTestId('latency-card-8')).toBeInTheDocument();
+    expect(screen.getByTestId('latency-card-7')).toBeInTheDocument();
+  });
+
+  it('the dropdown selects the ten, disables the others and says so', async () => {
+    serve(() => ok(many()));
+    renderPage();
+    await flush();
+    await openPicker();
+    for (const id of ALL) {
+      const on = TOP.includes(id);
+      expect(isSelected(`T${id}`), `T${id} selected`).toBe(on);
+      expect(isDisabled(`T${id}`), `T${id} disabled`).toBe(!on);
+    }
+    expect(screen.getByTestId('series-picker-hint')).toHaveTextContent('seriesPickMax');
+    expect(screen.getByTestId('series-picker-auto')).toBeInTheDocument();
+  });
+
+  it('picking changes what is drawn; the colour domain is the picked lines in target order', async () => {
+    serve(() => ok(many()));
+    renderPage();
+    await flush();
+    await openPicker();
+    await click(option('T9'));
+    expect(isDisabled('T8')).toBe(false);
+    await click(option('T8'));
+    const expected = inOrder([...TOP.filter((i) => i !== 9), 8]);
+    expect(drawn()).toEqual(expected);
+    expect(domain()).toEqual(expected);
+    expect(drawn()).toHaveLength(10);
+    expect(isDisabled('T9')).toBe(true);
+    expect(screen.queryByTestId('series-picker-auto')).toBeNull();
+  });
+
+  it('an explicit pick survives a range change and picking a card and then letting it go', async () => {
+    serve(() => ok(many()));
+    renderPage();
+    await flush();
+    await openPicker();
+    await click(option('T9'));
+    await click(option('T8'));
+    const expected = inOrder([...TOP.filter((i) => i !== 9), 8]);
+
+    fireEvent.click(screen.getByText('latencyRange7d'));
+    await flush();
+    expect(latencyCalls().at(-1)).toContain('range=7d');
+    expect(drawn()).toEqual(expected);
+
+    // a selected card shows that one target and the picker steps aside
+    fireEvent.click(screen.getByTestId('latency-card-5'));
+    await flush();
+    expect(drawn()).toEqual(['5']);
+    expect(screen.queryByTestId('series-picker')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('latency-card-5'));
+    await flush();
+    expect(drawn()).toEqual(expected);
+    expect(picker()).toBeInTheDocument();
+  });
+
+  it('targets that disappear drop out of the pick', async () => {
+    let count = 12;
+    serve(() => ok(many(count)));
+    renderPage();
+    await flush();
+    await openPicker();
+    for (const id of TOP.filter((i) => i !== 12 && i !== 1)) await click(option(`T${id}`));
+    expect(drawn()).toEqual(['1', '12']);
+
+    // T12 is deleted: eleven are left, T1 stays
+    count = 11;
+    fireEvent.click(screen.getByText('latencyRange6h'));
+    await flush();
+    expect(drawn()).toEqual(['1']);
+    expect(picker()).toBeInTheDocument();
+  });
+
+  it('a pick whose targets are all gone is automatic again', async () => {
+    let count = 12;
+    serve(() => ok(many(count)));
+    renderPage();
+    await flush();
+    await openPicker();
+    for (const id of TOP.filter((i) => i !== 12)) await click(option(`T${id}`));
+    expect(domain()).toEqual(['12']);
+
+    count = 11;
+    fireEvent.click(screen.getByText('latencyRange6h'));
+    await flush();
+    // T1..T11 ranked: 4 6 3 11 5 2 10 1 9, then T8 (a reading of nothing) and
+    // last T7 (cannot probe at all); ten of them
+    const top = [4, 6, 3, 11, 5, 2, 10, 1, 9, 8];
+    expect(domain()).toEqual(inOrder(top));
+    expect(drawn()).toEqual(inOrder(top));
+  });
+
+  it('clearing the select returns to the automatic ten', async () => {
+    serve(() => ok(many()));
+    renderPage();
+    await flush();
+    await openPicker();
+    await click(option('T9'));
+    await click(option('T8'));
+    expect(drawn()).toContain('8');
+
+    const clear = picker().querySelector('.ant-select-clear') as HTMLElement;
+    fireEvent.mouseDown(clear);
+    await flush();
+    expect(drawn()).toEqual(inOrder(TOP));
+    await openPicker();
+    expect(screen.getByTestId('series-picker-auto')).toBeInTheDocument();
   });
 });

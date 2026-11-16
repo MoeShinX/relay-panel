@@ -1021,4 +1021,9 @@ export const enUS: Dict = {
   latencyGroupChartFor: 'Trend: ',
   latencyStripsTitle: 'Recent status',
   latencyStripsLoss: 'Packet loss',
+  seriesPickNodes: 'Show nodes',
+  seriesPickTargets: 'Show targets',
+  seriesPickMax: 'Up to 10 lines at once',
+  seriesPickAuto: 'Showing the 10 that need attention most',
+  seriesPickCount: 'Showing {shown}/{total}',
 };
