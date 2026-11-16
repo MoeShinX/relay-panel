@@ -19,6 +19,15 @@ independent `v*` / `node-v*` tracks since this release).
   per target (node page), the current latency and the range's packet loss, each
   above a strip of 30 colour-coded slices of the selected range, with the
   slice's time span, mean latency and loss on hover.
+- The latency pages now open on the last 24 hours at hourly granularity
+  (before: the last hour, default granularity), and a 24-hour view re-reads
+  every minute like the shorter ranges. The "Recent status" strips get one slice
+  per data bucket, at most 30, so hourly or 5-minute data no longer leaves grey
+  gaps between slices.
+- Lines in the latency trend charts are easier to tell apart: ten distinct
+  colours instead of six (the old set had two greens and repeated from the
+  seventh node), filled dots in the legend instead of thin strokes, and
+  slightly thicker lines.
 
 ## [1.2.21] - 2026-11-15
 

@@ -49,8 +49,8 @@ export default function NodeLatency() {
   const navigate = useNavigate();
   const { nodeId = '' } = useParams();
 
-  const [range, setRange] = useState<LatencyRange>('1h');
-  const [granularity, setGranularity] = useState<LatencyGranularity>('auto');
+  const [range, setRange] = useState<LatencyRange>('24h');
+  const [granularity, setGranularity] = useState<LatencyGranularity>('1h');
   const [data, setData] = useState<NodeLatencyResponse | null>(null);
   const [state, setState] = useState<LoadState>('loading');
   const [selected, setSelected] = useState<number | null>(null);
@@ -124,7 +124,7 @@ export default function NodeLatency() {
 
   const onRange = (r: LatencyRange) => {
     setRange(r);
-    if (!granularityAllowed(r, granularity)) setGranularity('auto');
+    if (!granularityAllowed(r, granularity)) setGranularity('1h');
   };
 
   const series: LatencySeries[] = useMemo(() => data?.series ?? [], [data]);
@@ -365,7 +365,7 @@ export default function NodeLatency() {
         )}
       </Card>
       {data ? (
-        <LatencyStrips testId="latency-strips" rows={stripRows} since={data.since} until={data.until} withDate={withDate} />
+        <LatencyStrips testId="latency-strips" rows={stripRows} since={data.since} until={data.until} bucketSecs={data.bucket_secs} withDate={withDate} />
       ) : null}
     </>
   );
