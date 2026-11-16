@@ -15,6 +15,10 @@ import { useI18n } from '../i18n/context';
 import LatencyChart, { type LatencyChartHandle } from '../components/LatencyChart';
 import LatencyControls from '../components/LatencyControls';
 import LatencyStrips, { type StripRow } from '../components/LatencyStrips';
+import SeriesPicker from '../components/SeriesPicker';
+import { useIsMobile } from '../hooks/useIsMobile';
+import { useSeriesPick } from '../hooks/useSeriesPick';
+import { rankByAttention } from '../utils/seriesPick';
 import {
   AUTO_REFRESH_MS,
   LEVEL_COLORS,
@@ -65,6 +69,7 @@ export default function GroupLatency() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const { groupId = '' } = useParams();
+  const isMobile = useIsMobile();
 
   const [range, setRange] = useState<LatencyRange>('24h');
   const [granularity, setGranularity] = useState<LatencyGranularity>('1h');
@@ -139,12 +144,31 @@ export default function GroupLatency() {
   const activeId = data?.target_id ?? null;
   const activeTarget = targets.find((x) => x.id === activeId);
 
-  const points: ChartPoint[] = useMemo(
+  const allPoints: ChartPoint[] = useMemo(
     () => (data ? groupChartPoints(data.series, data.nodes) : []),
     [data],
   );
   const names = useMemo(() => new Map(nodes.map((n) => [n.node_id, nodeDisplayName(n)])), [nodes]);
-  const colorDomain = useMemo(() => nodes.map((n) => n.node_id), [nodes]);
+  // One line per node. Past ten the palette runs out: the picker chooses which
+  // to draw, by default the ten that need attention first for this target
+  // (worst latency level, then loss, then mean; a node that cannot be probed or
+  // has no reading last).
+  const nodeKeys = useMemo(() => nodes.map((n) => n.node_id), [nodes]);
+  const ranked = useMemo(() => {
+    const byId = new Map(nodes.map((n) => [n.node_id, n]));
+    return rankByAttention(nodeKeys, (id) => {
+      const n = byId.get(id);
+      if (!n || !n.supported || activeId == null || n.unsupported_targets.includes(activeId)) return null;
+      return cells.get(cellKey(id, activeId));
+    });
+  }, [nodes, nodeKeys, cells, activeId]);
+  const pick = useSeriesPick(nodeKeys, ranked);
+  const colorDomain = pick.shown;
+  const points: ChartPoint[] = useMemo(() => {
+    if (!pick.needsPicker) return allPoints;
+    const shown = new Set(pick.shown);
+    return allPoints.filter((p) => shown.has(p.key));
+  }, [allPoints, pick.needsPicker, pick.shown]);
   const withDate = range !== '1h' && range !== '6h';
   const hasPoints = points.length > 0;
 
@@ -171,6 +195,17 @@ export default function GroupLatency() {
       };
     });
   }, [data, nodes, cells, activeId, t]);
+
+  const picker = pick.needsPicker ? (
+    <SeriesPicker
+      testId="series-picker"
+      placeholder={t('seriesPickNodes')}
+      options={nodes.map((n) => ({ value: n.node_id, label: names.get(n.node_id) ?? n.node_id }))}
+      value={pick.shown}
+      automatic={pick.automatic}
+      onChange={pick.setPicked}
+    />
+  ) : null;
 
   const header = (
     <div className="rp-page-header" style={{ flexWrap: 'wrap', gap: 8 }}>
@@ -228,7 +263,7 @@ export default function GroupLatency() {
     );
   }
 
-  const pick = (id: number) => setSelected(id);
+  const pickTarget = (id: number) => setSelected(id);
 
   const columns = [
     {
@@ -287,8 +322,8 @@ export default function GroupLatency() {
             tabIndex: 0,
             'aria-selected': isActive,
             'data-testid': `latency-col-${tg.id}`,
-            onClick: () => pick(tg.id),
-            onKeyDown: onActivate(() => pick(tg.id)),
+            onClick: () => pickTarget(tg.id),
+            onKeyDown: onActivate(() => pickTarget(tg.id)),
             style: { cursor: 'pointer' },
           }) as HTMLAttributes<HTMLElement>,
         onCell: () => ({ style: isActive ? { background: 'var(--ant-color-primary-bg, rgba(99,102,241,0.06))' } : {} }),
@@ -320,8 +355,8 @@ export default function GroupLatency() {
               tabIndex={0}
               data-testid={`latency-cell-${n.node_id}-${tg.id}`}
               data-level={level}
-              onClick={() => pick(tg.id)}
-              onKeyDown={onActivate(() => pick(tg.id))}
+              onClick={() => pickTarget(tg.id)}
+              onKeyDown={onActivate(() => pickTarget(tg.id))}
               style={{ cursor: 'pointer', lineHeight: 1.3 }}
             >
               <div style={{ fontSize: 16, fontWeight: 600, color: LEVEL_COLORS[level] }}>
@@ -368,6 +403,7 @@ export default function GroupLatency() {
           }
           extra={
             <Space size={8} wrap>
+              {isMobile ? null : picker}
               {autoRefreshes(range) ? (
                 <Text type="secondary" style={{ fontSize: 12 }}>{t('latencyAutoRefresh')}</Text>
               ) : null}
@@ -385,6 +421,7 @@ export default function GroupLatency() {
             </Space>
           }
         >
+          {isMobile && picker ? <div style={{ marginBottom: 8 }}>{picker}</div> : null}
           {!hasPoints ? (
             <Empty description={t('latencyChartEmpty')} image={Empty.PRESENTED_IMAGE_SIMPLE} />
           ) : (

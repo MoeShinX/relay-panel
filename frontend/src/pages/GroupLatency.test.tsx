@@ -8,8 +8,13 @@ vi.mock('../api/client', () => ({ default: { get: mockGet } }));
 // reports what it was asked to draw, so the page's choices can be asserted.
 vi.mock('@ant-design/charts', () => ({
   Column: () => null,
-  Line: (props: { data: { key: string }[] }) => (
-    <div data-testid="chart" data-keys={[...new Set(props.data.map((d) => d.key))].join(',')} data-n={props.data.length} />
+  Line: (props: { data: { key: string }[]; scale?: { color?: { domain?: string[] } } }) => (
+    <div
+      data-testid="chart"
+      data-keys={[...new Set(props.data.map((d) => d.key))].join(',')}
+      data-domain={(props.scale?.color?.domain ?? []).join(',')}
+      data-n={props.data.length}
+    />
   ),
 }));
 
@@ -454,5 +459,232 @@ describe('GroupLatency status strips', () => {
     expect(stripLevel('lat', '0123456789abcdef', 29)).toBe('bad');
     expect(stripLevel('loss', '0123456789abcdef', 29)).toBe('bad');
     expect(screen.getByTestId('strip-loss-value-0123456789abcdef')).toHaveTextContent('100.0%');
+  });
+});
+
+
+describe('GroupLatency series picker', () => {
+  /**
+   * Thirteen nodes n0..n12. For target 1 (levels by latencyLevel):
+   *   n3 lost everything                      -> worst
+   *   bad:  n5 30 ms 10% loss, n2 500 ms, n11 300 ms
+   *   warn: n4 20 ms 3% loss, n1 150 ms
+   *   good: n10 60 ms, n12 40 ms, n0 20 ms, n9 10 ms
+   *   no reading: n6 (no cell), n7 (too old), n8 (cannot probe target 1)
+   * so the default ten are n3 n5 n2 n11 n4 n1 n10 n12 n0 n9, and n6 n7 n8 are
+   * left out. (n6 has points anyway, so a drawn n6 would show.) For target 2
+   * only n0 (900 ms) and n1 (400 ms) have cells: they lead, then everyone else
+   * (no reading, a tie) in the table's order: n0..n9.
+   */
+  const ids = Array.from({ length: 13 }, (_, i) => `n${i}`);
+  const TOP1 = ['n3', 'n5', 'n2', 'n11', 'n4', 'n1', 'n10', 'n12', 'n0', 'n9'];
+  const inOrder = (keys: string[]) => ids.filter((k) => keys.includes(k));
+  const TOP1_DRAWN = inOrder(TOP1);
+  const TOP2 = ids.slice(0, 10);
+  const matrix1 = [
+    cell('n0', 1, 20, 0), cell('n1', 1, 150, 0), cell('n2', 1, 500, 0), cell('n3', 1, null, 100),
+    cell('n4', 1, 20, 3), cell('n5', 1, 30, 10), cell('n9', 1, 10, 0), cell('n10', 1, 60, 0),
+    cell('n11', 1, 300, 0), cell('n12', 1, 40, 0),
+    cell('n0', 2, 900, 0), cell('n1', 2, 400, 0),
+  ];
+
+  const manyNodes = (count: number) =>
+    ids.slice(0, count).map((id) => {
+      if (id === 'n7') return node(id, { supported: false, node_version: '1.2.11' });
+      if (id === 'n8') return node(id, { unsupported_targets: [1] });
+      return node(id);
+    });
+
+  function serveMany(count = 13) {
+    serve((url) => {
+      const m = /target_id=(\d+)/.exec(url);
+      const tid = m ? Number(m[1]) : 1;
+      const nodes = manyNodes(count);
+      return ok(
+        response({
+          nodes,
+          matrix: matrix1.filter((c) => nodes.some((n) => n.node_id === c.node_id)),
+          target_id: tid,
+          series: nodes.map((n) => ({
+            node_id: n.node_id,
+            points: n.node_id === 'n7' || n.node_id === 'n8' ? [] : [point(NOW - 120, 20), point(NOW - 60, 25)],
+          })),
+        }),
+      );
+    });
+  }
+
+  const drawn = () => (screen.getByTestId('chart').getAttribute('data-keys') ?? '').split(',').filter(Boolean);
+  const domain = () => (screen.getByTestId('chart').getAttribute('data-domain') ?? '').split(',').filter(Boolean);
+  const picker = () => screen.getByTestId('series-picker');
+  const option = (label: string) =>
+    document.querySelector(`.ant-select-item-option[title="${label}"]`) as HTMLElement;
+  const isDisabled = (label: string) => option(label).classList.contains('ant-select-item-option-disabled');
+  const isSelected = (label: string) => option(label).classList.contains('ant-select-item-option-selected');
+  const openPicker = async () => {
+    fireEvent.mouseDown(within(picker()).getByRole('combobox'));
+    await flush();
+  };
+  const click = async (el: HTMLElement) => {
+    fireEvent.click(el);
+    await flush();
+  };
+
+  it('ten nodes or fewer: no picker and the colour domain is every node, as before', async () => {
+    serve();
+    renderPage();
+    await flush();
+    expect(screen.queryByTestId('series-picker')).toBeNull();
+    expect(screen.getByTestId('chart').getAttribute('data-domain')).toBe('n1,n2,0123456789abcdef,old');
+  });
+
+  it('exactly ten nodes: still no picker', async () => {
+    serveMany(10);
+    renderPage();
+    await flush();
+    expect(screen.queryByTestId('series-picker')).toBeNull();
+    expect(domain()).toEqual(ids.slice(0, 10));
+  });
+
+  it('more than ten: the ten that need attention first are drawn, the rest are not', async () => {
+    serveMany();
+    renderPage();
+    await flush();
+    expect(picker()).toBeInTheDocument();
+    expect(domain()).toEqual(TOP1_DRAWN);
+    expect(drawn()).toEqual(TOP1_DRAWN);
+    expect(drawn()).not.toContain('n6');
+    // the comparison table still lists every node
+    expect(screen.getByTestId('latency-node-n6')).toBeInTheDocument();
+    expect(screen.getByTestId('latency-node-n12')).toBeInTheDocument();
+  });
+
+  it('the default follows the chosen target', async () => {
+    serveMany();
+    renderPage();
+    await flush();
+    fireEvent.click(screen.getByTestId('latency-col-2'));
+    await flush();
+    expect(domain()).toEqual(TOP2);
+    // n7 and n8 are in the ten but have nothing to draw
+    expect(drawn()).toEqual(TOP2.filter((k) => k !== 'n7' && k !== 'n8'));
+  });
+
+  it('the dropdown selects the ten, disables the others and says so', async () => {
+    serveMany();
+    renderPage();
+    await flush();
+    await openPicker();
+    for (const id of ids) {
+      const on = TOP1.includes(id);
+      expect(isSelected(id), `${id} selected`).toBe(on);
+      expect(isDisabled(id), `${id} disabled`).toBe(!on);
+    }
+    expect(screen.getByTestId('series-picker-hint')).toHaveTextContent('seriesPickMax');
+    expect(screen.getByTestId('series-picker-auto')).toBeInTheDocument();
+  });
+
+  it('picking changes what is drawn; the colour domain is the picked lines in node order', async () => {
+    serveMany();
+    renderPage();
+    await flush();
+    await openPicker();
+    await click(option('n9'));
+    expect(isDisabled('n6')).toBe(false);
+    await click(option('n6'));
+    const expected = inOrder([...TOP1.filter((k) => k !== 'n9'), 'n6']);
+    expect(drawn()).toEqual(expected);
+    expect(domain()).toEqual(expected);
+    expect(drawn()).toHaveLength(10);
+    expect(isDisabled('n9')).toBe(true);
+    expect(screen.queryByTestId('series-picker-auto')).toBeNull();
+  });
+
+  it('an explicit pick survives a target change and a range change', async () => {
+    serveMany();
+    renderPage();
+    await flush();
+    await openPicker();
+    await click(option('n9'));
+    await click(option('n6'));
+    const expected = inOrder([...TOP1.filter((k) => k !== 'n9'), 'n6']);
+
+    fireEvent.click(screen.getByTestId('latency-col-2'));
+    await flush();
+    expect(calls().at(-1)).toContain('target_id=2');
+    expect(drawn()).toEqual(expected);
+
+    fireEvent.click(screen.getByText('latencyRange7d'));
+    await flush();
+    expect(calls().at(-1)).toContain('range=7d');
+    expect(drawn()).toEqual(expected);
+  });
+
+  /** Serve a group whose size the test can change between loads. */
+  function serveShrinking(size: { count: number }) {
+    serve((url) => {
+      const nodes = manyNodes(size.count);
+      const m = /target_id=(\d+)/.exec(url);
+      return ok(
+        response({
+          nodes,
+          matrix: matrix1.filter((c) => nodes.some((n) => n.node_id === c.node_id)),
+          target_id: m ? Number(m[1]) : 1,
+          series: nodes.map((n) => ({ node_id: n.node_id, points: [point(NOW - 60, 20)] })),
+        }),
+      );
+    });
+  }
+
+  it('nodes that left the group drop out of the pick', async () => {
+    const size = { count: 13 };
+    serveShrinking(size);
+    renderPage();
+    await flush();
+    await openPicker();
+    // keep only n12 and n0
+    for (const id of TOP1.filter((k) => k !== 'n12' && k !== 'n0')) await click(option(id));
+    expect(drawn()).toEqual(['n0', 'n12']);
+
+    // the group shrinks to twelve nodes: n12 is gone, n0 stays
+    size.count = 12;
+    fireEvent.click(screen.getByTestId('latency-col-2'));
+    await flush();
+    expect(drawn()).toEqual(['n0']);
+    expect(picker()).toBeInTheDocument();
+  });
+
+  it('a pick whose nodes are all gone is automatic again', async () => {
+    const size = { count: 13 };
+    serveShrinking(size);
+    renderPage();
+    await flush();
+    await openPicker();
+    for (const id of TOP1.filter((k) => k !== 'n12')) await click(option(id));
+    expect(drawn()).toEqual(['n12']);
+
+    size.count = 12;
+    fireEvent.click(screen.getByTestId('latency-col-1'));
+    await flush();
+    // n0..n11 for target 1, worst first, ten of them: n6 (no cell) is the first
+    // of the readingless and takes the last place
+    expect(drawn()).toEqual(inOrder(['n3', 'n5', 'n2', 'n11', 'n4', 'n1', 'n10', 'n0', 'n9', 'n6']));
+  });
+
+  it('clearing the select returns to the automatic ten', async () => {
+    serveMany();
+    renderPage();
+    await flush();
+    await openPicker();
+    await click(option('n9'));
+    await click(option('n6'));
+    expect(drawn()).toContain('n6');
+
+    const clear = picker().querySelector('.ant-select-clear') as HTMLElement;
+    fireEvent.mouseDown(clear);
+    await flush();
+    expect(drawn()).toEqual(TOP1_DRAWN);
+    await openPicker();
+    expect(screen.getByTestId('series-picker-auto')).toBeInTheDocument();
   });
 });

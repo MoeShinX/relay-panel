@@ -8,6 +8,10 @@ import { useI18n } from '../i18n/context';
 import LatencyChart, { type LatencyChartHandle } from '../components/LatencyChart';
 import LatencyControls from '../components/LatencyControls';
 import LatencyStrips, { type StripRow } from '../components/LatencyStrips';
+import SeriesPicker from '../components/SeriesPicker';
+import { useIsMobile } from '../hooks/useIsMobile';
+import { useSeriesPick } from '../hooks/useSeriesPick';
+import { rankByAttention } from '../utils/seriesPick';
 import {
   AUTO_REFRESH_MS,
   LEVEL_COLORS,
@@ -48,6 +52,7 @@ export default function NodeLatency() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const { nodeId = '' } = useParams();
+  const isMobile = useIsMobile();
 
   const [range, setRange] = useState<LatencyRange>('24h');
   const [granularity, setGranularity] = useState<LatencyGranularity>('1h');
@@ -139,9 +144,29 @@ export default function NodeLatency() {
   const selectedSeries = selected != null ? series.find((s) => s.target_id === selected) : undefined;
   const onlyId = selectedSeries ? selectedSeries.target_id : null;
 
-  const points: ChartPoint[] = useMemo(() => chartPoints(series, onlyId), [series, onlyId]);
   const names = useMemo(() => new Map(series.map((s) => [String(s.target_id), s.name])), [series]);
-  const colorDomain = useMemo(() => series.map((s) => String(s.target_id)), [series]);
+  // One line per target. Past ten the palette runs out: the picker chooses
+  // which to draw, by default the ten that need attention first over the range
+  // (worst latency level, then loss, then mean; a target this node cannot probe
+  // or with no reading last). A selected card narrows the chart to that one
+  // target and the picker steps aside.
+  const targetKeys = useMemo(() => series.map((s) => String(s.target_id)), [series]);
+  const ranked = useMemo(
+    () =>
+      rankByAttention(targetKeys, (k) => {
+        const id = Number(k);
+        return unsupportedIds.has(id) ? null : summaryById.get(id);
+      }),
+    [targetKeys, summaryById, unsupportedIds],
+  );
+  const pick = useSeriesPick(targetKeys, ranked);
+  const showPicker = pick.needsPicker && onlyId == null;
+  const colorDomain = onlyId == null ? pick.shown : targetKeys;
+  const points: ChartPoint[] = useMemo(() => {
+    if (onlyId != null || !pick.needsPicker) return chartPoints(series, onlyId);
+    const shown = new Set(pick.shown);
+    return chartPoints(series.filter((s) => shown.has(String(s.target_id))), null);
+  }, [series, onlyId, pick.needsPicker, pick.shown]);
   const withDate = range !== '1h' && range !== '6h';
   const hasPoints = points.length > 0;
 
@@ -161,6 +186,17 @@ export default function NodeLatency() {
       }),
     [series, summaryById, unsupportedIds, t],
   );
+
+  const picker = showPicker ? (
+    <SeriesPicker
+      testId="series-picker"
+      placeholder={t('seriesPickTargets')}
+      options={series.map((s) => ({ value: String(s.target_id), label: s.name }))}
+      value={pick.shown}
+      automatic={pick.automatic}
+      onChange={pick.setPicked}
+    />
+  ) : null;
 
   const header = (
     <div className="rp-page-header" style={{ flexWrap: 'wrap', gap: 8 }}>
@@ -332,6 +368,7 @@ export default function NodeLatency() {
         }
         extra={
           <Space size={8} wrap>
+            {isMobile ? null : picker}
             {autoRefreshes(range) ? (
               <Text type="secondary" style={{ fontSize: 12 }}>{t('latencyAutoRefresh')}</Text>
             ) : null}
@@ -349,6 +386,7 @@ export default function NodeLatency() {
           </Space>
         }
       >
+        {isMobile && picker ? <div style={{ marginBottom: 8 }}>{picker}</div> : null}
         {!hasPoints ? (
           <Empty description={t('latencyChartEmpty')} image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : (
