@@ -114,6 +114,14 @@ export interface StripSegment {
   allLost: boolean;
 }
 
+/** How many strip slices a range gets: one per data bucket, at most
+ *  STRIP_SEGMENTS. Slicing finer than the buckets would leave grey gaps between
+ *  points (hourly data over a day, 5-minute data over an hour). */
+export function stripSegmentCount(since: number, until: number, bucketSecs: number): number {
+  if (!(bucketSecs > 0) || !(until > since)) return STRIP_SEGMENTS;
+  return Math.max(1, Math.min(STRIP_SEGMENTS, Math.ceil((until - since) / bucketSecs)));
+}
+
 /** Cut [since, until] into `n` equal slices and fold the points into them. A
  *  point belongs to the slice holding its timestamp; one exactly on an inner
  *  boundary goes to the later slice, one at `until` to the last. Points

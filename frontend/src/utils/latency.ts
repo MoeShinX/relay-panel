@@ -74,7 +74,7 @@ export function granularityAllowed(range: LatencyRange, g: LatencyGranularity): 
 
 /** Ranges up to 6 hours follow the clock: they are re-read every minute. */
 export function autoRefreshes(range: LatencyRange): boolean {
-  return range === '1h' || range === '6h';
+  return range === '1h' || range === '6h' || range === '24h';
 }
 
 export const AUTO_REFRESH_MS = 60_000;

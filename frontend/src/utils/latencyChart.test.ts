@@ -8,6 +8,7 @@ import {
   lossMarkers,
   nodeDisplayName,
   stripLatencyLevel,
+  stripSegmentCount,
   stripSegments,
 } from './latencyChart';
 import type { LatencyPoint } from '../api/types';
@@ -167,6 +168,29 @@ describe('stripSegments', () => {
       expect(segs).toHaveLength(30);
       expect(segs.every((g) => g.count === 0 && g.avg === null)).toBe(true);
     }
+  });
+});
+
+describe('stripSegmentCount', () => {
+  it('one slice per bucket, at most 30, at least 1', () => {
+    // a day of hourly buckets (since aligned down to the hour, until = now + 1)
+    expect(stripSegmentCount(0, 24 * 3600 + 1800, 3600)).toBe(25);
+    // an hour of 5-minute buckets
+    expect(stripSegmentCount(0, 3600 + 1, 300)).toBe(13);
+    // an hour of minute buckets has more than enough
+    expect(stripSegmentCount(0, 3600 + 1, 60)).toBe(30);
+    expect(stripSegmentCount(0, 10, 3600)).toBe(1);
+    // nonsense input keeps the default
+    expect(stripSegmentCount(0, 3600, 0)).toBe(30);
+  });
+
+  it('with that count every hourly point of a day lands in its own slice', () => {
+    const since = 0;
+    const until = 24 * 3600 + 1800;
+    const n = stripSegmentCount(since, until, 3600);
+    const points = Array.from({ length: 25 }, (_, k) => ({ ts: k * 3600, avg: 20, min: 20, max: 20, loss: 0 })) as LatencyPoint[];
+    const segs = stripSegments(points, since, until, n);
+    expect(segs.every((g) => g.count === 1)).toBe(true);
   });
 });
 

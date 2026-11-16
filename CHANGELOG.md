@@ -19,6 +19,20 @@ independent `v*` / `node-v*` tracks since this release).
   per target (node page), the current latency and the range's packet loss, each
   above a strip of 30 colour-coded slices of the selected range, with the
   slice's time span, mean latency and loss on hover.
+- The latency pages now open on the last 24 hours at hourly granularity
+  (before: the last hour, default granularity), and a 24-hour view re-reads
+  every minute like the shorter ranges. The "Recent status" strips get one slice
+  per data bucket, at most 30, so hourly or 5-minute data no longer leaves grey
+  gaps between slices.
+- Chart lines are easier to tell apart. The dashboard's traffic and node
+  metrics charts and the latency trend charts share one palette of ten distinct
+  colours instead of six: the old set had two greens, and the node metrics
+  chart gave the seventh node the first colour again. The traffic chart now
+  folds lines into "Other" only after ten instead of six. The line charts'
+  legends show filled dots instead of thin strokes, and the lines are slightly
+  thicker.
+- The sidebar's "Device groups" entry has its own icon instead of reusing the
+  "Node status" one.
 
 ## [1.2.21] - 2026-11-15
 

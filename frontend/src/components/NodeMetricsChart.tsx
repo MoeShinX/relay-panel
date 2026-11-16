@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import api from '../api/client';
 import type { ApiEnvelope, NodeMetricsResponse } from '../api/types';
 import { useI18n } from '../i18n/context';
-import { parseUtcBucket, SERIES_COLORS_LIGHT } from '../utils/trafficBuckets';
+import { LINE_LEGEND_ITEM, LINE_WIDTH, parseUtcBucket, SERIES_COLORS_LIGHT } from '../utils/trafficBuckets';
 import type { Metric } from '../utils/nodeMetrics';
 import { formatMetric, multiNodeGroupNames, seriesName } from '../utils/nodeMetrics';
 
@@ -137,7 +137,8 @@ export default function NodeMetricsChart() {
             yField="value"
             colorField="node"
             scale={{ color: { range: SERIES_COLORS_LIGHT } }}
-            legend={{ color: { position: 'top', layout: { justifyContent: 'flex-end' } } }}
+            style={{ lineWidth: LINE_WIDTH }}
+            legend={{ color: { position: 'top', layout: { justifyContent: 'flex-end' }, ...LINE_LEGEND_ITEM } }}
             axis={{
               x: { labelAutoHide: true, labelAutoRotate: false, title: false },
               y: { title: false, labelFormatter: fmt },

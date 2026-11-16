@@ -200,23 +200,23 @@ describe('categorical palette', () => {
   it('has a fixed slot order so a line keeps its color', () => {
     // Colors are assigned by slot, never cycled or regenerated. If this array
     // is ever reordered, every existing chart silently repaints.
-    expect(SERIES_COLORS_LIGHT[0]).toBe('#6366f1');
+    expect(SERIES_COLORS_LIGHT[0]).toBe('#4e79a7');
+    expect(SERIES_COLORS_LIGHT).toHaveLength(10);
     expect(SERIES_COLORS_LIGHT).toHaveLength(MAX_SERIES);
     expect(SERIES_COLORS_DARK).toHaveLength(MAX_SERIES);
   });
 
   it('excludes the reserved status red and the accent-colliding violet', () => {
-    // Red is reserved for critical status and must never be "series 6"; it also
-    // failed the adjacent-pair check against orange (ΔE 7.1 normal vision).
-    // Violet collides with the indigo accent in slot 1.
-    for (const banned of ['#e34948', '#e66767', '#4a3aa7', '#9085e9']) {
+    // Red is reserved for critical status (and the latency loss markers) and
+    // must never be "series N". Violet stays out as well.
+    for (const banned of ['#e34948', '#e66767', '#e15759', '#ff4d4f', '#4a3aa7', '#9085e9']) {
       expect(SERIES_COLORS_LIGHT).not.toContain(banned);
       expect(SERIES_COLORS_DARK).not.toContain(banned);
     }
   });
 
   it('has no duplicate hues', () => {
-    expect(new Set(SERIES_COLORS_LIGHT).size).toBe(SERIES_COLORS_LIGHT.length);
+    expect(new Set(SERIES_COLORS_LIGHT.map((c) => c.toLowerCase())).size).toBe(SERIES_COLORS_LIGHT.length);
     expect(new Set(SERIES_COLORS_DARK).size).toBe(SERIES_COLORS_DARK.length);
   });
 });

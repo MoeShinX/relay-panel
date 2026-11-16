@@ -78,8 +78,8 @@ describe('granularity rules', () => {
     }
   });
 
-  it('only ranges up to 6 hours refresh themselves', () => {
-    expect(['1h', '6h', '24h', '7d', '30d'].map((r) => autoRefreshes(r as never))).toEqual([true, true, false, false, false]);
+  it('only ranges up to a day refresh themselves', () => {
+    expect(['1h', '6h', '24h', '7d', '30d'].map((r) => autoRefreshes(r as never))).toEqual([true, true, true, false, false]);
   });
 });
 

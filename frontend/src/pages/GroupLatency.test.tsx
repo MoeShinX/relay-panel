@@ -174,7 +174,7 @@ describe('GroupLatency comparison table', () => {
     serve();
     renderPage();
     await flush();
-    expect(calls()).toEqual(['/admin/groups/5/latency?range=1h&granularity=auto']);
+    expect(calls()).toEqual(['/admin/groups/5/latency?range=24h&granularity=1h']);
   });
 
   it('lists a row per node (name or shortened id, with its address) and a column per target', async () => {
@@ -247,7 +247,7 @@ describe('GroupLatency chart', () => {
     await flush();
     fireEvent.click(screen.getByTestId('latency-col-2'));
     await flush();
-    expect(calls().at(-1)).toBe('/admin/groups/5/latency?range=1h&granularity=auto&target_id=2');
+    expect(calls().at(-1)).toBe('/admin/groups/5/latency?range=24h&granularity=1h&target_id=2');
     expect(screen.getByTestId('latency-current-view')).toHaveTextContent('Shanghai Unicom');
     expect(screen.getByTestId('latency-col-2')).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('latency-col-1')).toHaveAttribute('aria-selected', 'false');
@@ -259,7 +259,7 @@ describe('GroupLatency chart', () => {
     await flush();
     fireEvent.click(screen.getByTestId('latency-cell-n1-2'));
     await flush();
-    expect(calls().at(-1)).toBe('/admin/groups/5/latency?range=1h&granularity=auto&target_id=2');
+    expect(calls().at(-1)).toBe('/admin/groups/5/latency?range=24h&granularity=1h&target_id=2');
   });
 
   it('keeps the chosen target when the range changes', async () => {
@@ -268,9 +268,9 @@ describe('GroupLatency chart', () => {
     await flush();
     fireEvent.click(screen.getByTestId('latency-col-2'));
     await flush();
-    fireEvent.click(screen.getByText('latencyRange24h'));
+    fireEvent.click(screen.getByText('latencyRange6h'));
     await flush();
-    expect(calls().at(-1)).toBe('/admin/groups/5/latency?range=24h&granularity=auto&target_id=2');
+    expect(calls().at(-1)).toBe('/admin/groups/5/latency?range=6h&granularity=1h&target_id=2');
   });
 
   it('a chosen target that was deleted meanwhile falls back to the first', async () => {
@@ -281,7 +281,7 @@ describe('GroupLatency chart', () => {
     serve((url) => (url.includes('target_id=') ? { code: 400, message: 'x', data: null } : ok(response())));
     fireEvent.click(screen.getByTestId('latency-col-2'));
     await flush();
-    expect(calls().at(-1)).toBe('/admin/groups/5/latency?range=1h&granularity=auto');
+    expect(calls().at(-1)).toBe('/admin/groups/5/latency?range=24h&granularity=1h');
     expect(screen.getByTestId('chart')).toBeInTheDocument();
   });
 
@@ -320,14 +320,14 @@ describe('GroupLatency range and refresh', () => {
     await flush();
     fireEvent.click(document.querySelector('.ant-select-item-option[title="latencyGran5m"]') as HTMLElement);
     await flush();
-    expect(calls().at(-1)).toBe('/admin/groups/5/latency?range=1h&granularity=5m');
+    expect(calls().at(-1)).toBe('/admin/groups/5/latency?range=24h&granularity=5m');
     fireEvent.click(screen.getByText('latencyRange30d'));
     await flush();
-    expect(calls().at(-1)).toBe('/admin/groups/5/latency?range=30d&granularity=auto');
+    expect(calls().at(-1)).toBe('/admin/groups/5/latency?range=30d&granularity=1h');
     expect(calls().some((u) => u.includes('range=30d&granularity=5m'))).toBe(false);
   });
 
-  it('re-reads every minute for a range up to 6 hours, and not for longer ones', async () => {
+  it('re-reads every minute for a range up to a day, and not for longer ones', async () => {
     serve();
     renderPage();
     await flush();
@@ -337,7 +337,7 @@ describe('GroupLatency range and refresh', () => {
     await flush(60_000);
     expect(calls()).toHaveLength(3);
 
-    fireEvent.click(screen.getByText('latencyRange24h'));
+    fireEvent.click(screen.getByText('latencyRange7d'));
     await flush();
     const after = calls().length;
     await flush(180_000);
@@ -405,7 +405,8 @@ describe('GroupLatency status strips', () => {
     renderPage();
     await flush();
     const slice = screen.getByTestId('strip-lat-n1-29');
-    expect(slice.getAttribute('title')).toMatch(/\d\d:\d\d - \d\d:\d\d/);
+    // the default range is a day, so the span carries the date too
+    expect(slice.getAttribute('title')).toMatch(/\d\d-\d\d \d\d:\d\d - \d\d-\d\d \d\d:\d\d/);
     expect(slice.getAttribute('title')).toContain('21.0 ms');
     expect(screen.getByTestId('strip-lat-n1-0').getAttribute('title')).toContain('latencyNoData');
   });

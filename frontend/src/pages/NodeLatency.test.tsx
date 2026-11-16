@@ -188,16 +188,16 @@ describe('NodeLatency range and granularity', () => {
     serve(() => ok(response()));
     renderPage();
     await flush();
-    expect(latencyCalls()).toEqual(['/admin/nodes/n1/latency?range=1h&granularity=auto']);
+    expect(latencyCalls()).toEqual(['/admin/nodes/n1/latency?range=24h&granularity=1h']);
   });
 
   it('changing the range asks again', async () => {
     serve(() => ok(response()));
     renderPage();
     await flush();
-    fireEvent.click(screen.getByText('latencyRange24h'));
+    fireEvent.click(screen.getByText('latencyRange6h'));
     await flush();
-    expect(latencyCalls().at(-1)).toBe('/admin/nodes/n1/latency?range=24h&granularity=auto');
+    expect(latencyCalls().at(-1)).toBe('/admin/nodes/n1/latency?range=6h&granularity=1h');
   });
 
   it('7 and 30 days leave only the hourly granularity (and the default) selectable', async () => {
@@ -238,18 +238,18 @@ describe('NodeLatency range and granularity', () => {
     await flush();
     fireEvent.click(document.querySelector('.ant-select-item-option[title="latencyGran5m"]') as HTMLElement);
     await flush();
-    expect(latencyCalls().at(-1)).toBe('/admin/nodes/n1/latency?range=1h&granularity=5m');
+    expect(latencyCalls().at(-1)).toBe('/admin/nodes/n1/latency?range=24h&granularity=5m');
 
     fireEvent.click(screen.getByText('latencyRange30d'));
     await flush();
     // never the refused combination 30d + 5m
-    expect(latencyCalls().at(-1)).toBe('/admin/nodes/n1/latency?range=30d&granularity=auto');
+    expect(latencyCalls().at(-1)).toBe('/admin/nodes/n1/latency?range=30d&granularity=1h');
     expect(latencyCalls().some((u) => u.includes('range=30d&granularity=5m'))).toBe(false);
   });
 });
 
 describe('NodeLatency auto-refresh', () => {
-  it('re-reads every minute for a range up to 6 hours, and not for longer ones', async () => {
+  it('re-reads every minute for a range up to a day, and not for longer ones', async () => {
     serve(() => ok(response()));
     renderPage();
     await flush();
@@ -259,7 +259,7 @@ describe('NodeLatency auto-refresh', () => {
     await flush(60_000);
     expect(latencyCalls()).toHaveLength(3);
 
-    fireEvent.click(screen.getByText('latencyRange24h'));
+    fireEvent.click(screen.getByText('latencyRange7d'));
     await flush();
     const after = latencyCalls().length;
     await flush(180_000);

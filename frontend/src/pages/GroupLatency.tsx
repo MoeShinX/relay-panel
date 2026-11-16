@@ -66,8 +66,8 @@ export default function GroupLatency() {
   const navigate = useNavigate();
   const { groupId = '' } = useParams();
 
-  const [range, setRange] = useState<LatencyRange>('1h');
-  const [granularity, setGranularity] = useState<LatencyGranularity>('auto');
+  const [range, setRange] = useState<LatencyRange>('24h');
+  const [granularity, setGranularity] = useState<LatencyGranularity>('1h');
   // null: let the server pick (the group's first target).
   const [selected, setSelected] = useState<number | null>(null);
   const [data, setData] = useState<GroupLatencyResponse | null>(null);
@@ -126,7 +126,7 @@ export default function GroupLatency() {
 
   const onRange = (r: LatencyRange) => {
     setRange(r);
-    if (!granularityAllowed(r, granularity)) setGranularity('auto');
+    if (!granularityAllowed(r, granularity)) setGranularity('1h');
   };
 
   const targets: LatencyTarget[] = useMemo(() => data?.targets ?? [], [data]);
@@ -407,6 +407,7 @@ export default function GroupLatency() {
           rows={stripRows}
           since={data.since}
           until={data.until}
+          bucketSecs={data.bucket_secs}
           withDate={withDate}
         />
       )}

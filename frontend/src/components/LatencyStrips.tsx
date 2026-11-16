@@ -9,6 +9,7 @@ import {
   formatLoss,
   formatMs,
   stripLatencyLevel,
+  stripSegmentCount,
   stripSegments,
   type StripSegment,
 } from '../utils/latencyChart';
@@ -38,6 +39,8 @@ interface Props {
   rows: StripRow[];
   since: number;
   until: number;
+  /** Data bucket of the points; caps the slice count so no slice falls between points. */
+  bucketSecs: number;
   /** A range of a day or more needs the date in the slice labels too. */
   withDate: boolean;
   testId?: string;
@@ -90,13 +93,16 @@ const msNumber = (v: number) => (v >= 100 ? String(Math.round(v)) : v.toFixed(1)
  * mean loss. The data is the series the page already holds; nothing is fetched.
  * Slice hover text is the slice's time span, mean latency and loss.
  */
-export default function LatencyStrips({ rows, since, until, withDate, testId }: Props) {
+export default function LatencyStrips({ rows, since, until, bucketSecs, withDate, testId }: Props) {
   const { t } = useI18n();
   const mobile = useIsMobile();
 
   const prepared = useMemo(
-    () => rows.map((r) => ({ row: r, segs: r.note ? [] : stripSegments(r.points, since, until) })),
-    [rows, since, until],
+    () => {
+      const n = stripSegmentCount(since, until, bucketSecs);
+      return rows.map((r) => ({ row: r, segs: r.note ? [] : stripSegments(r.points, since, until, n) }));
+    },
+    [rows, since, until, bucketSecs],
   );
 
   const span = (g: StripSegment) =>
