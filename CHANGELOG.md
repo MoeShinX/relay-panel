@@ -10,6 +10,8 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+## [1.2.22] - 2026-11-17
+
 ### Changed
 
 - In a device group's latency-monitor drawer each target now fits on one row:
