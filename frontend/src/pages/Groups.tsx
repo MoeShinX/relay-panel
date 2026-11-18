@@ -1,5 +1,5 @@
 import { Table, Button, Modal, Drawer, Form, Input, InputNumber, Select, Space, message, Popconfirm, Typography, Tag, Tooltip, Alert, Switch } from 'antd';
-import { PlusOutlined, ReloadOutlined, CopyOutlined, EditOutlined, CloudServerOutlined, CodeOutlined, ApiOutlined, SafetyCertificateOutlined, LineChartOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, CopyOutlined, EditOutlined, ClusterOutlined, CodeOutlined, ApiOutlined, SafetyCertificateOutlined, LineChartOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import api from '../api/client';
 import type { ApiEnvelope, DeviceGroup, LatencyGroupCount, User, NodeStatus } from '../api/types';
@@ -449,6 +449,22 @@ export default function Groups() {
     }
   };
 
+  // Drop one machine's record from the group (after it was uninstalled, say):
+  // the same call as the remove button on Node Status, so the machine leaves
+  // both lists. Offered on offline rows only — a running node reports again
+  // within seconds and would simply reappear.
+  const handleRemoveNode = async (n: NodeStatus) => {
+    try {
+      const qs = n.node_id ? `?node_id=${encodeURIComponent(n.node_id)}` : '';
+      const res = await api.delete<unknown, ApiEnvelope<null>>(`/nodes/${n.group_id}${qs}`);
+      if (res.code !== 0) { message.error(res.message || t('nodeRemoveFailed')); return; }
+      message.success(t('nodeRemoved'));
+      load();
+    } catch {
+      message.error(t('nodeRemoveFailed'));
+    }
+  };
+
   const expandedRowRender = (g: DeviceGroup) => {
     const groupNodes = nodesByGroup(g.id);
     if (groupNodes.length === 0) {
@@ -488,6 +504,21 @@ export default function Groups() {
             { title: t('status'), dataIndex: 'online', key: 'online', width: 80, render: (v: boolean) => <Tag color={v ? 'green' : 'default'}>{v ? t('online') : t('offline')}</Tag> },
             { title: t('nodeVersion'), dataIndex: 'node_version', key: 'version', width: 90, render: (v: string | undefined) => v ? <span className="rp-mono" style={{ fontSize: 12 }}>{v}</span> : '-' },
             { title: t('lastSeen'), dataIndex: 'last_seen', key: 'last_seen', width: 120, render: (v: string | undefined) => <span className="rp-mono" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{formatDateTime(v)}</span> },
+            ...(isAdmin ? [{
+              title: t('actions'), key: 'remove', width: 72,
+              render: (_: unknown, n: NodeStatus) => n.online ? null : (
+                <Popconfirm
+                  title={t('removeNodeTitle')}
+                  description={t('removeNodeHint')}
+                  okText={t('confirmRemoveNode')}
+                  cancelText={t('cancel')}
+                  okButtonProps={{ danger: true }}
+                  onConfirm={() => handleRemoveNode(n)}
+                >
+                  <Button size="small" type="text" danger icon={<DeleteOutlined />} aria-label={t('confirmRemoveNode')} />
+                </Popconfirm>
+              ),
+            }] : []),
           ]}
         />
       </div>
@@ -497,7 +528,7 @@ export default function Groups() {
   return (
     <>
       <div className="rp-page-header">
-        <h2 className="rp-page-title"><CloudServerOutlined /> {t('deviceGroups')}</h2>
+        <h2 className="rp-page-title"><ClusterOutlined /> {t('deviceGroups')}</h2>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={load}>{t('refresh')}</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>{t('addGroup')}</Button>

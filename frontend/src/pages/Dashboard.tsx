@@ -1,6 +1,6 @@
 import { Card, Col, Row, Statistic, Table, Tag, Typography, Alert, Modal, Button, Space, Tooltip } from 'antd';
 import {
-  CloudServerOutlined, ApiOutlined, UserOutlined, DashboardOutlined, ReloadOutlined,
+  ClusterOutlined, ApiOutlined, UserOutlined, DashboardOutlined, ReloadOutlined,
   ArrowUpOutlined, ArrowDownOutlined,
 } from '@ant-design/icons';
 import { useEffect, useMemo, useState } from 'react';
@@ -326,7 +326,7 @@ export default function Dashboard() {
           <Card className="rp-stat-card"><Statistic title={t('forwardRules')} value={stats.rules} prefix={<ApiOutlined style={{ color: 'var(--rp-primary)' }} />} /></Card>
         </Col>
         <Col span={8}>
-          <Card className="rp-stat-card"><Statistic title={t('deviceGroups')} value={stats.groups} prefix={<CloudServerOutlined style={{ color: 'var(--rp-primary)' }} />} /></Card>
+          <Card className="rp-stat-card"><Statistic title={t('deviceGroups')} value={stats.groups} prefix={<ClusterOutlined style={{ color: 'var(--rp-primary)' }} />} /></Card>
         </Col>
       </Row>
 

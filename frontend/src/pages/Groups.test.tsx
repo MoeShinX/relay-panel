@@ -206,6 +206,29 @@ describe('monitor-only groups hide the forwarding fields', () => {
     expect(screen.getAllByRole('button', { name: 'nodeLabelEdit' })).toHaveLength(3);
   });
 
+  it('removes an offline node from the group; an online one has no button', async () => {
+    const user = userEvent.setup();
+    const nodes = [
+      { group_id: 1, node_id: 'live000001', online: true, label: 'live' },
+      { group_id: 1, node_id: 'gone000002', online: false, label: 'gone' },
+    ];
+    mockGet.mockImplementation((url: string) =>
+      Promise.resolve(url === '/groups' ? ok([group()]) : url === '/nodes' ? ok(nodes) : ok([])));
+    mockDelete.mockResolvedValue(ok(null));
+    render(<Groups />);
+    await user.click(await screen.findByRole('button', { name: /expand|展开/i }));
+
+    const buttons = await screen.findAllByRole('button', { name: 'confirmRemoveNode' });
+    expect(buttons).toHaveLength(1);
+    await user.click(buttons[0]);
+    const pop = (await screen.findByText('removeNodeTitle')).closest('.ant-popover') as HTMLElement;
+    await user.click(within(pop).getByRole('button', { name: 'confirmRemoveNode' }));
+
+    await waitFor(() => expect(mockDelete).toHaveBeenCalledWith('/nodes/1?node_id=gone000002'));
+    expect(await screen.findByText('nodeRemoved')).toBeInTheDocument();
+    await waitFor(() => expect(mockGet.mock.calls.filter((c) => c[0] === '/nodes').length).toBeGreaterThan(1));
+  });
+
   it('leaves the stored forwarding fields alone when converting a group to monitor', async () => {
     // Wiping them would destroy what you need to convert the group back, and
     // flipping the type to look at something has to be a safe round trip.
