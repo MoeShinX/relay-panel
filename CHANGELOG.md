@@ -10,6 +10,15 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Changed
+
+- A device group's node list (Device Groups page, expand a group) has a remove
+  button on offline nodes, the same as on Node Status: after uninstalling a
+  machine, its record can be cleared from the group, and it leaves Node Status
+  too. Online nodes get no button, since they report again within seconds.
+- The dashboard's "Device groups" card and the Device Groups page title use the
+  device-group icon from the sidebar.
+
 ## [1.2.22] - 2026-11-17
 
 ### Changed
