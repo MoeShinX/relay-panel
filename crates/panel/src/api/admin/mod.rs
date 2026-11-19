@@ -3324,6 +3324,8 @@ mod tests {
         put_status(&state, "node_status:10:node-b").await;
         state.db.set("node_label:1:node-a", "HK-1").await.unwrap();
         state.db.set("node_label:10:node-b", "JP-1").await.unwrap();
+        state.db.set("latency_off:1:node-a", "1").await.unwrap();
+        state.db.set("latency_off:10:node-b", "1").await.unwrap();
 
         let Json(resp) =
             super::delete_group(AdminOnly { user_id: 1 }, State(state.clone()), Path(1)).await;
@@ -3337,6 +3339,14 @@ mod tests {
         assert!(
             has_status(&state, "node_label:10:node-b").await,
             "group 10's labels stay"
+        );
+        assert!(
+            !has_status(&state, "latency_off:1:node-a").await,
+            "the node's latency switch goes with the group"
+        );
+        assert!(
+            has_status(&state, "latency_off:10:node-b").await,
+            "group 10's switches stay"
         );
         assert!(
             !has_status(&state, "node_status:1").await,

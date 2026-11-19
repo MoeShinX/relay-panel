@@ -10,6 +10,13 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Added
+
+- A per-node latency-monitor switch in a device group's node list (Device
+  Groups page, expand a group). Switching a machine off makes the panel stop
+  recording and showing its latency (it may keep probing); its history is
+  kept and reappears when switched back on. No node upgrade needed.
+
 ### Changed
 
 - A device group's node list (Device Groups page, expand a group) has a remove

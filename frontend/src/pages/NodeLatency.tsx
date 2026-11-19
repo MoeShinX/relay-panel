@@ -270,10 +270,23 @@ export default function NodeLatency() {
     );
   }
 
+  // The admin switched this machine's monitor off (Groups page): the panel no
+  // longer records it, and what is below is from before that.
+  const offAlert = data?.monitoring_off ? (
+    <Alert
+      type="info"
+      showIcon
+      style={{ marginBottom: 12 }}
+      data-testid="latency-monitoring-off"
+      title={t('latencyMonitoringOff')}
+    />
+  ) : null;
+
   if (data && series.length === 0) {
     return (
       <>
         {header}
+        {offAlert}
         <Result
           icon={<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />}
           title={t('latencyNoTargets')}
@@ -354,6 +367,7 @@ export default function NodeLatency() {
   return (
     <>
       {header}
+      {offAlert}
       {cards}
       <Card
         size="small"

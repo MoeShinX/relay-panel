@@ -186,6 +186,58 @@ describe('monitor-only groups hide the forwarding fields', () => {
     await waitFor(() => expect(mockGet.mock.calls.filter((c) => c[0] === '/nodes').length).toBeGreaterThan(1));
   });
 
+  it('the latency switch reflects latency_enabled; toggling PUTs the flag and reads the page again', async () => {
+    const user = userEvent.setup();
+    const nodes = [
+      { group_id: 1, node_id: 'live000001', online: true, latency_enabled: true },
+      { group_id: 1, node_id: 'gone000002', online: false, latency_enabled: false },
+      { group_id: 1, node_id: 'old0000003', online: true }, // an older panel's row: no flag, on
+    ];
+    mockGet.mockImplementation((url: string) =>
+      Promise.resolve(url === '/groups' ? ok([group()]) : url === '/nodes' ? ok(nodes) : ok([])));
+    mockPut.mockResolvedValue(ok(false));
+    render(<Groups />);
+    await user.click(await screen.findByRole('button', { name: /expand|展开/i }));
+
+    const switches = await screen.findAllByRole('switch', { name: 'nodeLatencyColumn' });
+    expect(switches).toHaveLength(3);
+    expect(switches.map((s) => s.getAttribute('aria-checked'))).toEqual(['true', 'false', 'true']);
+
+    await user.click(switches[0]);
+    await waitFor(() => expect(mockPut).toHaveBeenCalledTimes(1));
+    expect(mockPut).toHaveBeenCalledWith('/nodes/1/latency/live000001', { enabled: false });
+    expect(await screen.findByText('nodeLatencyOff')).toBeInTheDocument();
+    await waitFor(() => expect(mockGet.mock.calls.filter((c) => c[0] === '/nodes').length).toBeGreaterThan(1));
+  });
+
+  it('turning an off node back on sends enabled: true; a failure is reported and the switch is usable again', async () => {
+    const user = userEvent.setup();
+    const nodes = [{ group_id: 1, node_id: 'gone000002', online: false, latency_enabled: false }];
+    mockGet.mockImplementation((url: string) =>
+      Promise.resolve(url === '/groups' ? ok([group()]) : url === '/nodes' ? ok(nodes) : ok([])));
+    mockPut.mockResolvedValueOnce({ code: 404, message: 'status record not found', data: null });
+    render(<Groups />);
+    await user.click(await screen.findByRole('button', { name: /expand|展开/i }));
+
+    const sw = await screen.findByRole('switch', { name: 'nodeLatencyColumn' });
+    await user.click(sw);
+    await waitFor(() => expect(mockPut).toHaveBeenCalledWith('/nodes/1/latency/gone000002', { enabled: true }));
+    expect(await screen.findByText('status record not found')).toBeInTheDocument();
+    await waitFor(() => expect(sw).toBeEnabled());
+  });
+
+  it('a regular user does not get the latency switch', async () => {
+    const user = userEvent.setup();
+    mockUseAuth.mockReturnValue({ isAdmin: false });
+    const nodes = [{ group_id: 1, node_id: 'live000001', online: true }];
+    mockGet.mockImplementation((url: string) =>
+      Promise.resolve(url === '/groups' ? ok([group()]) : url === '/nodes' ? ok(nodes) : ok([])));
+    render(<Groups />);
+    await user.click(await screen.findByRole('button', { name: /expand|展开/i }));
+    await screen.findByText('nodesInGroup', { exact: false });
+    expect(screen.queryByRole('switch', { name: 'nodeLatencyColumn' })).toBeNull();
+  });
+
   it('shows the node\'s address under its name', async () => {
     const user = userEvent.setup();
     const nodes = [

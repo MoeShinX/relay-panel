@@ -284,6 +284,14 @@ pub async fn get_node_status(
     // Admin-given node names: all for an admin, and for anyone else only when
     // the site setting shows them to users.
     let labels = crate::service::node_labels::visible_labels(&state, user.admin).await;
+    // Nodes whose latency monitor is switched off, as `{group_id}:{node_id}`.
+    let latency_off = match crate::service::latency::all_off(state.db.as_ref()).await {
+        Ok(off) => off,
+        Err(e) => {
+            tracing::warn!("get_node_status: latency switches read failed: {}", e);
+            Default::default()
+        }
+    };
 
     let rows: Vec<(String, String)> = match state.db.scan_prefix("node_status:").await {
         Ok(rows) => rows,
@@ -396,6 +404,11 @@ pub async fn get_node_status(
         {
             status["label"] = serde_json::json!(label);
         }
+        // v1.2.23: whether the panel records this node's latency (on unless
+        // the admin switched it off in the group's node list).
+        status["latency_enabled"] = serde_json::json!(!key
+            .strip_prefix("node_status:")
+            .is_some_and(|node_key| latency_off.contains(node_key)));
 
         statuses.push(status);
     }
@@ -512,6 +525,18 @@ pub async fn delete_node_status(
                         .await
                 {
                     tracing::warn!("delete_node_status: removing the label failed: {}", e);
+                }
+                // Likewise the latency-monitor switch: a node that reports again
+                // starts with the monitor on.
+                if let Err(e) = crate::service::latency::set_node_enabled(
+                    state.db.as_ref(),
+                    group_id,
+                    nid,
+                    true,
+                )
+                .await
+                {
+                    tracing::warn!("delete_node_status: removing the switch failed: {}", e);
                 }
             }
             // v1.2.5: audited like every other destructive admin action. The
@@ -640,6 +665,88 @@ pub async fn set_node_label(
     )
     .await;
     Json(ApiResponse::success(label))
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct SetLatencyRequest {
+    /// Whether the panel records and shows this node's latency.
+    pub enabled: bool,
+}
+
+/// PUT /nodes/{group_id}/latency/{node_id} — an admin switches one machine's
+/// latency monitor on or off.
+///
+/// Off means the panel ignores the node for latency from its next report; the
+/// node itself keeps probing (what it is sent does not change) and its stored
+/// history is kept. Like a label, the switch needs a status row to belong to.
+pub async fn set_node_latency(
+    admin: AdminOnly,
+    State(state): State<AppState>,
+    axum::extract::Path((group_id, node_id)): axum::extract::Path<(i64, String)>,
+    Json(req): Json<SetLatencyRequest>,
+) -> Json<ApiResponse<bool>> {
+    let node_id = node_id.trim().to_string();
+    let status_key = format!("node_status:{}:{}", group_id, node_id);
+    match parse_status_key(&status_key) {
+        Some((gid, Some(nid))) if gid == group_id && nid == node_id && !node_id.is_empty() => {}
+        _ => {
+            return Json(ApiResponse {
+                code: 400,
+                message: "invalid group_id / node_id combination".into(),
+                data: None,
+            })
+        }
+    }
+
+    match state.db.get(&status_key).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return Json(ApiResponse {
+                code: 404,
+                message: "status record not found".into(),
+                data: None,
+            })
+        }
+        Err(e) => {
+            tracing::error!("set_node_latency: status lookup failed: {}", e);
+            return Json(ApiResponse {
+                code: 500,
+                message: "database error".into(),
+                data: None,
+            });
+        }
+    }
+
+    if let Err(e) = crate::service::latency::set_node_enabled(
+        state.db.as_ref(),
+        group_id,
+        &node_id,
+        req.enabled,
+    )
+    .await
+    {
+        tracing::error!("set_node_latency: save failed: {}", e);
+        return Json(ApiResponse {
+            code: 500,
+            message: "database error".into(),
+            data: None,
+        });
+    }
+
+    crate::service::audit::record(
+        &state,
+        Some(admin.user_id),
+        "set_node_latency",
+        "node",
+        &node_id,
+        &format!(
+            "分组 {} / 延迟监控{}",
+            crate::service::audit::group_label(&state, group_id).await,
+            if req.enabled { "开启" } else { "关闭" }
+        ),
+    )
+    .await;
+    Json(ApiResponse::success(req.enabled))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1204,6 +1311,124 @@ mod upgrade_result_tests {
         assert_eq!(
             state.db.get("node_label:9:n2").await.unwrap().as_deref(),
             Some("HK-2")
+        );
+    }
+
+    async fn set_latency_as_admin(
+        state: &AppState,
+        node_id: &str,
+        enabled: bool,
+    ) -> ApiResponse<bool> {
+        let Json(resp) = set_node_latency(
+            AdminOnly { user_id: 1 },
+            State(state.clone()),
+            axum::extract::Path((9, node_id.to_string())),
+            Json(SetLatencyRequest { enabled }),
+        )
+        .await;
+        resp
+    }
+
+    async fn latency_flags(state: &AppState) -> Vec<(String, bool)> {
+        let Json(resp) = get_node_status(
+            AuthUser {
+                user_id: 1,
+                admin: true,
+            },
+            State(state.clone()),
+        )
+        .await;
+        let mut rows: Vec<(String, bool)> = resp
+            .data
+            .unwrap()
+            .into_iter()
+            .map(|s| {
+                (
+                    s["node_id"].as_str().unwrap().to_string(),
+                    s["latency_enabled"].as_bool().unwrap(),
+                )
+            })
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    #[tokio::test]
+    async fn the_latency_switch_toggles_its_key_and_the_node_list_carries_it() {
+        let state = state_with_group().await;
+        put_status(&state, "n1").await;
+        put_status(&state, "n2").await;
+        assert_eq!(
+            latency_flags(&state).await,
+            vec![("n1".to_string(), true), ("n2".to_string(), true)],
+            "on unless switched off"
+        );
+
+        let r = set_latency_as_admin(&state, "n1", false).await;
+        assert_eq!((r.code, r.data), (0, Some(false)), "{}", r.message);
+        assert_eq!(
+            state.db.get("latency_off:9:n1").await.unwrap().as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            latency_flags(&state).await,
+            vec![("n1".to_string(), false), ("n2".to_string(), true)]
+        );
+        // a node of another group with the same id is not affected
+        assert!(state.db.get("latency_off:10:n1").await.unwrap().is_none());
+
+        let r = set_latency_as_admin(&state, "n1", true).await;
+        assert_eq!((r.code, r.data), (0, Some(true)), "{}", r.message);
+        assert!(state.db.get("latency_off:9:n1").await.unwrap().is_none());
+        assert_eq!(
+            latency_flags(&state).await,
+            vec![("n1".to_string(), true), ("n2".to_string(), true)]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_latency_switch_is_audited_and_refuses_an_unknown_node() {
+        let state = state_with_group().await;
+        put_status(&state, "n1").await;
+        assert_eq!(set_latency_as_admin(&state, "ghost", false).await.code, 404);
+        assert!(state
+            .db
+            .scan_prefix("latency_off:")
+            .await
+            .unwrap()
+            .is_empty());
+        set_latency_as_admin(&state, "n1", false).await;
+        let rows = state
+            .db
+            .query_audit_log(Some("set_node_latency"), 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].detail.contains("关闭"), "{}", rows[0].detail);
+    }
+
+    #[tokio::test]
+    async fn removing_a_node_removes_its_latency_switch_and_only_its_own() {
+        let state = state_with_group().await;
+        put_status(&state, "n1").await;
+        put_status(&state, "n2").await;
+        set_latency_as_admin(&state, "n1", false).await;
+        set_latency_as_admin(&state, "n2", false).await;
+
+        let Json(resp) = delete_node_status(
+            AdminOnly { user_id: 1 },
+            State(state.clone()),
+            axum::extract::Path((9,)),
+            axum::extract::Query(DeleteStatusQuery {
+                node_id: Some("n1".into()),
+            }),
+        )
+        .await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+        assert!(state.db.get("latency_off:9:n1").await.unwrap().is_none());
+        assert_eq!(
+            state.db.get("latency_off:9:n2").await.unwrap().as_deref(),
+            Some("1")
         );
     }
 

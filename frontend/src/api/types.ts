@@ -463,6 +463,9 @@ export interface NodeStatus {
   node_id?: string | null;
   /** The admin's name for this machine (see NodeDisplayRow.label). */
   label?: string | null;
+  /** Whether the panel records this node's latency (admin /nodes; false = the
+   *  admin switched it off in the group's node list). Absent = on. */
+  latency_enabled?: boolean;
   /** Present in the API response but not the legacy type; both Nodes and
    *  Dashboard pages render it. Optional for safety on older payloads. */
   group_name?: string;
@@ -731,6 +734,9 @@ export interface NodeDisplayRow {
    *  it; a regular user only when the site setting "show node labels to users"
    *  is on. Absent when the node has none. */
   label?: string | null;
+  /** Whether the panel records this node's latency (admin /nodes). false hides
+   *  the latency icon; absent = on. */
+  latency_enabled?: boolean;
   /** The group's panel-wide display order (lower first; ties fall back to
    *  group_id). Absent for a status record whose group no longer exists. */
   group_sort_order?: number | null;
@@ -849,6 +855,9 @@ export interface NodeLatencyResponse {
   summary: LatencySummary[];
   /** Targets this node reported it cannot probe (ICMP without privilege). */
   unsupported_targets: number[];
+  /** The admin switched this node's latency monitor off: the panel no longer
+   *  records it, and the series are what was stored before. */
+  monitoring_off?: boolean;
 }
 
 /** GET /admin/latency/groups: a device group that has targets, and how many. */

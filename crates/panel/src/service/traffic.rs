@@ -154,6 +154,11 @@ pub async fn remove_group_status(db: &dyn Repository, group_id: i64) -> Result<u
     for (key, _) in db.scan_prefix(&label_prefix).await? {
         removed += db.delete(&key).await?;
     }
+    // So do their latency-monitor switches.
+    let off_prefix = format!("{}{}:", crate::service::latency::OFF_PREFIX, group_id);
+    for (key, _) in db.scan_prefix(&off_prefix).await? {
+        removed += db.delete(&key).await?;
+    }
     Ok(removed)
 }
 

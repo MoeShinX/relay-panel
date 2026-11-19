@@ -340,6 +340,11 @@ pub fn routes() -> Router<AppState> {
             "/nodes/{group_id}/label/{node_id}",
             axum::routing::put(stats::set_node_label),
         )
+        // Switch one machine's latency monitor on or off (the panel's side only).
+        .route(
+            "/nodes/{group_id}/latency/{node_id}",
+            axum::routing::put(stats::set_node_latency),
+        )
         // v1.0.10: admin triggers a directed self-upgrade on one node.
         .route(
             "/nodes/{group_id}/upgrade/{node_id}",

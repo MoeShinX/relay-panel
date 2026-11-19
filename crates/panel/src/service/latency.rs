@@ -35,6 +35,61 @@ pub fn interval_key(group_id: i64) -> String {
     format!("{INTERVAL_KEY_PREFIX}{group_id}")
 }
 
+/// kvs key prefix of a node's "latency monitor off" switch. Same
+/// `{group_id}:{node_id}` suffix as `node_label:` and `node_status:`.
+pub const OFF_PREFIX: &str = "latency_off:";
+
+/// The kvs key of one node's switch. The key being present (value "1") means
+/// the panel ignores the node for latency; absent means on, the default — so
+/// no migration and a node record that is gone takes its switch with it.
+pub fn off_key(group_id: i64, node_id: &str) -> String {
+    format!("{OFF_PREFIX}{group_id}:{node_id}")
+}
+
+/// Whether the monitor is on for one node (true unless its key exists). A read
+/// error counts as on: the switch only ever hides data, never loses it.
+pub async fn node_enabled<R: crate::db::repo::KvsRepository + ?Sized>(
+    db: &R,
+    group_id: i64,
+    node_id: &str,
+) -> bool {
+    match db.get(&off_key(group_id, node_id)).await {
+        Ok(v) => v.is_none(),
+        Err(e) => {
+            tracing::warn!("latency switch: read failed, treating as on: {}", e);
+            true
+        }
+    }
+}
+
+/// Every node with the monitor off, as `{group_id}:{node_id}` — the part after
+/// `node_status:` in a status key, like `node_labels::all_labels`.
+pub async fn all_off<R: crate::db::repo::KvsRepository + ?Sized>(
+    db: &R,
+) -> Result<BTreeSet<String>, DbError> {
+    Ok(db
+        .scan_prefix(OFF_PREFIX)
+        .await?
+        .into_iter()
+        .filter_map(|(k, _)| k.strip_prefix(OFF_PREFIX).map(str::to_string))
+        .collect())
+}
+
+/// Switch one node's monitor on or off.
+pub async fn set_node_enabled<R: crate::db::repo::KvsRepository + ?Sized>(
+    db: &R,
+    group_id: i64,
+    node_id: &str,
+    enabled: bool,
+) -> Result<(), DbError> {
+    let key = off_key(group_id, node_id);
+    if enabled {
+        db.delete(&key).await.map(|_| ())
+    } else {
+        db.set(&key, "1").await
+    }
+}
+
 /// Minute rows are kept 48 hours, hourly rows 30 days.
 pub const MINUTE_RETENTION_SECS: i64 = 48 * 3600;
 pub const HOURLY_RETENTION_SECS: i64 = 30 * 24 * 3600;
@@ -616,8 +671,8 @@ pub struct GroupNode {
     pub last_seen: Option<String>,
 }
 
-/// Every node with a status record under `group_id`, ordered by node id. The
-/// legacy per-group record (a node that never sent an id) has no series to
+/// Every node with a status record under `group_id` and its latency monitor on,
+/// ordered by node id. The legacy per-group record (a node that never sent an id) has no series to
 /// show and is left out.
 pub async fn list_group_nodes(
     db: &dyn Repository,
@@ -626,12 +681,17 @@ pub async fn list_group_nodes(
 ) -> Result<Vec<GroupNode>, DbError> {
     let prefix = format!("node_status:{group_id}:");
     let labels = crate::service::node_labels::all_labels(db).await?;
+    let off = all_off(db).await?;
     let mut nodes: Vec<GroupNode> = Vec::new();
     for (key, value) in db.scan_prefix(&prefix).await? {
         let Some(node_id) = key.strip_prefix(&prefix) else {
             continue;
         };
         if node_id.is_empty() {
+            continue;
+        }
+        // A node switched off is left out entirely (its history stays stored).
+        if off.contains(&format!("{group_id}:{node_id}")) {
             continue;
         }
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&value) else {

@@ -72,6 +72,25 @@ describe('the latency icon beside a node\'s IP', () => {
     expect(mockGet).not.toHaveBeenCalledWith('/admin/latency/groups');
   });
 
+  it('a node the admin switched the monitor off for has no icon, its neighbours keep theirs', async () => {
+    mockUseAuth.mockReturnValue({ isAdmin: true });
+    mockGet.mockImplementation(adminApi(
+      [
+        node({ latency_enabled: false }),
+        node({ node_id: 'def456', public_ipv4: '192.0.2.21', latency_enabled: true }),
+        node({ node_id: 'ghi789', public_ipv4: '192.0.2.22' }), // an older panel's row: no flag, on
+      ],
+      groupsWith(11),
+    ));
+    renderPage();
+    await screen.findByText('192.0.2.20');
+    await screen.findByText('192.0.2.22');
+    const links = await screen.findAllByTestId('latency-link');
+    expect(links).toHaveLength(2);
+    await userEvent.click(links[0]);
+    expect(await screen.findByText('latency page for def456')).toBeInTheDocument();
+  });
+
   it('a node row with no node id (legacy status record) has no icon either', async () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
     mockGet.mockImplementation(adminApi([node({ node_id: null })], groupsWith(11)));
