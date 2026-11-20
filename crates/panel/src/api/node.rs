@@ -332,7 +332,14 @@ pub async fn report_status(
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty());
-        let screened = match (latency_node_id, req.latency.is_empty()) {
+        // A node the admin switched off in the group's node list is ignored for
+        // latency: its samples are dropped and its "unsupported" list is not
+        // written, exactly as if the report carried no latency at all.
+        let latency_on = match latency_node_id {
+            Some(nid) => crate::service::latency::node_enabled(state.db.as_ref(), g.id, nid).await,
+            None => true,
+        };
+        let screened = match (latency_node_id, req.latency.is_empty() || !latency_on) {
             (Some(_), false) => match state.db.list_latency_targets(g.id).await {
                 Ok(targets) => crate::service::latency::screen_samples(
                     &targets,

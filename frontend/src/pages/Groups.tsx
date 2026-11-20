@@ -1,5 +1,5 @@
 import { Table, Button, Modal, Drawer, Form, Input, InputNumber, Select, Space, message, Popconfirm, Typography, Tag, Tooltip, Alert, Switch } from 'antd';
-import { PlusOutlined, ReloadOutlined, CopyOutlined, EditOutlined, CloudServerOutlined, CodeOutlined, ApiOutlined, SafetyCertificateOutlined, LineChartOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, CopyOutlined, EditOutlined, ClusterOutlined, CodeOutlined, ApiOutlined, SafetyCertificateOutlined, LineChartOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import api from '../api/client';
 import type { ApiEnvelope, DeviceGroup, LatencyGroupCount, User, NodeStatus } from '../api/types';
@@ -55,6 +55,8 @@ export default function Groups() {
   // many targets each group has (shown on the button; absent = none).
   const [latencyGroup, setLatencyGroup] = useState<DeviceGroup | null>(null);
   const [latencyCounts, setLatencyCounts] = useState<Map<number, number>>(new Map());
+  // The nodes whose latency switch has a request in flight (`group:node`).
+  const [latencyBusy, setLatencyBusy] = useState<Set<string>>(new Set());
   // See load(): a failed read must not be shown as an empty group list.
   const [loadFailed, setLoadFailed] = useState(false);
   const [createForm] = Form.useForm();
@@ -449,6 +451,45 @@ export default function Groups() {
     }
   };
 
+  // Switch one machine's latency monitor on or off. Only the panel's side: off
+  // means it stops recording and showing that machine (the node may keep
+  // probing), and what was stored stays. The switch is disabled while its own
+  // request is in flight.
+  const handleSetNodeLatency = async (n: NodeStatus, enabled: boolean) => {
+    if (!n.node_id) return;
+    const key = `${n.group_id}:${n.node_id}`;
+    setLatencyBusy((s) => new Set(s).add(key));
+    try {
+      const res = await api.put<unknown, ApiEnvelope<boolean>>(
+        `/nodes/${n.group_id}/latency/${encodeURIComponent(n.node_id)}`,
+        { enabled },
+      );
+      if (res.code !== 0) { message.error(res.message || t('nodeLatencySaveFailed')); return; }
+      message.success(t(enabled ? 'nodeLatencyOn' : 'nodeLatencyOff'));
+      load();
+    } catch {
+      message.error(t('nodeLatencySaveFailed'));
+    } finally {
+      setLatencyBusy((s) => { const next = new Set(s); next.delete(key); return next; });
+    }
+  };
+
+  // Drop one machine's record from the group (after it was uninstalled, say):
+  // the same call as the remove button on Node Status, so the machine leaves
+  // both lists. Offered on offline rows only — a running node reports again
+  // within seconds and would simply reappear.
+  const handleRemoveNode = async (n: NodeStatus) => {
+    try {
+      const qs = n.node_id ? `?node_id=${encodeURIComponent(n.node_id)}` : '';
+      const res = await api.delete<unknown, ApiEnvelope<null>>(`/nodes/${n.group_id}${qs}`);
+      if (res.code !== 0) { message.error(res.message || t('nodeRemoveFailed')); return; }
+      message.success(t('nodeRemoved'));
+      load();
+    } catch {
+      message.error(t('nodeRemoveFailed'));
+    }
+  };
+
   const expandedRowRender = (g: DeviceGroup) => {
     const groupNodes = nodesByGroup(g.id);
     if (groupNodes.length === 0) {
@@ -488,6 +529,34 @@ export default function Groups() {
             { title: t('status'), dataIndex: 'online', key: 'online', width: 80, render: (v: boolean) => <Tag color={v ? 'green' : 'default'}>{v ? t('online') : t('offline')}</Tag> },
             { title: t('nodeVersion'), dataIndex: 'node_version', key: 'version', width: 90, render: (v: string | undefined) => v ? <span className="rp-mono" style={{ fontSize: 12 }}>{v}</span> : '-' },
             { title: t('lastSeen'), dataIndex: 'last_seen', key: 'last_seen', width: 120, render: (v: string | undefined) => <span className="rp-mono" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{formatDateTime(v)}</span> },
+            ...(isAdmin ? [{
+              title: t('nodeLatencyColumn'), key: 'latency_enabled', width: 100,
+              render: (_: unknown, n: NodeStatus) => n.node_id ? (
+                <Switch
+                  size="small"
+                  aria-label={t('nodeLatencyColumn')}
+                  checked={n.latency_enabled !== false}
+                  loading={latencyBusy.has(`${n.group_id}:${n.node_id}`)}
+                  disabled={latencyBusy.has(`${n.group_id}:${n.node_id}`)}
+                  onChange={(checked) => handleSetNodeLatency(n, checked)}
+                />
+              ) : dash,
+            }] : []),
+            ...(isAdmin ? [{
+              title: t('actions'), key: 'remove', width: 72,
+              render: (_: unknown, n: NodeStatus) => n.online ? null : (
+                <Popconfirm
+                  title={t('removeNodeTitle')}
+                  description={t('removeNodeHint')}
+                  okText={t('confirmRemoveNode')}
+                  cancelText={t('cancel')}
+                  okButtonProps={{ danger: true }}
+                  onConfirm={() => handleRemoveNode(n)}
+                >
+                  <Button size="small" type="text" danger icon={<DeleteOutlined />} aria-label={t('confirmRemoveNode')} />
+                </Popconfirm>
+              ),
+            }] : []),
           ]}
         />
       </div>
@@ -497,7 +566,7 @@ export default function Groups() {
   return (
     <>
       <div className="rp-page-header">
-        <h2 className="rp-page-title"><CloudServerOutlined /> {t('deviceGroups')}</h2>
+        <h2 className="rp-page-title"><ClusterOutlined /> {t('deviceGroups')}</h2>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={load}>{t('refresh')}</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>{t('addGroup')}</Button>
