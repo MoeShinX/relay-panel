@@ -10,6 +10,8 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+## [1.2.23] - 2026-11-20
+
 ### Added
 
 - A per-node latency-monitor switch in a device group's node list (Device
