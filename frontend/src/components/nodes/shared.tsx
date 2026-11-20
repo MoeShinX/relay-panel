@@ -71,7 +71,8 @@ export function NetworkCell({ row, t, onOpenLatency }: { row: NodeDisplayRow; t:
   // v1.2.21: admins get a small monitor icon beside the first address, opening
   // the node's latency page. Only offered for a node that has an id (the page
   // is keyed by it); the caller leaves `onOpenLatency` unset for everyone else.
-  const latencyButton = onOpenLatency && row.node_id ? (
+  // Hidden for a node the admin switched the latency monitor off for.
+  const latencyButton = onOpenLatency && row.node_id && row.latency_enabled !== false ? (
     <Tooltip title={t('latencyIconTip')}>
       <Button
         type="text"

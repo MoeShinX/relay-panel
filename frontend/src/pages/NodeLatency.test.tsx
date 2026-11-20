@@ -149,6 +149,33 @@ describe('NodeLatency empty and gated states', () => {
   });
 });
 
+describe('NodeLatency monitoring switched off', () => {
+  it('shows an info alert above the stored data when the flag is set', async () => {
+    serve(() => ok(response({ monitoring_off: true })));
+    renderPage();
+    await flush();
+    expect(screen.getByTestId('latency-monitoring-off')).toHaveTextContent('latencyMonitoringOff');
+    // the stored history is still drawn
+    expect(screen.getByTestId('latency-cards')).toBeInTheDocument();
+    expect(screen.getByTestId('chart')).toBeInTheDocument();
+  });
+
+  it('shows no alert when the flag is false or absent', async () => {
+    serve(() => ok(response({ monitoring_off: false })));
+    const { unmount } = renderPage();
+    await flush();
+    expect(screen.getByTestId('latency-cards')).toBeInTheDocument();
+    expect(screen.queryByTestId('latency-monitoring-off')).toBeNull();
+    unmount();
+
+    serve(() => ok(response()));
+    renderPage();
+    await flush();
+    expect(screen.getByTestId('latency-cards')).toBeInTheDocument();
+    expect(screen.queryByTestId('latency-monitoring-off')).toBeNull();
+  });
+});
+
 describe('NodeLatency cards', () => {
   it('draws a card per target, coloured by latency and loss, with unsupported ones marked', async () => {
     serve(() => ok(response()));

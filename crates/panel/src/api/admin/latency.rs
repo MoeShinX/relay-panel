@@ -146,6 +146,9 @@ pub struct NodeLatencyResponse {
     pub summary: Vec<latency::TargetSummary>,
     /// Configured targets the node reported it cannot probe.
     pub unsupported_targets: Vec<i64>,
+    /// The admin switched this node's latency monitor off: the panel no longer
+    /// records it, and the series above are what was stored before.
+    pub monitoring_off: bool,
 }
 
 pub async fn get_node_latency(
@@ -223,6 +226,7 @@ pub async fn get_node_latency(
         })
         .unwrap_or_default();
 
+    let monitoring_off = !latency::node_enabled(db, group_id, &node_id).await;
     let (series, summary) = latency::build_series(&targets, &buckets, &latest);
     Json(ApiResponse::success(NodeLatencyResponse {
         node_id,
@@ -239,6 +243,7 @@ pub async fn get_node_latency(
         series,
         summary,
         unsupported_targets,
+        monitoring_off,
     }))
 }
 
@@ -267,7 +272,7 @@ pub struct GroupLatencyResponse {
     pub until: i64,
     /// The group's targets, in display order.
     pub targets: Vec<LatencyTarget>,
-    /// The group's nodes (every node with a status record), by node id.
+    /// The group's nodes with a status record and the monitor on, by node id.
     pub nodes: Vec<latency::GroupNode>,
     /// Per node and target, the mean round trip and loss over the whole
     /// `range` (minute rows for 1h / 6h / 24h, hourly rows for 7d / 30d). A
@@ -614,6 +619,44 @@ mod tests {
         // A bad token is a 401, as everywhere else.
         assert_eq!(
             status_of(&state, "GET", "/admin/groups/5/latency/config", "junk", "").await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    /// The per-node switch route is admin-only too (403 for a signed-in
+    /// non-admin, never 401), and it flips the key for an admin.
+    #[tokio::test]
+    async fn the_node_switch_route_is_admin_only() {
+        let (state, pool) = test_state().await;
+        seed_group(&pool, 5, "in").await;
+        sqlx::query(
+            "INSERT INTO users (id, username, password, admin, all_device_groups, balance, max_rules, traffic_used, traffic_limit, banned) \
+             VALUES (2, 'bob', 'x', 0, 1, '0', 5, 0, 0, 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        add_status(&state, 5, "n1", "1.2.12", &[]).await;
+        let body = r#"{"enabled":false}"#;
+        let uri = "/nodes/5/latency/n1";
+        assert_eq!(
+            status_of(&state, "PUT", uri, &sign_token(2), body).await,
+            StatusCode::FORBIDDEN
+        );
+        assert!(
+            state.db.get("latency_off:5:n1").await.unwrap().is_none(),
+            "a refused request changes nothing"
+        );
+        assert_eq!(
+            status_of(&state, "PUT", uri, &sign_token(1), body).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            state.db.get("latency_off:5:n1").await.unwrap().as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            status_of(&state, "PUT", uri, "junk", body).await,
             StatusCode::UNAUTHORIZED
         );
     }
@@ -1165,6 +1208,184 @@ mod tests {
         assert!(all.is_empty());
     }
 
+    fn bare_report(
+        node_id: &str,
+        latency: Vec<LatencySample>,
+    ) -> relay_shared::protocol::StatusReport {
+        relay_shared::protocol::StatusReport {
+            cpu_usage: 1.0,
+            mem_usage: 1.0,
+            active_connections: 0,
+            uptime_secs: 1,
+            public_ip: None,
+            public_ipv4: None,
+            public_ipv6: None,
+            disk_total: None,
+            disk_used: None,
+            disk_usage_percent: None,
+            disk_mount: None,
+            upload_bps: None,
+            download_bps: None,
+            boot_upload_bytes: None,
+            boot_download_bytes: None,
+            network_interface: None,
+            node_id: Some(node_id.to_string()),
+            process_uptime_secs: None,
+            node_version: Some("1.2.12".into()),
+            config_protocol_version: None,
+            listener_errors: None,
+            install_method: None,
+            cpu_model: None,
+            cpu_cores: None,
+            mem_total: None,
+            mem_used: None,
+            disks: vec![],
+            latency,
+        }
+    }
+
+    async fn switch(state: &AppState, group: i64, node: &str, enabled: bool) {
+        let Json(r) = crate::api::stats::set_node_latency(
+            admin(),
+            State(state.clone()),
+            Path((group, node.to_string())),
+            Json(crate::api::stats::SetLatencyRequest { enabled }),
+        )
+        .await;
+        assert_eq!(r.code, 0, "{}", r.message);
+    }
+
+    /// A node switched off is ignored for latency from its next report: its
+    /// samples are dropped and its "unsupported" list is not written, while
+    /// the rest of the report is handled and a node that is on is unaffected.
+    #[tokio::test]
+    async fn a_report_from_a_switched_off_node_stores_no_latency() {
+        let (state, pool) = test_state().await;
+        seed_group(&pool, 5, "in").await;
+        let ids = save_ids(
+            &state,
+            5,
+            vec![
+                target("电信", "192.0.2.1", Some(443)),
+                target("联通", "192.0.2.2", None),
+            ],
+        )
+        .await;
+        add_status(&state, 5, "n1", "1.2.12", &[]).await;
+        add_status(&state, 5, "n2", "1.2.12", &[]).await;
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("Authorization", "Bearer tok-5".parse().unwrap());
+        let send = |r: relay_shared::protocol::StatusReport| {
+            let (state, headers) = (state.clone(), headers.clone());
+            async move {
+                let Json(resp) =
+                    crate::api::node::report_status(State(state), headers, Json(r)).await;
+                assert_eq!(resp.code, 0);
+            }
+        };
+        let m = minute_now(2);
+        let samples = || {
+            vec![
+                LatencySample {
+                    target_id: ids[0],
+                    minute_ts: m,
+                    sent: 6,
+                    lost: 0,
+                    rtt_sum_ms: 60.0,
+                    rtt_min_ms: 9.0,
+                    rtt_max_ms: 11.0,
+                    unsupported: false,
+                },
+                LatencySample {
+                    target_id: ids[1],
+                    minute_ts: 0,
+                    sent: 0,
+                    lost: 0,
+                    rtt_sum_ms: 0.0,
+                    rtt_min_ms: 0.0,
+                    rtt_max_ms: 0.0,
+                    unsupported: true,
+                },
+            ]
+        };
+        let stored = |node: &'static str| {
+            let state = state.clone();
+            async move {
+                state
+                    .db
+                    .query_latency_buckets(node, LatencyGranularity::Minute1, 0, i64::MAX)
+                    .await
+                    .unwrap()
+                    .len()
+            }
+        };
+
+        // on by default: both nodes record, and the unsupported marker lands
+        send(bare_report("n1", samples())).await;
+        send(bare_report("n2", samples())).await;
+        assert_eq!((stored("n1").await, stored("n2").await), (1, 1));
+        let d = query(&state, "n1", "1h", "auto").await.data.unwrap();
+        assert_eq!(d.unsupported_targets, vec![ids[1]]);
+        assert!(!d.monitoring_off);
+
+        // n1 off: nothing new is stored for it and its marker clears (as if the
+        // report carried no latency); n2 is untouched
+        switch(&state, 5, "n1", false).await;
+        let m2 = minute_now(1);
+        let mut s = samples();
+        s[0].minute_ts = m2;
+        send(bare_report("n1", s.clone())).await;
+        send(bare_report("n2", s)).await;
+        assert_eq!(stored("n1").await, 1, "n1's new minute was dropped");
+        assert_eq!(stored("n2").await, 2, "n2 still records");
+        let d = query(&state, "n1", "1h", "auto").await.data.unwrap();
+        assert!(d.unsupported_targets.is_empty());
+        // the rest of the report was handled: the status row is fresh
+        let status: serde_json::Value =
+            serde_json::from_str(&state.db.get("node_status:5:n1").await.unwrap().unwrap())
+                .unwrap();
+        assert_eq!(status["cpu"], 1.0);
+
+        // back on: recording resumes from the next report
+        switch(&state, 5, "n1", true).await;
+        assert!(state.db.get("latency_off:5:n1").await.unwrap().is_none());
+        let mut s = samples();
+        s[0].minute_ts = m2;
+        send(bare_report("n1", s)).await;
+        assert_eq!(stored("n1").await, 2);
+    }
+
+    /// A node the panel has no status record for (under that group) cannot be
+    /// switched, and nothing is stored.
+    #[tokio::test]
+    async fn the_switch_is_refused_for_an_unknown_node_and_leaves_no_key() {
+        let (state, pool) = test_state().await;
+        seed_group(&pool, 5, "in").await;
+        add_status(&state, 5, "n1", "1.2.12", &[]).await;
+        let Json(r) = crate::api::stats::set_node_latency(
+            admin(),
+            State(state.clone()),
+            Path((5, "ghost".to_string())),
+            Json(crate::api::stats::SetLatencyRequest { enabled: false }),
+        )
+        .await;
+        assert_eq!(r.code, 404);
+        let Json(r) = crate::api::stats::set_node_latency(
+            admin(),
+            State(state.clone()),
+            Path((6, "n1".to_string())),
+            Json(crate::api::stats::SetLatencyRequest { enabled: false }),
+        )
+        .await;
+        assert_eq!(r.code, 404, "n1 is a node of group 5, not 6");
+        assert!(state
+            .db
+            .scan_prefix("latency_off:")
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
     /// The plan reaches every node of a group that has targets — an outbound
     /// group's as well as an inbound one's — is that group's own, and does not
     /// exist for a group without targets.
@@ -1402,6 +1623,54 @@ mod tests {
 
         // a bad range is refused
         assert_eq!(group_view(&state, 5, "2h", None).await.code, 400);
+    }
+
+    /// A node switched off is left out of the comparison entirely (rows,
+    /// chart lines, node list) but its history is kept, and the node page
+    /// still answers for it with the flag set.
+    #[tokio::test]
+    async fn a_switched_off_node_leaves_the_group_view_but_keeps_its_history() {
+        let (state, pool) = test_state().await;
+        seed_group(&pool, 5, "in").await;
+        let ids = save_ids(&state, 5, vec![target("电信", "192.0.2.1", Some(443))]).await;
+        add_status(&state, 5, "n1", "1.2.12", &[]).await;
+        add_status(&state, 5, "n2", "1.2.12", &[]).await;
+        for node in ["n1", "n2"] {
+            state
+                .db
+                .record_latency_minutes(node, &[row(ids[0], minute_now(2), 0, 10.0)])
+                .await
+                .unwrap();
+        }
+        let d = group_view(&state, 5, "1h", None).await.data.unwrap();
+        assert_eq!(d.nodes.len(), 2);
+
+        switch(&state, 5, "n2", false).await;
+        let d = group_view(&state, 5, "1h", None).await.data.unwrap();
+        let node_ids: Vec<&str> = d.nodes.iter().map(|n| n.node_id.as_str()).collect();
+        assert_eq!(node_ids, vec!["n1"]);
+        assert!(d.matrix.iter().all(|c| c.node_id == "n1"));
+        assert_eq!(d.series.len(), 1);
+        assert_eq!(d.series[0].node_id, "n1");
+
+        // the node page still has the stored history, with the flag
+        let n2 = query(&state, "n2", "1h", "auto").await.data.unwrap();
+        assert!(n2.monitoring_off);
+        assert_eq!(n2.series[0].points.len(), 1, "history is kept");
+        let n1 = query(&state, "n1", "1h", "auto").await.data.unwrap();
+        assert!(!n1.monitoring_off);
+
+        // switching back on shows it again
+        switch(&state, 5, "n2", true).await;
+        let d = group_view(&state, 5, "1h", None).await.data.unwrap();
+        assert_eq!(d.nodes.len(), 2);
+        assert!(
+            !query(&state, "n2", "1h", "auto")
+                .await
+                .data
+                .unwrap()
+                .monitoring_off
+        );
     }
 
     /// A group without targets still answers (the page shows its empty state):
