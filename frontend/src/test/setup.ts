@@ -2,7 +2,8 @@
 // to Vitest's expect so component assertions read naturally. Loaded once per
 // test run via vitest config setupFiles.
 import '@testing-library/jest-dom/vitest';
-import { cleanup } from '@testing-library/react';
+import { act, cleanup } from '@testing-library/react';
+import { Modal, message } from 'antd';
 import { afterEach, vi } from 'vitest';
 
 // jsdom doesn't implement ResizeObserver or matchMedia, but antd components
@@ -72,10 +73,36 @@ vi.mock('@ant-design/charts', () => ({
   Line: () => null,
 }));
 
-// Unmount rendered components between tests so each test starts from a clean
-// DOM (otherwise multiple StateProbe instances accumulate and getByTestId finds
-// duplicates). @testing-library/react auto-cleans when globals are enabled; we
-// do it explicitly since vitest runs without globals here.
-afterEach(() => {
+// Kept before any test can install fake timers, so the drain below always
+// waits on real timer turns.
+const realSetTimeout = globalThis.setTimeout;
+
+// After every test, in every file:
+//
+// 1. Unmount rendered components so each test starts from a clean DOM
+//    (otherwise multiple StateProbe instances accumulate and getByTestId finds
+//    duplicates). @testing-library/react auto-cleans when globals are enabled;
+//    we do it explicitly since vitest runs without globals here.
+// 2. Close antd's static message toasts and Modal.confirm dialogs. They live in
+//    antd's own React root, not in the tree render() made, so cleanup() never
+//    removes them, and a toast counts down to closing on requestAnimationFrame.
+//    Closing them inside act() flushes the resulting React work now.
+// 3. Let React's scheduler run what it already queued (e.g. effects of a
+//    commit made outside act(), such as a mock resolving while waitFor polls).
+//
+// Left alone, that work can run after the test file ends and its jsdom is torn
+// down, and vitest then reports "ReferenceError: window is not defined" from
+// react-dom's scheduler as an unhandled error, failing the run even though
+// every test passed.
+afterEach(async () => {
   cleanup();
+  await act(async () => {
+    message.destroy();
+    Modal.destroyAll();
+  });
+  // Two timer turns: whichever phase of Node's event loop this runs in, a
+  // check phase (where React's scheduler runs) comes before the second fires.
+  for (let i = 0; i < 2; i += 1) {
+    await new Promise((resolve) => realSetTimeout(resolve, 0));
+  }
 });
