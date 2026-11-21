@@ -497,6 +497,13 @@ html, body, #root {
   white-space: nowrap;
 }
 
+/* "No data" / "all lost" in place of a number: a quiet line, not a headline. */
+.rp-lat-target-value.is-text {
+  font-size: 15px;
+  line-height: 29px;
+  color: var(--ant-color-text-secondary, rgba(0, 0, 0, 0.55));
+}
+
 /* Trend card: a compact header whose tools wrap under the title. */
 .rp-lat-card .ant-card-head {
   min-height: 44px;

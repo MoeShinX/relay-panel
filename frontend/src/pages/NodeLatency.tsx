@@ -333,7 +333,7 @@ export default function NodeLatency() {
 
   const cards = (
     <div
-      style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 150px), 1fr))', gap: 12, marginBottom: 16 }}
+      style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 190px), 1fr))', gap: 12, marginBottom: 16 }}
       data-testid="latency-cards"
     >
       {series.map((s) => {
@@ -373,7 +373,7 @@ export default function NodeLatency() {
               {s.kind === 'icmp' ? 'ICMP' : 'TCP'} · {t(CARRIER_KEY[s.carrier])}
             </div>
             <div
-              className="rp-lat-target-value"
+              className={`rp-lat-target-value${unsupported || (hasLatest && sum?.latest != null) ? '' : ' is-text'}`}
               data-testid={`latency-card-value-${s.target_id}`}
               data-level={unsupported ? 'none' : level}
             >
