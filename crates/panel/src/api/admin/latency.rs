@@ -239,7 +239,11 @@ pub async fn get_node_latency(
             (
                 db.query_latency_buckets(&node_id, granularity, since, until)
                     .await?,
-                db.query_latest_latency(&node_id, now_ts - latency::ACCEPT_WINDOW_SECS)
+                // The newest minute whatever its age, within the 48 hours the
+                // minute table holds: a node that went quiet keeps showing when
+                // it last reported, and the page greys the reading by its age
+                // instead of colouring it from the range figures.
+                db.query_latest_latency(&node_id, now_ts - latency::MINUTE_RETENTION_SECS)
                     .await?,
             )
         } else {
@@ -1715,6 +1719,49 @@ mod tests {
         )
         .await;
         r
+    }
+
+    /// A node that stopped reporting still has its newest minute in the summary,
+    /// with its real age, so the page can say "no new data, last at ..." instead
+    /// of "no data"; only a target it never reported (within 48 hours) has none.
+    #[tokio::test]
+    async fn the_summary_keeps_the_newest_minute_of_a_node_that_went_quiet() {
+        let (state, pool) = test_state().await;
+        seed_group(&pool, 5, "in").await;
+        let ids = save_ids(
+            &state,
+            5,
+            vec![
+                target("A", "192.0.2.1", Some(443)),
+                target("B", "192.0.2.2", Some(443)),
+                target("C", "192.0.2.3", Some(443)),
+            ],
+        )
+        .await;
+        add_status(&state, 5, "n1", "1.2.12", &[]).await;
+        state
+            .db
+            .record_latency_minutes(
+                "n1",
+                &[
+                    // A: last heard 15 minutes ago (older minutes before it)
+                    row(ids[0], minute_now(40), 0, 11.0),
+                    row(ids[0], minute_now(15), 0, 21.0),
+                    // B: last heard two hours ago
+                    row(ids[1], minute_now(120), 0, 31.0),
+                ],
+            )
+            .await
+            .unwrap();
+        let r = query(&state, "n1", "24h", "1h").await;
+        let d = r.data.unwrap();
+        let by = |id: i64| d.summary.iter().find(|s| s.target_id == id).unwrap();
+        assert_eq!(by(ids[0]).latest_ts, Some(minute_now(15)));
+        assert_eq!(by(ids[0]).latest, Some(21.0));
+        assert_eq!(by(ids[1]).latest_ts, Some(minute_now(120)));
+        assert_eq!(by(ids[1]).latest, Some(31.0));
+        // never reported: nothing, and that stays "no data"
+        assert_eq!((by(ids[2]).latest_ts, by(ids[2]).latest), (None, None));
     }
 
     /// Each group line carries the real time of the node's newest minute for

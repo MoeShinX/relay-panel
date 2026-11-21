@@ -836,8 +836,10 @@ export interface LatencySeries {
 
 export interface LatencySummary {
   target_id: number;
-  /** The newest minute's mean (null: none in the last ten minutes, or it lost
-   *  everything) and when it started. */
+  /** The newest minute's mean (null: it lost everything, or the node never
+   *  reported the target in the last 48 hours) and when it started. That minute
+   *  may be old: a node that stopped reporting keeps its last one here, and the
+   *  page greys it by its age (`latest_ts`, LATENCY_STALE_SECS). */
   latest: number | null;
   latest_ts: number | null;
   latest_loss: number | null;

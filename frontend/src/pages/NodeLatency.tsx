@@ -402,11 +402,11 @@ export default function NodeLatency() {
         // A reading older than ten minutes is not the current state of the line:
         // no colour, no number, whatever the last answer from the panel was.
         const stale = hasLatest && isStaleSample(sum?.latest_ts, nowSecs);
-        const level = stale
+        // No fresh current reading (none at all, or too old) is never coloured
+        // from the range figures: the dot is grey.
+        const level = stale || !hasLatest
           ? 'none'
-          : hasLatest
-            ? latencyLevel(sum?.latest, sum?.latest_loss, sum?.latest_retrans_rate)
-            : latencyLevel(sum?.avg, sum?.loss, sum?.retrans_rate);
+          : latencyLevel(sum?.latest, sum?.latest_loss, sum?.latest_retrans_rate);
         const isSelected = onlyId === s.target_id;
         const failLabel = t(s.kind === 'tcp' ? 'latencyCardFailed' : 'latencyCardLoss');
         const rangeSlow = slowText(sum?.retrans_rate, s.kind);

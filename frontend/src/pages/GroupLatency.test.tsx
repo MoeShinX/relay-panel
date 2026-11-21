@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 
 const { mockGet } = vi.hoisted(() => ({ mockGet: vi.fn() }));
@@ -945,6 +945,27 @@ describe('GroupLatency slow handshakes', () => {
     expect(screen.getByTestId('strip-raw-n1')).toHaveTextContent('latencyCardRaw 992 ms');
     expect(screen.getByTestId('strip-lat-n1-29')).toHaveAttribute('data-level', 'bad');
     expect(screen.getByTestId('strip-current-n2')).toHaveAttribute('data-level', 'good');
+  });
+
+  it('a node that cannot do ICMP shows the "not supported" tag, whatever else is stored for the pair', async () => {
+    // n2 reported target 2 (ICMP) unsupported: the tag wins over "no data" and
+    // over a cell that happens to exist (stale figures from before)
+    serve(() => ok(response({ matrix: [cell('n1', 2, 250, 0), cell('n2', 2, 30, 0)] })));
+    renderPage();
+    await flush();
+    const c = screen.getByTestId('latency-cell-n2-2');
+    expect(c).toHaveTextContent('latencyGroupUnsupported');
+    expect(c).not.toHaveTextContent('latencyNoData');
+    expect(c).toHaveAttribute('data-level', 'none');
+    // a supported node's cell is a reading
+    expect(screen.getByTestId('latency-cell-n1-2')).toHaveTextContent('250 ms');
+    // and with no cell at all for the pair it is still the tag, not "no data"
+    cleanup();
+    serve(() => ok(response({ matrix: [] })));
+    renderPage();
+    await flush();
+    expect(screen.getByTestId('latency-cell-n2-2')).toHaveTextContent('latencyGroupUnsupported');
+    expect(screen.getByTestId('latency-cell-n1-2')).toHaveTextContent('latencyNoData');
   });
 
   it('an ICMP column has no slow-handshake figure and says loss', async () => {

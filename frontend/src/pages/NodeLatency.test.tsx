@@ -760,6 +760,40 @@ describe('NodeLatency stale readings and failed refreshes', () => {
     expect(screen.getByTestId('latency-updated-at')).toHaveAttribute('data-time', clock(Date.now() / 1000));
   });
 
+  it('a node that stopped reporting 15 minutes ago is grey with its last time, never coloured from the range', async () => {
+    // the server keeps the newest minute whatever its age; the range figures are
+    // bad (300 ms, 8 % lost), which must not colour a reading that is not current
+    serve(() =>
+      ok(
+        response({
+          series: [
+            { target_id: 1, name: 'Beijing Telecom', carrier: 'telecom', kind: 'tcp', points: [point(NOW - 900, 20)] },
+            { target_id: 2, name: 'Shanghai Unicom', carrier: 'unicom', kind: 'tcp', points: [] },
+          ],
+          summary: [
+            { target_id: 1, latest: 20, latest_ts: NOW - 900, latest_loss: 0, avg: 300, loss: 8 },
+            // never reported (within 48 hours): no sample at all
+            { target_id: 2, latest: null, latest_ts: null, latest_loss: null, avg: null, loss: null },
+          ],
+          unsupported_targets: [],
+        }),
+      ),
+    );
+    renderPage();
+    await flush();
+    expect(card()).toHaveAttribute('data-level', 'none');
+    expect(card()).toHaveTextContent('latencyNoNewData');
+    expect(card()).not.toHaveTextContent('latencyNoData');
+    expect(screen.getByTestId('latency-card-stale-time-1')).toHaveTextContent(formatSampleTime(NOW - 900, Date.now()));
+    expect(screen.getByTestId('strip-current-1')).toHaveAttribute('data-level', 'none');
+    // the range figures are still shown, with their own colours elsewhere
+    expect(within(screen.getByTestId('latency-card-1')).getByText(/latencyCardAvg 300 ms/)).toBeInTheDocument();
+    // a target the node never reported: "no data", also grey, also not from the range
+    expect(screen.getByTestId('latency-card-value-2')).toHaveTextContent('latencyNoData');
+    expect(screen.getByTestId('latency-card-value-2')).toHaveAttribute('data-level', 'none');
+    expect(screen.queryByTestId('latency-card-stale-2')).toBeNull();
+  });
+
   it('a fresh sample clears the stale state and the failure warning', async () => {
     let mode: 'ok' | 'fail' | 'fresh' = 'ok';
     serve(() => {

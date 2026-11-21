@@ -602,8 +602,11 @@ pub struct TargetSeries {
 #[derive(Debug, Serialize, PartialEq)]
 pub struct TargetSummary {
     pub target_id: i64,
-    /// The newest minute's mean round trip (null when none in the last ten
-    /// minutes, or when that minute lost every probe) and when it started.
+    /// The newest minute's mean round trip (null when that minute lost every
+    /// probe, or when the node never reported the target within the minute
+    /// table's 48 hours) and when it started. The minute may be old: a node that
+    /// stopped reporting keeps its last minute here, and the page decides from
+    /// `latest_ts` whether that is still "current" (see LATENCY_STALE_SECS).
     pub latest: Option<f64>,
     pub latest_ts: Option<i64>,
     pub latest_loss: Option<f64>,
