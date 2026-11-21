@@ -14,6 +14,7 @@ import {
   stripSegmentCount,
   stripSegments,
   tooltipText,
+  yDomainMin,
   type ChartPoint,
 } from './latencyChart';
 import type { LatencyPoint } from '../api/types';
@@ -168,9 +169,32 @@ describe('chart helpers', () => {
     expect(tooltipText({ raw: null, loss: 100, retrans: null }, labels)).toBe('ALL LOST · loss 100.0%');
   });
 
-  it('puts a loss marker on the line, and on the baseline under a gap', () => {
-    const m = lossMarkers([cp('a', 0, 25, { loss: 3 }), cp('a', 60, null, { loss: 100 }), cp('a', 120, 30)]);
-    expect(m.map((x) => x.y)).toEqual([25, 0]);
+  it('puts a loss marker on the line, and on the given baseline under a gap', () => {
+    const pts = [cp('a', 0, 25, { loss: 3 }), cp('a', 60, null, { loss: 100 }), cp('a', 120, 30)];
+    expect(lossMarkers(pts).map((x) => x.y)).toEqual([25, 0]);
+    expect(lossMarkers(pts, 20).map((x) => x.y)).toEqual([25, 20]);
+  });
+
+  it('marks only buckets at or above the warn loss (1%) or fully lost, not every dropped packet', () => {
+    const pts = [
+      cp('a', 0, 25, { loss: 0.2 }),
+      cp('a', 60, 25, { loss: 0.99 }),
+      cp('a', 120, 25, { loss: 1 }),
+      cp('a', 180, null, { loss: 100 }),
+    ];
+    expect(lossMarkers(pts).map((m) => m.loss)).toEqual([1, 100]);
+  });
+
+  it('starts the y axis a little under the lowest value, never below 0', () => {
+    const lines = (v: number[]) => v.map((x, i) => cp('a', i * 60, x));
+    const lo = yDomainMin(lines([35, 50, 70]));
+    expect(lo).toBeGreaterThan(0);
+    expect(lo).toBeLessThan(35);
+    expect(yDomainMin(lines([0.5, 1, 2]))).toBe(0);
+    expect(yDomainMin([])).toBe(0);
+    expect(yDomainMin([cp('a', 0, null)])).toBe(0);
+    // gaps do not count as zero
+    expect(yDomainMin([cp('a', 0, 40), cp('a', 60, null), cp('a', 120, 60)])).toBeGreaterThan(0);
   });
 });
 

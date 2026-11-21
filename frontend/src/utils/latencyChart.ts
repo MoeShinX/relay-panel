@@ -1,5 +1,5 @@
 import type { GroupLatencyNode, GroupLatencySeries, LatencyPoint, LatencySeries } from '../api/types';
-import { STRIP_SEGMENTS, latencyLevel, type LatencyLevel } from './latency';
+import { LATENCY_LOSS_WARN_PCT, STRIP_SEGMENTS, latencyLevel, type LatencyLevel } from './latency';
 
 /** One plotted point of one line. `value` is the bucket's mean round trip,
  *  null when every probe in it was lost (the line then breaks, which is the
@@ -87,12 +87,37 @@ export function groupChartPoints(series: GroupLatencySeries[], nodes: GroupLaten
   return out;
 }
 
-/** Where probes were lost: one marker per bucket with any loss, so an outage
- *  and a stray dropped packet are both visible without reading the tooltip. */
-export function lossMarkers(points: ChartPoint[]): LossMarker[] {
+/** Where probes were lost: one marker per bucket whose loss reaches
+ *  LATENCY_LOSS_WARN_PCT (which includes a bucket that lost everything). A
+ *  stray dropped packet in a long bucket would otherwise dot the whole chart;
+ *  the tooltip still gives the loss of every point. `baseline` is where a gap
+ *  (no line to sit on) gets its marker: the bottom edge of the plot. */
+export function lossMarkers(points: ChartPoint[], baseline = 0): LossMarker[] {
   return points
-    .filter((p) => p.loss > 0)
-    .map((p) => ({ time: p.time, key: p.key, name: p.name, loss: p.loss, y: p.value ?? 0 }));
+    .filter((p) => p.loss >= LATENCY_LOSS_WARN_PCT)
+    .map((p) => ({ time: p.time, key: p.key, name: p.name, loss: p.loss, y: p.value ?? baseline }));
+}
+
+/** The lowest value the y axis starts at: a little under the lowest drawn
+ *  value, rounded down to a tidy step, and never below 0. A chart of lines at
+ *  35-70 ms should not spend its lower half on 0-35. */
+export function yDomainMin(points: ChartPoint[]): number {
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const p of points) {
+    if (p.value == null) continue;
+    lo = Math.min(lo, p.value);
+    hi = Math.max(hi, p.value);
+  }
+  if (!Number.isFinite(lo)) return 0;
+  const span = hi - lo;
+  const raw = lo - Math.max(span * 0.15, hi * 0.05, 1);
+  if (raw <= 0) return 0;
+  const target = Math.max(span, 1) / 4;
+  const pow = 10 ** Math.floor(Math.log10(target));
+  const m = target / pow;
+  const step = (m >= 5 ? 5 : m >= 2 ? 2 : 1) * pow;
+  return Math.max(0, Math.floor(raw / step) * step);
 }
 
 /** Weight of the newest bucket in the smoothing. */

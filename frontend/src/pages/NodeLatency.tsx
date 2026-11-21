@@ -385,15 +385,22 @@ export default function NodeLatency() {
                 <Tag color="orange" style={{ marginTop: 4 }}>{t('latencyIcmpUnsupported')}</Tag>
               </Tooltip>
             ) : (
-              <span className="rp-lat-sub">
-                {t('latencyCardAvg')} {formatMs(sum?.avg)} · {t('latencyCardLoss')} {formatLoss(sum?.loss)}
-                {formatRetrans(sum?.retrans_rate) == null ? null : (
-                  <span data-testid={`latency-card-retrans-${s.target_id}`}>
-                    {' · '}
-                    {t('latencyCardRetrans')} {formatRetrans(sum?.retrans_rate)}
-                  </span>
-                )}
-              </span>
+              <>
+                <span className="rp-lat-sub">
+                  <span className="rp-lat-nowrap">{t('latencyCardAvg')} {formatMs(sum?.avg)}</span>
+                </span>
+                <span className="rp-lat-sub">
+                  <span className="rp-lat-nowrap">{t('latencyCardLoss')} {formatLoss(sum?.loss)}</span>
+                  {formatRetrans(sum?.retrans_rate) == null ? null : (
+                    <>
+                      {' · '}
+                      <span className="rp-lat-nowrap" data-testid={`latency-card-retrans-${s.target_id}`}>
+                        {t('latencyCardRetrans')} {formatRetrans(sum?.retrans_rate)}
+                      </span>
+                    </>
+                  )}
+                </span>
+              </>
             )}
           </Card>
         );

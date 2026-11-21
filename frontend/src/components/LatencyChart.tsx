@@ -9,8 +9,10 @@ import {
   maxPointsPerKey,
   smoothPoints,
   tooltipText,
+  yDomainMin,
   type ChartPoint,
 } from '../utils/latencyChart';
+import { LEVEL_COLORS } from '../utils/latency';
 
 /** The subset of the chart instance the latency pages use (see @ant-design/plots). */
 export interface LatencyChartHandle {
@@ -22,7 +24,7 @@ export interface LatencyChartHandle {
 export const CHART_HEIGHT = 320;
 
 /** Axis and grid ink. Neutral and translucent, so it reads on any surface. */
-const INK = 'rgba(100, 108, 120, 0.9)';
+const INK = 'rgba(75, 85, 99, 0.95)';
 const GRID = 'rgba(100, 108, 120, 0.22)';
 
 interface Props {
@@ -58,7 +60,8 @@ interface Props {
 export default function LatencyChart({ points, colorDomain, names, withDate, smooth = false, onReady }: Props) {
   const { t } = useI18n();
   const plotted = useMemo(() => (smooth ? smoothPoints(points) : points), [points, smooth]);
-  const markers = useMemo(() => lossMarkers(plotted), [plotted]);
+  const yMin = useMemo(() => yDomainMin(plotted), [plotted]);
+  const markers = useMemo(() => lossMarkers(plotted, yMin), [plotted, yMin]);
   const symbols = useMemo(() => maxPointsPerKey(points) <= SYMBOL_MAX_POINTS, [points]);
   const labels = useMemo(
     () => ({ allLost: t('latencyAllLost'), loss: t('latencyTipLoss'), retrans: t('latencyCardRetrans') }),
@@ -76,7 +79,7 @@ export default function LatencyChart({ points, colorDomain, names, withDate, smo
       connectNulls={false}
       scale={{
         x: { type: 'time' },
-        y: { nice: true, domainMin: 0 },
+        y: { nice: true, domainMin: yMin },
         color: { domain: colorDomain, range: SERIES_COLORS_LIGHT },
       }}
       style={{ lineWidth: 2 }}
@@ -127,9 +130,8 @@ export default function LatencyChart({ points, colorDomain, names, withDate, smo
           gridStrokeOpacity: 1,
           gridLineWidth: 1,
           tickCount: 5,
-          labelDirection: 'positive',
           labelFill: INK,
-          labelFontSize: 11,
+          labelFontSize: 10,
           labelFormatter: (v: number) => `${Math.round(v)} ms`,
         },
       }}
@@ -138,7 +140,7 @@ export default function LatencyChart({ points, colorDomain, names, withDate, smo
           type: 'point',
           data: markers,
           encode: { x: 'time', y: 'y' },
-          style: { fill: '#ef4444', stroke: '#ffffff', lineWidth: 1, r: 3 },
+          style: { fill: LEVEL_COLORS.bad, stroke: '#ffffff', lineWidth: 1, r: 3 },
           tooltip: false,
         },
       ]}

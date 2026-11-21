@@ -424,6 +424,9 @@ html, body, #root {
   font-weight: 500;
   white-space: nowrap;
 }
+.rp-lat-nowrap {
+  white-space: nowrap;
+}
 .rp-lat-sub {
   display: block;
   font-size: 12px;
@@ -537,15 +540,16 @@ html, body, #root {
   margin-bottom: 8px;
 }
 .rp-lat-stats {
-  width: auto;
-  min-width: min(100%, 520px);
+  width: 100%;
+  min-width: 560px;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 13px;
   white-space: nowrap;
 }
 .rp-lat-stats th,
 .rp-lat-stats td {
-  padding: 5px 0 5px 26px;
+  padding: 5px 0 5px 12px;
   text-align: right;
   font-weight: 400;
 }
@@ -558,7 +562,7 @@ html, body, #root {
 .rp-lat-stats td:first-child {
   text-align: left;
   padding-left: 0;
-  min-width: 110px;
+  width: 22%;
 }
 .rp-lat-stats tbody th {
   font-weight: 500;
@@ -607,9 +611,5 @@ html, body, #root {
   }
   .rp-lat-card-tools {
     justify-content: flex-start;
-  }
-  .rp-lat-stats th,
-  .rp-lat-stats td {
-    padding-left: 16px;
   }
 }
