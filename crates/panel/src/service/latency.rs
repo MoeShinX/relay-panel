@@ -575,12 +575,18 @@ pub struct SeriesPoint {
     pub ts: i64,
     /// Mean round trip of the answered probes; null when all were lost.
     pub avg: Option<f64>,
+    /// Mean of every answered probe, slow handshakes included (`avg` leaves
+    /// them out); equal to `avg` when the data does not say which were slow.
+    pub raw_avg: Option<f64>,
     pub min: Option<f64>,
     pub max: Option<f64>,
+    /// Slowest answered probe, slow handshakes included (`max` leaves them out).
+    pub raw_max: Option<f64>,
     /// Percent of probes lost, 0 to 100.
     pub loss: f64,
-    /// Percent of answered probes that were TCP retransmits, 0 to 100; null
-    /// when none of the bucket's data carries the figure (an older node, ICMP).
+    /// Percent of answered TCP probes whose connect took a second or more
+    /// ("slow handshakes"), 0 to 100; null when none of the bucket's data
+    /// carries the figure (an older node, ICMP).
     pub retrans_rate: Option<f64>,
 }
 
@@ -601,19 +607,26 @@ pub struct TargetSummary {
     pub latest: Option<f64>,
     pub latest_ts: Option<i64>,
     pub latest_loss: Option<f64>,
+    /// The newest minute's share of slow handshakes (see `retrans_rate`).
     pub latest_retrans_rate: Option<f64>,
+    /// The newest minute's mean with slow handshakes included.
+    pub latest_raw_avg: Option<f64>,
     /// Mean round trip over the whole range, and percent lost over it. Null
     /// when the range holds no data / no answered probe.
     pub avg: Option<f64>,
+    /// The range's mean with slow handshakes included.
+    pub raw_avg: Option<f64>,
     pub loss: Option<f64>,
-    /// Percent of answered probes that were retransmits over the range; null
-    /// when no row of the range carries the figure.
+    /// Percent of answered TCP probes that were slow handshakes over the range;
+    /// null when no row of the range carries the figure.
     pub retrans_rate: Option<f64>,
     /// The fastest and slowest answered probe of the range: the smallest of the
-    /// buckets' minimums, and the largest of their retransmit-free maximums
+    /// buckets' minimums, and the largest of their slow-handshake-free maximums
     /// (see `bucket_max` / `range_max`). Null when no probe was answered.
     pub min: Option<f64>,
     pub max: Option<f64>,
+    /// The slowest answered probe of the range, slow handshakes included.
+    pub raw_max: Option<f64>,
 }
 
 fn loss_percent(sent: i64, lost: i64) -> f64 {
@@ -680,9 +693,15 @@ impl RangeMax {
     fn get(&self) -> Option<f64> {
         self.normal.or(self.plain)
     }
+
+    /// The largest answered round trip of the range, slow handshakes included.
+    fn raw(&self) -> Option<f64> {
+        self.plain
+    }
 }
 
-/// The plain mean round trip of the answered probes, retransmits included.
+/// The plain (raw) mean round trip of the answered probes, slow handshakes
+/// included: what the API calls `raw_avg`.
 fn plain_mean(sum: f64, answered: i64) -> Option<f64> {
     (answered > 0).then(|| sum / answered as f64)
 }
@@ -777,8 +796,10 @@ pub fn build_series(
                 SeriesPoint {
                     ts: b.ts,
                     avg: mean(b.rtt_sum_ms, b.sent, b.lost, r),
+                    raw_avg: plain_mean(b.rtt_sum_ms, b.sent - b.lost),
                     min: b.rtt_min_ms,
                     max: bucket_max(b.normal_max_ms, b.rtt_max_ms),
+                    raw_max: b.rtt_max_ms,
                     loss: loss_percent(b.sent, b.lost),
                     retrans_rate: retrans_rate(r),
                 }
@@ -792,11 +813,14 @@ pub fn build_series(
             latest_ts: last.map(|r| r.minute_ts),
             latest_loss: last.map(|r| loss_percent(r.sent, r.lost)),
             latest_retrans_rate: last.and_then(|r| retrans_rate(Retrans::of_row(r))),
+            latest_raw_avg: last.and_then(|r| plain_mean(r.rtt_sum_ms, r.sent - r.lost)),
             avg: mean(sum, sent, lost, total),
+            raw_avg: plain_mean(sum, sent - lost),
             loss: (sent > 0).then(|| loss_percent(sent, lost)),
             retrans_rate: retrans_rate(total),
             min,
             max: max.get(),
+            raw_max: max.raw(),
         });
         series.push(TargetSeries {
             target_id: t.id,
@@ -934,8 +958,10 @@ pub struct MatrixCell {
     pub avg: Option<f64>,
     /// Percent of probes lost, 0 to 100.
     pub loss: f64,
-    /// Percent of answered probes that were TCP retransmits; null when no
-    /// data of the range carries the figure.
+    /// The range's mean with slow handshakes included.
+    pub raw_avg: Option<f64>,
+    /// Percent of answered TCP probes that were slow handshakes (connect took
+    /// a second or more); null when no data of the range carries the figure.
     pub retrans_rate: Option<f64>,
     pub sent: i64,
 }
@@ -954,6 +980,7 @@ pub fn build_matrix(totals: &[LatencyNodeTotal]) -> Vec<MatrixCell> {
                 node_id: t.node_id.clone(),
                 target_id: t.target_id,
                 avg: mean(t.rtt_sum_ms, t.sent, t.lost, r),
+                raw_avg: plain_mean(t.rtt_sum_ms, t.sent - t.lost),
                 loss: loss_percent(t.sent, t.lost),
                 retrans_rate: retrans_rate(r),
                 sent: t.sent,
@@ -988,8 +1015,10 @@ pub fn build_group_series(nodes: &[GroupNode], buckets: &[LatencyNodeBucket]) ->
                     SeriesPoint {
                         ts: b.ts,
                         avg: mean(b.rtt_sum_ms, b.sent, b.lost, r),
+                        raw_avg: plain_mean(b.rtt_sum_ms, b.sent - b.lost),
                         min: b.rtt_min_ms,
                         max: bucket_max(b.normal_max_ms, b.rtt_max_ms),
+                        raw_max: b.rtt_max_ms,
                         loss: loss_percent(b.sent, b.lost),
                         retrans_rate: retrans_rate(r),
                     }
@@ -1745,6 +1774,143 @@ mod tests {
         assert_eq!(cells[1].retrans_rate, None);
         let json = serde_json::to_value(&cells[1]).unwrap();
         assert!(json["retrans_rate"].is_null(), "serialised as null");
+    }
+
+    /// One probe of 20 ms and nine slow handshakes of 1100 ms, all answered:
+    /// the filtered figures read 20 ms, the raw ones tell the truth (992 ms /
+    /// 1100 ms), and 90 % of the probes were slow.
+    #[test]
+    fn raw_figures_keep_the_slow_handshakes_the_filtered_ones_leave_out() {
+        let t = [target(1)];
+        // (retrans, retrans_sum, normal_max, retrans_base)
+        let bucket =
+            |sum, max, extra: (Option<i64>, Option<f64>, Option<f64>, Option<i64>)| LatencyBucket {
+                target_id: 1,
+                ts: 600,
+                sent: 10,
+                lost: 0,
+                rtt_sum_ms: sum,
+                rtt_min_ms: Some(20.0),
+                rtt_max_ms: Some(max),
+                retrans: extra.0,
+                retrans_sum_ms: extra.1,
+                normal_max_ms: extra.2,
+                retrans_base: extra.3,
+            };
+        let minute = |sum, max, retrans, rsum, normal_max| LatencyMinuteRow {
+            target_id: 1,
+            minute_ts: 600,
+            sent: 10,
+            lost: 0,
+            rtt_sum_ms: sum,
+            rtt_min_ms: Some(20.0),
+            rtt_max_ms: Some(max),
+            retrans,
+            retrans_sum_ms: rsum,
+            normal_max_ms: normal_max,
+        };
+
+        // the example: 20 + 9 * 1100 = 9920
+        let buckets = [bucket(
+            9920.0,
+            1100.0,
+            (Some(9), Some(9900.0), Some(20.0), Some(10)),
+        )];
+        let latest = [minute(9920.0, 1100.0, Some(9), Some(9900.0), Some(20.0))];
+        let (series, summary) = build_series(&t, &buckets, &latest);
+        let p = &series[0].points[0];
+        assert_eq!((p.avg, p.max), (Some(20.0), Some(20.0)));
+        assert_eq!((p.raw_avg, p.raw_max), (Some(992.0), Some(1100.0)));
+        assert_eq!(p.retrans_rate, Some(90.0));
+        let s = &summary[0];
+        assert_eq!((s.avg, s.max), (Some(20.0), Some(20.0)));
+        assert_eq!((s.raw_avg, s.raw_max), (Some(992.0), Some(1100.0)));
+        assert_eq!((s.latest, s.latest_raw_avg), (Some(20.0), Some(992.0)));
+        assert_eq!(s.latest_retrans_rate, Some(90.0));
+
+        // matrix cell and group line
+        let cells = build_matrix(&[LatencyNodeTotal {
+            node_id: "n1".into(),
+            target_id: 1,
+            sent: 10,
+            lost: 0,
+            rtt_sum_ms: 9920.0,
+            retrans: Some(9),
+            retrans_sum_ms: Some(9900.0),
+            retrans_base: Some(10),
+        }]);
+        assert_eq!((cells[0].avg, cells[0].raw_avg), (Some(20.0), Some(992.0)));
+        assert_eq!(cells[0].retrans_rate, Some(90.0));
+        let nodes = [GroupNode {
+            node_id: "n1".into(),
+            label: None,
+            public_ip: None,
+            node_version: None,
+            supported: true,
+            unsupported_targets: vec![],
+            last_seen: None,
+        }];
+        let lines = build_group_series(
+            &nodes,
+            &[LatencyNodeBucket {
+                node_id: "n1".into(),
+                ts: 600,
+                sent: 10,
+                lost: 0,
+                rtt_sum_ms: 9920.0,
+                rtt_min_ms: Some(20.0),
+                rtt_max_ms: Some(1100.0),
+                normal_max_ms: Some(20.0),
+                retrans: Some(9),
+                retrans_sum_ms: Some(9900.0),
+                retrans_base: Some(10),
+            }],
+        );
+        let g = &lines[0].points[0];
+        assert_eq!((g.avg, g.max), (Some(20.0), Some(20.0)));
+        assert_eq!((g.raw_avg, g.raw_max), (Some(992.0), Some(1100.0)));
+
+        // rows without retransmit data: raw equals filtered
+        let buckets = [bucket(120.0, 40.0, (None, None, None, None))];
+        let latest = [minute(120.0, 40.0, None, None, None)];
+        let (series, summary) = build_series(&t, &buckets, &latest);
+        let p = &series[0].points[0];
+        assert_eq!((p.raw_avg, p.raw_max), (p.avg, p.max));
+        assert_eq!((p.raw_avg, p.raw_max), (Some(12.0), Some(40.0)));
+        assert_eq!(p.retrans_rate, None);
+        let s = &summary[0];
+        assert_eq!((s.raw_avg, s.raw_max), (s.avg, s.max));
+        assert_eq!(s.latest_raw_avg, s.latest);
+
+        // every answered probe slow: the filtered mean already falls back to
+        // the plain one, and so does the maximum
+        let buckets = [bucket(
+            11000.0,
+            1100.0,
+            (Some(10), Some(11000.0), None, Some(10)),
+        )];
+        let latest = [minute(11000.0, 1100.0, Some(10), Some(11000.0), None)];
+        let (series, summary) = build_series(&t, &buckets, &latest);
+        let p = &series[0].points[0];
+        assert_eq!((p.avg, p.max), (Some(1100.0), Some(1100.0)));
+        assert_eq!((p.raw_avg, p.raw_max), (Some(1100.0), Some(1100.0)));
+        assert_eq!(p.retrans_rate, Some(100.0));
+        assert_eq!(summary[0].raw_avg, summary[0].avg);
+        assert_eq!(summary[0].latest_raw_avg, Some(1100.0));
+
+        // a fully lost minute has no raw figure either
+        let buckets = [LatencyBucket {
+            lost: 10,
+            rtt_sum_ms: 0.0,
+            rtt_min_ms: None,
+            rtt_max_ms: None,
+            ..bucket(0.0, 0.0, (None, None, None, None))
+        }];
+        let (series, _) = build_series(&t, &buckets, &[]);
+        let p = &series[0].points[0];
+        assert_eq!((p.raw_avg, p.raw_max), (None, None));
+        let json = serde_json::to_value(p).unwrap();
+        assert!(json["raw_avg"].is_null() && json["raw_max"].is_null());
     }
 
     #[test]

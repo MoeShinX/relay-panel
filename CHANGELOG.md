@@ -10,6 +10,23 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Changed
+
+- Latency monitor, honest numbers. The "Retrans" rate introduced in 1.2.24 is now
+  called "Slow handshakes": it is the share of successful TCP probes whose connect
+  took a second or more, which is usually a lost and resent SYN but is not read
+  from any retransmit counter. A slow handshake now also counts against a reading:
+  from 2% the card, matrix cell or status slice turns amber and from 10% red, the
+  automatic choice of lines ranks it, and next to the average (which still leaves
+  slow handshakes out) the pages show the "raw" average and maximum with them
+  included (the API adds `raw_avg` / `raw_max`). A TCP target whose data does not
+  carry the figure shows "Slow —" instead of nothing, and its failures are
+  now called "Failed" (DNS failure, refused connection and timeout); ICMP targets
+  keep "Loss". A "current" reading older than ten minutes now turns grey and says
+  "No new data" with the time of its last sample, instead of staying green, and a
+  background refresh that fails keeps the old charts but shows a warning with the
+  time of the data on screen.
+
 ## [1.2.24] - 2026-11-21
 
 ### Changed

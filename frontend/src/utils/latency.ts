@@ -21,18 +21,47 @@ export const LATENCY_WARN_MS = 200;
 /** Loss, in percent, from which a card is flagged whatever its latency. */
 export const LATENCY_LOSS_WARN_PCT = 1;
 export const LATENCY_LOSS_BAD_PCT = 5;
+/** Share of slow handshakes (a successful TCP connect that took a second or
+ *  more), in percent, from which a reading is flagged whatever its latency. A
+ *  slow handshake means one packet of the handshake was lost, so the share is
+ *  about twice the packet loss on the way; 2% / 10% mirror the 1% / 5% loss
+ *  thresholds above. */
+export const LATENCY_SLOW_WARN_PCT = 2;
+export const LATENCY_SLOW_BAD_PCT = 10;
+/** A "current" reading is fresh only while its sample is at most this old, in
+ *  seconds: the server's "newest minute in the last ten minutes". Older, and it
+ *  is no longer the current state of the line, however recently the page
+ *  managed to talk to the panel. */
+export const LATENCY_STALE_SECS = 600;
 
 export type LatencyLevel = 'good' | 'warn' | 'bad' | 'none';
 
-/** How a card is coloured: by the worse of its latency and its loss. A target
- *  with no reading at all is 'none' (grey), not 'good'. */
-export function latencyLevel(avgMs: number | null | undefined, lossPct: number | null | undefined): LatencyLevel {
+/** Whether a reading whose sample was taken at `sampleTs` (unix seconds) is too
+ *  old to be called current at `nowSecs`. No sample at all is not "stale", it is
+ *  "no data" (the callers keep telling those apart). */
+export function isStaleSample(sampleTs: number | null | undefined, nowSecs: number): boolean {
+  return sampleTs != null && nowSecs - sampleTs > LATENCY_STALE_SECS;
+}
+
+/** How a card is coloured: by the worst of its latency, its failures / loss and
+ *  its slow-handshake share, the last two of the same window as the latency. A
+ *  null slow share (not reported: an older node, ICMP) is ignored, never read as
+ *  0%. A target with no reading at all is 'none' (grey), not 'good'. */
+export function latencyLevel(
+  avgMs: number | null | undefined,
+  lossPct: number | null | undefined,
+  slowPct?: number | null,
+): LatencyLevel {
   if (lossPct != null && lossPct >= 100) return 'bad';
   if (avgMs == null) return lossPct != null && lossPct > 0 ? 'bad' : 'none';
   let level: LatencyLevel = avgMs <= LATENCY_GOOD_MS ? 'good' : avgMs <= LATENCY_WARN_MS ? 'warn' : 'bad';
   if (lossPct != null) {
     if (lossPct >= LATENCY_LOSS_BAD_PCT) level = 'bad';
     else if (lossPct >= LATENCY_LOSS_WARN_PCT && level === 'good') level = 'warn';
+  }
+  if (slowPct != null) {
+    if (slowPct >= LATENCY_SLOW_BAD_PCT) level = 'bad';
+    else if (slowPct >= LATENCY_SLOW_WARN_PCT && level === 'good') level = 'warn';
   }
   return level;
 }

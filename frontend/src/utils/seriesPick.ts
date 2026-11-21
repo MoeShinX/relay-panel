@@ -35,10 +35,13 @@ export function rankByScore(keys: string[], score: (key: string) => number | nul
   return scored.map((x) => x.key);
 }
 
-/** What a latency line is ranked on: the range's mean round trip and loss. */
+/** What a latency line is ranked on: the range's mean round trip, loss (or
+ *  failed probes) and share of slow handshakes. `slow` null / absent = not
+ *  reported. */
 export interface LatencyReading {
   avg: number | null | undefined;
   loss: number | null | undefined;
+  slow?: number | null | undefined;
 }
 
 const LEVEL_ORDER: Record<LatencyLevel, number> = { bad: 3, warn: 2, good: 1, none: 0 };
@@ -46,17 +49,20 @@ const LEVEL_ORDER: Record<LatencyLevel, number> = { bad: 3, warn: 2, good: 1, no
 /** Sort key of a reading, bigger = needs attention sooner. A key with no
  *  reading at all (no cell, no data, a node or target that cannot be probed)
  *  scores below everything, including a reading of "none". */
-function attention(r: LatencyReading | null | undefined): [number, number, number, number] {
-  if (!r) return [-1, 0, 0, 0];
-  const level = latencyLevel(r.avg, r.loss);
+function attention(r: LatencyReading | null | undefined): [number, number, number, number, number] {
+  if (!r) return [-1, 0, 0, 0, 0];
+  const level = latencyLevel(r.avg, r.loss, r.slow);
   const loss = r.loss ?? 0;
   const allLost = r.avg == null && loss > 0;
-  return [LEVEL_ORDER[level], allLost ? 1 : 0, loss, r.avg ?? 0];
+  // An unknown share does not claim to be better than a known 0%: the two tie
+  // here and the mean decides, as it does for a line that has no such figure.
+  return [LEVEL_ORDER[level], allLost ? 1 : 0, loss, r.slow ?? 0, r.avg ?? 0];
 }
 
 /** Keys worst first: level (bad, warn, good, none) by the same thresholds as
- *  the cards and the table, a line that lost every probe ahead of the rest of
- *  its level, then higher loss, then higher mean latency. Keys with no reading
+ *  the cards and the table (latency, loss and slow-handshake share of the same
+ *  window), a line that lost every probe ahead of the rest of its level, then
+ *  higher loss, then higher slow share, then higher mean latency. Keys with no reading
  *  come last; ties keep the incoming order. */
 export function rankByAttention(
   keys: string[],
@@ -64,7 +70,7 @@ export function rankByAttention(
 ): string[] {
   const rows = keys.map((key, i) => ({ key, i, a: attention(reading(key)) }));
   rows.sort((x, y) => {
-    for (let k = 0; k < 4; k++) {
+    for (let k = 0; k < 5; k++) {
       if (x.a[k] !== y.a[k]) return y.a[k] - x.a[k];
     }
     return x.i - y.i;

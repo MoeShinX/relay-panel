@@ -810,14 +810,19 @@ export interface LatencyConfig {
  *  bucket was lost; `loss` is a percentage (0–100). `ts` is unix seconds. */
 export interface LatencyPoint {
   ts: number;
-  /** Mean round trip of the answered probes, leaving out TCP retransmits
-   *  (handshakes of a second or more) where the node reported them. */
+  /** Mean round trip of the answered probes, leaving out slow handshakes
+   *  (TCP connects of a second or more) where the node reported them. */
   avg: number | null;
+  /** The same mean with every answered probe in it, slow handshakes included. */
+  raw_avg?: number | null;
   min: number | null;
   max: number | null;
+  /** The slowest answered probe, slow handshakes included (`max` leaves them out). */
+  raw_max?: number | null;
   loss: number;
-  /** Percent of the answered probes that were TCP retransmits, 0-100; null /
-   *  absent when the data does not carry the figure (an older node, ICMP). */
+  /** Percent of the answered TCP probes that were slow handshakes, 0-100; null /
+   *  absent when the data does not carry the figure (an older node, ICMP). The
+   *  field keeps the name it had as "retransmit rate". */
   retrans_rate?: number | null;
 }
 
@@ -836,17 +841,24 @@ export interface LatencySummary {
   latest: number | null;
   latest_ts: number | null;
   latest_loss: number | null;
+  /** The newest minute's share of slow handshakes. */
   latest_retrans_rate?: number | null;
+  /** The newest minute's mean with slow handshakes included. */
+  latest_raw_avg?: number | null;
   /** Over the whole range. */
   avg: number | null;
+  /** The range's mean with slow handshakes included. */
+  raw_avg?: number | null;
   loss: number | null;
-  /** Percent of answered probes that were TCP retransmits over the range. */
+  /** Percent of answered TCP probes that were slow handshakes over the range. */
   retrans_rate?: number | null;
   /** The fastest answered probe of the range, and the slowest one that was not
-   *  a TCP retransmit (every answer a retransmit: the plain slowest); null when
-   *  none was answered. */
+   *  a slow handshake (every answer slow: the plain slowest); null when none
+   *  was answered. */
   min?: number | null;
   max?: number | null;
+  /** The slowest answered probe of the range, slow handshakes included. */
+  raw_max?: number | null;
 }
 
 /** GET /admin/nodes/{node_id}/latency. The targets are those of the node's own
@@ -899,10 +911,12 @@ export interface GroupLatencyCell {
   target_id: number;
   /** Mean over the answered probes of the range; null when all were lost. */
   avg: number | null;
+  /** The same mean with slow handshakes included. */
+  raw_avg?: number | null;
   /** Percent lost over the range, 0-100. */
   loss: number;
-  /** Percent of answered probes that were TCP retransmits; null when the data
-   *  of the range does not carry the figure. */
+  /** Percent of answered TCP probes that were slow handshakes; null when the
+   *  data of the range does not carry the figure. */
   retrans_rate?: number | null;
   sent: number;
 }

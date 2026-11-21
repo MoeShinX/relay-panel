@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes, type KeyboardEvent } from 'react';
-import { Button, Card, Empty, Result, Space, Spin, Table, Tag, Tooltip, Typography } from 'antd';
+import { Alert, Button, Card, Empty, Result, Space, Spin, Table, Tag, Tooltip, Typography } from 'antd';
 import { ArrowLeftOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
@@ -18,23 +18,29 @@ import LatencyTrendCard, { ChartBox, ChartBoxMessage } from '../components/Laten
 import LevelDot from '../components/LevelDot';
 import SeriesPicker from '../components/SeriesPicker';
 import { useSeriesPick } from '../hooks/useSeriesPick';
+import { useNowSecs } from '../hooks/useNowSecs';
 import { rankByAttention } from '../utils/seriesPick';
 import {
   AUTO_REFRESH_MS,
   LATENCY_LOSS_BAD_PCT,
   LATENCY_LOSS_WARN_PCT,
+  LATENCY_SLOW_BAD_PCT,
+  LATENCY_SLOW_WARN_PCT,
   autoRefreshes,
   granularityAllowed,
+  isStaleSample,
   latencyLevel,
   type LatencyGranularity,
   type LatencyRange,
 } from '../utils/latency';
 import {
+  formatClock,
   formatLoss,
   formatMs,
-  formatRetrans,
   groupChartPoints,
   nodeDisplayName,
+  showRaw,
+  slowText,
   type ChartPoint,
 } from '../utils/latencyChart';
 
@@ -78,13 +84,21 @@ export default function GroupLatency() {
   const [selected, setSelected] = useState<number | null>(null);
   const [data, setData] = useState<GroupLatencyResponse | null>(null);
   const [state, setState] = useState<LoadState>('loading');
+  // See NodeLatency: when the last load succeeded, whether the refreshes since
+  // have failed, and the browser's clock that stale readings are judged by.
+  const [lastSuccessAt, setLastSuccessAt] = useState<number | null>(null);
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  const [nowSecs, refreshNow] = useNowSecs();
   // Only the newest request may write the page (see NodeLatency).
   const requestRef = useRef(0);
 
   const load = useCallback(
     async (silent: boolean) => {
       const mine = ++requestRef.current;
-      if (!silent) setState('loading');
+      if (!silent) {
+        setState('loading');
+        setRefreshFailed(false);
+      }
       const target = selected != null ? `&target_id=${selected}` : '';
       try {
         const res = await api.get<unknown, ApiEnvelope<GroupLatencyResponse>>(
@@ -102,17 +116,24 @@ export default function GroupLatency() {
           return;
         }
         if (res.code !== 0 || !res.data) {
-          // A silent refresh that fails keeps the picture already on screen.
-          if (!silent) setState('failed');
+          // A silent refresh that fails keeps the picture already on screen,
+          // with a warning that it is getting old.
+          if (silent) setRefreshFailed(true);
+          else setState('failed');
           return;
         }
         setData(res.data);
         setState('ready');
+        setLastSuccessAt(Date.now());
+        setRefreshFailed(false);
+        refreshNow();
       } catch {
-        if (mine === requestRef.current && !silent) setState('failed');
+        if (mine !== requestRef.current) return;
+        if (silent) setRefreshFailed(true);
+        else setState('failed');
       }
     },
-    [groupId, range, granularity, selected],
+    [groupId, range, granularity, selected, refreshNow],
   );
 
   useEffect(() => {
@@ -142,21 +163,22 @@ export default function GroupLatency() {
   const activeTarget = targets.find((x) => x.id === activeId);
 
   const allPoints: ChartPoint[] = useMemo(
-    () => (data ? groupChartPoints(data.series, data.nodes) : []),
-    [data],
+    () => (data ? groupChartPoints(data.series, data.nodes, activeTarget?.kind ?? null) : []),
+    [data, activeTarget],
   );
   const names = useMemo(() => new Map(nodes.map((n) => [n.node_id, nodeDisplayName(n)])), [nodes]);
   // One line per node. Past ten the palette runs out: the picker chooses which
   // to draw, by default the ten that need attention first for this target
-  // (worst latency level, then loss, then mean; a node that cannot be probed or
-  // has no reading last).
+  // (worst level by latency, loss and slow-handshake share, then loss, then slow
+  // share, then mean; a node that cannot be probed or has no reading last).
   const nodeKeys = useMemo(() => nodes.map((n) => n.node_id), [nodes]);
   const ranked = useMemo(() => {
     const byId = new Map(nodes.map((n) => [n.node_id, n]));
     return rankByAttention(nodeKeys, (id) => {
       const n = byId.get(id);
       if (!n || !n.supported || activeId == null || n.unsupported_targets.includes(activeId)) return null;
-      return cells.get(cellKey(id, activeId));
+      const c = cells.get(cellKey(id, activeId));
+      return c ? { avg: c.avg, loss: c.loss, slow: c.retrans_rate } : undefined;
     });
   }, [nodes, nodeKeys, cells, activeId]);
   const pick = useSeriesPick(nodeKeys, ranked);
@@ -175,7 +197,8 @@ export default function GroupLatency() {
     for (const s of data?.series ?? []) byNode.set(s.node_id, s);
     return nodes.map((n) => {
       const name = nodeDisplayName(n);
-      const base = { key: n.node_id, name, points: [], current: null, loss: null, retrans: null };
+      const kind = activeTarget?.kind;
+      const base = { key: n.node_id, name, kind, points: [], current: null, loss: null, slow: null };
       if (!n.supported) return { ...base, note: t('latencyGroupNeedUpgrade') };
       if (activeId != null && n.unsupported_targets.includes(activeId)) {
         return { ...base, note: t('latencyGroupUnsupported') };
@@ -183,15 +206,28 @@ export default function GroupLatency() {
       const pts = byNode.get(n.node_id)?.points ?? [];
       const newest = pts.reduce<(typeof pts)[number] | null>((a, p) => (a == null || p.ts > a.ts ? p : a), null);
       const c = activeId != null ? cells.get(cellKey(n.node_id, activeId)) : undefined;
+      // The series carries no sample time of its own: the newest bucket is
+      // current while its end is recent (for the one-hour buckets of a long
+      // range that is generous, for minute buckets it is exact).
+      const sampleTs = newest ? newest.ts + (data?.bucket_secs ?? 0) : null;
       return {
         ...base,
         points: pts,
-        current: newest ? { ms: newest.avg, loss: newest.loss } : null,
+        current: newest
+          ? {
+              ms: newest.avg,
+              loss: newest.loss,
+              slow: newest.retrans_rate ?? null,
+              rawMs: newest.raw_avg ?? null,
+              sampleTs,
+              stale: isStaleSample(sampleTs, nowSecs),
+            }
+          : null,
         loss: c ? c.loss : null,
-        retrans: c?.retrans_rate ?? null,
+        slow: c?.retrans_rate ?? null,
       };
     });
-  }, [data, nodes, cells, activeId, t]);
+  }, [data, nodes, cells, activeId, activeTarget, nowSecs, t]);
 
   const picker = pick.needsPicker ? (
     <SeriesPicker
@@ -204,6 +240,7 @@ export default function GroupLatency() {
     />
   ) : null;
 
+  const updatedAt = lastSuccessAt != null ? formatClock(new Date(lastSuccessAt), true) : null;
   const header = (
     <div className="rp-page-header" style={{ flexWrap: 'wrap', gap: 8 }}>
       <Space wrap size={[12, 8]}>
@@ -214,6 +251,11 @@ export default function GroupLatency() {
           {t('latencyGroupTitle')}
           {data?.group_name ? ` · ${data.group_name}` : ''}
         </Title>
+        {updatedAt ? (
+          <Text type="secondary" style={{ fontSize: 12 }} data-testid="latency-updated-at" data-time={updatedAt}>
+            {t('latencyUpdatedAt')} {updatedAt}
+          </Text>
+        ) : null}
       </Space>
       <LatencyControls range={range} granularity={granularity} onRange={onRange} onGranularity={setGranularity} />
     </div>
@@ -258,10 +300,24 @@ export default function GroupLatency() {
       </div>
     );
   }
+  // A background refresh failed: what is below is from the last good load.
+  const failAlert =
+    refreshFailed && updatedAt != null ? (
+      <Alert
+        type="warning"
+        showIcon
+        style={{ marginBottom: 12 }}
+        data-testid="latency-refresh-failed"
+        data-time={updatedAt}
+        title={t('latencyRefreshFailed').replace('{time}', updatedAt)}
+      />
+    ) : null;
+
   if (data && targets.length === 0) {
     return (
       <div className="rp-lat">
         {header}
+        {failAlert}
         <Result
           icon={<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />}
           title={t('latencyGroupNoTargets')}
@@ -348,7 +404,8 @@ export default function GroupLatency() {
               </Text>
             );
           }
-          const level = latencyLevel(c.avg, c.loss);
+          const level = latencyLevel(c.avg, c.loss, c.retrans_rate);
+          const slow = slowText(c.retrans_rate, tg.kind);
           return (
             <div
               role="button"
@@ -363,14 +420,28 @@ export default function GroupLatency() {
                 <LevelDot level={level} />
                 {c.avg == null ? t('latencyAllLost') : formatMs(c.avg)}
               </div>
+              {showRaw(c.avg, c.raw_avg, c.retrans_rate) ? (
+                <span className="rp-lat-sub" data-testid={`latency-cell-raw-${n.node_id}-${tg.id}`}>
+                  {t('latencyCardRaw')} {formatMs(c.raw_avg)}
+                </span>
+              ) : null}
               <span className="rp-lat-sub">
                 <span className={c.loss >= LATENCY_LOSS_BAD_PCT ? 'is-bad' : c.loss >= LATENCY_LOSS_WARN_PCT ? 'is-warn' : undefined}>
-                  {t('latencyCardLoss')} {formatLoss(c.loss)}
+                  {t(tg.kind === 'tcp' ? 'latencyCardFailed' : 'latencyCardLoss')} {formatLoss(c.loss)}
                 </span>
-                {formatRetrans(c.retrans_rate) == null ? null : (
-                  <span data-testid={`latency-cell-retrans-${n.node_id}-${tg.id}`}>
+                {slow == null ? null : (
+                  <span
+                    data-testid={`latency-cell-slow-${n.node_id}-${tg.id}`}
+                    className={
+                      c.retrans_rate != null && c.retrans_rate >= LATENCY_SLOW_BAD_PCT
+                        ? 'is-bad'
+                        : c.retrans_rate != null && c.retrans_rate >= LATENCY_SLOW_WARN_PCT
+                          ? 'is-warn'
+                          : undefined
+                    }
+                  >
                     {' · '}
-                    {t('latencyCardRetrans')} {formatRetrans(c.retrans_rate)}
+                    {t('latencyCardSlow')} {slow}
                   </span>
                 )}
               </span>
@@ -384,6 +455,7 @@ export default function GroupLatency() {
   return (
     <div className="rp-lat">
       {header}
+      {failAlert}
       <Card
         size="small"
         className="rp-lat-card"
@@ -396,7 +468,7 @@ export default function GroupLatency() {
               title={
                 <div style={{ maxWidth: 360 }}>
                   <div>{t('latencyGroupTableHint')}</div>
-                  <div style={{ marginTop: 8 }}>{t('latencyRetransHelp')}</div>
+                  <div style={{ marginTop: 8 }}>{t('latencySlowHelp')}</div>
                 </div>
               }
             >
@@ -448,6 +520,7 @@ export default function GroupLatency() {
           until={data.until}
           bucketSecs={data.bucket_secs}
           withDate={withDate}
+          nowSecs={nowSecs}
         />
       )}
     </div>

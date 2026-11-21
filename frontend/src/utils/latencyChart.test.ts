@@ -5,11 +5,12 @@ import {
   classicLossMarkers,
   formatLoss,
   formatMs,
-  formatRetrans,
   groupChartPoints,
   lossMarkers,
   maxPointsPerKey,
   nodeDisplayName,
+  showRaw,
+  slowText,
   smoothPoints,
   stripLatencyLevel,
   stripSegmentCount,
@@ -60,7 +61,7 @@ describe('chartPoints', () => {
   });
 });
 
-describe('retransmit rate', () => {
+describe('slow handshake share', () => {
   it('rides along on chart points, null when the data does not carry it', () => {
     const withRate: LatencySeries[] = [
       {
@@ -74,18 +75,47 @@ describe('retransmit rate', () => {
         ],
       },
     ];
-    expect(chartPoints(withRate, null).map((p) => p.retrans)).toEqual([16.7, null]);
+    expect(chartPoints(withRate, null).map((p) => p.slow)).toEqual([16.7, null]);
     expect(
-      groupChartPoints([{ node_id: 'n1', points: withRate[0].points }], []).map((p) => p.retrans),
+      groupChartPoints([{ node_id: 'n1', points: withRate[0].points }], []).map((p) => p.slow),
     ).toEqual([16.7, null]);
   });
 
-  it('is text in the loss style, and nothing at all when not reported', () => {
-    expect(formatRetrans(null)).toBeNull();
-    expect(formatRetrans(undefined)).toBeNull();
-    expect(formatRetrans(0)).toBe('0%');
-    expect(formatRetrans(17)).toBe('17.0%');
-    expect(formatRetrans(0.25)).toBe('0.25%');
+  it('is text in the loss style; a TCP target without the figure says "—", ICMP has none', () => {
+    expect(slowText(null, 'tcp')).toBe('—');
+    expect(slowText(undefined, 'tcp')).toBe('—');
+    expect(slowText(0, 'tcp')).toBe('0%');
+    expect(slowText(17, 'tcp')).toBe('17.0%');
+    expect(slowText(0.25, 'tcp')).toBe('0.25%');
+    expect(slowText(17, 'icmp')).toBeNull();
+    expect(slowText(null, 'icmp')).toBeNull();
+    // a page that does not know the kind shows a real figure and never invents one
+    expect(slowText(17, null)).toBe('17.0%');
+    expect(slowText(null, null)).toBeNull();
+  });
+
+  it('carries the raw mean and the target kind on chart points', () => {
+    const raw: LatencySeries[] = [
+      {
+        target_id: 1,
+        name: 'A',
+        carrier: 'telecom',
+        kind: 'tcp',
+        points: [{ ts: 600, avg: 20, raw_avg: 992, min: 18, max: 20, raw_max: 1100, loss: 0, retrans_rate: 90 }],
+      },
+    ];
+    const [p] = chartPoints(raw, null);
+    expect([p.raw, p.rawAvg, p.kind]).toEqual([20, 992, 'tcp']);
+    expect(groupChartPoints([{ node_id: 'n1', points: raw[0].points }], [], 'icmp')[0].kind).toBe('icmp');
+  });
+
+  it('shows the raw mean only when slow handshakes make it differ', () => {
+    expect(showRaw(20, 992, 90)).toBe(true);
+    expect(showRaw(20, 20, 0)).toBe(false);
+    expect(showRaw(20, 992, null)).toBe(false);
+    expect(showRaw(null, null, 90)).toBe(false);
+    // every answer slow: the filtered mean already is the raw one
+    expect(showRaw(1100, 1100, 100)).toBe(false);
   });
 
   it('a strip slice averages the rates that exist; none reported stays null', () => {
@@ -95,11 +125,11 @@ describe('retransmit rate', () => {
       { ts: 620, avg: 20, min: 19, max: 24, loss: 0 },
     ];
     const [seg] = stripSegments(pts, 600, 660, 1);
-    expect(seg.retrans).toBe(15);
+    expect(seg.slow).toBe(15);
     const [none] = stripSegments([pts[2]], 600, 660, 1);
-    expect(none.retrans).toBeNull();
+    expect(none.slow).toBeNull();
     const [empty] = stripSegments([], 600, 660, 1);
-    expect(empty.retrans).toBeNull();
+    expect(empty.slow).toBeNull();
   });
 });
 
@@ -111,8 +141,10 @@ const cp = (key: string, sec: number, value: number | null, extra: Partial<Chart
   raw: value,
   min: value,
   max: value,
+  rawAvg: value,
   loss: 0,
-  retrans: null,
+  slow: null,
+  kind: null,
   ...extra,
 });
 
@@ -141,11 +173,11 @@ describe('smoothPoints', () => {
     expect(lead.map((p) => p.value)).toEqual([null, 30]);
   });
 
-  it('only changes what is drawn: raw, min, max, loss and retrans stay the bucket\'s own', () => {
-    const src = [cp('a', 0, 10), cp('a', 60, 20, { loss: 2, retrans: 5, min: 18, max: 30 })];
+  it('only changes what is drawn: raw, min, max, loss and slow stay the bucket\'s own', () => {
+    const src = [cp('a', 0, 10), cp('a', 60, 20, { loss: 2, slow: 5, min: 18, max: 30 })];
     const out = smoothPoints(src);
     expect(out[1].raw).toBe(20);
-    expect([out[1].min, out[1].max, out[1].loss, out[1].retrans]).toEqual([18, 30, 2, 5]);
+    expect([out[1].min, out[1].max, out[1].loss, out[1].slow]).toEqual([18, 30, 2, 5]);
     // and the input is untouched
     expect(src[1].value).toBe(20);
   });
@@ -163,11 +195,19 @@ describe('chart helpers', () => {
     expect(maxPointsPerKey([cp('a', 0, 1), cp('b', 0, 1), cp('a', 60, 1)])).toBe(2);
   });
 
-  it('writes a tooltip line with the raw mean, loss and, when reported, the retransmit share', () => {
-    const labels = { allLost: 'ALL LOST', loss: 'loss', retrans: 'retrans' };
-    expect(tooltipText({ raw: 20.04, loss: 0.2, retrans: 17 }, labels)).toBe('20.0 ms · loss 0.20% · retrans 17.0%');
-    expect(tooltipText({ raw: 150, loss: 0, retrans: null }, labels)).toBe('150 ms · loss 0%');
-    expect(tooltipText({ raw: null, loss: 100, retrans: null }, labels)).toBe('ALL LOST · loss 100.0%');
+  it('writes a tooltip line by target kind: failed + slow for TCP, loss for ICMP, the raw mean when slow ones differ', () => {
+    const labels = { allLost: 'ALL LOST', loss: 'loss', failed: 'failed', slow: 'slow', rawAvg: 'raw' };
+    const d = (over: Partial<Parameters<typeof tooltipText>[0]>) => ({ raw: 20, rawAvg: 20, loss: 0, slow: null, kind: 'tcp' as const, ...over });
+    expect(tooltipText(d({ raw: 20.04, rawAvg: 20.04, loss: 0.2, slow: 17 }), labels)).toBe('20.0 ms · failed 0.20% · slow 17.0%');
+    // slow handshakes make the raw mean differ: it is shown beside the filtered one
+    expect(tooltipText(d({ raw: 20, rawAvg: 992, slow: 90 }), labels)).toBe('20.0 ms (raw 992 ms) · failed 0% · slow 90.0%');
+    // a TCP target without the figure: "slow —", never 0%
+    expect(tooltipText(d({ raw: 150, rawAvg: 150 }), labels)).toBe('150 ms · failed 0% · slow —');
+    // ICMP: loss, and no slow-handshake figure at all
+    expect(tooltipText(d({ raw: 150, rawAvg: 150, kind: 'icmp' }), labels)).toBe('150 ms · loss 0%');
+    expect(tooltipText(d({ raw: null, rawAvg: null, loss: 100, kind: 'icmp' }), labels)).toBe('ALL LOST · loss 100.0%');
+    // kind unknown: neutral loss, only a real figure
+    expect(tooltipText(d({ kind: null }), labels)).toBe('20.0 ms · loss 0%');
   });
 
   it('puts a loss marker on the line, and on the given baseline under a gap', () => {
