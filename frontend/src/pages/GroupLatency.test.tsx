@@ -33,7 +33,7 @@ vi.mock('@ant-design/charts', () => ({
 }));
 
 import GroupLatency from './GroupLatency';
-import { formatClock } from '../utils/latencyChart';
+import { formatClock, formatSampleTime } from '../utils/latencyChart';
 import type { GroupLatencyCell, GroupLatencyNode, GroupLatencyResponse, LatencyTarget } from '../api/types';
 
 const ok = <T,>(data: T) => ({ code: 0, message: 'ok', data });
@@ -544,7 +544,7 @@ describe('GroupLatency range and refresh', () => {
     expect(calls().some((u) => u.includes('range=30d&granularity=5m'))).toBe(false);
   });
 
-  it('re-reads every minute for a range up to a day, and not for longer ones', async () => {
+  it('re-reads every minute for a range up to a day, and every five minutes for 7d / 30d', async () => {
     serve();
     renderPage();
     await flush();
@@ -557,8 +557,15 @@ describe('GroupLatency range and refresh', () => {
     fireEvent.click(screen.getByText('latencyRange7d'));
     await flush();
     const after = calls().length;
-    await flush(180_000);
+    // not every minute any more, but every five
+    await flush(4 * 60_000);
     expect(calls()).toHaveLength(after);
+    await flush(60_000);
+    expect(calls()).toHaveLength(after + 1);
+    await flush(5 * 60_000);
+    expect(calls()).toHaveLength(after + 2);
+    expect(calls().at(-1)).toContain('range=7d');
+    expect(screen.getByText('latencyAutoRefreshLong')).toBeInTheDocument();
   });
 
   it('a refresh that fails keeps the picture on screen', async () => {
@@ -976,6 +983,38 @@ describe('GroupLatency slow handshakes', () => {
 
 describe('GroupLatency stale readings and failed refreshes', () => {
   const MIN = 60_000;
+
+  it('judges "now" by the node\'s newest minute, not by its hourly bucket', async () => {
+    // hourly buckets: the newest bucket of both nodes is the current hour, but
+    // one node's last minute is 15 minutes old and the other's is one minute old'
+    const hour = Math.floor(NOW / 3600) * 3600;
+    serve(() =>
+      ok(
+        response({
+          granularity: '1h',
+          bucket_secs: 3600,
+          since: hour - 24 * 3600,
+          until: NOW + 1,
+          series: [
+            { node_id: 'n1', latest_ts: NOW - 15 * 60, points: [point(hour, 20)] },
+            { node_id: 'n2', latest_ts: NOW - 60, points: [point(hour, 20)] },
+            { node_id: '0123456789abcdef', points: [] },
+            { node_id: 'old', points: [] },
+          ],
+        }),
+      ),
+    );
+    renderPage();
+    await flush();
+    expect(screen.getByTestId('strip-current-n1')).toHaveAttribute('data-level', 'none');
+    expect(screen.getByTestId('strip-stale-n1')).toHaveTextContent('latencyNoNewData');
+    expect(screen.getByTestId('strip-stale-time-n1')).toHaveTextContent(formatSampleTime(NOW - 15 * 60, NOW * 1000));
+    expect(screen.getByTestId('strip-current-n2')).toHaveAttribute('data-level', 'good');
+    expect(screen.queryByTestId('strip-stale-n2')).toBeNull();
+    // the matrix is a range figure and keeps its colour
+    expect(level('n1', 1)).toBe('good');
+  });
+
   const clock = (ts: number) => formatClock(new Date(ts * 1000), true);
 
   it('a failing refresh keeps the picture with a warning, and the current reading goes grey after ten minutes', async () => {

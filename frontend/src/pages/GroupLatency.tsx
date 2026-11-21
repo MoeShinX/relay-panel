@@ -21,12 +21,12 @@ import { useSeriesPick } from '../hooks/useSeriesPick';
 import { useNowSecs } from '../hooks/useNowSecs';
 import { rankByAttention } from '../utils/seriesPick';
 import {
-  AUTO_REFRESH_MS,
   LATENCY_LOSS_BAD_PCT,
   LATENCY_LOSS_WARN_PCT,
   LATENCY_SLOW_BAD_PCT,
   LATENCY_SLOW_WARN_PCT,
-  autoRefreshes,
+  autoRefreshMs,
+  autoRefreshNoteKey,
   granularityAllowed,
   isStaleSample,
   latencyLevel,
@@ -140,10 +140,9 @@ export default function GroupLatency() {
     load(false);
   }, [load]);
 
-  // Ranges up to 6 hours follow the clock.
+  // Every range re-reads itself (a minute, or five for 7d / 30d).
   useEffect(() => {
-    if (!autoRefreshes(range)) return undefined;
-    const ti = setInterval(() => load(true), AUTO_REFRESH_MS);
+    const ti = setInterval(() => load(true), autoRefreshMs(range));
     return () => clearInterval(ti);
   }, [range, load]);
 
@@ -206,10 +205,12 @@ export default function GroupLatency() {
       const pts = byNode.get(n.node_id)?.points ?? [];
       const newest = pts.reduce<(typeof pts)[number] | null>((a, p) => (a == null || p.ts > a.ts ? p : a), null);
       const c = activeId != null ? cells.get(cellKey(n.node_id, activeId)) : undefined;
-      // The series carries no sample time of its own: the newest bucket is
-      // current while its end is recent (for the one-hour buckets of a long
-      // range that is generous, for minute buckets it is exact).
-      const sampleTs = newest ? newest.ts + (data?.bucket_secs ?? 0) : null;
+      // The real time of the node's newest minute, which an hourly bucket
+      // cannot tell (its bucket is "the current hour" for a node quiet for
+      // 15 minutes and one that is live alike). Only a response without it
+      // falls back to the bucket's end.
+      const latestTs = byNode.get(n.node_id)?.latest_ts;
+      const sampleTs = newest ? (latestTs ?? newest.ts + (data?.bucket_secs ?? 0)) : null;
       return {
         ...base,
         points: pts,
@@ -507,7 +508,7 @@ export default function GroupLatency() {
           colorDomain={colorDomain}
           names={names}
           withDate={withDate}
-          autoRefresh={autoRefreshes(range)}
+          autoRefreshNote={t(autoRefreshNoteKey(range))}
           loading={state === 'loading'}
           downloadName={`latency-group-${groupId}-${range}`}
         />

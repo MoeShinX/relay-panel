@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  autoRefreshes,
+  AUTO_REFRESH_MS,
+  LONG_RANGE_REFRESH_MS,
+  autoRefreshMs,
+  autoRefreshNoteKey,
   granularityAllowed,
   LATENCY_STALE_SECS,
   intervalValid,
@@ -116,8 +119,17 @@ describe('granularity rules', () => {
     }
   });
 
-  it('only ranges up to a day refresh themselves', () => {
-    expect(['1h', '6h', '24h', '7d', '30d'].map((r) => autoRefreshes(r as never))).toEqual([true, true, true, false, false]);
+  it('every range refreshes itself: a minute up to a day, five minutes for 7d / 30d', () => {
+    expect(['1h', '6h', '24h', '7d', '30d'].map((r) => autoRefreshMs(r as never))).toEqual([
+      AUTO_REFRESH_MS,
+      AUTO_REFRESH_MS,
+      AUTO_REFRESH_MS,
+      LONG_RANGE_REFRESH_MS,
+      LONG_RANGE_REFRESH_MS,
+    ]);
+    expect([AUTO_REFRESH_MS, LONG_RANGE_REFRESH_MS]).toEqual([60_000, 300_000]);
+    expect(autoRefreshNoteKey('24h')).toBe('latencyAutoRefresh');
+    expect(autoRefreshNoteKey('7d')).toBe('latencyAutoRefreshLong');
   });
 });
 

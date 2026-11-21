@@ -1036,6 +1036,7 @@ export const enUS: Dict = {
   latencyTipSlow: 'slow',
   latencyTipRaw: 'raw',
   latencyAutoRefresh: 'Refreshes every minute',
+  latencyAutoRefreshLong: 'Refreshes every 5 minutes',
   latencyUpdatedAt: 'Updated',
   latencyLastAt: 'last',
   latencyNoNewData: 'No new data',

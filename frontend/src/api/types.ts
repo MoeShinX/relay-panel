@@ -924,6 +924,10 @@ export interface GroupLatencyCell {
 /** One node's line for the selected target. */
 export interface GroupLatencySeries {
   node_id: string;
+  /** The newest minute (unix seconds) the node reported for the chosen target:
+   *  the real sample time of its current reading, whatever the chart's bucket.
+   *  null / absent: none within the 48 hours of minute rows. */
+  latest_ts?: number | null;
   points: LatencyPoint[];
 }
 

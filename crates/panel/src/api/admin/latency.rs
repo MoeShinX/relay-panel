@@ -391,16 +391,23 @@ pub async fn get_group_latency(
         let totals = db
             .query_latency_totals(&node_ids, &target_ids, hourly, matrix_since, until)
             .await?;
-        let buckets = match selected {
+        let (buckets, newest) = match selected {
             Some(t) => {
-                db.query_latency_target_series(&node_ids, t, granularity, since, until)
-                    .await?
+                let buckets = db
+                    .query_latency_target_series(&node_ids, t, granularity, since, until)
+                    .await?;
+                // The real time of each node's newest minute, whatever the
+                // chart's bucket: all the minute table holds is 48 hours.
+                let newest = db
+                    .query_latest_minute_ts(&node_ids, t, now_ts - latency::MINUTE_RETENTION_SECS)
+                    .await?;
+                (buckets, newest)
             }
-            None => Vec::new(),
+            None => (Vec::new(), Vec::new()),
         };
-        Ok::<_, crate::db::error::DbError>((totals, buckets))
+        Ok::<_, crate::db::error::DbError>((totals, buckets, newest))
     };
-    let (totals, buckets) = match query.await {
+    let (totals, buckets, newest) = match query.await {
         Ok(v) => v,
         Err(e) => {
             tracing::error!("get_group_latency: query failed: {}", e);
@@ -418,7 +425,7 @@ pub async fn get_group_latency(
         since,
         until,
         matrix: latency::build_matrix(&totals),
-        series: latency::build_group_series(&nodes, &buckets),
+        series: latency::build_group_series(&nodes, &buckets, &newest),
         targets,
         nodes,
         target_id: selected,
@@ -1708,6 +1715,85 @@ mod tests {
         )
         .await;
         r
+    }
+
+    /// Each group line carries the real time of the node's newest minute for
+    /// the chosen target, so a page can tell a node that went quiet 15 minutes
+    /// ago from one that is current even when the chart is hourly and the last
+    /// hourly bucket (the current hour) is the same for both.
+    #[tokio::test]
+    async fn group_lines_carry_the_nodes_newest_minute_whatever_the_granularity() {
+        let (state, pool) = test_state().await;
+        seed_group(&pool, 5, "in").await;
+        seed_group(&pool, 6, "in").await;
+        let ids = save_ids(
+            &state,
+            5,
+            vec![
+                target("A", "192.0.2.1", Some(443)),
+                target("B", "192.0.2.2", Some(443)),
+            ],
+        )
+        .await;
+        let other = save_ids(&state, 6, vec![target("C", "192.0.2.60", Some(443))]).await;
+        for n in ["quiet", "live", "never"] {
+            add_status(&state, 5, n, "1.2.12", &[]).await;
+        }
+        add_status(&state, 6, "elsewhere", "1.2.12", &[]).await;
+        let rec = |node: &'static str, t: i64, back: i64| {
+            let state = state.clone();
+            async move {
+                state
+                    .db
+                    .record_latency_minutes(node, &[row(t, minute_now(back), 0, 20.0)])
+                    .await
+                    .unwrap();
+            }
+        };
+        // quiet: its last minute for target A was 15 minutes ago (an older one
+        // before it must not be picked), live: a minute ago
+        rec("quiet", ids[0], 40).await;
+        rec("quiet", ids[0], 15).await;
+        rec("live", ids[0], 1).await;
+        // another target of the same node, and another group's node: not A's time
+        rec("quiet", ids[1], 2).await;
+        rec("elsewhere", other[0], 1).await;
+
+        let hourly = Query(GroupLatencyQuery {
+            range: "24h".into(),
+            granularity: "1h".into(),
+            target_id: Some(ids[0]),
+        });
+        let Json(r) = get_group_latency(admin(), State(state.clone()), Path(5), hourly).await;
+        assert_eq!(r.code, 0, "{}", r.message);
+        let d = r.data.unwrap();
+        assert_eq!(d.granularity, "1h");
+        let ts = |n: &str| d.series.iter().find(|s| s.node_id == n).unwrap().latest_ts;
+        assert_eq!(ts("quiet"), Some(minute_now(15)));
+        assert_eq!(ts("live"), Some(minute_now(1)));
+        assert_eq!(ts("never"), None);
+        // the hourly line itself cannot tell them apart: both have a point in the
+        // current hour (or the one before it), none of them the minute
+        let quiet = d.series.iter().find(|s| s.node_id == "quiet").unwrap();
+        assert!(!quiet.points.is_empty());
+        let json = serde_json::to_value(quiet).unwrap();
+        assert_eq!(json["latest_ts"], serde_json::json!(minute_now(15)));
+
+        // the chosen target decides: B's newest minute for the same node
+        let Json(r) = get_group_latency(
+            admin(),
+            State(state.clone()),
+            Path(5),
+            Query(GroupLatencyQuery {
+                range: "24h".into(),
+                granularity: "1h".into(),
+                target_id: Some(ids[1]),
+            }),
+        )
+        .await;
+        let d = r.data.unwrap();
+        let ts = |n: &str| d.series.iter().find(|s| s.node_id == n).unwrap().latest_ts;
+        assert_eq!((ts("quiet"), ts("live")), (Some(minute_now(2)), None));
     }
 
     /// The comparison: every node of the group against every target, averaged

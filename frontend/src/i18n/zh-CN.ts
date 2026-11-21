@@ -1034,6 +1034,7 @@ export const zhCN = {
   latencyTipSlow: '慢握手',
   latencyTipRaw: '原始',
   latencyAutoRefresh: '每分钟自动刷新',
+  latencyAutoRefreshLong: '每 5 分钟自动刷新',
   latencyUpdatedAt: '更新于',
   latencyLastAt: '最后',
   latencyNoNewData: '无新数据',

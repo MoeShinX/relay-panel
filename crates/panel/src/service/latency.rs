@@ -993,16 +993,29 @@ pub fn build_matrix(totals: &[LatencyNodeTotal]) -> Vec<MatrixCell> {
 #[derive(Debug, Serialize, PartialEq)]
 pub struct NodeSeries {
     pub node_id: String,
+    /// The newest minute (unix seconds) this node reported for the target, or
+    /// null when it reported none within the minute table's retention. The real
+    /// sample time of the node's "current" reading: the last bucket of an
+    /// hourly line says only which hour it fell in.
+    pub latest_ts: Option<i64>,
     pub points: Vec<SeriesPoint>,
 }
 
 /// One line per node (a node with no data still gets an empty one), points
 /// oldest first.
-pub fn build_group_series(nodes: &[GroupNode], buckets: &[LatencyNodeBucket]) -> Vec<NodeSeries> {
+pub fn build_group_series(
+    nodes: &[GroupNode],
+    buckets: &[LatencyNodeBucket],
+    latest: &[(String, i64)],
+) -> Vec<NodeSeries> {
     nodes
         .iter()
         .map(|n| NodeSeries {
             node_id: n.node_id.clone(),
+            latest_ts: latest
+                .iter()
+                .find(|(id, _)| *id == n.node_id)
+                .map(|(_, ts)| *ts),
             points: buckets
                 .iter()
                 .filter(|b| b.node_id == n.node_id)
@@ -1865,7 +1878,9 @@ mod tests {
                 retrans_sum_ms: Some(9900.0),
                 retrans_base: Some(10),
             }],
+            &[("n1".to_string(), 660)],
         );
+        assert_eq!(lines[0].latest_ts, Some(660));
         let g = &lines[0].points[0];
         assert_eq!((g.avg, g.max), (Some(20.0), Some(20.0)));
         assert_eq!((g.raw_avg, g.raw_max), (Some(992.0), Some(1100.0)));

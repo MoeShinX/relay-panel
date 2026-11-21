@@ -353,7 +353,7 @@ describe('NodeLatency range and granularity', () => {
 });
 
 describe('NodeLatency auto-refresh', () => {
-  it('re-reads every minute for a range up to a day, and not for longer ones', async () => {
+  it('re-reads every minute for a range up to a day, and every five minutes for longer ones', async () => {
     serve(() => ok(response()));
     renderPage();
     await flush();
@@ -366,8 +366,18 @@ describe('NodeLatency auto-refresh', () => {
     fireEvent.click(screen.getByText('latencyRange7d'));
     await flush();
     const after = latencyCalls().length;
-    await flush(180_000);
+    // a long range re-reads every five minutes, not every minute
+    await flush(4 * 60_000);
     expect(latencyCalls()).toHaveLength(after);
+    await flush(60_000);
+    expect(latencyCalls()).toHaveLength(after + 1);
+    expect(latencyCalls().at(-1)).toContain('range=7d');
+    expect(screen.getByText('latencyAutoRefreshLong')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('latencyRange30d'));
+    await flush();
+    const n30 = latencyCalls().length;
+    await flush(5 * 60_000);
+    expect(latencyCalls()).toHaveLength(n30 + 1);
   });
 
   it('a refresh that fails keeps the picture on screen', async () => {

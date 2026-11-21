@@ -101,12 +101,24 @@ export function granularityAllowed(range: LatencyRange, g: LatencyGranularity): 
   return true;
 }
 
-/** Ranges up to 6 hours follow the clock: they are re-read every minute. */
-export function autoRefreshes(range: LatencyRange): boolean {
-  return range === '1h' || range === '6h' || range === '24h';
+/** The latency pages re-read their data on their own, so that "no new data"
+ *  means the samples really stopped and not that the page stopped asking: every
+ *  minute for the ranges that follow the clock (1h / 6h / 24h), every five for
+ *  the long ones (7d / 30d), whose hourly figures move slowly (a current reading
+ *  is judged by its sample time, which a five-minute refresh keeps well inside
+ *  the ten-minute limit). */
+export const AUTO_REFRESH_MS = 60_000;
+export const LONG_RANGE_REFRESH_MS = 5 * 60_000;
+
+/** How often a range re-reads itself, in ms. */
+export function autoRefreshMs(range: LatencyRange): number {
+  return range === '7d' || range === '30d' ? LONG_RANGE_REFRESH_MS : AUTO_REFRESH_MS;
 }
 
-export const AUTO_REFRESH_MS = 60_000;
+/** The i18n key of the "refreshes every ..." note of a range. */
+export function autoRefreshNoteKey(range: LatencyRange): 'latencyAutoRefresh' | 'latencyAutoRefreshLong' {
+  return autoRefreshMs(range) === AUTO_REFRESH_MS ? 'latencyAutoRefresh' : 'latencyAutoRefreshLong';
+}
 
 // ── Settings validation ──
 

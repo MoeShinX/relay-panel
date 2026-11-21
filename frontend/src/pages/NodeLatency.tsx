@@ -15,8 +15,8 @@ import { useSeriesPick } from '../hooks/useSeriesPick';
 import { useNowSecs } from '../hooks/useNowSecs';
 import { rankByAttention } from '../utils/seriesPick';
 import {
-  AUTO_REFRESH_MS,
-  autoRefreshes,
+  autoRefreshMs,
+  autoRefreshNoteKey,
   granularityAllowed,
   isStaleSample,
   latencyLevel,
@@ -117,10 +117,9 @@ export default function NodeLatency() {
     load(false);
   }, [load]);
 
-  // Ranges up to 6 hours follow the clock.
+  // Every range re-reads itself (a minute, or five for 7d / 30d).
   useEffect(() => {
-    if (!autoRefreshes(range)) return undefined;
-    const ti = setInterval(() => load(true), AUTO_REFRESH_MS);
+    const ti = setInterval(() => load(true), autoRefreshMs(range));
     return () => clearInterval(ti);
   }, [range, load]);
 
@@ -531,7 +530,7 @@ export default function NodeLatency() {
         colorDomain={colorDomain}
         names={names}
         withDate={withDate}
-        autoRefresh={autoRefreshes(range)}
+        autoRefreshNote={t(autoRefreshNoteKey(range))}
         loading={state === 'loading'}
         downloadName={`latency-${nodeId}-${range}`}
       />

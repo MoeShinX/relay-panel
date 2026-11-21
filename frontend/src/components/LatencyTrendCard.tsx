@@ -42,8 +42,8 @@ interface Props {
   colorDomain: string[];
   names: Map<string, string>;
   withDate: boolean;
-  /** The range re-reads on its own every minute. */
-  autoRefresh: boolean;
+  /** How often the range re-reads itself, as text ("Refreshes every minute"). */
+  autoRefreshNote: string;
   /** A read is in flight over data already on screen: shown as a veil. */
   loading?: boolean;
   /** File name stem of the PNG download. */
@@ -66,7 +66,7 @@ export default function LatencyTrendCard({
   colorDomain,
   names,
   withDate,
-  autoRefresh,
+  autoRefreshNote,
   loading = false,
   downloadName,
 }: Props) {
@@ -105,9 +105,7 @@ export default function LatencyTrendCard({
               <span>{t('latencySmooth')}</span>
             </label>
           </Tooltip>
-          {autoRefresh ? (
-            <Text type="secondary" style={{ fontSize: 12 }}>{t('latencyAutoRefresh')}</Text>
-          ) : null}
+          <Text type="secondary" style={{ fontSize: 12 }}>{autoRefreshNote}</Text>
           <Button type="text" size="small" icon={<UndoOutlined />} onClick={() => setChartKey((k) => k + 1)}>
             {t('latencyChartReset')}
           </Button>

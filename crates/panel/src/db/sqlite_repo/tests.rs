@@ -7374,6 +7374,63 @@ async fn latency_clear_history_removes_only_one_groups_rows() {
     assert_eq!(db.clear_latency_history(2).await.unwrap(), 2);
 }
 
+/// The newest minute a node reported for one target, from the minute table:
+/// per node, within the window, only the asked-for nodes and target.
+#[tokio::test]
+async fn latency_latest_minute_ts_is_per_node_for_one_target() {
+    let db = repo().await;
+    seed_group(&db, 1).await;
+    let a = db
+        .replace_latency_targets(
+            1,
+            "2026-01-01 00:00:00",
+            &[
+                lat_input(None, "A1", "192.0.2.1"),
+                lat_input(None, "A2", "192.0.2.2"),
+            ],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    for (node, target, ts) in [
+        ("n1", a[0].id, 36000),
+        ("n1", a[0].id, 36600),
+        ("n1", a[1].id, 37200),
+        ("n2", a[0].id, 30000),
+    ] {
+        db.record_latency_minutes(
+            node,
+            &[lat_row(target, ts, 6, 0, 60.0, Some(9.0), Some(11.0))],
+        )
+        .await
+        .unwrap();
+    }
+    let nodes = ["n1".to_string(), "n2".to_string(), "n3".to_string()];
+    // each node's newest minute for the target; a node with none is absent
+    assert_eq!(
+        db.query_latest_minute_ts(&nodes, a[0].id, 0).await.unwrap(),
+        vec![("n1".to_string(), 36600), ("n2".to_string(), 30000)]
+    );
+    // the window starts at since_ts, and only the asked-for nodes count
+    assert_eq!(
+        db.query_latest_minute_ts(&nodes, a[0].id, 31000)
+            .await
+            .unwrap(),
+        vec![("n1".to_string(), 36600)]
+    );
+    assert_eq!(
+        db.query_latest_minute_ts(&nodes[..1], a[1].id, 0)
+            .await
+            .unwrap(),
+        vec![("n1".to_string(), 37200)]
+    );
+    assert!(db
+        .query_latest_minute_ts(&[], a[0].id, 0)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
 /// The comparison queries: totals per node and target over a window, and one
 /// target's series per node, from the minute or the hourly table, for the
 /// nodes and the target asked for only.

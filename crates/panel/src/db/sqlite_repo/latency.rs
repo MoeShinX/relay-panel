@@ -452,6 +452,31 @@ impl LatencyRepository for SqliteRepository {
             .await?)
     }
 
+    async fn query_latest_minute_ts(
+        &self,
+        node_ids: &[String],
+        target_id: i64,
+        since_ts: i64,
+    ) -> Result<Vec<(String, i64)>, DbError> {
+        if node_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let marks = vec!["?"; node_ids.len()].join(", ");
+        let sql = format!(
+            "SELECT node_id, MAX(minute_ts) FROM latency_minute
+             WHERE node_id IN ({marks}) AND target_id = ? AND minute_ts >= ?
+             GROUP BY node_id ORDER BY node_id"
+        );
+        let mut q = sqlx::query_as(&sql);
+        for n in node_ids {
+            q = q.bind(n);
+        }
+        Ok(q.bind(target_id)
+            .bind(since_ts)
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
     async fn clear_latency_history(&self, group_id: i64) -> Result<u64, DbError> {
         let mut tx = self.begin_write().await?;
         let mut deleted = 0;
