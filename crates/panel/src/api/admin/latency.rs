@@ -942,6 +942,7 @@ mod tests {
             rtt_max_ms: (answered > 0).then_some(avg + 5.0),
             retrans: None,
             retrans_sum_ms: None,
+            normal_max_ms: None,
         }
     }
 
@@ -1095,6 +1096,7 @@ mod tests {
             rtt_max_ms: 11.0,
             retrans: None,
             retrans_sum_ms: None,
+            normal_max_ms: None,
             unsupported: false,
         };
         let report = |node_id: Option<&str>, latency: Vec<LatencySample>| StatusReport {
@@ -1305,6 +1307,7 @@ mod tests {
                     rtt_max_ms: 11.0,
                     retrans: None,
                     retrans_sum_ms: None,
+                    normal_max_ms: None,
                     unsupported: false,
                 },
                 LatencySample {
@@ -1317,6 +1320,7 @@ mod tests {
                     rtt_max_ms: 0.0,
                     retrans: None,
                     retrans_sum_ms: None,
+                    normal_max_ms: None,
                     unsupported: true,
                 },
             ]
@@ -1708,6 +1712,7 @@ mod tests {
             rtt_max_ms: Some(1200.0),
             retrans: Some(1),
             retrans_sum_ms: Some(1200.0),
+            normal_max_ms: Some(20.0),
         };
         state
             .db
@@ -1749,6 +1754,12 @@ mod tests {
         assert_eq!(n.summary[0].loss, Some(0.0));
         let n2 = query(&state, "n2", "1h", "auto").await.data.unwrap();
         assert_eq!(n2.summary[0].retrans_rate, None);
+        // the maximum leaves the 1200 ms retransmit out; n1's old-style minute
+        // counts with its plain maximum (row(): avg + 5)
+        assert_eq!(n.series[0].points[0].max, Some(20.0));
+        assert_eq!(n.series[0].points[1].max, Some(45.0));
+        assert_eq!(n.summary[0].max, Some(45.0));
+        assert_eq!(n.summary[0].min, Some(20.0));
     }
 
     /// A group without targets still answers (the page shows its empty state):

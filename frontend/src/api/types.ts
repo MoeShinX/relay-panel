@@ -842,8 +842,9 @@ export interface LatencySummary {
   loss: number | null;
   /** Percent of answered probes that were TCP retransmits over the range. */
   retrans_rate?: number | null;
-  /** The fastest and slowest answered probe of the range (a retransmit counts
-   *  as the slow probe it is); null when none was answered. */
+  /** The fastest answered probe of the range, and the slowest one that was not
+   *  a TCP retransmit (every answer a retransmit: the plain slowest); null when
+   *  none was answered. */
   min?: number | null;
   max?: number | null;
 }

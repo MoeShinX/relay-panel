@@ -446,6 +446,9 @@ CREATE INDEX IF NOT EXISTS idx_traffic_batches_created ON traffic_batches(create
 -- or an ICMP target). rtt_sum_ms still includes them. latency_hourly adds
 -- retrans_base: the answered probes of the minutes that DID carry the field, so
 -- a rate over an hour of mixed old/new reports divides by the right number.
+-- normal_max_ms is the largest answered round trip that was not a retransmit
+-- (minute: as the node reported it; hour: the largest over its minutes, where a
+-- minute from a node that reports no retransmits counts with its rtt_max_ms).
 -- Migration 49 adds them to existing databases; there is deliberately no index
 -- on them.
 CREATE TABLE IF NOT EXISTS latency_targets (
@@ -471,6 +474,7 @@ CREATE TABLE IF NOT EXISTS latency_minute (
     rtt_max_ms REAL,
     retrans INTEGER,
     retrans_sum_ms REAL,
+    normal_max_ms REAL,
     PRIMARY KEY (node_id, target_id, minute_ts)
 );
 CREATE INDEX IF NOT EXISTS idx_latency_minute_ts ON latency_minute(minute_ts);
@@ -486,6 +490,7 @@ CREATE TABLE IF NOT EXISTS latency_hourly (
     retrans INTEGER,
     retrans_sum_ms REAL,
     retrans_base INTEGER,
+    normal_max_ms REAL,
     PRIMARY KEY (node_id, target_id, hour_ts)
 );
 CREATE INDEX IF NOT EXISTS idx_latency_hourly_ts ON latency_hourly(hour_ts);
@@ -2006,6 +2011,8 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
         ("latency_hourly", "retrans", "INTEGER"),
         ("latency_hourly", "retrans_sum_ms", "REAL"),
         ("latency_hourly", "retrans_base", "INTEGER"),
+        ("latency_minute", "normal_max_ms", "REAL"),
+        ("latency_hourly", "normal_max_ms", "REAL"),
     ] {
         add_column_if_missing(pool, table, column, ty).await?;
     }
@@ -3038,6 +3045,8 @@ mod tests {
             ("latency_hourly", "retrans"),
             ("latency_hourly", "retrans_sum_ms"),
             ("latency_hourly", "retrans_base"),
+            ("latency_minute", "normal_max_ms"),
+            ("latency_hourly", "normal_max_ms"),
         ] {
             assert!(
                 column_exists(&pool, table, column).await,
@@ -3061,6 +3070,11 @@ mod tests {
         .await
         .unwrap();
         assert_eq!((rows, nulls), (1, 1), "the old row is kept, retrans NULL");
+        let (nm,): (Option<f64>,) = sqlx::query_as("SELECT normal_max_ms FROM latency_minute")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(nm, None);
 
         run_migrations(&pool).await.expect("re-run migrations");
         assert!(column_exists(&pool, "latency_hourly", "retrans_base").await);
@@ -3079,6 +3093,8 @@ mod tests {
             ("latency_hourly", "retrans"),
             ("latency_hourly", "retrans_sum_ms"),
             ("latency_hourly", "retrans_base"),
+            ("latency_minute", "normal_max_ms"),
+            ("latency_hourly", "normal_max_ms"),
         ] {
             assert!(
                 column_exists(&pool, table, column).await,

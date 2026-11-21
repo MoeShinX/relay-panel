@@ -9,7 +9,21 @@ use std::collections::BTreeSet;
 
 /// Columns of a stored minute / hourly row, shared by both tables.
 const SELECT_ROW_COLS: &str =
-    "target_id, minute_ts, sent, lost, rtt_sum_ms, rtt_min_ms, rtt_max_ms, retrans, retrans_sum_ms";
+    "target_id, minute_ts, sent, lost, rtt_sum_ms, rtt_min_ms, rtt_max_ms, retrans, retrans_sum_ms, normal_max_ms";
+
+/// The retransmit-free maximum of a group of rows of `table`, for a bucket:
+/// the largest per-row figure, where a minute row without a reported
+/// `normal_max_ms` counts with its plain `rtt_max_ms` only if it carries no
+/// retransmit data at all (an older node, or ICMP). A reporting row whose every
+/// answer was a retransmit has none, and so adds nothing. The hourly table
+/// stores that per-minute figure already. NULL when no row has one.
+fn normal_max_sql(table: &str) -> &'static str {
+    if table == "latency_hourly" {
+        "MAX(normal_max_ms) AS normal_max_ms"
+    } else {
+        "MAX(COALESCE(normal_max_ms, CASE WHEN retrans IS NULL THEN rtt_max_ms END)) AS normal_max_ms"
+    }
+}
 
 /// The retransmit sums of a query over `table` (the minute table carries the
 /// answered-probe base implicitly: it is `sent - lost` of the rows that have the
@@ -218,8 +232,8 @@ impl LatencyRepository for SqliteRepository {
             sqlx::query(
                 "INSERT INTO latency_minute
                      (node_id, target_id, minute_ts, sent, lost, rtt_sum_ms, rtt_min_ms, rtt_max_ms,
-                      retrans, retrans_sum_ms)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                      retrans, retrans_sum_ms, normal_max_ms)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT(node_id, target_id, minute_ts) DO UPDATE SET
                      sent = excluded.sent,
                      lost = excluded.lost,
@@ -227,7 +241,8 @@ impl LatencyRepository for SqliteRepository {
                      rtt_min_ms = excluded.rtt_min_ms,
                      rtt_max_ms = excluded.rtt_max_ms,
                      retrans = excluded.retrans,
-                     retrans_sum_ms = excluded.retrans_sum_ms",
+                     retrans_sum_ms = excluded.retrans_sum_ms,
+                     normal_max_ms = excluded.normal_max_ms",
             )
             .bind(node_id)
             .bind(r.target_id)
@@ -239,6 +254,7 @@ impl LatencyRepository for SqliteRepository {
             .bind(r.rtt_max_ms)
             .bind(r.retrans)
             .bind(r.retrans_sum_ms)
+            .bind(r.normal_max_ms)
             .execute(&mut *tx)
             .await?;
             hours.insert((r.target_id, r.minute_ts.div_euclid(3600) * 3600));
@@ -256,11 +272,12 @@ impl LatencyRepository for SqliteRepository {
             sqlx::query(
                 "INSERT INTO latency_hourly
                      (node_id, target_id, hour_ts, sent, lost, rtt_sum_ms, rtt_min_ms, rtt_max_ms,
-                      retrans, retrans_sum_ms, retrans_base)
+                      retrans, retrans_sum_ms, retrans_base, normal_max_ms)
                  SELECT node_id, target_id, ?, SUM(sent), SUM(lost), SUM(rtt_sum_ms),
                         MIN(rtt_min_ms), MAX(rtt_max_ms),
                         SUM(retrans), SUM(retrans_sum_ms),
-                        SUM(CASE WHEN retrans IS NOT NULL THEN sent - lost END)
+                        SUM(CASE WHEN retrans IS NOT NULL THEN sent - lost END),
+                        MAX(COALESCE(normal_max_ms, CASE WHEN retrans IS NULL THEN rtt_max_ms END))
                  FROM latency_minute
                  WHERE node_id = ? AND target_id = ? AND minute_ts >= ? AND minute_ts < ?
                  GROUP BY node_id, target_id
@@ -272,7 +289,8 @@ impl LatencyRepository for SqliteRepository {
                      rtt_max_ms = excluded.rtt_max_ms,
                      retrans = excluded.retrans,
                      retrans_sum_ms = excluded.retrans_sum_ms,
-                     retrans_base = excluded.retrans_base",
+                     retrans_base = excluded.retrans_base,
+                     normal_max_ms = excluded.normal_max_ms",
             )
             .bind(hour_ts)
             .bind(node_id)
@@ -302,6 +320,7 @@ impl LatencyRepository for SqliteRepository {
             LatencyGranularity::Hour1 => ("latency_hourly", "hour_ts", "hour_ts"),
         };
         let retrans = retrans_sums(table);
+        let normal_max = normal_max_sql(table);
         let sql = format!(
             "SELECT target_id, {bucket} AS ts,
                     CAST(SUM(sent) AS INTEGER) AS sent,
@@ -309,6 +328,7 @@ impl LatencyRepository for SqliteRepository {
                     SUM(rtt_sum_ms) AS rtt_sum_ms,
                     MIN(rtt_min_ms) AS rtt_min_ms,
                     MAX(rtt_max_ms) AS rtt_max_ms,
+                    {normal_max},
                     {retrans}
              FROM {table}
              WHERE node_id = ? AND {col} >= ? AND {col} < ?
@@ -406,6 +426,7 @@ impl LatencyRepository for SqliteRepository {
         };
         let marks = vec!["?"; node_ids.len()].join(", ");
         let retrans = retrans_sums(table);
+        let normal_max = normal_max_sql(table);
         let sql = format!(
             "SELECT node_id, {bucket} AS ts,
                     CAST(SUM(sent) AS INTEGER) AS sent,
@@ -413,6 +434,7 @@ impl LatencyRepository for SqliteRepository {
                     SUM(rtt_sum_ms) AS rtt_sum_ms,
                     MIN(rtt_min_ms) AS rtt_min_ms,
                     MAX(rtt_max_ms) AS rtt_max_ms,
+                    {normal_max},
                     {retrans}
              FROM {table}
              WHERE node_id IN ({marks}) AND target_id = ? AND {col} >= ? AND {col} < ?

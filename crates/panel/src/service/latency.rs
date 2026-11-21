@@ -419,6 +419,23 @@ fn screen_retrans(s: &LatencySample, answered: u32, rtt_sum: f64) -> (Option<i64
     }
 }
 
+/// The retransmit-free maximum of a sample that passed the other checks, or
+/// None ("not reported") when missing or inconsistent; the sample is kept
+/// either way. Consistent means finite, no smaller than the minimum and no
+/// larger than the maximum of the answered probes (a hair of slack for float
+/// rounding), and below `LATENCY_RETRANSMIT_MS` — a slower probe would itself
+/// be a retransmit. Nothing answered has no maximum at all.
+fn screen_normal_max(s: &LatencySample, answered: u32) -> Option<f64> {
+    let v = s.normal_max_ms?;
+    let slack = 1e-6 * (1.0 + s.rtt_max_ms);
+    (answered > 0
+        && v.is_finite()
+        && v >= s.rtt_min_ms - slack
+        && v <= s.rtt_max_ms + slack
+        && v < LATENCY_RETRANSMIT_MS + slack)
+        .then_some(v)
+}
+
 /// Decide which of a node's reported samples to keep. Nothing here is trusted:
 /// a sample is dropped unless its target exists, its minute is aligned and
 /// recent, and its numbers are finite, non-negative and consistent. One bad
@@ -478,6 +495,7 @@ pub fn screen_samples(
             (s.rtt_sum_ms, Some(s.rtt_min_ms), Some(s.rtt_max_ms))
         };
         let (retrans, retrans_sum_ms) = screen_retrans(s, answered, sum);
+        let normal_max_ms = screen_normal_max(s, answered);
         accepted.insert(
             (s.target_id, s.minute_ts),
             LatencyMinuteRow {
@@ -490,6 +508,7 @@ pub fn screen_samples(
                 rtt_max_ms: max,
                 retrans,
                 retrans_sum_ms,
+                normal_max_ms,
             },
         );
     }
@@ -590,9 +609,9 @@ pub struct TargetSummary {
     /// Percent of answered probes that were retransmits over the range; null
     /// when no row of the range carries the figure.
     pub retrans_rate: Option<f64>,
-    /// The fastest and slowest answered probe of the range (the smallest of the
-    /// buckets' minimums, the largest of their maximums; a retransmit counts as
-    /// the slow probe it is). Null when no probe was answered.
+    /// The fastest and slowest answered probe of the range: the smallest of the
+    /// buckets' minimums, and the largest of their retransmit-free maximums
+    /// (see `bucket_max` / `range_max`). Null when no probe was answered.
     pub min: Option<f64>,
     pub max: Option<f64>,
 }
@@ -623,6 +642,43 @@ impl Retrans {
             sum_ms: r.retrans_sum_ms,
             base: r.retrans.map(|_| r.sent - r.lost),
         }
+    }
+}
+
+/// The maximum a bucket shows: the slowest answered probe that was not a TCP
+/// retransmit. Rows of a node that does not report retransmits (older node, ICMP
+/// target) count with their plain maximum, which is what the repository's
+/// `normal_max_ms` already folds in. When the bucket has no retransmit-free
+/// maximum at all — every answered probe of every reporting row was a retransmit
+/// — the plain maximum is shown instead, so a line whose every handshake took a
+/// second or more reads as that, not as "no data". The minimum is untouched.
+fn bucket_max(normal_max: Option<f64>, rtt_max: Option<f64>) -> Option<f64> {
+    normal_max.or(rtt_max)
+}
+
+/// The maximum of a whole range: the largest retransmit-free maximum of its
+/// buckets; only when no bucket has one, the largest plain maximum (the
+/// fallback of `bucket_max` for the range as a whole). A bucket that was all
+/// retransmits does not lift the range's maximum while other buckets have a
+/// normal one.
+#[derive(Default)]
+struct RangeMax {
+    normal: Option<f64>,
+    plain: Option<f64>,
+}
+
+impl RangeMax {
+    fn add(&mut self, normal_max: Option<f64>, rtt_max: Option<f64>) {
+        let hi = |a: Option<f64>, b: Option<f64>| match (a, b) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        };
+        self.normal = hi(self.normal, normal_max);
+        self.plain = hi(self.plain, rtt_max);
+    }
+
+    fn get(&self) -> Option<f64> {
+        self.normal.or(self.plain)
     }
 }
 
@@ -699,7 +755,8 @@ pub fn build_series(
         let mine: Vec<&LatencyBucket> = buckets.iter().filter(|b| b.target_id == t.id).collect();
         let (mut sent, mut lost, mut sum) = (0_i64, 0_i64, 0.0_f64);
         let mut total = RetransTotal::default();
-        let (mut min, mut max): (Option<f64>, Option<f64>) = (None, None);
+        let mut min: Option<f64> = None;
+        let mut max = RangeMax::default();
         let points: Vec<SeriesPoint> = mine
             .iter()
             .map(|b| {
@@ -716,15 +773,12 @@ pub fn build_series(
                     (Some(a), Some(b)) => Some(a.min(b)),
                     (a, b) => a.or(b),
                 };
-                max = match (max, b.rtt_max_ms) {
-                    (Some(a), Some(b)) => Some(a.max(b)),
-                    (a, b) => a.or(b),
-                };
+                max.add(b.normal_max_ms, b.rtt_max_ms);
                 SeriesPoint {
                     ts: b.ts,
                     avg: mean(b.rtt_sum_ms, b.sent, b.lost, r),
                     min: b.rtt_min_ms,
-                    max: b.rtt_max_ms,
+                    max: bucket_max(b.normal_max_ms, b.rtt_max_ms),
                     loss: loss_percent(b.sent, b.lost),
                     retrans_rate: retrans_rate(r),
                 }
@@ -742,7 +796,7 @@ pub fn build_series(
             loss: (sent > 0).then(|| loss_percent(sent, lost)),
             retrans_rate: retrans_rate(total),
             min,
-            max,
+            max: max.get(),
         });
         series.push(TargetSeries {
             target_id: t.id,
@@ -935,7 +989,7 @@ pub fn build_group_series(nodes: &[GroupNode], buckets: &[LatencyNodeBucket]) ->
                         ts: b.ts,
                         avg: mean(b.rtt_sum_ms, b.sent, b.lost, r),
                         min: b.rtt_min_ms,
-                        max: b.rtt_max_ms,
+                        max: bucket_max(b.normal_max_ms, b.rtt_max_ms),
                         loss: loss_percent(b.sent, b.lost),
                         retrans_rate: retrans_rate(r),
                     }
@@ -1093,6 +1147,7 @@ mod tests {
             rtt_max_ms: 12.0,
             retrans: None,
             retrans_sum_ms: None,
+            normal_max_ms: None,
             unsupported: false,
         }
     }
@@ -1290,6 +1345,7 @@ mod tests {
                 rtt_max_ms: Some(14.0),
                 retrans: None,
                 retrans_sum_ms: None,
+                normal_max_ms: None,
                 retrans_base: None,
             },
             LatencyBucket {
@@ -1302,6 +1358,7 @@ mod tests {
                 rtt_max_ms: None,
                 retrans: None,
                 retrans_sum_ms: None,
+                normal_max_ms: None,
                 retrans_base: None,
             },
         ];
@@ -1315,6 +1372,7 @@ mod tests {
             rtt_max_ms: None,
             retrans: None,
             retrans_sum_ms: None,
+            normal_max_ms: None,
         }];
         let (series, summary) = build_series(&t, &buckets, &latest);
         assert_eq!(series.len(), 2);
@@ -1353,6 +1411,7 @@ mod tests {
             rtt_max_ms: 1100.0,
             retrans,
             retrans_sum_ms,
+            normal_max_ms: None,
             unsupported: false,
         }
     }
@@ -1415,6 +1474,113 @@ mod tests {
     }
 
     #[test]
+    fn screening_keeps_a_consistent_normal_max_and_drops_only_it_otherwise() {
+        let t = [target(1)];
+        // 5 answered, min 18, max 1100, one retransmit: a normal max of 22 fits
+        let with = |v: Option<f64>| LatencySample {
+            normal_max_ms: v,
+            ..rt_sample(Some(1), Some(1100.0))
+        };
+        let stored = |s: LatencySample| {
+            let r = screen_samples(&t, &[s], NOW);
+            assert_eq!(r.accepted.len(), 1, "the sample itself is always kept");
+            // the retransmit figures are not collateral damage either
+            assert_eq!(r.accepted[0].retrans, Some(1));
+            r.accepted[0].normal_max_ms
+        };
+        assert_eq!(stored(with(Some(22.0))), Some(22.0));
+        assert_eq!(stored(with(None)), None);
+        // exactly the minimum and just under a second are fine
+        assert_eq!(stored(with(Some(18.0))), Some(18.0));
+        assert_eq!(stored(with(Some(999.0))), Some(999.0));
+        for (why, v) in [
+            ("NaN", f64::NAN),
+            ("infinite", f64::INFINITY),
+            ("below the minimum", 10.0),
+            ("negative", -1.0),
+            ("a second or more is a retransmit", 1000.5),
+        ] {
+            assert_eq!(stored(with(Some(v))), None, "{why}");
+        }
+        // above rtt_max (a max of 800 cannot hold a larger normal probe)
+        let low_max = LatencySample {
+            rtt_max_ms: 800.0,
+            rtt_sum_ms: 4.0 * 20.0 + 800.0,
+            normal_max_ms: Some(900.0),
+            retrans: None,
+            retrans_sum_ms: None,
+            ..rt_sample(None, None)
+        };
+        let r = screen_samples(&t, &[low_max], NOW);
+        assert_eq!(r.accepted[0].normal_max_ms, None, "above rtt_max");
+        // nothing answered has no maximum at all
+        let lost = LatencySample {
+            sent: 6,
+            lost: 6,
+            rtt_sum_ms: 0.0,
+            rtt_min_ms: 0.0,
+            rtt_max_ms: 0.0,
+            retrans: None,
+            retrans_sum_ms: None,
+            normal_max_ms: Some(0.0),
+            ..rt_sample(None, None)
+        };
+        let r = screen_samples(&t, &[lost], NOW);
+        assert_eq!(r.accepted[0].normal_max_ms, None);
+    }
+
+    #[test]
+    fn the_shown_maximum_leaves_out_retransmits_with_the_fallbacks_of_the_card() {
+        // a bucket with a retransmit-free maximum shows it, not the 1100 ms probe
+        assert_eq!(bucket_max(Some(22.0), Some(1100.0)), Some(22.0));
+        // none known (older node, ICMP, or every answer a retransmit): plain max
+        assert_eq!(bucket_max(None, Some(1100.0)), Some(1100.0));
+        assert_eq!(bucket_max(None, None), None);
+        // a range prefers retransmit-free maximums over the plain one ...
+        let mut m = RangeMax::default();
+        m.add(Some(22.0), Some(1100.0));
+        m.add(None, Some(1300.0)); // an all-retransmit bucket does not lift it
+        m.add(Some(30.0), Some(40.0));
+        assert_eq!(m.get(), Some(30.0));
+        // ... and falls back to the plain one only when there is none at all
+        let mut all = RangeMax::default();
+        all.add(None, Some(1100.0));
+        all.add(None, Some(1300.0));
+        assert_eq!(all.get(), Some(1300.0));
+        assert_eq!(RangeMax::default().get(), None);
+    }
+
+    #[test]
+    fn series_and_summary_show_the_retransmit_free_maximum() {
+        let t = [target(1)];
+        let bucket = |ts, nm| LatencyBucket {
+            target_id: 1,
+            ts,
+            sent: 6,
+            lost: 0,
+            rtt_sum_ms: 1220.0,
+            rtt_min_ms: Some(18.0),
+            rtt_max_ms: Some(1100.0),
+            normal_max_ms: nm,
+            retrans: Some(1),
+            retrans_sum_ms: Some(1100.0),
+            retrans_base: Some(6),
+        };
+        let (series, summary) =
+            build_series(&t, &[bucket(600, Some(22.0)), bucket(660, None)], &[]);
+        assert_eq!(series[0].points[0].max, Some(22.0));
+        assert_eq!(
+            series[0].points[1].max,
+            Some(1100.0),
+            "every answer a retransmit"
+        );
+        assert_eq!(summary[0].max, Some(22.0));
+        assert_eq!(summary[0].min, Some(18.0), "min is untouched");
+        let (_, only_retrans) = build_series(&t, &[bucket(600, None)], &[]);
+        assert_eq!(only_retrans[0].max, Some(1100.0));
+    }
+
+    #[test]
     fn a_fully_lost_minute_keeps_a_reported_zero_and_drops_anything_else() {
         let t = [target(1)];
         let lost = |retrans, sum| LatencySample {
@@ -1427,6 +1593,7 @@ mod tests {
             rtt_max_ms: 0.0,
             retrans,
             retrans_sum_ms: sum,
+            normal_max_ms: None,
             unsupported: false,
         };
         let r = screen_samples(&t, &[lost(Some(0), Some(0.0))], NOW);
@@ -1518,6 +1685,7 @@ mod tests {
             rtt_max_ms: Some(1100.0),
             retrans,
             retrans_sum_ms: rsum,
+            normal_max_ms: None,
             retrans_base: base,
         };
         let buckets = vec![
@@ -1536,6 +1704,7 @@ mod tests {
             rtt_max_ms: Some(1100.0),
             retrans: Some(1),
             retrans_sum_ms: Some(1100.0),
+            normal_max_ms: None,
         }];
         let (series, summary) = build_series(&t, &buckets, &latest);
         let p = &series[0].points;

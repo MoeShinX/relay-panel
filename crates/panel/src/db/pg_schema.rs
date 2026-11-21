@@ -323,6 +323,7 @@ CREATE TABLE IF NOT EXISTS latency_minute (
     rtt_max_ms DOUBLE PRECISION,
     retrans BIGINT,
     retrans_sum_ms DOUBLE PRECISION,
+    normal_max_ms DOUBLE PRECISION,
     PRIMARY KEY (node_id, target_id, minute_ts)
 );
 CREATE INDEX IF NOT EXISTS idx_latency_minute_ts ON latency_minute(minute_ts);
@@ -338,6 +339,7 @@ CREATE TABLE IF NOT EXISTS latency_hourly (
     retrans BIGINT,
     retrans_sum_ms DOUBLE PRECISION,
     retrans_base BIGINT,
+    normal_max_ms DOUBLE PRECISION,
     PRIMARY KEY (node_id, target_id, hour_ts)
 );
 CREATE INDEX IF NOT EXISTS idx_latency_hourly_ts ON latency_hourly(hour_ts);
@@ -1652,6 +1654,8 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
             "ALTER TABLE latency_hourly ADD COLUMN IF NOT EXISTS retrans BIGINT",
             "ALTER TABLE latency_hourly ADD COLUMN IF NOT EXISTS retrans_sum_ms DOUBLE PRECISION",
             "ALTER TABLE latency_hourly ADD COLUMN IF NOT EXISTS retrans_base BIGINT",
+            "ALTER TABLE latency_minute ADD COLUMN IF NOT EXISTS normal_max_ms DOUBLE PRECISION",
+            "ALTER TABLE latency_hourly ADD COLUMN IF NOT EXISTS normal_max_ms DOUBLE PRECISION",
         ] {
             sqlx::query(ddl).execute(&mut *tx).await?;
         }

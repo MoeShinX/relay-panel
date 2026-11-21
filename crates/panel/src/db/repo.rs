@@ -1159,6 +1159,12 @@ pub struct LatencyMinuteRow {
     /// None when every probe of the minute was lost.
     pub rtt_min_ms: Option<f64>,
     pub rtt_max_ms: Option<f64>,
+    /// The largest answered round trip that was not a TCP retransmit. On a
+    /// minute row: what the node reported (None = not reported, or no
+    /// non-retransmit answer). On a bucket: the largest per-row figure, where a
+    /// row of a node that does not report retransmits counts with its plain
+    /// `rtt_max_ms`; None when no row has a retransmit-free maximum.
+    pub normal_max_ms: Option<f64>,
     /// TCP retransmits among the answered probes (still counted in
     /// `rtt_sum_ms`) and their summed round trip; None = the node did not
     /// report them.
@@ -1198,6 +1204,12 @@ pub struct LatencyBucket {
     pub rtt_sum_ms: f64,
     pub rtt_min_ms: Option<f64>,
     pub rtt_max_ms: Option<f64>,
+    /// The largest answered round trip that was not a TCP retransmit. On a
+    /// minute row: what the node reported (None = not reported, or no
+    /// non-retransmit answer). On a bucket: the largest per-row figure, where a
+    /// row of a node that does not report retransmits counts with its plain
+    /// `rtt_max_ms`; None when no row has a retransmit-free maximum.
+    pub normal_max_ms: Option<f64>,
     /// TCP retransmits among the answered probes (handshakes that took a second
     /// or more; still part of `rtt_sum_ms`), their summed round trip, and the
     /// answered probes of the rows that carried those two. All three None when
@@ -1243,6 +1255,12 @@ pub struct LatencyNodeBucket {
     pub rtt_sum_ms: f64,
     pub rtt_min_ms: Option<f64>,
     pub rtt_max_ms: Option<f64>,
+    /// The largest answered round trip that was not a TCP retransmit. On a
+    /// minute row: what the node reported (None = not reported, or no
+    /// non-retransmit answer). On a bucket: the largest per-row figure, where a
+    /// row of a node that does not report retransmits counts with its plain
+    /// `rtt_max_ms`; None when no row has a retransmit-free maximum.
+    pub normal_max_ms: Option<f64>,
     /// TCP retransmits among the answered probes (handshakes that took a second
     /// or more; still part of `rtt_sum_ms`), their summed round trip, and the
     /// answered probes of the rows that carried those two. All three None when

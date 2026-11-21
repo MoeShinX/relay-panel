@@ -231,6 +231,14 @@ pub struct LatencySample {
     pub retrans: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retrans_sum_ms: Option<f64>,
+    /// The largest round trip among the answered probes that were NOT
+    /// retransmits, in milliseconds: the line's slowest normal handshake.
+    /// `rtt_max_ms` keeps counting every answered probe. `None`: the node does
+    /// not report it (an older node, or an ICMP target, whose plain maximum is
+    /// already the maximum), or every answered probe was a retransmit, or
+    /// nothing answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal_max_ms: Option<f64>,
     /// The node cannot probe this target this way at all (ICMP without the
     /// privilege to open a socket). Not packet loss: the panel stores no data
     /// for it and only remembers that the node cannot do it.
@@ -2108,13 +2116,16 @@ mod tests {
             "rtt_sum_ms":50.0,"rtt_min_ms":8.0,"rtt_max_ms":12.0}"#;
         let s: LatencySample = serde_json::from_str(old).unwrap();
         assert_eq!((s.retrans, s.retrans_sum_ms), (None, None));
-        assert!(!serde_json::to_string(&s).unwrap().contains("retrans"));
+        assert_eq!(s.normal_max_ms, None);
+        let out = serde_json::to_string(&s).unwrap();
+        assert!(!out.contains("retrans") && !out.contains("normal_max"));
 
         let new = r#"{"target_id":3,"minute_ts":600,"sent":6,"lost":1,
             "rtt_sum_ms":1250.0,"rtt_min_ms":8.0,"rtt_max_ms":1100.0,
-            "retrans":1,"retrans_sum_ms":1100.0}"#;
+            "retrans":1,"retrans_sum_ms":1100.0,"normal_max_ms":22.0}"#;
         let s: LatencySample = serde_json::from_str(new).unwrap();
         assert_eq!((s.retrans, s.retrans_sum_ms), (Some(1), Some(1100.0)));
+        assert_eq!(s.normal_max_ms, Some(22.0));
         let again: LatencySample =
             serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(again, s);

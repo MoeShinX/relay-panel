@@ -12,13 +12,13 @@ independent `v*` / `node-v*` tracks since this release).
 
 ### Changed
 
-- The latency monitor's average now leaves out TCP handshakes that needed a
-  retransmit (a lost first SYN is resent after one second, so those probes
-  finished at one second or more and dragged the average far above the line's
-  normal latency), and a "Retrans" rate is shown beside the loss on the group
+- The latency monitor's average and maximum now leave out TCP handshakes that
+  needed a retransmit (a lost first SYN is resent after one second, so those
+  probes finished at one second or more and dragged the average far above the
+  line's normal latency), and a "Retrans" rate is shown beside the loss on the group
   comparison, the node page, the trend chart and the status strips. It needs
   node-v1.2.13 or newer to report it; data from older nodes and from before the
-  upgrade keeps the old average and shows no retransmit rate.
+  upgrade keeps the old average and maximum and shows no retransmit rate.
 - The latency pages (group comparison and node page) got a calmer look: plainer
   matrix headers and cells, a thinner trend chart with a "Smooth" switch (chart
   only) and a fixed-height chart box, a per-target stats row on the node page

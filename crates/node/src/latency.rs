@@ -99,6 +99,9 @@ struct Accum {
     /// They are also part of `sum_ms` / `min_ms` / `max_ms`.
     retrans: u32,
     retrans_sum_ms: f64,
+    /// The largest answered round trip below `RETRANSMIT_MS` (TCP only): the
+    /// slowest normal handshake. None until one has been seen.
+    normal_max_ms: Option<f64>,
 }
 
 impl Accum {
@@ -112,6 +115,7 @@ impl Accum {
             max_ms: 0.0,
             retrans: 0,
             retrans_sum_ms: 0.0,
+            normal_max_ms: None,
         }
     }
 
@@ -125,6 +129,8 @@ impl Accum {
                 if self.tcp && ms >= RETRANSMIT_MS {
                     self.retrans += 1;
                     self.retrans_sum_ms += ms;
+                } else if self.tcp {
+                    self.normal_max_ms = Some(self.normal_max_ms.map_or(ms, |m| m.max(ms)));
                 }
             }
             None => self.lost += 1,
@@ -145,6 +151,9 @@ impl Accum {
             rtt_max_ms: if answered { self.max_ms } else { 0.0 },
             retrans: self.tcp.then_some(self.retrans),
             retrans_sum_ms: self.tcp.then_some(self.retrans_sum_ms),
+            // None for ICMP (its plain maximum is the maximum) and when every
+            // answered probe was a retransmit.
+            normal_max_ms: if self.tcp { self.normal_max_ms } else { None },
             unsupported: false,
         }
     }
@@ -214,6 +223,7 @@ impl Ledger {
             rtt_max_ms: 0.0,
             retrans: None,
             retrans_sum_ms: None,
+            normal_max_ms: None,
             unsupported: true,
         }));
         ready
@@ -528,9 +538,26 @@ mod tests {
         // 1200 and exactly 1000 are retransmits, 999 is not, the lost one never
         assert_eq!(s.retrans, Some(2));
         assert_eq!(s.retrans_sum_ms, Some(2200.0));
+        // the slowest handshake that was not a retransmit
+        assert_eq!(s.normal_max_ms, Some(999.0));
         // the plain sums still hold every answered probe
         assert_eq!(s.rtt_sum_ms, 40.0 + 1200.0 + 999.0 + 1000.0);
         assert_eq!((s.rtt_min_ms, s.rtt_max_ms), (40.0, 1200.0));
+    }
+
+    #[test]
+    fn normal_max_is_none_when_every_answer_was_a_retransmit_or_nothing_answered() {
+        let mut l = Ledger::default();
+        acc_sample(&mut l, 1, T0, Some(1200.0));
+        acc_sample(&mut l, 1, T0 + 5, Some(1000.0));
+        acc_sample(&mut l, 1, T0 + 10, None);
+        acc_sample(&mut l, 2, T0, None);
+        acc_sample(&mut l, 3, T0, Some(35.0));
+        let out = l.pending(T0 + 100);
+        assert_eq!(out[0].normal_max_ms, None, "all retransmits");
+        assert_eq!(out[0].rtt_max_ms, 1200.0, "rtt_max keeps its meaning");
+        assert_eq!(out[1].normal_max_ms, None, "nothing answered");
+        assert_eq!(out[2].normal_max_ms, Some(35.0));
     }
 
     #[test]
@@ -557,6 +584,7 @@ mod tests {
         l.record(1, LatencyKind::Icmp, T0 + 5, Some(20.0));
         let s = l.pending(T0 + 100).remove(0);
         assert_eq!((s.retrans, s.retrans_sum_ms), (None, None));
+        assert_eq!(s.normal_max_ms, None, "the plain max already is the max");
         assert_eq!(s.rtt_sum_ms, 1520.0);
         // and the fields stay out of the JSON, so an old panel never sees them
         let json = serde_json::to_string(&s).unwrap();

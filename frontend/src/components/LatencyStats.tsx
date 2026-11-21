@@ -36,7 +36,7 @@ export default function LatencyStats({ rows, testId }: { rows: StatsRow[]; testI
             <th scope="col">{t('latencyCardLatest')}</th>
             <th scope="col">{t('latencyCardAvg')}</th>
             <th scope="col">{t('latencyStatsMin')}</th>
-            <th scope="col">{t('latencyStatsMax')}</th>
+            <th scope="col" title={t('latencyStatsMaxTip')}>{t('latencyStatsMax')}</th>
             <th scope="col">{t('latencyCardLoss')}</th>
             <th scope="col">{t('latencyCardRetrans')}</th>
           </tr>
