@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Card, Empty, Result, Space, Spin, Tag, Tooltip, Typography } from 'antd';
-import { ArrowLeftOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
 import type { ApiEnvelope, LatencySeries, LatencySummary, NodeLatencyResponse, NodeStatus } from '../api/types';
@@ -12,20 +12,25 @@ import LatencyTrendCard, { ChartBox, ChartBoxMessage } from '../components/Laten
 import LevelDot from '../components/LevelDot';
 import SeriesPicker from '../components/SeriesPicker';
 import { useSeriesPick } from '../hooks/useSeriesPick';
+import { useNowSecs } from '../hooks/useNowSecs';
 import { rankByAttention } from '../utils/seriesPick';
 import {
-  AUTO_REFRESH_MS,
-  autoRefreshes,
+  autoRefreshMs,
+  autoRefreshNoteKey,
   granularityAllowed,
+  isStaleSample,
   latencyLevel,
   type LatencyGranularity,
   type LatencyRange,
 } from '../utils/latency';
 import {
   chartPoints,
+  formatClock,
   formatLoss,
   formatMs,
-  formatRetrans,
+  formatSampleTime,
+  showRaw,
+  slowText,
   type ChartPoint,
 } from '../utils/latencyChart';
 
@@ -58,6 +63,13 @@ export default function NodeLatency() {
   const [granularity, setGranularity] = useState<LatencyGranularity>('1h');
   const [data, setData] = useState<NodeLatencyResponse | null>(null);
   const [state, setState] = useState<LoadState>('loading');
+  // When the page last got an answer, and whether the refreshes since have been
+  // failing: the old picture stays on screen, but says how old it is.
+  const [lastSuccessAt, setLastSuccessAt] = useState<number | null>(null);
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  // The browser's clock, ticking whether or not a request succeeds: a "current"
+  // reading is judged by the age of its sample against it.
+  const [nowSecs, refreshNow] = useNowSecs();
   const [selected, setSelected] = useState<number | null>(null);
   const [node, setNode] = useState<{ name: string; ip: string } | null>(null);
   // Only the newest request may write the page: a slow answer for a range the
@@ -67,7 +79,10 @@ export default function NodeLatency() {
   const load = useCallback(
     async (silent: boolean) => {
       const mine = ++requestRef.current;
-      if (!silent) setState('loading');
+      if (!silent) {
+        setState('loading');
+        setRefreshFailed(false);
+      }
       try {
         const res = await api.get<unknown, ApiEnvelope<NodeLatencyResponse>>(
           `/admin/nodes/${encodeURIComponent(nodeId)}/latency?range=${range}&granularity=${granularity}`,
@@ -78,27 +93,33 @@ export default function NodeLatency() {
           return;
         }
         if (res.code !== 0 || !res.data) {
-          // A silent refresh that fails keeps the picture already on screen.
-          if (!silent) setState('failed');
+          // A silent refresh that fails keeps the picture already on screen,
+          // with a warning that it is getting old.
+          if (silent) setRefreshFailed(true);
+          else setState('failed');
           return;
         }
         setData(res.data);
         setState('ready');
+        setLastSuccessAt(Date.now());
+        setRefreshFailed(false);
+        refreshNow();
       } catch {
-        if (mine === requestRef.current && !silent) setState('failed');
+        if (mine !== requestRef.current) return;
+        if (silent) setRefreshFailed(true);
+        else setState('failed');
       }
     },
-    [nodeId, range, granularity],
+    [nodeId, range, granularity, refreshNow],
   );
 
   useEffect(() => {
     load(false);
   }, [load]);
 
-  // Ranges up to 6 hours follow the clock.
+  // Every range re-reads itself (a minute, or five for 7d / 30d).
   useEffect(() => {
-    if (!autoRefreshes(range)) return undefined;
-    const ti = setInterval(() => load(true), AUTO_REFRESH_MS);
+    const ti = setInterval(() => load(true), autoRefreshMs(range));
     return () => clearInterval(ti);
   }, [range, load]);
 
@@ -143,15 +164,16 @@ export default function NodeLatency() {
   const names = useMemo(() => new Map(series.map((s) => [String(s.target_id), s.name])), [series]);
   // One line per target. Past ten the palette runs out: the picker chooses
   // which to draw, by default the ten that need attention first over the range
-  // (worst latency level, then loss, then mean; a target this node cannot probe
-  // or with no reading last). A selected card narrows the chart to that one
+  // (worst level by latency, loss and slow-handshake share, then loss, then slow
+  // share, then mean; a target this node cannot probe or with no reading last). A selected card narrows the chart to that one
   // target and the picker steps aside.
   const targetKeys = useMemo(() => series.map((s) => String(s.target_id)), [series]);
   const ranked = useMemo(
     () =>
       rankByAttention(targetKeys, (k) => {
         const id = Number(k);
-        return unsupportedIds.has(id) ? null : summaryById.get(id);
+        const sum = summaryById.get(id);
+        return unsupportedIds.has(id) || !sum ? null : { avg: sum.avg, loss: sum.loss, slow: sum.retrans_rate };
       }),
     [targetKeys, summaryById, unsupportedIds],
   );
@@ -174,23 +196,31 @@ export default function NodeLatency() {
           const sum = summaryById.get(s.target_id);
           if (unsupportedIds.has(s.target_id)) {
             return {
-              key: String(s.target_id), name: s.name, note: t('latencyIcmpUnsupported'),
-              latest: null, avg: null, min: null, max: null, loss: null, retrans: null,
+              key: String(s.target_id), name: s.name, kind: s.kind, note: t('latencyIcmpUnsupported'),
+              latest: null, avg: null, min: null, max: null, loss: null, slow: null,
             };
           }
+          const stale = isStaleSample(sum?.latest_ts, nowSecs);
           return {
             key: String(s.target_id),
             name: s.name,
+            kind: s.kind,
             latest: sum?.latest ?? null,
             latestAllLost: sum?.latest_ts != null && sum.latest == null,
+            latestStale: stale,
+            latestStaleTip: stale && sum?.latest_ts != null
+              ? `${t('latencyNoNewData')} · ${t('latencyLastAt')} ${formatSampleTime(sum.latest_ts, nowSecs * 1000)}`
+              : undefined,
             avg: sum?.avg ?? null,
             min: sum?.min ?? null,
             max: sum?.max ?? null,
+            rawAvg: sum?.raw_avg ?? null,
+            rawMax: sum?.raw_max ?? null,
             loss: sum?.loss ?? null,
-            retrans: sum?.retrans_rate ?? null,
+            slow: sum?.retrans_rate ?? null,
           };
         }),
-    [series, summaryById, unsupportedIds, onlyId, t],
+    [series, summaryById, unsupportedIds, onlyId, nowSecs, t],
   );
 
   // One strip row per target, over the full range whatever card is selected.
@@ -199,16 +229,26 @@ export default function NodeLatency() {
     () =>
       series.map((s) => {
         const sum = summaryById.get(s.target_id);
-        const base = { key: String(s.target_id), name: s.name, points: s.points, current: null, loss: null, retrans: null };
+        const base = { key: String(s.target_id), name: s.name, kind: s.kind, points: s.points, current: null, loss: null, slow: null };
         if (unsupportedIds.has(s.target_id)) return { ...base, points: [], note: t('latencyIcmpUnsupported') };
         return {
           ...base,
-          current: sum?.latest_ts != null ? { ms: sum.latest, loss: sum.latest_loss } : null,
+          current:
+            sum?.latest_ts != null
+              ? {
+                  ms: sum.latest,
+                  loss: sum.latest_loss,
+                  slow: sum.latest_retrans_rate ?? null,
+                  rawMs: sum.latest_raw_avg ?? null,
+                  sampleTs: sum.latest_ts,
+                  stale: isStaleSample(sum.latest_ts, nowSecs),
+                }
+              : null,
           loss: sum?.loss ?? null,
-          retrans: sum?.retrans_rate ?? null,
+          slow: sum?.retrans_rate ?? null,
         };
       }),
-    [series, summaryById, unsupportedIds, t],
+    [series, summaryById, unsupportedIds, nowSecs, t],
   );
 
   const picker = showPicker ? (
@@ -233,6 +273,11 @@ export default function NodeLatency() {
           {node?.name ? ` · ${node.name}` : ''}
         </Title>
         {node?.ip ? <Text type="secondary" className="rp-mono">{node.ip}</Text> : null}
+        {lastSuccessAt != null ? (
+          <Text type="secondary" style={{ fontSize: 12 }} data-testid="latency-updated-at" data-time={formatClock(new Date(lastSuccessAt), true)}>
+            {t('latencyUpdatedAt')} {formatClock(new Date(lastSuccessAt), true)}
+          </Text>
+        ) : null}
         {/* The group whose targets these are; a way back to its comparison. */}
         {data?.group_name ? (
           <Tooltip title={t('latencyGroupLink')}>
@@ -317,10 +362,24 @@ export default function NodeLatency() {
     />
   ) : null;
 
+  // A background refresh failed: what is below is from the last good load.
+  const failAlert =
+    refreshFailed && lastSuccessAt != null ? (
+      <Alert
+        type="warning"
+        showIcon
+        style={{ marginBottom: 12 }}
+        data-testid="latency-refresh-failed"
+        data-time={formatClock(new Date(lastSuccessAt), true)}
+        title={t('latencyRefreshFailed').replace('{time}', formatClock(new Date(lastSuccessAt), true))}
+      />
+    ) : null;
+
   if (data && series.length === 0) {
     return (
       <div className="rp-lat">
         {header}
+        {failAlert}
         {offAlert}
         <Result
           icon={<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />}
@@ -340,12 +399,20 @@ export default function NodeLatency() {
         const sum = summaryById.get(s.target_id);
         const unsupported = unsupportedIds.has(s.target_id);
         const hasLatest = sum?.latest_ts != null;
-        const level = hasLatest
-          ? latencyLevel(sum?.latest, sum?.latest_loss)
-          : latencyLevel(sum?.avg, sum?.loss);
+        // A reading older than ten minutes is not the current state of the line:
+        // no colour, no number, whatever the last answer from the panel was.
+        const stale = hasLatest && isStaleSample(sum?.latest_ts, nowSecs);
+        // No fresh current reading (none at all, or too old) is never coloured
+        // from the range figures: the dot is grey.
+        const level = stale || !hasLatest
+          ? 'none'
+          : latencyLevel(sum?.latest, sum?.latest_loss, sum?.latest_retrans_rate);
         const isSelected = onlyId === s.target_id;
+        const failLabel = t(s.kind === 'tcp' ? 'latencyCardFailed' : 'latencyCardLoss');
+        const rangeSlow = slowText(sum?.retrans_rate, s.kind);
         let big: string;
         if (unsupported) big = '-';
+        else if (stale) big = t('latencyNoNewData');
         else if (hasLatest && sum?.latest != null) big = formatMs(sum.latest);
         else if (hasLatest) big = t('latencyAllLost');
         else big = t('latencyNoData');
@@ -373,7 +440,7 @@ export default function NodeLatency() {
               {s.kind === 'icmp' ? 'ICMP' : 'TCP'} · {t(CARRIER_KEY[s.carrier])}
             </div>
             <div
-              className={`rp-lat-target-value${unsupported || (hasLatest && sum?.latest != null) ? '' : ' is-text'}`}
+              className={`rp-lat-target-value${unsupported || (!stale && hasLatest && sum?.latest != null) ? '' : ' is-text'}`}
               data-testid={`latency-card-value-${s.target_id}`}
               data-level={unsupported ? 'none' : level}
             >
@@ -386,16 +453,41 @@ export default function NodeLatency() {
               </Tooltip>
             ) : (
               <>
+                {stale && sum?.latest_ts != null ? (
+                  <span className="rp-lat-sub" data-testid={`latency-card-stale-${s.target_id}`}>
+                    <span className="rp-lat-nowrap">
+                      {t('latencyLastAt')}{' '}
+                      <span data-testid={`latency-card-stale-time-${s.target_id}`}>
+                        {formatSampleTime(sum.latest_ts, nowSecs * 1000)}
+                      </span>
+                    </span>
+                  </span>
+                ) : null}
+                {!stale && hasLatest && showRaw(sum?.latest, sum?.latest_raw_avg, sum?.latest_retrans_rate) ? (
+                  <span className="rp-lat-sub">
+                    <span className="rp-lat-nowrap" data-testid={`latency-card-raw-${s.target_id}`}>
+                      {t('latencyCardRaw')} {formatMs(sum?.latest_raw_avg)}
+                    </span>
+                  </span>
+                ) : null}
                 <span className="rp-lat-sub">
                   <span className="rp-lat-nowrap">{t('latencyCardAvg')} {formatMs(sum?.avg)}</span>
-                </span>
-                <span className="rp-lat-sub">
-                  <span className="rp-lat-nowrap">{t('latencyCardLoss')} {formatLoss(sum?.loss)}</span>
-                  {formatRetrans(sum?.retrans_rate) == null ? null : (
+                  {showRaw(sum?.avg, sum?.raw_avg, sum?.retrans_rate) ? (
                     <>
                       {' · '}
-                      <span className="rp-lat-nowrap" data-testid={`latency-card-retrans-${s.target_id}`}>
-                        {t('latencyCardRetrans')} {formatRetrans(sum?.retrans_rate)}
+                      <span className="rp-lat-nowrap" data-testid={`latency-card-rawavg-${s.target_id}`}>
+                        {t('latencyCardRaw')} {formatMs(sum?.raw_avg)}
+                      </span>
+                    </>
+                  ) : null}
+                </span>
+                <span className="rp-lat-sub">
+                  <span className="rp-lat-nowrap">{failLabel} {formatLoss(sum?.loss)}</span>
+                  {rangeSlow == null ? null : (
+                    <>
+                      {' · '}
+                      <span className="rp-lat-nowrap" data-testid={`latency-card-slow-${s.target_id}`}>
+                        {t('latencyCardSlow')} {rangeSlow}
                       </span>
                     </>
                   )}
@@ -411,6 +503,7 @@ export default function NodeLatency() {
   return (
     <div className="rp-lat">
       {header}
+      {failAlert}
       {offAlert}
       {cards}
       <LatencyTrendCard
@@ -421,6 +514,14 @@ export default function NodeLatency() {
               <Text strong>{selectedSeries ? selectedSeries.name : t('latencyAllTargets')}</Text>
             </span>
             <Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>{t('latencyCardHint')}</Text>
+            <Tooltip placement="bottomLeft" title={<div style={{ maxWidth: 360 }}>{t('latencySlowHelp')}</div>}>
+              <InfoCircleOutlined
+                data-testid="latency-slow-help"
+                tabIndex={0}
+                aria-label={t('latencySlowFull')}
+                style={{ color: 'var(--ant-color-text-tertiary, #6b7280)' }}
+              />
+            </Tooltip>
           </Space>
         }
         picker={picker}
@@ -429,12 +530,12 @@ export default function NodeLatency() {
         colorDomain={colorDomain}
         names={names}
         withDate={withDate}
-        autoRefresh={autoRefreshes(range)}
+        autoRefreshNote={t(autoRefreshNoteKey(range))}
         loading={state === 'loading'}
         downloadName={`latency-${nodeId}-${range}`}
       />
       {data ? (
-        <LatencyStrips testId="latency-strips" rows={stripRows} since={data.since} until={data.until} bucketSecs={data.bucket_secs} withDate={withDate} />
+        <LatencyStrips testId="latency-strips" rows={stripRows} since={data.since} until={data.until} bucketSecs={data.bucket_secs} withDate={withDate} nowSecs={nowSecs} />
       ) : null}
     </div>
   );

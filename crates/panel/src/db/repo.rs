@@ -1346,6 +1346,23 @@ pub trait LatencyRepository: Send + Sync {
         until_ts: i64,
     ) -> Result<Vec<LatencyNodeBucket>, DbError>;
 
+    /// For each of the given nodes, the newest minute it reported for one
+    /// target at or after `since_ts` (unix seconds, from the minute table).
+    /// Nodes with no such minute are absent. This is the real sample time of a
+    /// node's "current" reading, which an hourly bucket cannot tell.
+    async fn query_latest_minute_ts(
+        &self,
+        node_ids: &[String],
+        target_id: i64,
+        since_ts: i64,
+    ) -> Result<Vec<(String, i64)>, DbError>;
+
+    /// Delete every minute and hourly row of every target of one device
+    /// group, all nodes, in one transaction. The targets, the interval and
+    /// everything else stay. Returns the rows deleted (zero for an unknown
+    /// group or one with no history).
+    async fn clear_latency_history(&self, group_id: i64) -> Result<u64, DbError>;
+
     /// Delete minute rows older than `minute_before` and hourly rows older
     /// than `hourly_before` (unix seconds). Returns rows deleted. The sweeper
     /// is the only thing that removes them (no FK on node_id).

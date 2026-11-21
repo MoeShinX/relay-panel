@@ -21,18 +21,47 @@ export const LATENCY_WARN_MS = 200;
 /** Loss, in percent, from which a card is flagged whatever its latency. */
 export const LATENCY_LOSS_WARN_PCT = 1;
 export const LATENCY_LOSS_BAD_PCT = 5;
+/** Share of slow handshakes (a successful TCP connect that took a second or
+ *  more), in percent, from which a reading is flagged whatever its latency. A
+ *  slow handshake means one packet of the handshake was lost, so the share is
+ *  about twice the packet loss on the way; 2% / 10% mirror the 1% / 5% loss
+ *  thresholds above. */
+export const LATENCY_SLOW_WARN_PCT = 2;
+export const LATENCY_SLOW_BAD_PCT = 10;
+/** A "current" reading is fresh only while its sample is at most this old, in
+ *  seconds: the server's "newest minute in the last ten minutes". Older, and it
+ *  is no longer the current state of the line, however recently the page
+ *  managed to talk to the panel. */
+export const LATENCY_STALE_SECS = 600;
 
 export type LatencyLevel = 'good' | 'warn' | 'bad' | 'none';
 
-/** How a card is coloured: by the worse of its latency and its loss. A target
- *  with no reading at all is 'none' (grey), not 'good'. */
-export function latencyLevel(avgMs: number | null | undefined, lossPct: number | null | undefined): LatencyLevel {
+/** Whether a reading whose sample was taken at `sampleTs` (unix seconds) is too
+ *  old to be called current at `nowSecs`. No sample at all is not "stale", it is
+ *  "no data" (the callers keep telling those apart). */
+export function isStaleSample(sampleTs: number | null | undefined, nowSecs: number): boolean {
+  return sampleTs != null && nowSecs - sampleTs > LATENCY_STALE_SECS;
+}
+
+/** How a card is coloured: by the worst of its latency, its failures / loss and
+ *  its slow-handshake share, the last two of the same window as the latency. A
+ *  null slow share (not reported: an older node, ICMP) is ignored, never read as
+ *  0%. A target with no reading at all is 'none' (grey), not 'good'. */
+export function latencyLevel(
+  avgMs: number | null | undefined,
+  lossPct: number | null | undefined,
+  slowPct?: number | null,
+): LatencyLevel {
   if (lossPct != null && lossPct >= 100) return 'bad';
   if (avgMs == null) return lossPct != null && lossPct > 0 ? 'bad' : 'none';
   let level: LatencyLevel = avgMs <= LATENCY_GOOD_MS ? 'good' : avgMs <= LATENCY_WARN_MS ? 'warn' : 'bad';
   if (lossPct != null) {
     if (lossPct >= LATENCY_LOSS_BAD_PCT) level = 'bad';
     else if (lossPct >= LATENCY_LOSS_WARN_PCT && level === 'good') level = 'warn';
+  }
+  if (slowPct != null) {
+    if (slowPct >= LATENCY_SLOW_BAD_PCT) level = 'bad';
+    else if (slowPct >= LATENCY_SLOW_WARN_PCT && level === 'good') level = 'warn';
   }
   return level;
 }
@@ -72,12 +101,24 @@ export function granularityAllowed(range: LatencyRange, g: LatencyGranularity): 
   return true;
 }
 
-/** Ranges up to 6 hours follow the clock: they are re-read every minute. */
-export function autoRefreshes(range: LatencyRange): boolean {
-  return range === '1h' || range === '6h' || range === '24h';
+/** The latency pages re-read their data on their own, so that "no new data"
+ *  means the samples really stopped and not that the page stopped asking: every
+ *  minute for the ranges that follow the clock (1h / 6h / 24h), every five for
+ *  the long ones (7d / 30d), whose hourly figures move slowly (a current reading
+ *  is judged by its sample time, which a five-minute refresh keeps well inside
+ *  the ten-minute limit). */
+export const AUTO_REFRESH_MS = 60_000;
+export const LONG_RANGE_REFRESH_MS = 5 * 60_000;
+
+/** How often a range re-reads itself, in ms. */
+export function autoRefreshMs(range: LatencyRange): number {
+  return range === '7d' || range === '30d' ? LONG_RANGE_REFRESH_MS : AUTO_REFRESH_MS;
 }
 
-export const AUTO_REFRESH_MS = 60_000;
+/** The i18n key of the "refreshes every ..." note of a range. */
+export function autoRefreshNoteKey(range: LatencyRange): 'latencyAutoRefresh' | 'latencyAutoRefreshLong' {
+  return autoRefreshMs(range) === AUTO_REFRESH_MS ? 'latencyAutoRefresh' : 'latencyAutoRefreshLong';
+}
 
 // ── Settings validation ──
 

@@ -1,5 +1,5 @@
 import type { GroupLatencyNode, GroupLatencySeries, LatencyPoint, LatencySeries } from '../api/types';
-import { STRIP_SEGMENTS, latencyLevel, type LatencyLevel } from './latency';
+import { STRIP_SEGMENTS, latencyLevel, type LatencyKind, type LatencyLevel } from './latency';
 
 /** One plotted point of one line. `value` is the bucket's mean round trip,
  *  null when every probe in it was lost (the line then breaks, which is the
@@ -15,11 +15,17 @@ export interface ChartPoint {
   value: number | null;
   /** The bucket's own mean, whatever the line shows. Tooltips read this. */
   raw: number | null;
+  /** The bucket's mean with slow handshakes included (`raw` leaves them out). */
+  rawAvg: number | null;
   min: number | null;
   max: number | null;
   loss: number;
-  /** Percent of answered probes that were TCP retransmits; null = not reported. */
-  retrans: number | null;
+  /** Percent of answered TCP probes that were slow handshakes (connect took a
+   *  second or more); null = not reported. */
+  slow: number | null;
+  /** What the line probes: TCP targets say "failed" and "slow handshakes", ICMP
+   *  ones "loss" and no handshake figure; null when the page does not know. */
+  kind: LatencyKind | null;
 }
 
 /** A marker for a bucket that lost probes. It sits on the line at that point;
@@ -46,10 +52,12 @@ export function chartPoints(series: LatencySeries[], onlyId: number | null): Cha
         name: s.name,
         value: p.avg,
         raw: p.avg,
+        rawAvg: p.raw_avg ?? null,
         min: p.min,
         max: p.max,
         loss: p.loss,
-        retrans: p.retrans_rate ?? null,
+        slow: p.retrans_rate ?? null,
+        kind: s.kind,
       });
     }
   }
@@ -65,7 +73,11 @@ export function nodeDisplayName(n: Pick<GroupLatencyNode, 'node_id' | 'label'>):
 
 /** The lines of the group chart: one per node, keyed by node id and named for
  *  the node, for the one target the chart shows. */
-export function groupChartPoints(series: GroupLatencySeries[], nodes: GroupLatencyNode[]): ChartPoint[] {
+export function groupChartPoints(
+  series: GroupLatencySeries[],
+  nodes: GroupLatencyNode[],
+  kind: LatencyKind | null = null,
+): ChartPoint[] {
   const names = new Map(nodes.map((n) => [n.node_id, nodeDisplayName(n)]));
   const out: ChartPoint[] = [];
   for (const s of series) {
@@ -77,10 +89,12 @@ export function groupChartPoints(series: GroupLatencySeries[], nodes: GroupLaten
         name,
         value: p.avg,
         raw: p.avg,
+        rawAvg: p.raw_avg ?? null,
         min: p.min,
         max: p.max,
         loss: p.loss,
-        retrans: p.retrans_rate ?? null,
+        slow: p.retrans_rate ?? null,
+        kind,
       });
     }
   }
@@ -136,7 +150,7 @@ export const SMOOTH_ALPHA = 0.35;
  *  mean, `s = alpha * x + (1 - alpha) * s`, oldest bucket first. A gap (null)
  *  stays a gap and is skipped: it is neither zero nor interpolated, and the
  *  average carries on from the last value before it. Only `value` (what is
- *  drawn) changes; `raw`, min, max, loss and retrans stay the bucket's own, and
+ *  drawn) changes; `raw`, `rawAvg`, min, max, loss and slow stay the bucket's own, and
  *  nothing outside the chart (table, cards, strips) ever sees this. Returns a
  *  new array in the input's order. */
 export function smoothPoints(points: ChartPoint[], alpha: number = SMOOTH_ALPHA): ChartPoint[] {
@@ -177,17 +191,70 @@ export function maxPointsPerKey(points: ChartPoint[]): number {
  *  only show the point under the cursor. */
 export const SYMBOL_MAX_POINTS = 30;
 
-/** One line of the chart tooltip: "20.1 ms · loss 0.2% · retrans 17%". Reads
- *  the bucket's own mean even when the line is smoothed. */
+/** The labels the chart tooltips use. */
+export interface TooltipLabels {
+  allLost: string;
+  loss: string;
+  /** What a TCP target's loss is called ("failed"). */
+  failed: string;
+  slow: string;
+  rawAvg: string;
+}
+
+/** The loss label of a target kind: TCP probes fail (DNS, refused, timeout),
+ *  ICMP ones are lost; an unknown kind keeps the neutral loss. */
+export function lossLabel(kind: LatencyKind | null | undefined, labels: { loss: string; failed: string }): string {
+  return kind === 'tcp' ? labels.failed : labels.loss;
+}
+
+/** The slow-handshake share as text. ICMP has no handshake: null, leave it
+ *  out. A TCP target whose data does not carry the figure (an older node, data
+ *  from before the upgrade): "—", never 0%. Unknown kind: only a real figure. */
+export function slowText(v: number | null | undefined, kind: LatencyKind | null | undefined): string | null {
+  if (kind === 'icmp') return null;
+  if (v == null) return kind === 'tcp' ? '—' : null;
+  return formatLoss(v);
+}
+
+/** Whether the raw mean (slow handshakes included) is worth showing next to the
+ *  filtered one: only when some probe was slow and it actually differs. */
+export function showRaw(
+  avg: number | null | undefined,
+  rawAvg: number | null | undefined,
+  slow: number | null | undefined,
+): boolean {
+  if (rawAvg == null || slow == null || !(slow > 0)) return false;
+  return avg == null || Math.abs(rawAvg - avg) >= 0.05;
+}
+
+/** One line of the chart tooltip: "20.1 ms (raw 992 ms) · failed 0.2% · slow
+ *  17%". Reads the bucket's own mean even when the line is smoothed; the raw
+ *  mean appears only when slow handshakes make it differ. */
 export function tooltipText(
-  d: Pick<ChartPoint, 'raw' | 'loss' | 'retrans'>,
-  labels: { allLost: string; loss: string; retrans: string },
+  d: Pick<ChartPoint, 'raw' | 'rawAvg' | 'loss' | 'slow' | 'kind'>,
+  labels: TooltipLabels,
 ): string {
-  const head = d.raw == null ? labels.allLost : formatMs(d.raw);
-  const parts = [head, `${labels.loss} ${formatLoss(d.loss)}`];
-  const r = formatRetrans(d.retrans);
-  if (r != null) parts.push(`${labels.retrans} ${r}`);
+  let head = d.raw == null ? labels.allLost : formatMs(d.raw);
+  if (showRaw(d.raw, d.rawAvg, d.slow)) head += ` (${labels.rawAvg} ${formatMs(d.rawAvg)})`;
+  const parts = [head, `${lossLabel(d.kind, labels)} ${formatLoss(d.loss)}`];
+  const s = slowText(d.slow, d.kind);
+  if (s != null) parts.push(`${labels.slow} ${s}`);
   return parts.join(' · ');
+}
+
+/** Local clock time, "21:58:26" (with seconds) or "21:58". */
+export function formatClock(d: Date, seconds = false): string {
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return seconds ? `${hm}:${pad(d.getSeconds())}` : hm;
+}
+
+/** When a sample was taken, for "last 21:40"; the date too once it is not from
+ *  today. */
+export function formatSampleTime(tsSecs: number, nowMs: number): string {
+  const d = new Date(tsSecs * 1000);
+  const n = new Date(nowMs);
+  const sameDay = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
+  return sameDay ? formatClock(d) : formatChartTime(d, true);
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -208,12 +275,6 @@ export function formatLoss(v: number | null | undefined): string {
   return v === 0 ? '0%' : v < 1 ? `${v.toFixed(2)}%` : `${v.toFixed(1)}%`;
 }
 
-/** The retransmit rate as text, same style as the loss; null when the data does
- *  not carry it, so callers leave it out instead of showing "0%". */
-export function formatRetrans(v: number | null | undefined): string | null {
-  return v == null ? null : formatLoss(v);
-}
-
 /** One slice of the selected range, for the status strips. */
 export interface StripSegment {
   /** Unix seconds: the slice covers [start, end), the last one also `end`. */
@@ -223,10 +284,12 @@ export interface StripSegment {
   count: number;
   /** Mean of the points' averages (null points ignored); null when none. */
   avg: number | null;
+  /** Mean of the points' raw averages (slow handshakes included); null when none. */
+  rawAvg: number | null;
   /** Mean of the points' loss percentages; null when the slice has no points. */
   loss: number | null;
-  /** Mean of the points' retransmit rates that carry one; null when none does. */
-  retrans: number | null;
+  /** Mean of the points' slow-handshake shares that carry one; null when none does. */
+  slow: number | null;
   /** Points exist but every one lost all its probes. */
   allLost: boolean;
 }
@@ -257,9 +320,11 @@ export function stripSegments(
     count: 0,
     avgSum: 0,
     avgN: 0,
+    rawSum: 0,
+    rawN: 0,
     lossSum: 0,
-    retransSum: 0,
-    retransN: 0,
+    slowSum: 0,
+    slowN: 0,
   }));
   if (width > 0) {
     for (const p of points) {
@@ -269,8 +334,12 @@ export function stripSegments(
       g.count += 1;
       g.lossSum += p.loss;
       if (p.retrans_rate != null) {
-        g.retransSum += p.retrans_rate;
-        g.retransN += 1;
+        g.slowSum += p.retrans_rate;
+        g.slowN += 1;
+      }
+      if (p.raw_avg != null) {
+        g.rawSum += p.raw_avg;
+        g.rawN += 1;
       }
       if (p.avg != null) {
         g.avgSum += p.avg;
@@ -283,17 +352,20 @@ export function stripSegments(
     end: g.end,
     count: g.count,
     avg: g.avgN > 0 ? g.avgSum / g.avgN : null,
+    rawAvg: g.rawN > 0 ? g.rawSum / g.rawN : null,
     loss: g.count > 0 ? g.lossSum / g.count : null,
-    retrans: g.retransN > 0 ? g.retransSum / g.retransN : null,
+    slow: g.slowN > 0 ? g.slowSum / g.slowN : null,
     allLost: g.count > 0 && g.avgN === 0,
   }));
 }
 
 /** Colour class of a latency strip slice: grey with no data, red when every
- *  probe was lost, otherwise by the latency thresholds alone (loss has its own
- *  strip). */
-export function stripLatencyLevel(seg: Pick<StripSegment, 'count' | 'avg' | 'allLost'>): LatencyLevel {
+ *  probe was lost, otherwise by the latency thresholds and the slice's own
+ *  share of slow handshakes (loss has its own strip). */
+export function stripLatencyLevel(
+  seg: Pick<StripSegment, 'count' | 'avg' | 'allLost'> & Partial<Pick<StripSegment, 'slow'>>,
+): LatencyLevel {
   if (seg.count === 0) return 'none';
   if (seg.allLost) return 'bad';
-  return latencyLevel(seg.avg, null);
+  return latencyLevel(seg.avg, null, seg.slow ?? null);
 }

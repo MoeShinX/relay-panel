@@ -10,6 +10,33 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Added
+
+- A "Clear history" button at the bottom of a device group's latency-monitor
+  settings drawer deletes the latency history of every target and node of that
+  group (after a confirmation); the targets, the interval and each node's
+  on/off switch stay. The action is on the audit trail
+  (`DELETE /api/v1/admin/groups/{id}/latency/history`, admin only).
+
+### Changed
+
+- Latency monitor, honest numbers. The "Retrans" rate introduced in 1.2.24 is now
+  called "Slow handshakes": it is the share of successful TCP probes whose connect
+  took a second or more, which is usually a lost and resent SYN but is not read
+  from any retransmit counter. A slow handshake now also counts against a reading:
+  from 2% the card, matrix cell or status slice turns amber and from 10% red, the
+  automatic choice of lines ranks it, and next to the average (which still leaves
+  slow handshakes out) the pages show the "raw" average and maximum with them
+  included (the API adds `raw_avg` / `raw_max`). A TCP target whose data does not
+  carry the figure shows "Slow —" instead of nothing, and its failures are
+  now called "Failed" (DNS failure, refused connection and timeout); ICMP targets
+  keep "Loss". A "current" reading older than ten minutes now turns grey and says
+  "No new data" with the time of its last sample, instead of staying green, and a
+  background refresh that fails keeps the old charts but shows a warning with the
+  time of the data on screen. The 7-day and 30-day views now refresh themselves
+  every five minutes too, and the group page judges a node's current reading by
+  its newest minute (the group latency API adds `latest_ts` to each node's line).
+
 ## [1.2.24] - 2026-11-21
 
 ### Changed
