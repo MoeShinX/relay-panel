@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.2.13] - 2026-11-21
+
 ### Changed
 
 - The latency monitor counts TCP probes whose handshake finished only after one
