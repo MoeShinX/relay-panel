@@ -1,7 +1,6 @@
-import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { message } from 'antd';
 
 const { mockGet, mockPut, mockDelete } = vi.hoisted(() => ({ mockGet: vi.fn(), mockPut: vi.fn(), mockDelete: vi.fn() }));
 vi.mock('../api/client', () => ({ default: { get: mockGet, put: mockPut, delete: mockDelete } }));
@@ -77,25 +76,8 @@ beforeEach(() => {
     ))));
 });
 
-// Saving shows antd's message toasts. They live in antd's own React root, not
-// in the tree render() made, so cleanup() never removes them, and each one
-// counts down to closing on requestAnimationFrame. React also queues the
-// effects of a commit made outside act() (a mock resolving while waitFor
-// polls) on its scheduler. Left alone, either can run after the test file
-// ends and jsdom is gone ("window is not defined"). So after every test:
-// unmount, close the toasts inside act(), then let the scheduler run what it
-// already queued while there is still a window.
-afterEach(async () => {
-  cleanup();
-  await act(async () => {
-    message.destroy();
-  });
-  // Two timer turns: whichever phase of Node's event loop this runs in, a
-  // check phase (where React's scheduler runs) comes before the second fires.
-  for (let i = 0; i < 2; i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-});
+// Saving shows antd's message toasts; src/test/setup.ts closes them and lets
+// React's scheduler drain after every test, so nothing runs after jsdom is gone.
 
 describe('LatencySettings clear history', () => {
   /** The confirmation's own button: it carries the same label as the one that opened it. */
