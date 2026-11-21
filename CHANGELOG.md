@@ -10,6 +10,14 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Added
+
+- A "Clear history" button at the bottom of a device group's latency-monitor
+  settings drawer deletes the latency history of every target and node of that
+  group (after a confirmation); the targets, the interval and each node's
+  on/off switch stay. The action is on the audit trail
+  (`DELETE /api/v1/admin/groups/{id}/latency/history`, admin only).
+
 ### Changed
 
 - Latency monitor, honest numbers. The "Retrans" rate introduced in 1.2.24 is now

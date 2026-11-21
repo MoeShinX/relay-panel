@@ -7723,6 +7723,80 @@ async fn pg_latency_targets_belong_to_one_group_each() {
     cleanup(&db).await;
 }
 
+/// Clearing a group's latency history deletes the minute and hourly rows of its
+/// targets for every node, reports how many, and touches nothing else: not
+/// another group's rows, not the targets.
+#[tokio::test]
+async fn pg_latency_clear_history_removes_only_one_groups_rows() {
+    let Some(db) = repo("lat_clear").await else {
+        return;
+    };
+    pg_seed_group(&db, 1).await;
+    pg_seed_group(&db, 2).await;
+    let a = db
+        .replace_latency_targets(
+            1,
+            "2026-01-01 00:00:00",
+            &[
+                lat_input(None, "A1", "192.0.2.1"),
+                lat_input(None, "A2", "192.0.2.2"),
+            ],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let b = db
+        .replace_latency_targets(
+            2,
+            "2026-01-01 00:00:00",
+            &[lat_input(None, "B", "192.0.2.3")],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    // two nodes of group 1 on both of its targets, and one node of group 2
+    for node in ["n1", "n2"] {
+        db.record_latency_minutes(
+            node,
+            &[
+                lat_row(a[0].id, 36000, 6, 0, 60.0, Some(9.0), Some(11.0)),
+                lat_row(a[1].id, 36000, 6, 0, 60.0, Some(9.0), Some(11.0)),
+            ],
+        )
+        .await
+        .unwrap();
+    }
+    db.record_latency_minutes(
+        "n1",
+        &[lat_row(b[0].id, 36000, 6, 0, 60.0, Some(9.0), Some(11.0))],
+    )
+    .await
+    .unwrap();
+
+    // 2 nodes x 2 targets, each one minute row and one hourly row
+    assert_eq!(db.clear_latency_history(1).await.unwrap(), 8);
+    for g in [LatencyGranularity::Minute1, LatencyGranularity::Hour1] {
+        let n1 = db.query_latency_buckets("n1", g, 0, 100_000).await.unwrap();
+        assert_eq!(
+            n1.iter().map(|x| x.target_id).collect::<Vec<_>>(),
+            vec![b[0].id],
+            "only the other group's row is left on n1"
+        );
+        assert!(db
+            .query_latency_buckets("n2", g, 0, 100_000)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+    // the targets stay
+    assert_eq!(db.list_latency_targets(1).await.unwrap(), a);
+    assert_eq!(db.list_latency_targets(2).await.unwrap(), b);
+    // nothing left to clear, and an unknown group has nothing either
+    assert_eq!(db.clear_latency_history(1).await.unwrap(), 0);
+    assert_eq!(db.clear_latency_history(99).await.unwrap(), 0);
+    assert_eq!(db.clear_latency_history(2).await.unwrap(), 2);
+}
+
 /// The comparison queries: totals per node and target over a window, and one
 /// target's series per node, from the minute or the hourly table, for the
 /// nodes and the target asked for only.

@@ -299,6 +299,12 @@ pub fn routes() -> Router<AppState> {
             "/admin/groups/{id}/latency",
             axum::routing::get(admin::get_group_latency),
         )
+        // Clear a group's latency history (every target, every node); the
+        // targets and settings stay.
+        .route(
+            "/admin/groups/{id}/latency/history",
+            axum::routing::delete(admin::delete_group_latency_history),
+        )
         .route(
             "/admin/latency/groups",
             axum::routing::get(admin::get_latency_groups),

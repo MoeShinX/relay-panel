@@ -1346,6 +1346,12 @@ pub trait LatencyRepository: Send + Sync {
         until_ts: i64,
     ) -> Result<Vec<LatencyNodeBucket>, DbError>;
 
+    /// Delete every minute and hourly row of every target of one device
+    /// group, all nodes, in one transaction. The targets, the interval and
+    /// everything else stay. Returns the rows deleted (zero for an unknown
+    /// group or one with no history).
+    async fn clear_latency_history(&self, group_id: i64) -> Result<u64, DbError>;
+
     /// Delete minute rows older than `minute_before` and hourly rows older
     /// than `hourly_before` (unix seconds). Returns rows deleted. The sweeper
     /// is the only thing that removes them (no FK on node_id).

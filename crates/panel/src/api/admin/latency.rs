@@ -94,6 +94,47 @@ pub async fn put_group_latency_config(
     }
 }
 
+/// What clearing a group's latency history removed.
+#[derive(Debug, Serialize)]
+pub struct ClearedLatencyHistory {
+    /// Minute and hourly rows deleted, all nodes together.
+    pub deleted: u64,
+}
+
+/// Delete the latency history (minute and hourly rows, every node) of every
+/// target of one group. The targets, the probe interval, each node's on/off
+/// switch and what the nodes reported they cannot probe stay as they are.
+pub async fn delete_group_latency_history(
+    admin: AdminOnly,
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+) -> Json<ApiResponse<ClearedLatencyHistory>> {
+    match group_name(&state, group_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return Json(err(404, "分组不存在")),
+        Err(()) => return Json(err(500, "数据库错误")),
+    }
+    match state.db.clear_latency_history(group_id).await {
+        Ok(deleted) => {
+            let label = crate::service::audit::group_label(&state, group_id).await;
+            crate::service::audit::record(
+                &state,
+                Some(admin.user_id),
+                "clear_latency_history",
+                "group",
+                group_id,
+                &format!("分组 {} / 清空延迟历史（{} 条）", label, deleted),
+            )
+            .await;
+            Json(ApiResponse::success(ClearedLatencyHistory { deleted }))
+        }
+        Err(e) => {
+            tracing::error!("delete_group_latency_history: db error: {}", e);
+            Json(err(500, "数据库错误"))
+        }
+    }
+}
+
 /// Every group that has targets, with how many: what the node-status page
 /// needs to decide where to show the monitor button and icon.
 pub async fn get_latency_groups(
@@ -586,6 +627,7 @@ mod tests {
             ("GET", "/admin/groups/5/latency/config"),
             ("PUT", "/admin/groups/5/latency/config"),
             ("GET", "/admin/groups/5/latency"),
+            ("DELETE", "/admin/groups/5/latency/history"),
             ("GET", "/admin/latency/groups"),
             ("GET", "/admin/nodes/n1/latency"),
         ] {
@@ -595,11 +637,21 @@ mod tests {
                 "{method} {uri}"
             );
         }
+        // a refused request deletes nothing and leaves no audit entry
+        assert_eq!(
+            state
+                .db
+                .count_audit_log(Some("clear_latency_history"))
+                .await
+                .unwrap(),
+            0
+        );
         let root = sign_token(1);
         for (method, uri, b) in [
             ("GET", "/admin/groups/5/latency/config", ""),
             ("PUT", "/admin/groups/5/latency/config", body),
             ("GET", "/admin/groups/5/latency", ""),
+            ("DELETE", "/admin/groups/5/latency/history", ""),
             ("GET", "/admin/latency/groups", ""),
         ] {
             assert_eq!(
@@ -1445,6 +1497,139 @@ mod tests {
 
     /// Deleting a device group takes its targets, their minute and hourly
     /// history and its interval with it; another group's are untouched.
+    /// Clearing a group's history removes the minute and hourly rows of its
+    /// targets for every node and nothing else: not another group's rows, not
+    /// the targets or the interval, not a node's on/off switch or the targets it
+    /// reported it cannot probe. It is audited with the group named, an unknown
+    /// group is a 404 that changes nothing, and clearing twice is harmless.
+    #[tokio::test]
+    async fn clearing_a_groups_history_removes_only_its_rows() {
+        let (state, pool) = test_state().await;
+        seed_group(&pool, 5, "in").await;
+        seed_group(&pool, 6, "in").await;
+        let a = save_ids(
+            &state,
+            5,
+            vec![
+                target("A1", "192.0.2.1", Some(443)),
+                target("A2", "192.0.2.2", Some(443)),
+            ],
+        )
+        .await;
+        let b = save_ids(&state, 6, vec![target("B", "192.0.2.3", Some(443))]).await;
+        add_status(&state, 5, "n1", "1.2.12", &[a[1]]).await;
+        state.db.set("latency_off:5:n2", "1").await.unwrap();
+        let status_before = state.db.get("node_status:5:n1").await.unwrap();
+        let t = minute_now(2);
+        // two nodes of group 5 on two targets, and one node of group 6
+        for node in ["n1", "n2"] {
+            state
+                .db
+                .record_latency_minutes(node, &[row(a[0], t, 0, 10.0), row(a[1], t, 0, 12.0)])
+                .await
+                .unwrap();
+        }
+        state
+            .db
+            .record_latency_minutes("n3", &[row(b[0], t, 0, 20.0)])
+            .await
+            .unwrap();
+        let targets_before = state.db.list_latency_targets(5).await.unwrap();
+
+        // an unknown group: 404, nothing deleted, nothing audited
+        let Json(r) = delete_group_latency_history(admin(), State(state.clone()), Path(99)).await;
+        assert_eq!(r.code, 404);
+        assert_eq!(
+            state
+                .db
+                .count_audit_log(Some("clear_latency_history"))
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(!state
+            .db
+            .query_latency_buckets("n1", LatencyGranularity::Minute1, 0, i64::MAX)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let Json(r) = delete_group_latency_history(admin(), State(state.clone()), Path(5)).await;
+        assert_eq!(r.code, 0, "{}", r.message);
+        // 2 nodes x 2 targets, each one minute row and one hourly row
+        assert_eq!(r.data.unwrap().deleted, 8);
+
+        for node in ["n1", "n2"] {
+            for g in [LatencyGranularity::Minute1, LatencyGranularity::Hour1] {
+                assert!(
+                    state
+                        .db
+                        .query_latency_buckets(node, g, 0, i64::MAX)
+                        .await
+                        .unwrap()
+                        .is_empty(),
+                    "{node} {g:?}"
+                );
+            }
+        }
+        // another group's rows survive
+        for g in [LatencyGranularity::Minute1, LatencyGranularity::Hour1] {
+            let left = state
+                .db
+                .query_latency_buckets("n3", g, 0, i64::MAX)
+                .await
+                .unwrap();
+            assert_eq!(
+                left.iter().map(|x| x.target_id).collect::<Vec<_>>(),
+                vec![b[0]]
+            );
+        }
+        // targets, interval, the switch and the "cannot probe" list are untouched
+        assert_eq!(
+            state.db.list_latency_targets(5).await.unwrap(),
+            targets_before
+        );
+        assert!(state
+            .db
+            .get(&crate::service::latency::interval_key(5))
+            .await
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            state.db.get("latency_off:5:n2").await.unwrap().as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            state.db.get("node_status:5:n1").await.unwrap(),
+            status_before
+        );
+
+        // on the audit trail with the group named
+        assert_eq!(
+            state
+                .db
+                .count_audit_log(Some("clear_latency_history"))
+                .await
+                .unwrap(),
+            1
+        );
+        let (target_type, detail): (String, String) = sqlx::query_as(
+            "SELECT target_type, detail FROM audit_log WHERE action = 'clear_latency_history'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(target_type, "group");
+        assert!(
+            detail.contains("group-5") && detail.contains("清空延迟历史"),
+            "{detail}"
+        );
+
+        // nothing left to clear: harmless, reports zero
+        let Json(r) = delete_group_latency_history(admin(), State(state.clone()), Path(5)).await;
+        assert_eq!((r.code, r.data.unwrap().deleted), (0, 0));
+    }
+
     #[tokio::test]
     async fn deleting_a_group_removes_its_latency_data() {
         let (state, pool) = test_state().await;

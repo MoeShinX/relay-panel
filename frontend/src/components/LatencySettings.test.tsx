@@ -3,8 +3,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import userEvent from '@testing-library/user-event';
 import { message } from 'antd';
 
-const { mockGet, mockPut } = vi.hoisted(() => ({ mockGet: vi.fn(), mockPut: vi.fn() }));
-vi.mock('../api/client', () => ({ default: { get: mockGet, put: mockPut } }));
+const { mockGet, mockPut, mockDelete } = vi.hoisted(() => ({ mockGet: vi.fn(), mockPut: vi.fn(), mockDelete: vi.fn() }));
+vi.mock('../api/client', () => ({ default: { get: mockGet, put: mockPut, delete: mockDelete } }));
 
 import LatencySettings from './LatencySettings';
 import type { LatencyConfig, LatencyTarget } from '../api/types';
@@ -39,12 +39,13 @@ function config(targets: LatencyTarget[], interval = 10): LatencyConfig {
 }
 
 const onSaved = vi.fn();
+const onCleared = vi.fn();
 
 async function renderSettings(cfg: LatencyConfig) {
   mockGet.mockResolvedValue(ok(cfg));
   const view = render(
     <I18nContext.Provider value={realT}>
-      <LatencySettings groupId={5} onSaved={onSaved} />
+      <LatencySettings groupId={5} onSaved={onSaved} onCleared={onCleared} />
     </I18nContext.Provider>,
   );
   await screen.findByTestId('latency-row-0').catch(() => screen.findByText(zhCN.latencyNoTargetsYet));
@@ -66,7 +67,9 @@ const clickSave = () => userEvent.click(screen.getByTestId("latency-save"));
 beforeEach(() => {
   mockGet.mockReset();
   mockPut.mockReset();
+  mockDelete.mockReset();
   onSaved.mockReset();
+  onCleared.mockReset();
   mockPut.mockImplementation((_url: string, body: { interval_secs: number; targets: unknown[] }) =>
     Promise.resolve(ok(config(
       body.targets.map((t, i) => ({ ...target(i + 1), ...(t as object) }) as LatencyTarget),
@@ -92,6 +95,73 @@ afterEach(async () => {
   for (let i = 0; i < 2; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
+});
+
+describe('LatencySettings clear history', () => {
+  /** The confirmation's own button: it carries the same label as the one that opened it. */
+  const confirmButton = async () => {
+    const text = await screen.findByText(zhCN.latencyClearHistoryConfirm);
+    const popover = text.closest('.ant-popover') as HTMLElement;
+    return within(popover).getByRole('button', { name: new RegExp(zhCN.latencyClearHistory) });
+  };
+
+  it('asks first, then sends the DELETE for this group and says how many rows went', async () => {
+    mockDelete.mockResolvedValue(ok({ deleted: 12 }));
+    await renderSettings(config([target(1)]));
+    await userEvent.click(screen.getByTestId('latency-clear-history'));
+    // nothing is sent until the question is answered
+    expect(await screen.findByText(zhCN.latencyClearHistoryConfirm)).toBeInTheDocument();
+    expect(mockDelete).not.toHaveBeenCalled();
+
+    await userEvent.click(await confirmButton());
+    await waitFor(() => expect(mockDelete).toHaveBeenCalledTimes(1));
+    expect(mockDelete).toHaveBeenCalledWith('/admin/groups/5/latency/history');
+    expect(await screen.findByText(zhCN.latencyHistoryClearedN.replace('{n}', '12'))).toBeInTheDocument();
+    expect(onCleared).toHaveBeenCalledTimes(1);
+    // clearing history is not saving the configuration
+    expect(mockPut).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByTestId('latency-clear-history')).not.toBeDisabled());
+  });
+
+  it('cancelling sends nothing', async () => {
+    await renderSettings(config([target(1)]));
+    await userEvent.click(screen.getByTestId('latency-clear-history'));
+    const text = await screen.findByText(zhCN.latencyClearHistoryConfirm);
+    // antd spaces out a two-character label, so take the first button of the pair
+    const cancel = (text.closest('.ant-popover') as HTMLElement).querySelector('.ant-popconfirm-buttons button') as HTMLElement;
+    await userEvent.click(cancel);
+    expect(mockDelete).not.toHaveBeenCalled();
+    expect(onCleared).not.toHaveBeenCalled();
+  });
+
+  it('the button is disabled while the request runs', async () => {
+    let finish: (v: unknown) => void = () => {};
+    mockDelete.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    await renderSettings(config([target(1)]));
+    await userEvent.click(screen.getByTestId('latency-clear-history'));
+    await userEvent.click(await confirmButton());
+    await waitFor(() => expect(screen.getByTestId('latency-clear-history')).toBeDisabled());
+    await act(async () => {
+      finish(ok({ deleted: 0 }));
+    });
+    await waitFor(() => expect(screen.getByTestId('latency-clear-history')).not.toBeDisabled());
+    expect(mockDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it('a refused or failed request says so and does not report success', async () => {
+    mockDelete.mockResolvedValueOnce({ code: 404, message: '分组不存在', data: null });
+    await renderSettings(config([target(1)]));
+    await userEvent.click(screen.getByTestId('latency-clear-history'));
+    await userEvent.click(await confirmButton());
+    expect(await screen.findByText('分组不存在')).toBeInTheDocument();
+    expect(onCleared).not.toHaveBeenCalled();
+
+    mockDelete.mockRejectedValueOnce(new Error('network'));
+    await userEvent.click(screen.getByTestId('latency-clear-history'));
+    await userEvent.click(await confirmButton());
+    expect(await screen.findByText(zhCN.latencyClearFailed)).toBeInTheDocument();
+    expect(onCleared).not.toHaveBeenCalled();
+  });
 });
 
 describe('LatencySettings', () => {

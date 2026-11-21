@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Button, Empty, Input, InputNumber, Select, Space, Spin, Tooltip, Typography, message } from 'antd';
-import { DeleteOutlined, HolderOutlined, PlusOutlined } from '@ant-design/icons';
+import { Alert, Button, Empty, Input, InputNumber, Popconfirm, Select, Space, Spin, Tooltip, Typography, message } from 'antd';
+import { ClearOutlined, DeleteOutlined, HolderOutlined, PlusOutlined } from '@ant-design/icons';
 import {
   DndContext,
   KeyboardSensor,
@@ -184,6 +184,9 @@ interface SettingsProps {
   groupId: number;
   /** Called with the group's target count after every successful save. */
   onSaved?: (targets: number) => void;
+  /** Called after the group's latency history was cleared (a page that shows
+   *  this group's data can reload it). */
+  onCleared?: () => void;
 }
 
 /**
@@ -193,13 +196,14 @@ interface SettingsProps {
  * group's whole configuration; targets that keep their row keep their history,
  * a removed one takes its history with it (the hint says so).
  */
-export default function LatencySettings({ groupId, onSaved }: SettingsProps) {
+export default function LatencySettings({ groupId, onSaved, onCleared }: SettingsProps) {
   const { t } = useI18n();
   const [interval, setIntervalSecs] = useState<number | null>(LATENCY_DEFAULT_INTERVAL);
   const [rows, setRows] = useState<TargetRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
   const [removedSaved, setRemovedSaved] = useState(false);
   const nextKey = useRef(0);
@@ -306,6 +310,28 @@ export default function LatencySettings({ groupId, onSaved }: SettingsProps) {
     }
   };
 
+  // Delete the stored history of every target and node of this group. The
+  // targets and settings stay; the server says how many rows went.
+  const clearHistory = async () => {
+    setClearing(true);
+    try {
+      const res = await api.delete<unknown, ApiEnvelope<{ deleted: number }>>(
+        `/admin/groups/${groupId}/latency/history`,
+      );
+      if (res.code !== 0) {
+        message.error(res.message || t('latencyClearFailed'));
+        return;
+      }
+      const n = res.data?.deleted;
+      message.success(n == null ? t('latencyHistoryCleared') : t('latencyHistoryClearedN').replace('{n}', String(n)));
+      onCleared?.();
+    } catch {
+      message.error(t('latencyClearFailed'));
+    } finally {
+      setClearing(false);
+    }
+  };
+
   const full = rows.length >= LATENCY_MAX_TARGETS;
 
   return (
@@ -375,6 +401,21 @@ export default function LatencySettings({ groupId, onSaved }: SettingsProps) {
             {full ? <Text type="secondary" style={{ fontSize: 12 }}>{t('latencyTargetLimit')}</Text> : null}
             {removedSaved ? <Text type="warning" style={{ fontSize: 12 }}>{t('latencyDeleteWarning')}</Text> : null}
           </Space>
+
+          <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid var(--ant-color-split, #f0f0f0)' }}>
+            <Popconfirm
+              title={t('latencyClearHistoryConfirm')}
+              okText={t('latencyClearHistory')}
+              cancelText={t('cancel')}
+              okButtonProps={{ danger: true }}
+              disabled={clearing}
+              onConfirm={clearHistory}
+            >
+              <Button danger icon={<ClearOutlined />} loading={clearing} disabled={clearing} data-testid="latency-clear-history">
+                {t('latencyClearHistory')}
+              </Button>
+            </Popconfirm>
+          </div>
         </>
       )}
     </div>

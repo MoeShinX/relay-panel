@@ -436,6 +436,23 @@ impl LatencyRepository for PgRepository {
             .await?)
     }
 
+    async fn clear_latency_history(&self, group_id: i64) -> Result<u64, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let mut deleted = 0;
+        for table in ["latency_minute", "latency_hourly"] {
+            deleted += sqlx::query(&format!(
+                "DELETE FROM {table} WHERE target_id IN
+                 (SELECT id FROM latency_targets WHERE group_id = $1)"
+            ))
+            .bind(group_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        }
+        tx.commit().await?;
+        Ok(deleted)
+    }
+
     async fn prune_latency_history(
         &self,
         minute_before: i64,
