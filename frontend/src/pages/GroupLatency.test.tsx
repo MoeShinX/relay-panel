@@ -210,6 +210,41 @@ describe('GroupLatency comparison table', () => {
     expect(screen.getByTestId('latency-cell-0123456789abcdef-2')).toHaveTextContent('latencyAllLost');
   });
 
+  it('shows the retransmit share beside the loss, and leaves it out when the data has none', async () => {
+    serve(() =>
+      ok(
+        response({
+          matrix: [
+            { ...cell('n1', 1, 20, 0.2), retrans_rate: 16.7 },
+            { ...cell('n2', 1, 30, 0), retrans_rate: 0 },
+            cell('0123456789abcdef', 1, 40, 0),
+          ],
+        }),
+      ),
+    );
+    renderPage();
+    await flush();
+    const c1 = screen.getByTestId('latency-cell-n1-1');
+    expect(c1).toHaveTextContent('latencyCardLoss 0.20% · latencyCardRetrans 16.7%');
+    // a reported zero is a real 0 %, not a missing figure
+    expect(screen.getByTestId('latency-cell-n2-1')).toHaveTextContent('latencyCardRetrans 0%');
+    // not reported (older node): no retransmit text at all, not "0%"
+    const old = screen.getByTestId('latency-cell-0123456789abcdef-1');
+    expect(old).toHaveTextContent('latencyCardLoss 0%');
+    expect(old).not.toHaveTextContent('latencyCardRetrans');
+    expect(screen.queryByTestId('latency-cell-retrans-0123456789abcdef-1')).toBeNull();
+    // the colour still comes from the (retransmit-free) average and the loss
+    expect(level('n1', 1)).toBe('good');
+  });
+
+  it('has an info icon by the matrix title that explains the retransmit figure', async () => {
+    serve();
+    renderPage();
+    await flush();
+    expect(screen.getByText('latencyGroupMatrixTitle')).toBeInTheDocument();
+    expect(screen.getByTestId('latency-retrans-help')).toBeInTheDocument();
+  });
+
   it('marks what has no reading: no data, a target the node cannot probe, and an old node', async () => {
     serve();
     renderPage();

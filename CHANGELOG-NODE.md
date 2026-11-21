@@ -13,6 +13,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+
+- The latency monitor counts TCP probes whose handshake finished only after one
+  second or more (a retransmitted SYN) separately and reports how many there
+  were and their total time, so the panel can leave them out of the average and
+  show a retransmit rate. Round-trip sums, minimum and maximum are unchanged, so
+  an older panel keeps working as before. ICMP probes are not affected.
+
 ## [1.2.12] - 2026-11-15
 
 Runs against any current panel (still protocol version 4). The feature below

@@ -9,6 +9,21 @@ use std::collections::BTreeSet;
 //
 // Same contract as the SQLite implementation; see `LatencyRepository`.
 
+/// The retransmit sums of a query over `table`; see the SQLite twin. `SUM` over
+/// BIGINT is NUMERIC in PostgreSQL, hence the casts.
+fn retrans_sums(table: &str) -> &'static str {
+    if table == "latency_hourly" {
+        "CAST(SUM(retrans) AS BIGINT) AS retrans,
+                    SUM(retrans_sum_ms) AS retrans_sum_ms,
+                    CAST(SUM(retrans_base) AS BIGINT) AS retrans_base"
+    } else {
+        "CAST(SUM(retrans) AS BIGINT) AS retrans,
+                    SUM(retrans_sum_ms) AS retrans_sum_ms,
+                    CAST(SUM(CASE WHEN retrans IS NOT NULL THEN sent - lost END) AS BIGINT)
+                        AS retrans_base"
+    }
+}
+
 /// Remove the latency targets matching `target_filter` (a condition on
 /// `latency_targets.group_id` with one `$1`) together with their minute and
 /// hourly history. Runs inside the caller's transaction, so a group and what
@@ -201,14 +216,17 @@ impl LatencyRepository for PgRepository {
             // The newest report of a minute replaces the stored one.
             sqlx::query(
                 "INSERT INTO latency_minute
-                     (node_id, target_id, minute_ts, sent, lost, rtt_sum_ms, rtt_min_ms, rtt_max_ms)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                     (node_id, target_id, minute_ts, sent, lost, rtt_sum_ms, rtt_min_ms, rtt_max_ms,
+                      retrans, retrans_sum_ms)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                  ON CONFLICT (node_id, target_id, minute_ts) DO UPDATE SET
                      sent = EXCLUDED.sent,
                      lost = EXCLUDED.lost,
                      rtt_sum_ms = EXCLUDED.rtt_sum_ms,
                      rtt_min_ms = EXCLUDED.rtt_min_ms,
-                     rtt_max_ms = EXCLUDED.rtt_max_ms",
+                     rtt_max_ms = EXCLUDED.rtt_max_ms,
+                     retrans = EXCLUDED.retrans,
+                     retrans_sum_ms = EXCLUDED.retrans_sum_ms",
             )
             .bind(node_id)
             .bind(r.target_id)
@@ -218,6 +236,8 @@ impl LatencyRepository for PgRepository {
             .bind(r.rtt_sum_ms)
             .bind(r.rtt_min_ms)
             .bind(r.rtt_max_ms)
+            .bind(r.retrans)
+            .bind(r.retrans_sum_ms)
             .execute(&mut *tx)
             .await?;
             hours.insert((r.target_id, r.minute_ts.div_euclid(3600) * 3600));
@@ -225,14 +245,19 @@ impl LatencyRepository for PgRepository {
         // The hourly row is rebuilt from the minute rows of its hour rather
         // than added to: re-storing a minute changes the minute row, and the
         // rebuild then gives the hour exactly what its minutes say — counting
-        // nothing twice, and keeping the true min / max.
+        // nothing twice, and keeping the true min / max. The retransmit columns
+        // sum only the minutes that carry them (NULL when none does), and
+        // `retrans_base` is the answered probes of exactly those minutes.
         for (target_id, hour_ts) in hours {
             sqlx::query(
                 "INSERT INTO latency_hourly
-                     (node_id, target_id, hour_ts, sent, lost, rtt_sum_ms, rtt_min_ms, rtt_max_ms)
+                     (node_id, target_id, hour_ts, sent, lost, rtt_sum_ms, rtt_min_ms, rtt_max_ms,
+                      retrans, retrans_sum_ms, retrans_base)
                  SELECT node_id, target_id, CAST($1 AS BIGINT),
                         CAST(SUM(sent) AS BIGINT), CAST(SUM(lost) AS BIGINT),
-                        SUM(rtt_sum_ms), MIN(rtt_min_ms), MAX(rtt_max_ms)
+                        SUM(rtt_sum_ms), MIN(rtt_min_ms), MAX(rtt_max_ms),
+                        CAST(SUM(retrans) AS BIGINT), SUM(retrans_sum_ms),
+                        CAST(SUM(CASE WHEN retrans IS NOT NULL THEN sent - lost END) AS BIGINT)
                  FROM latency_minute
                  WHERE node_id = $2 AND target_id = $3 AND minute_ts >= $1 AND minute_ts < $4
                  GROUP BY node_id, target_id
@@ -241,7 +266,10 @@ impl LatencyRepository for PgRepository {
                      lost = EXCLUDED.lost,
                      rtt_sum_ms = EXCLUDED.rtt_sum_ms,
                      rtt_min_ms = EXCLUDED.rtt_min_ms,
-                     rtt_max_ms = EXCLUDED.rtt_max_ms",
+                     rtt_max_ms = EXCLUDED.rtt_max_ms,
+                     retrans = EXCLUDED.retrans,
+                     retrans_sum_ms = EXCLUDED.retrans_sum_ms,
+                     retrans_base = EXCLUDED.retrans_base",
             )
             .bind(hour_ts)
             .bind(node_id)
@@ -270,13 +298,15 @@ impl LatencyRepository for PgRepository {
             }
             LatencyGranularity::Hour1 => ("latency_hourly", "hour_ts", "hour_ts"),
         };
+        let retrans = retrans_sums(table);
         let sql = format!(
             "SELECT target_id, {bucket} AS ts,
                     CAST(SUM(sent) AS BIGINT) AS sent,
                     CAST(SUM(lost) AS BIGINT) AS lost,
                     SUM(rtt_sum_ms) AS rtt_sum_ms,
                     MIN(rtt_min_ms) AS rtt_min_ms,
-                    MAX(rtt_max_ms) AS rtt_max_ms
+                    MAX(rtt_max_ms) AS rtt_max_ms,
+                    {retrans}
              FROM {table}
              WHERE node_id = $1 AND {col} >= $2 AND {col} < $3
              GROUP BY target_id, {bucket}
@@ -296,7 +326,8 @@ impl LatencyRepository for PgRepository {
         since_ts: i64,
     ) -> Result<Vec<LatencyMinuteRow>, DbError> {
         Ok(sqlx::query_as(
-            "SELECT target_id, minute_ts, sent, lost, rtt_sum_ms, rtt_min_ms, rtt_max_ms
+            "SELECT target_id, minute_ts, sent, lost, rtt_sum_ms, rtt_min_ms, rtt_max_ms,
+                    retrans, retrans_sum_ms
              FROM latency_minute m
              WHERE node_id = $1 AND minute_ts = (
                  SELECT MAX(minute_ts) FROM latency_minute
@@ -325,11 +356,13 @@ impl LatencyRepository for PgRepository {
         } else {
             ("latency_minute", "minute_ts")
         };
+        let retrans = retrans_sums(table);
         let sql = format!(
             "SELECT node_id, target_id,
                     CAST(SUM(sent) AS BIGINT) AS sent,
                     CAST(SUM(lost) AS BIGINT) AS lost,
-                    SUM(rtt_sum_ms) AS rtt_sum_ms
+                    SUM(rtt_sum_ms) AS rtt_sum_ms,
+                    {retrans}
              FROM {table}
              WHERE node_id = ANY($1) AND target_id = ANY($2) AND {col} >= $3 AND {col} < $4
              GROUP BY node_id, target_id
@@ -362,13 +395,15 @@ impl LatencyRepository for PgRepository {
             }
             LatencyGranularity::Hour1 => ("latency_hourly", "hour_ts", "hour_ts"),
         };
+        let retrans = retrans_sums(table);
         let sql = format!(
             "SELECT node_id, {bucket} AS ts,
                     CAST(SUM(sent) AS BIGINT) AS sent,
                     CAST(SUM(lost) AS BIGINT) AS lost,
                     SUM(rtt_sum_ms) AS rtt_sum_ms,
                     MIN(rtt_min_ms) AS rtt_min_ms,
-                    MAX(rtt_max_ms) AS rtt_max_ms
+                    MAX(rtt_max_ms) AS rtt_max_ms,
+                    {retrans}
              FROM {table}
              WHERE node_id = ANY($1) AND target_id = $2 AND {col} >= $3 AND {col} < $4
              GROUP BY node_id, {bucket}

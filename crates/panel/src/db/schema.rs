@@ -439,6 +439,15 @@ CREATE INDEX IF NOT EXISTS idx_traffic_batches_created ON traffic_batches(create
 -- spike (and the outage) a 7- or 30-day view is opened to find.
 --
 -- Brand-new tables, so their indexes are safe here as well as in Migration 48.
+--
+-- v1.2.24: retrans / retrans_sum_ms are how many of the answered probes were TCP
+-- retransmits (a handshake that took a second or more) and the sum of their
+-- round trips; both are NULL when the node does not report them (an older node,
+-- or an ICMP target). rtt_sum_ms still includes them. latency_hourly adds
+-- retrans_base: the answered probes of the minutes that DID carry the field, so
+-- a rate over an hour of mixed old/new reports divides by the right number.
+-- Migration 49 adds them to existing databases; there is deliberately no index
+-- on them.
 CREATE TABLE IF NOT EXISTS latency_targets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     group_id INTEGER NOT NULL,
@@ -460,6 +469,8 @@ CREATE TABLE IF NOT EXISTS latency_minute (
     rtt_sum_ms REAL NOT NULL,
     rtt_min_ms REAL,
     rtt_max_ms REAL,
+    retrans INTEGER,
+    retrans_sum_ms REAL,
     PRIMARY KEY (node_id, target_id, minute_ts)
 );
 CREATE INDEX IF NOT EXISTS idx_latency_minute_ts ON latency_minute(minute_ts);
@@ -472,6 +483,9 @@ CREATE TABLE IF NOT EXISTS latency_hourly (
     rtt_sum_ms REAL NOT NULL,
     rtt_min_ms REAL,
     rtt_max_ms REAL,
+    retrans INTEGER,
+    retrans_sum_ms REAL,
+    retrans_base INTEGER,
     PRIMARY KEY (node_id, target_id, hour_ts)
 );
 CREATE INDEX IF NOT EXISTS idx_latency_hourly_ts ON latency_hourly(hour_ts);
@@ -1983,6 +1997,20 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
     }
     tracing::info!("Migration 48: latency monitor tables present");
 
+    // ── Migration 49: v1.2.24 TCP retransmit statistics ──
+    // Nullable, no default: NULL means "not reported", which the readers treat
+    // as "nothing known", never as zero. No indexes (see SCHEMA_SQL).
+    for (table, column, ty) in [
+        ("latency_minute", "retrans", "INTEGER"),
+        ("latency_minute", "retrans_sum_ms", "REAL"),
+        ("latency_hourly", "retrans", "INTEGER"),
+        ("latency_hourly", "retrans_sum_ms", "REAL"),
+        ("latency_hourly", "retrans_base", "INTEGER"),
+    ] {
+        add_column_if_missing(pool, table, column, ty).await?;
+    }
+    tracing::info!("Migration 49: latency retransmit columns present");
+
     Ok(())
 }
 
@@ -2935,14 +2963,11 @@ mod tests {
         assert_eq!(idx, 1);
 
         // The primary keys are what make a re-sent minute replace, not repeat.
-        sqlx::query("INSERT INTO latency_minute VALUES ('n1', 1, 600, 6, 0, 60.0, 9.0, 11.0)")
-            .execute(&pool)
-            .await
-            .unwrap();
-        let dup =
-            sqlx::query("INSERT INTO latency_minute VALUES ('n1', 1, 600, 6, 0, 60.0, 9.0, 11.0)")
-                .execute(&pool)
-                .await;
+        const ROW: &str = "INSERT INTO latency_minute
+            (node_id, target_id, minute_ts, sent, lost, rtt_sum_ms, rtt_min_ms, rtt_max_ms)
+            VALUES ('n1', 1, 600, 6, 0, 60.0, 9.0, 11.0)";
+        sqlx::query(ROW).execute(&pool).await.unwrap();
+        let dup = sqlx::query(ROW).execute(&pool).await;
         assert!(dup.is_err(), "(node, target, minute) must be unique");
 
         run_migrations(&pool).await.expect("re-run migrations");
@@ -2953,12 +2978,112 @@ mod tests {
         assert_eq!(n, 1, "re-running must not touch the data");
     }
 
+    async fn column_exists(pool: &SqlitePool, table: &str, column: &str) -> bool {
+        let (n,): (i64,) = sqlx::query_as(&format!(
+            "SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = '{column}'"
+        ))
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        n == 1
+    }
+
+    /// Migration 49: latency tables from before the retransmit statistics get
+    /// the nullable columns without losing a row; the old rows read as "not
+    /// reported" (NULL), and re-running changes nothing.
+    #[tokio::test]
+    async fn migration_49_adds_the_retransmit_columns() {
+        let pool = fresh_pool().await;
+        // Back to the pre-49 shape: the two tables without the new columns.
+        for t in ["latency_hourly", "latency_minute"] {
+            sqlx::query(&format!("DROP TABLE {t}"))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query(
+            "CREATE TABLE latency_minute (
+                node_id TEXT NOT NULL, target_id INTEGER NOT NULL, minute_ts INTEGER NOT NULL,
+                sent INTEGER NOT NULL, lost INTEGER NOT NULL, rtt_sum_ms REAL NOT NULL,
+                rtt_min_ms REAL, rtt_max_ms REAL,
+                PRIMARY KEY (node_id, target_id, minute_ts))",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE latency_hourly (
+                node_id TEXT NOT NULL, target_id INTEGER NOT NULL, hour_ts INTEGER NOT NULL,
+                sent INTEGER NOT NULL, lost INTEGER NOT NULL, rtt_sum_ms REAL NOT NULL,
+                rtt_min_ms REAL, rtt_max_ms REAL,
+                PRIMARY KEY (node_id, target_id, hour_ts))",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO latency_minute VALUES ('n1', 1, 600, 6, 0, 60.0, 9.0, 11.0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(!column_exists(&pool, "latency_minute", "retrans").await);
+
+        sqlx::query(SCHEMA_SQL)
+            .execute(&pool)
+            .await
+            .expect("baseline on an old database");
+        run_migrations(&pool).await.expect("migrate old database");
+        for (table, column) in [
+            ("latency_minute", "retrans"),
+            ("latency_minute", "retrans_sum_ms"),
+            ("latency_hourly", "retrans"),
+            ("latency_hourly", "retrans_sum_ms"),
+            ("latency_hourly", "retrans_base"),
+        ] {
+            assert!(
+                column_exists(&pool, table, column).await,
+                "{table}.{column}"
+            );
+        }
+        // No index on the new columns (baseline-index hazard).
+        let (idx,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND sql LIKE '%retrans%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(idx, 0);
+
+        let (rows, nulls): (i64, i64) = sqlx::query_as(
+            "SELECT COUNT(*), COALESCE(SUM(retrans IS NULL AND retrans_sum_ms IS NULL), 0)
+             FROM latency_minute",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!((rows, nulls), (1, 1), "the old row is kept, retrans NULL");
+
+        run_migrations(&pool).await.expect("re-run migrations");
+        assert!(column_exists(&pool, "latency_hourly", "retrans_base").await);
+    }
+
     /// A new database has the tables from the baseline.
     #[tokio::test]
     async fn fresh_db_has_the_latency_tables() {
         let pool = fresh_pool().await;
         for t in ["latency_targets", "latency_minute", "latency_hourly"] {
             assert!(table_exists(&pool, t).await, "{t} must exist");
+        }
+        for (table, column) in [
+            ("latency_minute", "retrans"),
+            ("latency_minute", "retrans_sum_ms"),
+            ("latency_hourly", "retrans"),
+            ("latency_hourly", "retrans_sum_ms"),
+            ("latency_hourly", "retrans_base"),
+        ] {
+            assert!(
+                column_exists(&pool, table, column).await,
+                "{table}.{column}"
+            );
         }
     }
 }

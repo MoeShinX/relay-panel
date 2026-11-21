@@ -24,7 +24,7 @@ use crate::db::repo::{
 use relay_shared::protocol::{
     LatencyKind, LatencyProbeConfig, LatencyProbeTarget, LatencySample,
     LATENCY_DEFAULT_INTERVAL_SECS, LATENCY_MAX_INTERVAL_SECS, LATENCY_MAX_SENT_PER_MINUTE,
-    LATENCY_MAX_TARGETS, LATENCY_MIN_INTERVAL_SECS,
+    LATENCY_MAX_TARGETS, LATENCY_MIN_INTERVAL_SECS, LATENCY_RETRANSMIT_MS,
 };
 
 /// kvs key prefix of a group's probe interval.
@@ -389,6 +389,36 @@ pub struct ScreenedSamples {
     pub unsupported: Vec<i64>,
 }
 
+/// The retransmit figures of a sample that passed the other checks, or
+/// `(None, None)` ("not reported") when they are missing, only half there, or
+/// inconsistent. A bad retransmit figure never costs the sample itself: the
+/// round trips are still good, only this extra is dropped.
+///
+/// Consistent means: no more retransmits than answered probes, a finite
+/// non-negative sum that is no larger than the answered probes' total
+/// (`rtt_sum`, as stored: zero for a fully lost minute), and a sum that is at
+/// least `LATENCY_RETRANSMIT_MS` per retransmit (a retransmit takes that long
+/// by definition) — with a hair of slack for float rounding. No retransmits
+/// means a zero sum. A fully lost minute can only carry zero, which is stored
+/// as 0 rather than NULL.
+fn screen_retrans(s: &LatencySample, answered: u32, rtt_sum: f64) -> (Option<i64>, Option<f64>) {
+    let (Some(n), Some(sum)) = (s.retrans, s.retrans_sum_ms) else {
+        return (None, None);
+    };
+    let slack = 1e-6 * (1.0 + rtt_sum);
+    let consistent = n <= answered
+        && sum.is_finite()
+        && sum >= 0.0
+        && sum <= rtt_sum + slack
+        && sum >= LATENCY_RETRANSMIT_MS * f64::from(n) - slack
+        && (n > 0 || sum <= slack);
+    if consistent {
+        (Some(i64::from(n)), Some(sum))
+    } else {
+        (None, None)
+    }
+}
+
 /// Decide which of a node's reported samples to keep. Nothing here is trusted:
 /// a sample is dropped unless its target exists, its minute is aligned and
 /// recent, and its numbers are finite, non-negative and consistent. One bad
@@ -447,6 +477,7 @@ pub fn screen_samples(
             }
             (s.rtt_sum_ms, Some(s.rtt_min_ms), Some(s.rtt_max_ms))
         };
+        let (retrans, retrans_sum_ms) = screen_retrans(s, answered, sum);
         accepted.insert(
             (s.target_id, s.minute_ts),
             LatencyMinuteRow {
@@ -457,6 +488,8 @@ pub fn screen_samples(
                 rtt_sum_ms: sum,
                 rtt_min_ms: min,
                 rtt_max_ms: max,
+                retrans,
+                retrans_sum_ms,
             },
         );
     }
@@ -527,6 +560,9 @@ pub struct SeriesPoint {
     pub max: Option<f64>,
     /// Percent of probes lost, 0 to 100.
     pub loss: f64,
+    /// Percent of answered probes that were TCP retransmits, 0 to 100; null
+    /// when none of the bucket's data carries the figure (an older node, ICMP).
+    pub retrans_rate: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -546,10 +582,14 @@ pub struct TargetSummary {
     pub latest: Option<f64>,
     pub latest_ts: Option<i64>,
     pub latest_loss: Option<f64>,
+    pub latest_retrans_rate: Option<f64>,
     /// Mean round trip over the whole range, and percent lost over it. Null
     /// when the range holds no data / no answered probe.
     pub avg: Option<f64>,
     pub loss: Option<f64>,
+    /// Percent of answered probes that were retransmits over the range; null
+    /// when no row of the range carries the figure.
+    pub retrans_rate: Option<f64>,
 }
 
 fn loss_percent(sent: i64, lost: i64) -> f64 {
@@ -560,9 +600,84 @@ fn loss_percent(sent: i64, lost: i64) -> f64 {
     }
 }
 
-fn mean(sum: f64, sent: i64, lost: i64) -> Option<f64> {
-    let answered = sent - lost;
+/// The retransmit figures of a stored period, as the repository returns them.
+/// All None when no row of the period carried them. `base` is the answered
+/// probes of the rows that did, which is what a rate divides by.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct Retrans {
+    count: Option<i64>,
+    sum_ms: Option<f64>,
+    base: Option<i64>,
+}
+
+impl Retrans {
+    /// A single minute row: its base is simply its answered probes.
+    fn of_row(r: &LatencyMinuteRow) -> Self {
+        Self {
+            count: r.retrans,
+            sum_ms: r.retrans_sum_ms,
+            base: r.retrans.map(|_| r.sent - r.lost),
+        }
+    }
+}
+
+/// The plain mean round trip of the answered probes, retransmits included.
+fn plain_mean(sum: f64, answered: i64) -> Option<f64> {
     (answered > 0).then(|| sum / answered as f64)
+}
+
+/// The mean round trip of the answered probes, leaving out the handshakes that
+/// needed a TCP retransmit where the data says which they were: the retransmits'
+/// count and round trips come off both the total and the number of probes.
+/// Rows that do not carry the figures (an older node, before the upgrade)
+/// contribute their whole sum and count, i.e. the old behaviour.
+///
+/// When every answered probe was a retransmit nothing is left to average, and
+/// the plain mean is returned instead of dividing by zero: a line whose every
+/// handshake took a second or more should show that, not "no data".
+fn mean(sum: f64, sent: i64, lost: i64, retrans: Retrans) -> Option<f64> {
+    let answered = sent - lost;
+    if let (Some(n), Some(rsum)) = (retrans.count, retrans.sum_ms) {
+        let normal = answered - n;
+        if n > 0 && normal > 0 {
+            return Some(((sum - rsum) / normal as f64).max(0.0));
+        }
+    }
+    plain_mean(sum, answered)
+}
+
+/// Percent of the answered probes (of the rows that report retransmits) that
+/// were retransmits. Null when no row reports them, and also when the rows that
+/// do had no answered probe to be a retransmit of.
+fn retrans_rate(retrans: Retrans) -> Option<f64> {
+    match (retrans.count, retrans.base) {
+        (Some(n), Some(base)) if base > 0 => Some(n as f64 * 100.0 / base as f64),
+        _ => None,
+    }
+}
+
+/// Adds up the retransmit figures of several rows. A figure stays None until a
+/// row carries it, so "nothing reported" survives the addition.
+#[derive(Default)]
+struct RetransTotal(Retrans);
+
+impl RetransTotal {
+    fn add(&mut self, r: Retrans) {
+        fn plus<T: std::ops::Add<Output = T>>(a: Option<T>, b: Option<T>) -> Option<T> {
+            match (a, b) {
+                (Some(a), Some(b)) => Some(a + b),
+                (a, None) => a,
+                (None, b) => b,
+            }
+        }
+        self.0.count = plus(self.0.count, r.count);
+        self.0.sum_ms = plus(self.0.sum_ms, r.sum_ms);
+        self.0.base = plus(self.0.base, r.base);
+    }
+
+    fn get(&self) -> Retrans {
+        self.0
+    }
 }
 
 /// Shape stored buckets into one series per configured target (a target with
@@ -578,29 +693,40 @@ pub fn build_series(
     for t in targets {
         let mine: Vec<&LatencyBucket> = buckets.iter().filter(|b| b.target_id == t.id).collect();
         let (mut sent, mut lost, mut sum) = (0_i64, 0_i64, 0.0_f64);
+        let mut total = RetransTotal::default();
         let points: Vec<SeriesPoint> = mine
             .iter()
             .map(|b| {
                 sent += b.sent;
                 lost += b.lost;
                 sum += b.rtt_sum_ms;
+                let r = Retrans {
+                    count: b.retrans,
+                    sum_ms: b.retrans_sum_ms,
+                    base: b.retrans_base,
+                };
+                total.add(r);
                 SeriesPoint {
                     ts: b.ts,
-                    avg: mean(b.rtt_sum_ms, b.sent, b.lost),
+                    avg: mean(b.rtt_sum_ms, b.sent, b.lost, r),
                     min: b.rtt_min_ms,
                     max: b.rtt_max_ms,
                     loss: loss_percent(b.sent, b.lost),
+                    retrans_rate: retrans_rate(r),
                 }
             })
             .collect();
+        let total = total.get();
         let last = latest.iter().find(|r| r.target_id == t.id);
         summary.push(TargetSummary {
             target_id: t.id,
-            latest: last.and_then(|r| mean(r.rtt_sum_ms, r.sent, r.lost)),
+            latest: last.and_then(|r| mean(r.rtt_sum_ms, r.sent, r.lost, Retrans::of_row(r))),
             latest_ts: last.map(|r| r.minute_ts),
             latest_loss: last.map(|r| loss_percent(r.sent, r.lost)),
-            avg: mean(sum, sent, lost),
+            latest_retrans_rate: last.and_then(|r| retrans_rate(Retrans::of_row(r))),
+            avg: mean(sum, sent, lost, total),
             loss: (sent > 0).then(|| loss_percent(sent, lost)),
+            retrans_rate: retrans_rate(total),
         });
         series.push(TargetSeries {
             target_id: t.id,
@@ -738,6 +864,9 @@ pub struct MatrixCell {
     pub avg: Option<f64>,
     /// Percent of probes lost, 0 to 100.
     pub loss: f64,
+    /// Percent of answered probes that were TCP retransmits; null when no
+    /// data of the range carries the figure.
+    pub retrans_rate: Option<f64>,
     pub sent: i64,
 }
 
@@ -745,12 +874,20 @@ pub fn build_matrix(totals: &[LatencyNodeTotal]) -> Vec<MatrixCell> {
     totals
         .iter()
         .filter(|t| t.sent > 0)
-        .map(|t| MatrixCell {
-            node_id: t.node_id.clone(),
-            target_id: t.target_id,
-            avg: mean(t.rtt_sum_ms, t.sent, t.lost),
-            loss: loss_percent(t.sent, t.lost),
-            sent: t.sent,
+        .map(|t| {
+            let r = Retrans {
+                count: t.retrans,
+                sum_ms: t.retrans_sum_ms,
+                base: t.retrans_base,
+            };
+            MatrixCell {
+                node_id: t.node_id.clone(),
+                target_id: t.target_id,
+                avg: mean(t.rtt_sum_ms, t.sent, t.lost, r),
+                loss: loss_percent(t.sent, t.lost),
+                retrans_rate: retrans_rate(r),
+                sent: t.sent,
+            }
         })
         .collect()
 }
@@ -772,12 +909,20 @@ pub fn build_group_series(nodes: &[GroupNode], buckets: &[LatencyNodeBucket]) ->
             points: buckets
                 .iter()
                 .filter(|b| b.node_id == n.node_id)
-                .map(|b| SeriesPoint {
-                    ts: b.ts,
-                    avg: mean(b.rtt_sum_ms, b.sent, b.lost),
-                    min: b.rtt_min_ms,
-                    max: b.rtt_max_ms,
-                    loss: loss_percent(b.sent, b.lost),
+                .map(|b| {
+                    let r = Retrans {
+                        count: b.retrans,
+                        sum_ms: b.retrans_sum_ms,
+                        base: b.retrans_base,
+                    };
+                    SeriesPoint {
+                        ts: b.ts,
+                        avg: mean(b.rtt_sum_ms, b.sent, b.lost, r),
+                        min: b.rtt_min_ms,
+                        max: b.rtt_max_ms,
+                        loss: loss_percent(b.sent, b.lost),
+                        retrans_rate: retrans_rate(r),
+                    }
                 })
                 .collect(),
         })
@@ -930,6 +1075,8 @@ mod tests {
             rtt_sum_ms: 50.0,
             rtt_min_ms: 8.0,
             rtt_max_ms: 12.0,
+            retrans: None,
+            retrans_sum_ms: None,
             unsupported: false,
         }
     }
@@ -1125,6 +1272,9 @@ mod tests {
                 rtt_sum_ms: 60.0,
                 rtt_min_ms: Some(8.0),
                 rtt_max_ms: Some(14.0),
+                retrans: None,
+                retrans_sum_ms: None,
+                retrans_base: None,
             },
             LatencyBucket {
                 target_id: 1,
@@ -1134,6 +1284,9 @@ mod tests {
                 rtt_sum_ms: 0.0,
                 rtt_min_ms: None,
                 rtt_max_ms: None,
+                retrans: None,
+                retrans_sum_ms: None,
+                retrans_base: None,
             },
         ];
         let latest = vec![LatencyMinuteRow {
@@ -1144,6 +1297,8 @@ mod tests {
             rtt_sum_ms: 0.0,
             rtt_min_ms: None,
             rtt_max_ms: None,
+            retrans: None,
+            retrans_sum_ms: None,
         }];
         let (series, summary) = build_series(&t, &buckets, &latest);
         assert_eq!(series.len(), 2);
@@ -1165,6 +1320,241 @@ mod tests {
         assert_eq!(summary[1].avg, None);
         assert_eq!(summary[1].loss, None);
         assert_eq!(summary[1].latest_ts, None);
+    }
+
+    fn rt_sample(retrans: Option<u32>, retrans_sum_ms: Option<f64>) -> LatencySample {
+        // 6 sent, 1 lost, 5 answered: 4 normal ones and (maybe) one retransmit.
+        LatencySample {
+            target_id: 1,
+            minute_ts: NOW - 120,
+            sent: 6,
+            lost: 1,
+            rtt_sum_ms: 4.0 * 20.0 + 1100.0,
+            rtt_min_ms: 18.0,
+            rtt_max_ms: 1100.0,
+            retrans,
+            retrans_sum_ms,
+            unsupported: false,
+        }
+    }
+
+    #[test]
+    fn screening_stores_consistent_retransmit_figures() {
+        let t = [target(1)];
+        let stored = |s: LatencySample| {
+            let r = screen_samples(&t, &[s], NOW);
+            assert_eq!(r.accepted.len(), 1, "the sample itself is always kept");
+            (r.accepted[0].retrans, r.accepted[0].retrans_sum_ms)
+        };
+        assert_eq!(
+            stored(rt_sample(Some(1), Some(1100.0))),
+            (Some(1), Some(1100.0))
+        );
+        // a node that reports none, or zero
+        assert_eq!(stored(rt_sample(None, None)), (None, None));
+        let mut none = rt_sample(Some(0), Some(0.0));
+        none.rtt_sum_ms = 100.0;
+        none.rtt_max_ms = 22.0;
+        assert_eq!(stored(none), (Some(0), Some(0.0)));
+        // every answered probe a retransmit
+        let mut all = rt_sample(Some(5), Some(5500.0));
+        all.rtt_sum_ms = 5500.0;
+        assert_eq!(stored(all), (Some(5), Some(5500.0)));
+    }
+
+    #[test]
+    fn screening_drops_only_the_retransmit_fields_when_they_are_inconsistent() {
+        let t = [target(1)];
+        let bad: Vec<(&str, LatencySample)> = vec![
+            ("more than answered", rt_sample(Some(6), Some(6600.0))),
+            ("NaN sum", rt_sample(Some(1), Some(f64::NAN))),
+            ("infinite sum", rt_sample(Some(1), Some(f64::INFINITY))),
+            ("negative sum", rt_sample(Some(1), Some(-1100.0))),
+            (
+                "sum above the round trips",
+                rt_sample(Some(1), Some(1500.0)),
+            ),
+            ("under a second each", rt_sample(Some(1), Some(900.0))),
+            (
+                "two of them need two seconds",
+                rt_sample(Some(2), Some(1100.0)),
+            ),
+            ("none but a sum", rt_sample(Some(0), Some(50.0))),
+            ("count without sum", rt_sample(Some(1), None)),
+            ("sum without count", rt_sample(None, Some(1100.0))),
+        ];
+        for (why, s) in bad {
+            let r = screen_samples(&t, &[s], NOW);
+            assert_eq!(r.accepted.len(), 1, "{why}: the sample is kept");
+            assert_eq!(r.accepted[0].rtt_sum_ms, 4.0 * 20.0 + 1100.0, "{why}");
+            assert_eq!(
+                (r.accepted[0].retrans, r.accepted[0].retrans_sum_ms),
+                (None, None),
+                "{why}: stored as not reported"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fully_lost_minute_keeps_a_reported_zero_and_drops_anything_else() {
+        let t = [target(1)];
+        let lost = |retrans, sum| LatencySample {
+            target_id: 1,
+            minute_ts: NOW - 60,
+            sent: 6,
+            lost: 6,
+            rtt_sum_ms: 0.0,
+            rtt_min_ms: 0.0,
+            rtt_max_ms: 0.0,
+            retrans,
+            retrans_sum_ms: sum,
+            unsupported: false,
+        };
+        let r = screen_samples(&t, &[lost(Some(0), Some(0.0))], NOW);
+        assert_eq!(
+            (r.accepted[0].retrans, r.accepted[0].retrans_sum_ms),
+            (Some(0), Some(0.0)),
+            "zero is stored as 0, not NULL"
+        );
+        let r = screen_samples(&t, &[lost(Some(1), Some(1100.0))], NOW);
+        assert_eq!(r.accepted.len(), 1);
+        assert_eq!(
+            (r.accepted[0].retrans, r.accepted[0].retrans_sum_ms),
+            (None, None)
+        );
+    }
+
+    fn r(count: Option<i64>, sum_ms: Option<f64>, base: Option<i64>) -> Retrans {
+        Retrans {
+            count,
+            sum_ms,
+            base,
+        }
+    }
+
+    #[test]
+    fn the_average_leaves_out_retransmits_where_they_are_known() {
+        // 10 answered, 2 of them retransmits of 1100 ms; 8 normal ones of 20 ms
+        let sum = 8.0 * 20.0 + 2.0 * 1100.0;
+        let known = r(Some(2), Some(2200.0), Some(10));
+        assert_eq!(mean(sum, 12, 2, known), Some(20.0));
+        assert_eq!(retrans_rate(known), Some(20.0));
+        // no retransmits reported: the plain mean, no rate
+        assert_eq!(
+            mean(sum, 12, 2, Retrans::default()),
+            Some(sum / 10.0),
+            "old data keeps the old average"
+        );
+        assert_eq!(retrans_rate(Retrans::default()), None);
+        // reported as zero: same as the plain mean, and a real 0 %
+        let zero = r(Some(0), Some(0.0), Some(10));
+        assert_eq!(mean(200.0, 10, 0, zero), Some(20.0));
+        assert_eq!(retrans_rate(zero), Some(0.0));
+        // every answered probe was a retransmit: the plain mean, not 0 / 0
+        let all = r(Some(4), Some(4400.0), Some(4));
+        assert_eq!(mean(4400.0, 4, 0, all), Some(1100.0));
+        assert_eq!(retrans_rate(all), Some(100.0));
+        // nothing answered: no mean and no rate, with or without the figures
+        let none = r(Some(0), Some(0.0), Some(0));
+        assert_eq!(mean(0.0, 6, 6, none), None);
+        assert_eq!(retrans_rate(none), None);
+        assert_eq!(mean(0.0, 0, 0, Retrans::default()), None);
+        // a mixed period: 6 answered probes from a reporting node (1 retransmit
+        // of 1100 ms) plus 4 from an old one (40 ms each); the rate only counts
+        // the 6 that could say.
+        let mixed = r(Some(1), Some(1100.0), Some(6));
+        let mixed_sum = 5.0 * 20.0 + 1100.0 + 4.0 * 40.0;
+        assert_eq!(retrans_rate(mixed), Some(100.0 / 6.0));
+        let avg = mean(mixed_sum, 10, 0, mixed).unwrap();
+        assert!((avg - (5.0 * 20.0 + 4.0 * 40.0) / 9.0).abs() < 1e-9);
+        // float noise never makes the average negative
+        assert_eq!(
+            mean(1100.0, 3, 1, r(Some(1), Some(1100.0000001), Some(2))),
+            Some(0.0)
+        );
+    }
+
+    #[test]
+    fn totals_stay_unreported_until_a_row_reports_and_add_up_after() {
+        let mut t = RetransTotal::default();
+        assert_eq!(t.get(), Retrans::default());
+        t.add(Retrans::default());
+        assert_eq!(t.get(), Retrans::default(), "an old row adds nothing");
+        t.add(r(Some(1), Some(1100.0), Some(6)));
+        t.add(Retrans::default());
+        t.add(r(Some(0), Some(0.0), Some(6)));
+        assert_eq!(t.get(), r(Some(1), Some(1100.0), Some(12)));
+    }
+
+    #[test]
+    fn series_carry_the_retransmit_rate_and_a_retransmit_free_average() {
+        let t = [target(1)];
+        let bucket = |ts, sent, lost, sum, retrans, rsum, base| LatencyBucket {
+            target_id: 1,
+            ts,
+            sent,
+            lost,
+            rtt_sum_ms: sum,
+            rtt_min_ms: Some(18.0),
+            rtt_max_ms: Some(1100.0),
+            retrans,
+            retrans_sum_ms: rsum,
+            retrans_base: base,
+        };
+        let buckets = vec![
+            // 5 answered, one a retransmit
+            bucket(600, 6, 1, 1180.0, Some(1), Some(1100.0), Some(5)),
+            // an old row
+            bucket(660, 6, 0, 120.0, None, None, None),
+        ];
+        let latest = vec![LatencyMinuteRow {
+            target_id: 1,
+            minute_ts: 660,
+            sent: 6,
+            lost: 1,
+            rtt_sum_ms: 1180.0,
+            rtt_min_ms: Some(18.0),
+            rtt_max_ms: Some(1100.0),
+            retrans: Some(1),
+            retrans_sum_ms: Some(1100.0),
+        }];
+        let (series, summary) = build_series(&t, &buckets, &latest);
+        let p = &series[0].points;
+        assert_eq!(p[0].avg, Some(20.0));
+        assert_eq!(p[0].retrans_rate, Some(20.0));
+        assert_eq!(p[1].avg, Some(20.0), "no figures: the plain mean");
+        assert_eq!(p[1].retrans_rate, None, "not reported is not 0 %");
+        assert_eq!(summary[0].latest, Some(20.0));
+        assert_eq!(summary[0].latest_retrans_rate, Some(20.0));
+        // range: (1300 - 1100) / (11 - 1) = 20, rate over the 5 that could say
+        assert_eq!(summary[0].avg, Some(20.0));
+        assert_eq!(summary[0].retrans_rate, Some(20.0));
+        // loss is untouched by all of this
+        assert_eq!(summary[0].loss.map(|l| (l * 10.0).round()), Some(83.0));
+    }
+
+    #[test]
+    fn the_matrix_cell_has_the_retransmit_free_average_and_the_rate() {
+        let total = |node: &str, retrans, rsum, base| LatencyNodeTotal {
+            node_id: node.into(),
+            target_id: 1,
+            sent: 12,
+            lost: 2,
+            rtt_sum_ms: 2360.0,
+            retrans,
+            retrans_sum_ms: rsum,
+            retrans_base: base,
+        };
+        let cells = build_matrix(&[
+            total("new", Some(2), Some(2200.0), Some(10)),
+            total("old", None, None, None),
+        ]);
+        assert_eq!(cells[0].avg, Some(20.0));
+        assert_eq!(cells[0].retrans_rate, Some(20.0));
+        assert_eq!(cells[1].avg, Some(236.0), "an old node keeps the old mean");
+        assert_eq!(cells[1].retrans_rate, None);
+        let json = serde_json::to_value(&cells[1]).unwrap();
+        assert!(json["retrans_rate"].is_null(), "serialised as null");
     }
 
     #[test]

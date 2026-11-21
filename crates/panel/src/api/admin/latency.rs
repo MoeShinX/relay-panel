@@ -940,6 +940,8 @@ mod tests {
             rtt_sum_ms: avg * answered as f64,
             rtt_min_ms: (answered > 0).then_some(avg - 1.0),
             rtt_max_ms: (answered > 0).then_some(avg + 5.0),
+            retrans: None,
+            retrans_sum_ms: None,
         }
     }
 
@@ -1086,6 +1088,8 @@ mod tests {
             rtt_sum_ms: 60.0 - 10.0 * f64::from(lost),
             rtt_min_ms: 9.0,
             rtt_max_ms: 11.0,
+            retrans: None,
+            retrans_sum_ms: None,
             unsupported: false,
         };
         let report = |node_id: Option<&str>, latency: Vec<LatencySample>| StatusReport {
@@ -1294,6 +1298,8 @@ mod tests {
                     rtt_sum_ms: 60.0,
                     rtt_min_ms: 9.0,
                     rtt_max_ms: 11.0,
+                    retrans: None,
+                    retrans_sum_ms: None,
                     unsupported: false,
                 },
                 LatencySample {
@@ -1304,6 +1310,8 @@ mod tests {
                     rtt_sum_ms: 0.0,
                     rtt_min_ms: 0.0,
                     rtt_max_ms: 0.0,
+                    retrans: None,
+                    retrans_sum_ms: None,
                     unsupported: true,
                 },
             ]
@@ -1671,6 +1679,71 @@ mod tests {
                 .unwrap()
                 .monitoring_off
         );
+    }
+
+    /// Retransmit figures reach every response next to the loss: the average
+    /// leaves the retransmits out, the rate is over the answered probes of the
+    /// reporting rows, and a node that never reports them gets null, not 0.
+    #[tokio::test]
+    async fn responses_carry_the_retransmit_rate_beside_the_loss() {
+        let (state, pool) = test_state().await;
+        seed_group(&pool, 5, "in").await;
+        let ids = save_ids(&state, 5, vec![target("电信", "192.0.2.1", Some(443))]).await;
+        add_status(&state, 5, "n1", "1.2.12", &[]).await;
+        add_status(&state, 5, "n2", "1.2.12", &[]).await;
+        // n1: a minute with one retransmit of 1200 ms among six answers
+        // (five at 20 ms), then an old-style minute of 40 ms answers
+        let with_retrans = LatencyMinuteRow {
+            target_id: ids[0],
+            minute_ts: minute_now(2),
+            sent: 6,
+            lost: 0,
+            rtt_sum_ms: 5.0 * 20.0 + 1200.0,
+            rtt_min_ms: Some(20.0),
+            rtt_max_ms: Some(1200.0),
+            retrans: Some(1),
+            retrans_sum_ms: Some(1200.0),
+        };
+        state
+            .db
+            .record_latency_minutes("n1", &[with_retrans, row(ids[0], minute_now(1), 0, 40.0)])
+            .await
+            .unwrap();
+        state
+            .db
+            .record_latency_minutes("n2", &[row(ids[0], minute_now(1), 0, 40.0)])
+            .await
+            .unwrap();
+
+        let d = group_view(&state, 5, "1h", None).await.data.unwrap();
+        let cell = |node: &str| d.matrix.iter().find(|c| c.node_id == node).unwrap();
+        // (1300 + 240 - 1200) / (12 - 1); the rate counts the reporting minute only
+        let c = cell("n1");
+        assert!((c.avg.unwrap() - 340.0 / 11.0).abs() < 1e-9);
+        assert!((c.retrans_rate.unwrap() - 100.0 / 6.0).abs() < 1e-9);
+
+        let c = cell("n2");
+        assert_eq!((c.avg, c.retrans_rate), (Some(40.0), None));
+        let p = &d.series[0].points;
+        assert_eq!(p[0].avg, Some(20.0));
+        assert!((p[0].retrans_rate.unwrap() - 100.0 / 6.0).abs() < 1e-9);
+        assert_eq!(p[1].retrans_rate, None);
+        // and on the wire
+        let json = serde_json::to_value(&d.matrix[0]).unwrap();
+        assert!(json.get("retrans_rate").is_some());
+
+        // the node page: points, the latest minute and the range summary
+        let n = query(&state, "n1", "1h", "auto").await.data.unwrap();
+        assert!((n.series[0].points[0].retrans_rate.unwrap() - 100.0 / 6.0).abs() < 1e-9);
+        assert_eq!(
+            n.summary[0].latest_retrans_rate, None,
+            "newest minute is old-style"
+        );
+        assert!((n.summary[0].retrans_rate.unwrap() - 100.0 / 6.0).abs() < 1e-9);
+        assert!((n.summary[0].avg.unwrap() - 340.0 / 11.0).abs() < 1e-9);
+        assert_eq!(n.summary[0].loss, Some(0.0));
+        let n2 = query(&state, "n2", "1h", "auto").await.data.unwrap();
+        assert_eq!(n2.summary[0].retrans_rate, None);
     }
 
     /// A group without targets still answers (the page shows its empty state):

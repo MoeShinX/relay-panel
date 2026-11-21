@@ -810,10 +810,15 @@ export interface LatencyConfig {
  *  bucket was lost; `loss` is a percentage (0–100). `ts` is unix seconds. */
 export interface LatencyPoint {
   ts: number;
+  /** Mean round trip of the answered probes, leaving out TCP retransmits
+   *  (handshakes of a second or more) where the node reported them. */
   avg: number | null;
   min: number | null;
   max: number | null;
   loss: number;
+  /** Percent of the answered probes that were TCP retransmits, 0-100; null /
+   *  absent when the data does not carry the figure (an older node, ICMP). */
+  retrans_rate?: number | null;
 }
 
 export interface LatencySeries {
@@ -831,9 +836,12 @@ export interface LatencySummary {
   latest: number | null;
   latest_ts: number | null;
   latest_loss: number | null;
+  latest_retrans_rate?: number | null;
   /** Over the whole range. */
   avg: number | null;
   loss: number | null;
+  /** Percent of answered probes that were TCP retransmits over the range. */
+  retrans_rate?: number | null;
 }
 
 /** GET /admin/nodes/{node_id}/latency. The targets are those of the node's own
@@ -888,6 +896,9 @@ export interface GroupLatencyCell {
   avg: number | null;
   /** Percent lost over the range, 0-100. */
   loss: number;
+  /** Percent of answered probes that were TCP retransmits; null when the data
+   *  of the range does not carry the figure. */
+  retrans_rate?: number | null;
   sent: number;
 }
 

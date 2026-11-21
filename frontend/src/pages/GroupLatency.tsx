@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes, type KeyboardEvent } from 'react';
 import { Button, Card, Empty, Result, Space, Spin, Table, Tag, Tooltip, Typography } from 'antd';
-import { ArrowLeftOutlined, DownloadOutlined, UndoOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, DownloadOutlined, InfoCircleOutlined, UndoOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
 import type {
@@ -31,6 +31,7 @@ import {
 import {
   formatLoss,
   formatMs,
+  formatRetrans,
   groupChartPoints,
   nodeDisplayName,
   type ChartPoint,
@@ -179,7 +180,7 @@ export default function GroupLatency() {
     for (const s of data?.series ?? []) byNode.set(s.node_id, s);
     return nodes.map((n) => {
       const name = nodeDisplayName(n);
-      const base = { key: n.node_id, name, points: [], current: null, loss: null };
+      const base = { key: n.node_id, name, points: [], current: null, loss: null, retrans: null };
       if (!n.supported) return { ...base, note: t('latencyGroupNeedUpgrade') };
       if (activeId != null && n.unsupported_targets.includes(activeId)) {
         return { ...base, note: t('latencyGroupUnsupported') };
@@ -192,6 +193,7 @@ export default function GroupLatency() {
         points: pts,
         current: newest ? { ms: newest.avg, loss: newest.loss } : null,
         loss: c ? c.loss : null,
+        retrans: c?.retrans_rate ?? null,
       };
     });
   }, [data, nodes, cells, activeId, t]);
@@ -364,6 +366,12 @@ export default function GroupLatency() {
               </div>
               <Text type="secondary" style={{ fontSize: 12 }}>
                 {t('latencyCardLoss')} {formatLoss(c.loss)}
+                {formatRetrans(c.retrans_rate) == null ? null : (
+                  <span data-testid={`latency-cell-retrans-${n.node_id}-${tg.id}`}>
+                    {' · '}
+                    {t('latencyCardRetrans')} {formatRetrans(c.retrans_rate)}
+                  </span>
+                )}
               </Text>
             </div>
           );
@@ -375,7 +383,18 @@ export default function GroupLatency() {
   return (
     <>
       {header}
-      <Card size="small" style={{ marginBottom: 16 }}>
+      <Card
+        size="small"
+        style={{ marginBottom: 16 }}
+        title={
+          <Space size={6}>
+            <span>{t('latencyGroupMatrixTitle')}</span>
+            <Tooltip title={t('latencyRetransHelp')}>
+              <InfoCircleOutlined data-testid="latency-retrans-help" style={{ color: 'var(--ant-color-text-tertiary)' }} />
+            </Tooltip>
+          </Space>
+        }
+      >
         <Text type="secondary" style={{ display: 'block', marginBottom: 8, fontSize: 12 }}>
           {t('latencyGroupTableHint')}
         </Text>

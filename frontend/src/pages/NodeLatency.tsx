@@ -25,6 +25,7 @@ import {
   chartPoints,
   formatLoss,
   formatMs,
+  formatRetrans,
   type ChartPoint,
 } from '../utils/latencyChart';
 
@@ -176,12 +177,13 @@ export default function NodeLatency() {
     () =>
       series.map((s) => {
         const sum = summaryById.get(s.target_id);
-        const base = { key: String(s.target_id), name: s.name, points: s.points, current: null, loss: null };
+        const base = { key: String(s.target_id), name: s.name, points: s.points, current: null, loss: null, retrans: null };
         if (unsupportedIds.has(s.target_id)) return { ...base, points: [], note: t('latencyIcmpUnsupported') };
         return {
           ...base,
           current: sum?.latest_ts != null ? { ms: sum.latest, loss: sum.latest_loss } : null,
           loss: sum?.loss ?? null,
+          retrans: sum?.retrans_rate ?? null,
         };
       }),
     [series, summaryById, unsupportedIds, t],
@@ -356,6 +358,12 @@ export default function NodeLatency() {
             ) : (
               <Text type="secondary" style={{ fontSize: 12 }}>
                 {t('latencyCardAvg')} {formatMs(sum?.avg)} · {t('latencyCardLoss')} {formatLoss(sum?.loss)}
+                {formatRetrans(sum?.retrans_rate) == null ? null : (
+                  <span data-testid={`latency-card-retrans-${s.target_id}`}>
+                    {' · '}
+                    {t('latencyCardRetrans')} {formatRetrans(sum?.retrans_rate)}
+                  </span>
+                )}
               </Text>
             )}
           </Card>

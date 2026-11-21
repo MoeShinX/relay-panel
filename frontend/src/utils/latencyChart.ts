@@ -14,6 +14,8 @@ export interface ChartPoint {
   min: number | null;
   max: number | null;
   loss: number;
+  /** Percent of answered probes that were TCP retransmits; null = not reported. */
+  retrans: number | null;
 }
 
 /** A marker at the foot of the chart for a bucket that lost probes. */
@@ -38,6 +40,7 @@ export function chartPoints(series: LatencySeries[], onlyId: number | null): Cha
         min: p.min,
         max: p.max,
         loss: p.loss,
+        retrans: p.retrans_rate ?? null,
       });
     }
   }
@@ -67,6 +70,7 @@ export function groupChartPoints(series: GroupLatencySeries[], nodes: GroupLaten
         min: p.min,
         max: p.max,
         loss: p.loss,
+        retrans: p.retrans_rate ?? null,
       });
     }
   }
@@ -99,6 +103,12 @@ export function formatLoss(v: number | null | undefined): string {
   return v === 0 ? '0%' : v < 1 ? `${v.toFixed(2)}%` : `${v.toFixed(1)}%`;
 }
 
+/** The retransmit rate as text, same style as the loss; null when the data does
+ *  not carry it, so callers leave it out instead of showing "0%". */
+export function formatRetrans(v: number | null | undefined): string | null {
+  return v == null ? null : formatLoss(v);
+}
+
 /** One slice of the selected range, for the status strips. */
 export interface StripSegment {
   /** Unix seconds: the slice covers [start, end), the last one also `end`. */
@@ -110,6 +120,8 @@ export interface StripSegment {
   avg: number | null;
   /** Mean of the points' loss percentages; null when the slice has no points. */
   loss: number | null;
+  /** Mean of the points' retransmit rates that carry one; null when none does. */
+  retrans: number | null;
   /** Points exist but every one lost all its probes. */
   allLost: boolean;
 }
@@ -141,6 +153,8 @@ export function stripSegments(
     avgSum: 0,
     avgN: 0,
     lossSum: 0,
+    retransSum: 0,
+    retransN: 0,
   }));
   if (width > 0) {
     for (const p of points) {
@@ -149,6 +163,10 @@ export function stripSegments(
       const g = segs[i];
       g.count += 1;
       g.lossSum += p.loss;
+      if (p.retrans_rate != null) {
+        g.retransSum += p.retrans_rate;
+        g.retransN += 1;
+      }
       if (p.avg != null) {
         g.avgSum += p.avg;
         g.avgN += 1;
@@ -161,6 +179,7 @@ export function stripSegments(
     count: g.count,
     avg: g.avgN > 0 ? g.avgSum / g.avgN : null,
     loss: g.count > 0 ? g.lossSum / g.count : null,
+    retrans: g.retransN > 0 ? g.retransSum / g.retransN : null,
     allLost: g.count > 0 && g.avgN === 0,
   }));
 }

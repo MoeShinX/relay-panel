@@ -1159,6 +1159,11 @@ pub struct LatencyMinuteRow {
     /// None when every probe of the minute was lost.
     pub rtt_min_ms: Option<f64>,
     pub rtt_max_ms: Option<f64>,
+    /// TCP retransmits among the answered probes (still counted in
+    /// `rtt_sum_ms`) and their summed round trip; None = the node did not
+    /// report them.
+    pub retrans: Option<i64>,
+    pub retrans_sum_ms: Option<f64>,
 }
 
 /// How finely a latency series is cut, and so which table answers it: the
@@ -1193,6 +1198,13 @@ pub struct LatencyBucket {
     pub rtt_sum_ms: f64,
     pub rtt_min_ms: Option<f64>,
     pub rtt_max_ms: Option<f64>,
+    /// TCP retransmits among the answered probes (handshakes that took a second
+    /// or more; still part of `rtt_sum_ms`), their summed round trip, and the
+    /// answered probes of the rows that carried those two. All three None when
+    /// no row of the period carried them (an older node, or ICMP).
+    pub retrans: Option<i64>,
+    pub retrans_sum_ms: Option<f64>,
+    pub retrans_base: Option<i64>,
 }
 
 /// How many targets a device group has probing configured.
@@ -1211,6 +1223,13 @@ pub struct LatencyNodeTotal {
     pub sent: i64,
     pub lost: i64,
     pub rtt_sum_ms: f64,
+    /// TCP retransmits among the answered probes (handshakes that took a second
+    /// or more; still part of `rtt_sum_ms`), their summed round trip, and the
+    /// answered probes of the rows that carried those two. All three None when
+    /// no row of the period carried them (an older node, or ICMP).
+    pub retrans: Option<i64>,
+    pub retrans_sum_ms: Option<f64>,
+    pub retrans_base: Option<i64>,
 }
 
 /// One bucket of one node's series for one target (the group chart's lines).
@@ -1224,6 +1243,13 @@ pub struct LatencyNodeBucket {
     pub rtt_sum_ms: f64,
     pub rtt_min_ms: Option<f64>,
     pub rtt_max_ms: Option<f64>,
+    /// TCP retransmits among the answered probes (handshakes that took a second
+    /// or more; still part of `rtt_sum_ms`), their summed round trip, and the
+    /// answered probes of the rows that carried those two. All three None when
+    /// no row of the period carried them (an older node, or ICMP).
+    pub retrans: Option<i64>,
+    pub retrans_sum_ms: Option<f64>,
+    pub retrans_base: Option<i64>,
 }
 
 #[async_trait]

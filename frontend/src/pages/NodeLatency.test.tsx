@@ -192,6 +192,27 @@ describe('NodeLatency cards', () => {
     expect(within(screen.getByTestId('latency-card-3')).getByText('latencyIcmpUnsupported')).toBeInTheDocument();
   });
 
+  it('shows the retransmit share on a card only when the node reported it', async () => {
+    const base = response();
+    serve(() =>
+      ok(
+        response({
+          summary: [
+            { ...base.summary[0], retrans_rate: 17 },
+            { ...base.summary[1], retrans_rate: 0 },
+            base.summary[2],
+          ],
+        }),
+      ),
+    );
+    renderPage();
+    await flush();
+    expect(screen.getByTestId('latency-card-retrans-1')).toHaveTextContent('latencyCardRetrans 17.0%');
+    expect(screen.getByTestId('latency-card-retrans-2')).toHaveTextContent('latencyCardRetrans 0%');
+    // the unsupported target has no figure and no stray "0%"
+    expect(screen.queryByTestId('latency-card-retrans-3')).toBeNull();
+  });
+
   it('clicking a card shows only that target, clicking it again shows all', async () => {
     serve(() => ok(response()));
     renderPage();

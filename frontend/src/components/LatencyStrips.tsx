@@ -8,6 +8,7 @@ import {
   formatChartTime,
   formatLoss,
   formatMs,
+  formatRetrans,
   stripLatencyLevel,
   stripSegmentCount,
   stripSegments,
@@ -33,6 +34,8 @@ export interface StripRow {
   current: StripCurrent | null;
   /** Loss over the whole selected range, as the table / card shows it. */
   loss: number | null;
+  /** Retransmit share over the same range; null / absent when not reported. */
+  retrans?: number | null;
 }
 
 interface Props {
@@ -110,8 +113,12 @@ export default function LatencyStrips({ rows, since, until, bucketSecs, withDate
   const latText = (g: StripSegment) =>
     g.count === 0 ? t('latencyNoData') : g.allLost ? t('latencyAllLost') : formatMs(g.avg);
   const lossText = (g: StripSegment) => (g.loss == null ? t('latencyNoData') : formatLoss(g.loss));
+  const retransText = (g: StripSegment) => {
+    const r = formatRetrans(g.retrans);
+    return r == null ? '' : ` · ${t('latencyCardRetrans')} ${r}`;
+  };
   const describe = (g: StripSegment) =>
-    `${span(g)}\n${t('latencyCardAvg')} ${latText(g)} · ${t('latencyCardLoss')} ${lossText(g)}`;
+    `${span(g)}\n${t('latencyCardAvg')} ${latText(g)} · ${t('latencyCardLoss')} ${lossText(g)}${retransText(g)}`;
 
   const headStyle = { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 } as const;
 
@@ -166,6 +173,12 @@ export default function LatencyStrips({ rows, since, until, bucketSecs, withDate
                 <div style={{ minWidth: 0 }}>
                   <div style={headStyle}>
                     <Text type="secondary" style={{ fontSize: 13 }}>{t('latencyStripsLoss')}</Text>
+                    <span style={{ whiteSpace: 'nowrap' }}>
+                    {formatRetrans(row.retrans) == null ? null : (
+                      <Text type="secondary" style={{ fontSize: 12, marginRight: 8 }} data-testid={`strip-retrans-value-${row.key}`}>
+                        {t('latencyCardRetrans')} {formatRetrans(row.retrans)}
+                      </Text>
+                    )}
                     <span data-testid={`strip-loss-value-${row.key}`} data-level={lossLevel} style={{ whiteSpace: 'nowrap' }}>
                       <span style={{ fontSize: 22, fontWeight: 600, lineHeight: 1.2, color: LEVEL_COLORS[lossLevel] }}>
                         {lossNumber(row.loss)}
@@ -173,6 +186,7 @@ export default function LatencyStrips({ rows, since, until, bucketSecs, withDate
                       {row.loss == null ? null : (
                         <span style={{ fontSize: 12, marginLeft: 2, color: LEVEL_COLORS[lossLevel] }}>%</span>
                       )}
+                    </span>
                     </span>
                   </div>
                   <Strip

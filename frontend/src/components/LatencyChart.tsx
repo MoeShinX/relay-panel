@@ -6,9 +6,17 @@ import {
   formatChartTime,
   formatLoss,
   formatMs,
+  formatRetrans,
   lossMarkers,
   type ChartPoint,
 } from '../utils/latencyChart';
+
+/** "0.20% · Retrans 17%": the loss text with the retransmit share beside it
+ *  when the data carries one. */
+function retransSuffix(loss: string, retrans: number | null, label: string): string {
+  const r = formatRetrans(retrans);
+  return r == null ? loss : `${loss} · ${label} ${r}`;
+}
 
 /** The subset of the chart instance the latency pages use (see @ant-design/plots). */
 export interface LatencyChartHandle {
@@ -84,7 +92,10 @@ export default function LatencyChart({ points, colorDomain, names, withDate, onR
           (d: ChartPoint) => ({ name: `${d.name} · ${t('latencyTipAvg')}`, value: d.value == null ? t('latencyAllLost') : formatMs(d.value) }),
           (d: ChartPoint) => ({ name: t('latencyTipMin'), value: formatMs(d.min) }),
           (d: ChartPoint) => ({ name: t('latencyTipMax'), value: formatMs(d.max) }),
-          (d: ChartPoint) => ({ name: t('latencyTipLoss'), value: formatLoss(d.loss) }),
+          (d: ChartPoint) => ({
+            name: t('latencyTipLoss'),
+            value: retransSuffix(formatLoss(d.loss), d.retrans, t('latencyCardRetrans')),
+          }),
         ],
       }}
       onReady={onReady}

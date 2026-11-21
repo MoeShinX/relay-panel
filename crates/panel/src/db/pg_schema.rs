@@ -296,6 +296,10 @@ CREATE INDEX IF NOT EXISTS idx_traffic_batches_created ON traffic_batches(create
 -- the SQLite SCHEMA_SQL comment for the design (no FKs, NULL min/max when every
 -- probe was lost). Brand-new tables, so their indexes are safe here as well as
 -- in revision 31.
+--
+-- v1.2.24: retrans / retrans_sum_ms (and retrans_base on the hourly table) are
+-- the TCP retransmit statistics; see the SQLite SCHEMA_SQL comment. Revision 32
+-- adds them to existing databases. No index on them.
 CREATE TABLE IF NOT EXISTS latency_targets (
     id BIGSERIAL PRIMARY KEY,
     group_id BIGINT NOT NULL,
@@ -317,6 +321,8 @@ CREATE TABLE IF NOT EXISTS latency_minute (
     rtt_sum_ms DOUBLE PRECISION NOT NULL,
     rtt_min_ms DOUBLE PRECISION,
     rtt_max_ms DOUBLE PRECISION,
+    retrans BIGINT,
+    retrans_sum_ms DOUBLE PRECISION,
     PRIMARY KEY (node_id, target_id, minute_ts)
 );
 CREATE INDEX IF NOT EXISTS idx_latency_minute_ts ON latency_minute(minute_ts);
@@ -329,6 +335,9 @@ CREATE TABLE IF NOT EXISTS latency_hourly (
     rtt_sum_ms DOUBLE PRECISION NOT NULL,
     rtt_min_ms DOUBLE PRECISION,
     rtt_max_ms DOUBLE PRECISION,
+    retrans BIGINT,
+    retrans_sum_ms DOUBLE PRECISION,
+    retrans_base BIGINT,
     PRIMARY KEY (node_id, target_id, hour_ts)
 );
 CREATE INDEX IF NOT EXISTS idx_latency_hourly_ts ON latency_hourly(hour_ts);
@@ -439,7 +448,7 @@ INSERT INTO schema_version (version) VALUES (1) ON CONFLICT (version) DO NOTHING
 /// The schema revision this build's baseline `PG_SCHEMA_SQL` represents. When a
 /// future release adds a column/table, bump this and add a matching arm in
 /// `run_pg_migrations`. `apply_pg_schema` seeds `schema_version` with revision 1.
-pub const PG_SCHEMA_VERSION: i32 = 31;
+pub const PG_SCHEMA_VERSION: i32 = 32;
 
 /// Apply PG_SCHEMA_SQL to a pool. PostgreSQL's prepared-statement protocol
 /// rejects multi-statement strings ("cannot insert multiple commands into a
@@ -1631,6 +1640,28 @@ pub async fn run_pg_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         .await?;
         tx.commit().await?;
         tracing::info!("PG migration 31: latency monitor tables present");
+    }
+
+    // v1.2.24 revision 32: TCP retransmit statistics. Mirrors SQLite Migration
+    // 49; nullable (NULL = the node did not report it), no indexes.
+    if current < 32 {
+        let mut tx = pool.begin().await?;
+        for ddl in [
+            "ALTER TABLE latency_minute ADD COLUMN IF NOT EXISTS retrans BIGINT",
+            "ALTER TABLE latency_minute ADD COLUMN IF NOT EXISTS retrans_sum_ms DOUBLE PRECISION",
+            "ALTER TABLE latency_hourly ADD COLUMN IF NOT EXISTS retrans BIGINT",
+            "ALTER TABLE latency_hourly ADD COLUMN IF NOT EXISTS retrans_sum_ms DOUBLE PRECISION",
+            "ALTER TABLE latency_hourly ADD COLUMN IF NOT EXISTS retrans_base BIGINT",
+        ] {
+            sqlx::query(ddl).execute(&mut *tx).await?;
+        }
+        sqlx::query(
+            "INSERT INTO schema_version (version) VALUES (32) ON CONFLICT (version) DO NOTHING",
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        tracing::info!("PG migration 32: latency retransmit columns present");
     }
 
     Ok(())

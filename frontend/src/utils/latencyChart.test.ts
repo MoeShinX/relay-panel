@@ -4,6 +4,7 @@ import {
   chartPoints,
   formatLoss,
   formatMs,
+  formatRetrans,
   groupChartPoints,
   lossMarkers,
   nodeDisplayName,
@@ -50,6 +51,49 @@ describe('chartPoints', () => {
   it('only the selected target when one is chosen', () => {
     expect(chartPoints(series, 1).map((p) => p.key)).toEqual(['1', '1']);
     expect(chartPoints(series, 99)).toEqual([]);
+  });
+});
+
+describe('retransmit rate', () => {
+  it('rides along on chart points, null when the data does not carry it', () => {
+    const withRate: LatencySeries[] = [
+      {
+        target_id: 1,
+        name: 'A',
+        carrier: 'telecom',
+        kind: 'tcp',
+        points: [
+          { ts: 600, avg: 20, min: 18, max: 1100, loss: 0, retrans_rate: 16.7 },
+          { ts: 660, avg: 20, min: 18, max: 22, loss: 0 },
+        ],
+      },
+    ];
+    expect(chartPoints(withRate, null).map((p) => p.retrans)).toEqual([16.7, null]);
+    expect(
+      groupChartPoints([{ node_id: 'n1', points: withRate[0].points }], []).map((p) => p.retrans),
+    ).toEqual([16.7, null]);
+  });
+
+  it('is text in the loss style, and nothing at all when not reported', () => {
+    expect(formatRetrans(null)).toBeNull();
+    expect(formatRetrans(undefined)).toBeNull();
+    expect(formatRetrans(0)).toBe('0%');
+    expect(formatRetrans(17)).toBe('17.0%');
+    expect(formatRetrans(0.25)).toBe('0.25%');
+  });
+
+  it('a strip slice averages the rates that exist; none reported stays null', () => {
+    const pts: LatencyPoint[] = [
+      { ts: 600, avg: 20, min: 19, max: 24, loss: 0, retrans_rate: 10 },
+      { ts: 610, avg: 20, min: 19, max: 24, loss: 0, retrans_rate: 20 },
+      { ts: 620, avg: 20, min: 19, max: 24, loss: 0 },
+    ];
+    const [seg] = stripSegments(pts, 600, 660, 1);
+    expect(seg.retrans).toBe(15);
+    const [none] = stripSegments([pts[2]], 600, 660, 1);
+    expect(none.retrans).toBeNull();
+    const [empty] = stripSegments([], 600, 660, 1);
+    expect(empty.retrans).toBeNull();
   });
 });
 
