@@ -10,6 +10,8 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+## [1.2.24] - 2026-11-21
+
 ### Changed
 
 - The latency monitor's average and maximum now leave out TCP handshakes that
@@ -20,8 +22,10 @@ independent `v*` / `node-v*` tracks since this release).
   node-v1.2.13 or newer to report it; data from older nodes and from before the
   upgrade keeps the old average and maximum and shows no retransmit rate.
 - The latency pages (group comparison and node page) got a calmer look: plainer
-  matrix headers and cells, a thinner trend chart with a "Smooth" switch (chart
-  only) and a fixed-height chart box, a per-target stats row on the node page
+  matrix headers and cells, a thinner trend chart with an automatic y range,
+  red markers only where a bucket lost every probe, a "Smooth" switch (chart
+  only), a "Modern / Classic" switch (Classic is the previous chart look) and a
+  fixed-height chart box, a per-target stats row on the node page
   (now, average, min, max, loss, retransmit share) and slimmer "Recent status"
   strips. The node latency API also returns each target's min and max for the
   range.
