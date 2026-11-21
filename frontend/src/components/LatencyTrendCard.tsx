@@ -132,7 +132,10 @@ export default function LatencyTrendCard({
           </ChartBoxMessage>
         ) : (
           <LatencyChart
-            key={chartKey}
+            // Rebuilt on a look change: the chart keeps some parts of its first
+            // configuration (the zoom slider and its preview, the legend layout),
+            // so switching in place would leave the old look's slider behind.
+            key={`${variant}-${chartKey}`}
             points={points}
             colorDomain={colorDomain}
             names={names}
