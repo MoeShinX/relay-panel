@@ -1,20 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Card, Empty, Result, Space, Spin, Tag, Tooltip, Typography } from 'antd';
-import { ArrowLeftOutlined, DownloadOutlined, UndoOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
 import type { ApiEnvelope, LatencySeries, LatencySummary, NodeLatencyResponse, NodeStatus } from '../api/types';
 import { useI18n } from '../i18n/context';
-import LatencyChart, { type LatencyChartHandle } from '../components/LatencyChart';
 import LatencyControls from '../components/LatencyControls';
+import LatencyStats, { type StatsRow } from '../components/LatencyStats';
 import LatencyStrips, { type StripRow } from '../components/LatencyStrips';
+import LatencyTrendCard, { ChartBox, ChartBoxMessage } from '../components/LatencyTrendCard';
+import LevelDot from '../components/LevelDot';
 import SeriesPicker from '../components/SeriesPicker';
-import { useIsMobile } from '../hooks/useIsMobile';
 import { useSeriesPick } from '../hooks/useSeriesPick';
 import { rankByAttention } from '../utils/seriesPick';
 import {
   AUTO_REFRESH_MS,
-  LEVEL_COLORS,
   autoRefreshes,
   granularityAllowed,
   latencyLevel,
@@ -25,6 +25,7 @@ import {
   chartPoints,
   formatLoss,
   formatMs,
+  formatRetrans,
   type ChartPoint,
 } from '../utils/latencyChart';
 
@@ -52,7 +53,6 @@ export default function NodeLatency() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const { nodeId = '' } = useParams();
-  const isMobile = useIsMobile();
 
   const [range, setRange] = useState<LatencyRange>('24h');
   const [granularity, setGranularity] = useState<LatencyGranularity>('1h');
@@ -60,10 +60,6 @@ export default function NodeLatency() {
   const [state, setState] = useState<LoadState>('loading');
   const [selected, setSelected] = useState<number | null>(null);
   const [node, setNode] = useState<{ name: string; ip: string } | null>(null);
-  // Bumped to remount the chart, which is how "reset zoom" returns the slider
-  // to the full range.
-  const [chartKey, setChartKey] = useState(0);
-  const chartRef = useRef<LatencyChartHandle | null>(null);
   // Only the newest request may write the page: a slow answer for a range the
   // admin has since left must not overwrite the one they are looking at.
   const requestRef = useRef(0);
@@ -168,7 +164,34 @@ export default function NodeLatency() {
     return chartPoints(series.filter((s) => shown.has(String(s.target_id))), null);
   }, [series, onlyId, pick.needsPicker, pick.shown]);
   const withDate = range !== '1h' && range !== '6h';
-  const hasPoints = points.length > 0;
+
+  // The stats table above the chart: the selected target, or every target.
+  const statsRows: StatsRow[] = useMemo(
+    () =>
+      series
+        .filter((s) => onlyId == null || s.target_id === onlyId)
+        .map((s) => {
+          const sum = summaryById.get(s.target_id);
+          if (unsupportedIds.has(s.target_id)) {
+            return {
+              key: String(s.target_id), name: s.name, note: t('latencyIcmpUnsupported'),
+              latest: null, avg: null, min: null, max: null, loss: null, retrans: null,
+            };
+          }
+          return {
+            key: String(s.target_id),
+            name: s.name,
+            latest: sum?.latest ?? null,
+            latestAllLost: sum?.latest_ts != null && sum.latest == null,
+            avg: sum?.avg ?? null,
+            min: sum?.min ?? null,
+            max: sum?.max ?? null,
+            loss: sum?.loss ?? null,
+            retrans: sum?.retrans_rate ?? null,
+          };
+        }),
+    [series, summaryById, unsupportedIds, onlyId, t],
+  );
 
   // One strip row per target, over the full range whatever card is selected.
   // "Now" and the range loss are the cards' own figures.
@@ -176,12 +199,13 @@ export default function NodeLatency() {
     () =>
       series.map((s) => {
         const sum = summaryById.get(s.target_id);
-        const base = { key: String(s.target_id), name: s.name, points: s.points, current: null, loss: null };
+        const base = { key: String(s.target_id), name: s.name, points: s.points, current: null, loss: null, retrans: null };
         if (unsupportedIds.has(s.target_id)) return { ...base, points: [], note: t('latencyIcmpUnsupported') };
         return {
           ...base,
           current: sum?.latest_ts != null ? { ms: sum.latest, loss: sum.latest_loss } : null,
           loss: sum?.loss ?? null,
+          retrans: sum?.retrans_rate ?? null,
         };
       }),
     [series, summaryById, unsupportedIds, t],
@@ -229,36 +253,47 @@ export default function NodeLatency() {
 
   if (state === 'notfound') {
     return (
-      <>
+      <div className="rp-lat">
         {header}
         <Result status="404" title={t('latencyNodeNotFound')} />
-      </>
+      </div>
     );
   }
   if (state === 'failed') {
     return (
-      <>
+      <div className="rp-lat">
         {header}
-        <Result
-          status="warning"
-          title={t('latencyLoadFailed')}
-          extra={<Button type="primary" onClick={() => load(false)}>{t('refresh')}</Button>}
-        />
-      </>
+        <Card size="small" className="rp-lat-card">
+          <ChartBox>
+            <ChartBoxMessage>
+              <Result
+                status="warning"
+                style={{ padding: 0 }}
+                title={t('latencyLoadFailed')}
+                extra={<Button type="primary" onClick={() => load(false)}>{t('refresh')}</Button>}
+              />
+            </ChartBoxMessage>
+          </ChartBox>
+        </Card>
+      </div>
     );
   }
   if (state === 'loading' && !data) {
     return (
-      <>
+      <div className="rp-lat">
         {header}
-        <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
-      </>
+        <Card size="small" className="rp-lat-card">
+          <ChartBox>
+            <ChartBoxMessage><Spin /></ChartBoxMessage>
+          </ChartBox>
+        </Card>
+      </div>
     );
   }
 
   if (data && !data.supported) {
     return (
-      <>
+      <div className="rp-lat">
         {header}
         <Alert
           type="warning"
@@ -266,7 +301,7 @@ export default function NodeLatency() {
           message={t('latencyNodeTooOld')}
           description={data.node_version ? `${t('latencyNodeVersion')}: v${data.node_version}` : undefined}
         />
-      </>
+      </div>
     );
   }
 
@@ -284,7 +319,7 @@ export default function NodeLatency() {
 
   if (data && series.length === 0) {
     return (
-      <>
+      <div className="rp-lat">
         {header}
         {offAlert}
         <Result
@@ -292,13 +327,13 @@ export default function NodeLatency() {
           title={t('latencyNoTargets')}
           extra={<Button type="primary" onClick={() => navigate('/groups')}>{t('latencyGoGroups')}</Button>}
         />
-      </>
+      </div>
     );
   }
 
   const cards = (
     <div
-      style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 12, marginBottom: 16 }}
+      style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 190px), 1fr))', gap: 12, marginBottom: 16 }}
       data-testid="latency-cards"
     >
       {series.map((s) => {
@@ -331,22 +366,18 @@ export default function NodeLatency() {
                 toggle();
               }
             }}
-            style={{
-              cursor: 'pointer',
-              borderColor: isSelected ? 'var(--ant-color-primary, #6366f1)' : undefined,
-              boxShadow: isSelected ? '0 0 0 1px var(--ant-color-primary, #6366f1)' : undefined,
-            }}
+            className={`rp-lat-target${isSelected ? ' is-selected' : ''}`}
           >
-            <Space size={4} wrap style={{ marginBottom: 4 }}>
-              <Text strong>{s.name}</Text>
-              <Tag style={{ marginInlineEnd: 0 }}>{t(CARRIER_KEY[s.carrier])}</Tag>
-              <Tag style={{ marginInlineEnd: 0 }}>{s.kind === 'icmp' ? 'ICMP' : 'TCP'}</Tag>
-            </Space>
+            <div className="rp-lat-colname">{s.name}</div>
+            <div className="rp-lat-head-sub" style={{ marginBottom: 6 }}>
+              {s.kind === 'icmp' ? 'ICMP' : 'TCP'} · {t(CARRIER_KEY[s.carrier])}
+            </div>
             <div
+              className={`rp-lat-target-value${unsupported || (hasLatest && sum?.latest != null) ? '' : ' is-text'}`}
               data-testid={`latency-card-value-${s.target_id}`}
               data-level={unsupported ? 'none' : level}
-              style={{ fontSize: 24, fontWeight: 600, color: LEVEL_COLORS[unsupported ? 'none' : level], lineHeight: 1.3 }}
             >
+              <LevelDot level={unsupported ? 'none' : level} />
               {big}
             </div>
             {unsupported ? (
@@ -354,9 +385,22 @@ export default function NodeLatency() {
                 <Tag color="orange" style={{ marginTop: 4 }}>{t('latencyIcmpUnsupported')}</Tag>
               </Tooltip>
             ) : (
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {t('latencyCardAvg')} {formatMs(sum?.avg)} · {t('latencyCardLoss')} {formatLoss(sum?.loss)}
-              </Text>
+              <>
+                <span className="rp-lat-sub">
+                  <span className="rp-lat-nowrap">{t('latencyCardAvg')} {formatMs(sum?.avg)}</span>
+                </span>
+                <span className="rp-lat-sub">
+                  <span className="rp-lat-nowrap">{t('latencyCardLoss')} {formatLoss(sum?.loss)}</span>
+                  {formatRetrans(sum?.retrans_rate) == null ? null : (
+                    <>
+                      {' · '}
+                      <span className="rp-lat-nowrap" data-testid={`latency-card-retrans-${s.target_id}`}>
+                        {t('latencyCardRetrans')} {formatRetrans(sum?.retrans_rate)}
+                      </span>
+                    </>
+                  )}
+                </span>
+              </>
             )}
           </Card>
         );
@@ -365,12 +409,11 @@ export default function NodeLatency() {
   );
 
   return (
-    <>
+    <div className="rp-lat">
       {header}
       {offAlert}
       {cards}
-      <Card
-        size="small"
+      <LatencyTrendCard
         title={
           <Space size={8} wrap>
             <span data-testid="latency-current-view">
@@ -380,45 +423,19 @@ export default function NodeLatency() {
             <Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>{t('latencyCardHint')}</Text>
           </Space>
         }
-        extra={
-          <Space size={8} wrap>
-            {isMobile ? null : picker}
-            {autoRefreshes(range) ? (
-              <Text type="secondary" style={{ fontSize: 12 }}>{t('latencyAutoRefresh')}</Text>
-            ) : null}
-            <Button size="small" icon={<UndoOutlined />} onClick={() => setChartKey((k) => k + 1)}>
-              {t('latencyChartReset')}
-            </Button>
-            <Button
-              size="small"
-              icon={<DownloadOutlined />}
-              disabled={!hasPoints}
-              onClick={() => chartRef.current?.downloadImage?.(`latency-${nodeId}-${range}`)}
-            >
-              {t('latencyChartDownload')}
-            </Button>
-          </Space>
-        }
-      >
-        {isMobile && picker ? <div style={{ marginBottom: 8 }}>{picker}</div> : null}
-        {!hasPoints ? (
-          <Empty description={t('latencyChartEmpty')} image={Empty.PRESENTED_IMAGE_SIMPLE} />
-        ) : (
-          <LatencyChart
-            key={chartKey}
-            points={points}
-            colorDomain={colorDomain}
-            names={names}
-            withDate={withDate}
-            onReady={(chart) => {
-              chartRef.current = chart;
-            }}
-          />
-        )}
-      </Card>
+        picker={picker}
+        stats={<LatencyStats testId="latency-stats" rows={statsRows} />}
+        points={points}
+        colorDomain={colorDomain}
+        names={names}
+        withDate={withDate}
+        autoRefresh={autoRefreshes(range)}
+        loading={state === 'loading'}
+        downloadName={`latency-${nodeId}-${range}`}
+      />
       {data ? (
         <LatencyStrips testId="latency-strips" rows={stripRows} since={data.since} until={data.until} bucketSecs={data.bucket_secs} withDate={withDate} />
       ) : null}
-    </>
+    </div>
   );
 }

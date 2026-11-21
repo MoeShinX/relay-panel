@@ -150,6 +150,13 @@ pub const LATENCY_DEFAULT_INTERVAL_SECS: u32 = 10;
 /// claims more): the 5 s minimum interval gives 12, this leaves a wide margin.
 pub const LATENCY_MAX_SENT_PER_MINUTE: u32 = 60;
 
+/// A TCP handshake that finished only after this many milliseconds went through
+/// a retransmit: Linux resends a lost first SYN after one second, so such a
+/// handshake completes at about 1000 ms plus the real round trip. The node
+/// counts these apart from normal probes, and the panel uses the same bound to
+/// check a report's retransmit figures for consistency.
+pub const LATENCY_RETRANSMIT_MS: f64 = 1000.0;
+
 /// How a latency target is probed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -213,6 +220,25 @@ pub struct LatencySample {
     pub rtt_sum_ms: f64,
     pub rtt_min_ms: f64,
     pub rtt_max_ms: f64,
+    /// Of the answered probes, how many were TCP retransmits (the handshake
+    /// finished, but only after the first SYN was resent, so it took a second
+    /// or more), and the sum of their round trips in milliseconds. They are
+    /// still counted in `rtt_sum_ms` / `rtt_min_ms` / `rtt_max_ms`, so a panel
+    /// that does not know these fields reads the same numbers as before.
+    /// `None`: the node does not report it (an older node, or an ICMP target,
+    /// which has no handshake to retransmit).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrans: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrans_sum_ms: Option<f64>,
+    /// The largest round trip among the answered probes that were NOT
+    /// retransmits, in milliseconds: the line's slowest normal handshake.
+    /// `rtt_max_ms` keeps counting every answered probe. `None`: the node does
+    /// not report it (an older node, or an ICMP target, whose plain maximum is
+    /// already the maximum), or every answered probe was a retransmit, or
+    /// nothing answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal_max_ms: Option<f64>,
     /// The node cannot probe this target this way at all (ICMP without the
     /// privilege to open a socket). Not packet loss: the panel stores no data
     /// for it and only remembers that the node cannot do it.
@@ -2079,6 +2105,30 @@ mod tests {
         assert_eq!(r.latency.len(), 1);
         assert!(!r.latency[0].unsupported);
         assert_eq!(r.latency[0].lost, 1);
+    }
+
+    /// The retransmit fields are optional on the wire in both directions: an
+    /// old node's report has none, and a sample without them does not write
+    /// them out, so an old panel never meets an unknown field.
+    #[test]
+    fn latency_sample_retransmit_fields_are_optional_on_the_wire() {
+        let old = r#"{"target_id":3,"minute_ts":600,"sent":6,"lost":1,
+            "rtt_sum_ms":50.0,"rtt_min_ms":8.0,"rtt_max_ms":12.0}"#;
+        let s: LatencySample = serde_json::from_str(old).unwrap();
+        assert_eq!((s.retrans, s.retrans_sum_ms), (None, None));
+        assert_eq!(s.normal_max_ms, None);
+        let out = serde_json::to_string(&s).unwrap();
+        assert!(!out.contains("retrans") && !out.contains("normal_max"));
+
+        let new = r#"{"target_id":3,"minute_ts":600,"sent":6,"lost":1,
+            "rtt_sum_ms":1250.0,"rtt_min_ms":8.0,"rtt_max_ms":1100.0,
+            "retrans":1,"retrans_sum_ms":1100.0,"normal_max_ms":22.0}"#;
+        let s: LatencySample = serde_json::from_str(new).unwrap();
+        assert_eq!((s.retrans, s.retrans_sum_ms), (Some(1), Some(1100.0)));
+        assert_eq!(s.normal_max_ms, Some(22.0));
+        let again: LatencySample =
+            serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(again, s);
     }
 
     #[test]

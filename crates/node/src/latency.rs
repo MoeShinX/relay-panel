@@ -23,7 +23,9 @@
 // 5 minutes of them) until a report that carried it was accepted, and the
 // panel stores a minute idempotently, so re-sending is harmless.
 
-use relay_shared::protocol::{LatencyKind, LatencyProbeConfig, LatencyProbeTarget, LatencySample};
+use relay_shared::protocol::{
+    LatencyKind, LatencyProbeConfig, LatencyProbeTarget, LatencySample, LATENCY_RETRANSMIT_MS,
+};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -46,6 +48,14 @@ const MINUTE_GRACE_SECS: i64 = 10;
 /// Finished minutes older than this are dropped rather than kept for another
 /// try — the panel would refuse them anyway (it takes the last 10 minutes).
 const KEEP_SECS: i64 = 5 * 60;
+/// A TCP handshake that finished only after this long went through a
+/// retransmit. Linux resends a lost first SYN after one second, so such a
+/// handshake completes at about 1000 ms + the real round trip; counting it as
+/// a normal sample would drag the average far above the line's real latency
+/// while loss (which only counts handshakes that never finished) stays 0. Only
+/// TCP probes can be retransmits, and only answered ones. The panel checks a
+/// report against the same bound, hence the shared constant.
+const RETRANSMIT_MS: f64 = LATENCY_RETRANSMIT_MS;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     // A panic while holding the lock leaves plain counters behind; they are
@@ -78,21 +88,34 @@ enum Outcome {
 /// One target's probes within one minute.
 #[derive(Debug, Clone, PartialEq)]
 struct Accum {
+    /// Only a TCP target reports retransmits (ICMP has no handshake).
+    tcp: bool,
     sent: u32,
     lost: u32,
     sum_ms: f64,
     min_ms: f64,
     max_ms: f64,
+    /// Answered probes that took at least `RETRANSMIT_MS`, and their sum.
+    /// They are also part of `sum_ms` / `min_ms` / `max_ms`.
+    retrans: u32,
+    retrans_sum_ms: f64,
+    /// The largest answered round trip below `RETRANSMIT_MS` (TCP only): the
+    /// slowest normal handshake. None until one has been seen.
+    normal_max_ms: Option<f64>,
 }
 
 impl Accum {
-    fn new() -> Self {
+    fn new(kind: LatencyKind) -> Self {
         Self {
+            tcp: kind == LatencyKind::Tcp,
             sent: 0,
             lost: 0,
             sum_ms: 0.0,
             min_ms: f64::INFINITY,
             max_ms: 0.0,
+            retrans: 0,
+            retrans_sum_ms: 0.0,
+            normal_max_ms: None,
         }
     }
 
@@ -103,6 +126,12 @@ impl Accum {
                 self.sum_ms += ms;
                 self.min_ms = self.min_ms.min(ms);
                 self.max_ms = self.max_ms.max(ms);
+                if self.tcp && ms >= RETRANSMIT_MS {
+                    self.retrans += 1;
+                    self.retrans_sum_ms += ms;
+                } else if self.tcp {
+                    self.normal_max_ms = Some(self.normal_max_ms.map_or(ms, |m| m.max(ms)));
+                }
             }
             None => self.lost += 1,
         }
@@ -120,6 +149,11 @@ impl Accum {
             // round trip of a fully lost minute, and JSON has no infinity.
             rtt_min_ms: if answered { self.min_ms } else { 0.0 },
             rtt_max_ms: if answered { self.max_ms } else { 0.0 },
+            retrans: self.tcp.then_some(self.retrans),
+            retrans_sum_ms: self.tcp.then_some(self.retrans_sum_ms),
+            // None for ICMP (its plain maximum is the maximum) and when every
+            // answered probe was a retransmit.
+            normal_max_ms: if self.tcp { self.normal_max_ms } else { None },
             unsupported: false,
         }
     }
@@ -139,14 +173,14 @@ struct Ledger {
 }
 
 impl Ledger {
-    fn record(&mut self, target_id: i64, started_at: i64, rtt: Option<f64>) {
+    fn record(&mut self, target_id: i64, kind: LatencyKind, started_at: i64, rtt: Option<f64>) {
         let minute = minute_of(started_at);
         if minute <= self.acked_through {
             return;
         }
         self.minutes
             .entry((target_id, minute))
-            .or_insert_with(Accum::new)
+            .or_insert_with(|| Accum::new(kind))
             .add(rtt);
     }
 
@@ -187,6 +221,9 @@ impl Ledger {
             rtt_sum_ms: 0.0,
             rtt_min_ms: 0.0,
             rtt_max_ms: 0.0,
+            retrans: None,
+            retrans_sum_ms: None,
+            normal_max_ms: None,
             unsupported: true,
         }));
         ready
@@ -300,6 +337,7 @@ impl LatencyMonitor {
     ) {
         let started_at = unix_now();
         let slots = Arc::new(Semaphore::new(MAX_CONCURRENT_PROBES));
+        let kinds: HashMap<i64, LatencyKind> = targets.iter().map(|t| (t.id, t.kind)).collect();
         let mut set = JoinSet::new();
         for target in targets.iter().cloned() {
             let (slots, resolver, icmp) = (slots.clone(), resolver.clone(), icmp.clone());
@@ -312,15 +350,16 @@ impl LatencyMonitor {
         }
         while let Some(joined) = set.join_next().await {
             let Ok((id, outcome)) = joined else { continue };
+            let kind = kinds.get(&id).copied().unwrap_or(LatencyKind::Icmp);
             let mut ledger = lock(&self.ledger);
             match outcome {
                 Outcome::Rtt(ms) => {
                     ledger.set_unsupported(id, false);
-                    ledger.record(id, started_at, Some(ms));
+                    ledger.record(id, kind, started_at, Some(ms));
                 }
                 Outcome::Lost => {
                     ledger.set_unsupported(id, false);
-                    ledger.record(id, started_at, None);
+                    ledger.record(id, kind, started_at, None);
                 }
                 Outcome::Unsupported => ledger.set_unsupported(id, true),
             }
@@ -458,7 +497,7 @@ mod tests {
     const T0: i64 = 1_700_000_100;
 
     fn acc_sample(l: &mut Ledger, target: i64, at: i64, rtt: Option<f64>) {
-        l.record(target, at, rtt);
+        l.record(target, LatencyKind::Tcp, at, rtt);
     }
 
     #[test]
@@ -481,6 +520,75 @@ mod tests {
         assert_eq!(s.rtt_sum_ms, 60.0);
         assert_eq!((s.rtt_min_ms, s.rtt_max_ms), (10.0, 30.0));
         assert!(!s.unsupported);
+    }
+
+    #[test]
+    fn tcp_answers_of_a_second_or_more_count_as_retransmits_but_stay_in_the_sums() {
+        let mut l = Ledger::default();
+        for (at, rtt) in [
+            (T0, Some(40.0)),
+            (T0 + 10, Some(1200.0)),
+            (T0 + 20, Some(999.0)),
+            (T0 + 30, Some(1000.0)),
+            (T0 + 40, None),
+        ] {
+            acc_sample(&mut l, 1, at, rtt);
+        }
+        let s = l.pending(T0 + 100).remove(0);
+        // 1200 and exactly 1000 are retransmits, 999 is not, the lost one never
+        assert_eq!(s.retrans, Some(2));
+        assert_eq!(s.retrans_sum_ms, Some(2200.0));
+        // the slowest handshake that was not a retransmit
+        assert_eq!(s.normal_max_ms, Some(999.0));
+        // the plain sums still hold every answered probe
+        assert_eq!(s.rtt_sum_ms, 40.0 + 1200.0 + 999.0 + 1000.0);
+        assert_eq!((s.rtt_min_ms, s.rtt_max_ms), (40.0, 1200.0));
+    }
+
+    #[test]
+    fn normal_max_is_none_when_every_answer_was_a_retransmit_or_nothing_answered() {
+        let mut l = Ledger::default();
+        acc_sample(&mut l, 1, T0, Some(1200.0));
+        acc_sample(&mut l, 1, T0 + 5, Some(1000.0));
+        acc_sample(&mut l, 1, T0 + 10, None);
+        acc_sample(&mut l, 2, T0, None);
+        acc_sample(&mut l, 3, T0, Some(35.0));
+        let out = l.pending(T0 + 100);
+        assert_eq!(out[0].normal_max_ms, None, "all retransmits");
+        assert_eq!(out[0].rtt_max_ms, 1200.0, "rtt_max keeps its meaning");
+        assert_eq!(out[1].normal_max_ms, None, "nothing answered");
+        assert_eq!(out[2].normal_max_ms, Some(35.0));
+    }
+
+    #[test]
+    fn a_tcp_minute_without_retransmits_reports_zero_not_none() {
+        let mut l = Ledger::default();
+        acc_sample(&mut l, 1, T0, Some(30.0));
+        acc_sample(&mut l, 2, T0, None);
+        let out = l.pending(T0 + 100);
+        assert_eq!(
+            (out[0].retrans, out[0].retrans_sum_ms),
+            (Some(0), Some(0.0))
+        );
+        // fully lost: still a TCP minute, still zero
+        assert_eq!(
+            (out[1].retrans, out[1].retrans_sum_ms),
+            (Some(0), Some(0.0))
+        );
+    }
+
+    #[test]
+    fn icmp_never_counts_retransmits_and_reports_none() {
+        let mut l = Ledger::default();
+        l.record(1, LatencyKind::Icmp, T0, Some(1500.0));
+        l.record(1, LatencyKind::Icmp, T0 + 5, Some(20.0));
+        let s = l.pending(T0 + 100).remove(0);
+        assert_eq!((s.retrans, s.retrans_sum_ms), (None, None));
+        assert_eq!(s.normal_max_ms, None, "the plain max already is the max");
+        assert_eq!(s.rtt_sum_ms, 1520.0);
+        // and the fields stay out of the JSON, so an old panel never sees them
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("retrans"), "{json}");
     }
 
     #[test]

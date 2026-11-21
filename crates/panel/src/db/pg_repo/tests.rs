@@ -6768,6 +6768,9 @@ fn lat_row(
         rtt_sum_ms: sum,
         rtt_min_ms: min,
         rtt_max_ms: max,
+        retrans: None,
+        retrans_sum_ms: None,
+        normal_max_ms: None,
     }
 }
 
@@ -7031,6 +7034,272 @@ async fn pg_latency_minute_resend_is_idempotent_and_does_not_double_the_hour() {
     cleanup(&db).await;
 }
 
+/// A minute row that reports retransmits (`retrans`, their summed round trip).
+fn pg_lat_row_rt(
+    target_id: i64,
+    minute_ts: i64,
+    sent: i64,
+    lost: i64,
+    sum: f64,
+    retrans: i64,
+    retrans_sum: f64,
+) -> LatencyMinuteRow {
+    LatencyMinuteRow {
+        retrans: Some(retrans),
+        retrans_sum_ms: Some(retrans_sum),
+        normal_max_ms: None,
+        ..lat_row(
+            target_id,
+            minute_ts,
+            sent,
+            lost,
+            sum,
+            Some(9.0),
+            Some(1100.0),
+        )
+    }
+}
+
+/// The hour adds up the retransmit figures of the minutes that carry them,
+/// counts only those minutes' answered probes as the rate's base, stays NULL
+/// when no minute carried them, and a re-sent minute changes nothing twice.
+#[tokio::test]
+async fn pg_latency_retransmit_figures_roll_up_over_mixed_minutes_and_resend_idempotently() {
+    let Some(db) = repo("lat_retrans").await else {
+        return;
+    };
+    // hour 36000: one old minute (no figures), two reporting ones
+    let old = lat_row(1, 36000, 6, 0, 60.0, Some(9.0), Some(11.0));
+    let m1 = pg_lat_row_rt(1, 36060, 6, 1, 1150.0, 1, 1100.0);
+    let m2 = pg_lat_row_rt(1, 36120, 6, 0, 60.0, 0, 0.0);
+    db.record_latency_minutes("n1", &[old.clone(), m1.clone(), m2.clone()])
+        .await
+        .unwrap();
+
+    let h = pg_lat_hour(&db, "n1", 1, 36000).await;
+    assert_eq!((h.retrans, h.retrans_sum_ms), (Some(1), Some(1100.0)));
+    // answered probes of the two reporting minutes only: 5 + 6
+    assert_eq!(h.retrans_base, Some(11));
+    assert_eq!((h.sent, h.lost, h.rtt_sum_ms), (18, 1, 1270.0));
+
+    // the same report again, twice, and the minute re-sent with other figures
+    for _ in 0..2 {
+        db.record_latency_minutes("n1", &[old.clone(), m1.clone(), m2.clone()])
+            .await
+            .unwrap();
+    }
+    let h = pg_lat_hour(&db, "n1", 1, 36000).await;
+    assert_eq!(
+        (h.retrans, h.retrans_sum_ms, h.retrans_base),
+        (Some(1), Some(1100.0), Some(11))
+    );
+    let m1b = pg_lat_row_rt(1, 36060, 6, 0, 60.0, 0, 0.0);
+    db.record_latency_minutes("n1", &[m1b]).await.unwrap();
+    let h = pg_lat_hour(&db, "n1", 1, 36000).await;
+    assert_eq!(
+        (h.retrans, h.retrans_sum_ms, h.retrans_base),
+        (Some(0), Some(0.0), Some(12))
+    );
+
+    // the minute and 5-minute views read the same figures from the minute rows
+    let minutes = db
+        .query_latency_buckets("n1", LatencyGranularity::Minute1, 36000, 36180)
+        .await
+        .unwrap();
+    assert_eq!(minutes[0].retrans, None, "the old minute is not reported");
+    assert_eq!(minutes[0].retrans_base, None);
+    assert_eq!(
+        (minutes[2].retrans, minutes[2].retrans_base),
+        (Some(0), Some(6))
+    );
+    let five = db
+        .query_latency_buckets("n1", LatencyGranularity::Minute5, 36000, 36300)
+        .await
+        .unwrap();
+    assert_eq!(five.len(), 1);
+    assert_eq!((five[0].retrans, five[0].retrans_base), (Some(0), Some(12)));
+
+    // an hour whose minutes are all old stays NULL, not 0
+    db.record_latency_minutes(
+        "n1",
+        &[lat_row(1, 39600, 6, 0, 60.0, Some(9.0), Some(11.0))],
+    )
+    .await
+    .unwrap();
+    let h = pg_lat_hour(&db, "n1", 1, 39600).await;
+    assert_eq!(
+        (h.retrans, h.retrans_sum_ms, h.retrans_base),
+        (None, None, None)
+    );
+    // ... and turns reported when a reporting minute replaces it
+    db.record_latency_minutes("n1", &[pg_lat_row_rt(1, 39600, 6, 0, 60.0, 0, 0.0)])
+        .await
+        .unwrap();
+    let h = pg_lat_hour(&db, "n1", 1, 39600).await;
+    assert_eq!(
+        (h.retrans, h.retrans_sum_ms, h.retrans_base),
+        (Some(0), Some(0.0), Some(6))
+    );
+
+    // totals (the matrix) and the per-node series carry them too
+    let totals = db
+        .query_latency_totals(&["n1".to_string()], &[1], true, 36000, 40000)
+        .await
+        .unwrap();
+    assert_eq!(
+        (totals[0].retrans, totals[0].retrans_base),
+        (Some(0), Some(18))
+    );
+    let totals = db
+        .query_latency_totals(&["n1".to_string()], &[1], false, 36000, 36180)
+        .await
+        .unwrap();
+    assert_eq!(
+        (totals[0].retrans, totals[0].retrans_base),
+        (Some(0), Some(12))
+    );
+    let series = db
+        .query_latency_target_series(
+            &["n1".to_string()],
+            1,
+            LatencyGranularity::Hour1,
+            36000,
+            40000,
+        )
+        .await
+        .unwrap();
+    assert_eq!(series.len(), 2);
+    assert_eq!(series[0].retrans_base, Some(12));
+
+    // the latest-minute read returns the figures
+    let latest = db.query_latest_latency("n1", 0).await.unwrap();
+    assert_eq!(
+        (latest[0].retrans, latest[0].retrans_sum_ms),
+        (Some(0), Some(0.0))
+    );
+    cleanup(&db).await;
+}
+
+/// The retransmit-free maximum: an hour takes the largest over its minutes,
+/// where a minute from a node that reports no retransmits counts with its plain
+/// maximum; a minute whose answers were all retransmits adds nothing; and a
+/// re-sent minute replaces its figure instead of piling up.
+#[tokio::test]
+async fn pg_latency_normal_max_rolls_up_over_mixed_minutes_and_resends_idempotently() {
+    let Some(db) = repo("lat_normal_max").await else {
+        return;
+    };
+    // old node (no retransmit data), a reporting minute (normal 30, one
+    // retransmit of 1100), and a reporting minute that was all retransmits
+    let old = lat_row(1, 36000, 6, 0, 300.0, Some(40.0), Some(50.0));
+    let m1 = LatencyMinuteRow {
+        normal_max_ms: Some(30.0),
+        ..pg_lat_row_rt(1, 36060, 6, 0, 1250.0, 1, 1100.0)
+    };
+    let m2 = pg_lat_row_rt(1, 36120, 6, 0, 6600.0, 6, 6600.0);
+    let m2 = LatencyMinuteRow {
+        rtt_max_ms: Some(1300.0),
+        ..m2
+    };
+
+    // only the reporting minutes: the all-retransmit one adds nothing
+    db.record_latency_minutes("n1", &[m1.clone(), m2.clone()])
+        .await
+        .unwrap();
+    let h = pg_lat_hour(&db, "n1", 1, 36000).await;
+    assert_eq!(h.normal_max_ms, Some(30.0));
+    assert_eq!(h.rtt_max_ms, Some(1300.0), "rtt_max keeps every probe");
+
+    // the old minute joins: it counts with its plain maximum (50 > 30)
+    db.record_latency_minutes("n1", std::slice::from_ref(&old))
+        .await
+        .unwrap();
+    let h = pg_lat_hour(&db, "n1", 1, 36000).await;
+    assert_eq!(h.normal_max_ms, Some(50.0));
+
+    // the same report again changes nothing; a re-sent minute replaces its figure
+    for _ in 0..2 {
+        db.record_latency_minutes("n1", &[old.clone(), m1.clone(), m2.clone()])
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        pg_lat_hour(&db, "n1", 1, 36000).await.normal_max_ms,
+        Some(50.0)
+    );
+    let m1b = LatencyMinuteRow {
+        normal_max_ms: Some(22.0),
+        ..m1.clone()
+    };
+    let old_b = pg_lat_row_rt(1, 36000, 6, 0, 300.0, 0, 0.0);
+    let old_b = LatencyMinuteRow {
+        normal_max_ms: Some(18.0),
+        ..old_b
+    };
+    db.record_latency_minutes("n1", &[old_b, m1b])
+        .await
+        .unwrap();
+    assert_eq!(
+        pg_lat_hour(&db, "n1", 1, 36000).await.normal_max_ms,
+        Some(22.0)
+    );
+
+    // 1- and 5-minute buckets follow the same rule from the minute rows
+    let five = db
+        .query_latency_buckets("n1", LatencyGranularity::Minute5, 36000, 36300)
+        .await
+        .unwrap();
+    assert_eq!(five[0].normal_max_ms, Some(22.0));
+    let one = db
+        .query_latency_buckets("n1", LatencyGranularity::Minute1, 36000, 36180)
+        .await
+        .unwrap();
+    assert_eq!(
+        one.iter().map(|b| b.normal_max_ms).collect::<Vec<_>>(),
+        vec![Some(18.0), Some(22.0), None],
+        "the all-retransmit minute has no retransmit-free maximum"
+    );
+
+    // an hour of only an all-retransmit minute stays NULL, not 0
+    db.record_latency_minutes(
+        "n1",
+        &[LatencyMinuteRow {
+            minute_ts: 39600,
+            ..m2.clone()
+        }],
+    )
+    .await
+    .unwrap();
+    assert_eq!(pg_lat_hour(&db, "n1", 1, 39600).await.normal_max_ms, None);
+    // and an hour of old minutes only is its plain maximum
+    db.record_latency_minutes(
+        "n1",
+        &[lat_row(1, 43200, 6, 0, 300.0, Some(40.0), Some(50.0))],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        pg_lat_hour(&db, "n1", 1, 43200).await.normal_max_ms,
+        Some(50.0)
+    );
+
+    // the per-node series and the latest-minute read carry it too
+    let series = db
+        .query_latency_target_series(
+            &["n1".to_string()],
+            1,
+            LatencyGranularity::Hour1,
+            36000,
+            40000,
+        )
+        .await
+        .unwrap();
+    assert_eq!(series[0].normal_max_ms, Some(22.0));
+    let latest = db.query_latest_latency("n1", 0).await.unwrap();
+    assert_eq!(latest[0].normal_max_ms, None);
+    cleanup(&db).await;
+}
+
 /// The hour keeps the peak and the lost count its average would hide, and a
 /// minute that lost everything cannot drag the hour's minimum to nothing.
 #[tokio::test]
@@ -7265,6 +7534,9 @@ async fn pg_migration_31_adds_latency_tables() {
         rtt_sum_ms: 60.0,
         rtt_min_ms: Some(9.0),
         rtt_max_ms: Some(11.0),
+        retrans: None,
+        retrans_sum_ms: None,
+        normal_max_ms: None,
     };
     db.record_latency_minutes("n1", std::slice::from_ref(&row))
         .await
@@ -7279,6 +7551,72 @@ async fn pg_migration_31_adds_latency_tables() {
         1,
         "the table keys make a re-sent minute replace"
     );
+
+    crate::db::pg_schema::run_pg_migrations(&db.pool)
+        .await
+        .expect("re-run is a no-op");
+    cleanup(&db).await;
+}
+
+/// Revision 32 gives latency tables from before the retransmit statistics the
+/// nullable columns (old rows read as NULL = not reported) and no index on
+/// them; re-running is a no-op.
+#[tokio::test]
+async fn pg_migration_32_adds_the_latency_retransmit_columns() {
+    let Some(db) = repo("mig32_latency").await else {
+        return;
+    };
+    // Back to the pre-32 shape, with one old row.
+    for ddl in [
+        "ALTER TABLE latency_minute DROP COLUMN retrans",
+        "ALTER TABLE latency_minute DROP COLUMN retrans_sum_ms",
+        "ALTER TABLE latency_hourly DROP COLUMN retrans",
+        "ALTER TABLE latency_hourly DROP COLUMN retrans_sum_ms",
+        "ALTER TABLE latency_hourly DROP COLUMN retrans_base",
+    ] {
+        sqlx::query(ddl).execute(&db.pool).await.unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO latency_minute
+             (node_id, target_id, minute_ts, sent, lost, rtt_sum_ms, rtt_min_ms, rtt_max_ms)
+         VALUES ('n1', 1, 600, 6, 0, 60.0, 9.0, 11.0)",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query("DELETE FROM schema_version WHERE version >= 32")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    crate::db::pg_schema::run_pg_migrations(&db.pool)
+        .await
+        .expect("revision 32 must apply to an older database");
+    let v: i32 = sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM schema_version")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(v, crate::db::pg_schema::PG_SCHEMA_VERSION);
+    let cols: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.columns
+         WHERE table_name IN ('latency_minute', 'latency_hourly')
+           AND column_name IN ('retrans', 'retrans_sum_ms', 'retrans_base')",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(cols, 5);
+    let idx: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pg_indexes
+         WHERE tablename IN ('latency_minute', 'latency_hourly') AND indexdef LIKE '%retrans%'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(idx, 0, "no index on the new columns");
+    let rows = db.query_latest_latency("n1", 0).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!((rows[0].retrans, rows[0].retrans_sum_ms), (None, None));
 
     crate::db::pg_schema::run_pg_migrations(&db.pool)
         .await

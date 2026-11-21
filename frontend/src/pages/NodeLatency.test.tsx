@@ -192,6 +192,69 @@ describe('NodeLatency cards', () => {
     expect(within(screen.getByTestId('latency-card-3')).getByText('latencyIcmpUnsupported')).toBeInTheDocument();
   });
 
+  it('shows the retransmit share on a card only when the node reported it', async () => {
+    const base = response();
+    serve(() =>
+      ok(
+        response({
+          summary: [
+            { ...base.summary[0], retrans_rate: 17 },
+            { ...base.summary[1], retrans_rate: 0 },
+            base.summary[2],
+          ],
+        }),
+      ),
+    );
+    renderPage();
+    await flush();
+    expect(screen.getByTestId('latency-card-retrans-1')).toHaveTextContent('latencyCardRetrans 17.0%');
+    expect(screen.getByTestId('latency-card-retrans-2')).toHaveTextContent('latencyCardRetrans 0%');
+    // the unsupported target has no figure and no stray "0%"
+    expect(screen.queryByTestId('latency-card-retrans-3')).toBeNull();
+  });
+
+  it('has a stats row per target: now, average, fastest, slowest, loss and retransmit share', async () => {
+    const base = response();
+    serve(() =>
+      ok(
+        response({
+          summary: [
+            { ...base.summary[0], min: 9.5, max: 1210, retrans_rate: 12.5 },
+            { ...base.summary[1], min: 200, max: 400 },
+            base.summary[2],
+          ],
+        }),
+      ),
+    );
+    renderPage();
+    await flush();
+    const row = (id: number) => screen.getByTestId(`latency-stats-row-${id}`);
+    const col = (id: number, c: string) => row(id).querySelector(`[data-col="${c}"]`)?.textContent;
+    expect(col(1, 'latest')).toBe('30.0 ms');
+    expect(col(1, 'avg')).toBe('25.0 ms');
+    expect(col(1, 'min')).toBe('9.5 ms');
+    expect(col(1, 'max')).toBe('1210 ms');
+    expect(col(1, 'loss')).toBe('5.0%');
+    expect(col(1, 'retrans')).toBe('12.5%');
+    // not reported: the cell is empty, not 0%
+    expect(col(2, 'retrans')).toBe('');
+    // the newest minute lost everything
+    expect(col(2, 'latest')).toBe('latencyAllLost');
+    // a target the node cannot probe has a note instead of figures
+    expect(row(3)).toHaveTextContent('latencyIcmpUnsupported');
+    expect(row(3).querySelector('[data-col="avg"]')).toBeNull();
+  });
+
+  it('selecting a card narrows the stats to that target', async () => {
+    serve(() => ok(response()));
+    renderPage();
+    await flush();
+    fireEvent.click(screen.getByTestId('latency-card-2'));
+    await flush();
+    expect(screen.queryByTestId('latency-stats-row-1')).toBeNull();
+    expect(screen.getByTestId('latency-stats-row-2')).toBeInTheDocument();
+  });
+
   it('clicking a card shows only that target, clicking it again shows all', async () => {
     serve(() => ok(response()));
     renderPage();

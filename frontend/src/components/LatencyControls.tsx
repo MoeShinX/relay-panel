@@ -1,4 +1,4 @@
-import { Radio, Select, Space, Typography } from 'antd';
+import { Segmented, Select, Typography } from 'antd';
 import { useI18n } from '../i18n/context';
 import {
   GRANULARITIES,
@@ -32,14 +32,21 @@ interface Props {
   onGranularity: (g: LatencyGranularity) => void;
 }
 
-/** The granularity picker and the time-range buttons of the latency pages. A
- *  granularity the range cannot answer (minutes over 7 or 30 days) is disabled;
- *  the page falls back to the default when the range moves under it. */
+/** The time-range switch and the granularity picker of the latency pages, at
+ *  the same height, wrapping together on a narrow screen. A granularity the
+ *  range cannot answer (minutes over 7 or 30 days) is disabled; the page falls
+ *  back to the default when the range moves under it. */
 export default function LatencyControls({ range, granularity, onRange, onGranularity }: Props) {
   const { t } = useI18n();
   return (
-    <Space wrap size={[12, 8]}>
-      <Space size={6}>
+    <div className="rp-lat-controls">
+      <Segmented<LatencyRange>
+        data-testid="latency-range"
+        value={range}
+        onChange={onRange}
+        options={RANGES.map((r) => ({ value: r, label: t(RANGE_LABEL[r]) }))}
+      />
+      <span className="rp-lat-gran">
         <Text type="secondary">{t('latencyGranularity')}</Text>
         <Select
           aria-label={t('latencyGranularity')}
@@ -53,15 +60,7 @@ export default function LatencyControls({ range, granularity, onRange, onGranula
             disabled: !granularityAllowed(range, g),
           }))}
         />
-      </Space>
-      <Radio.Group
-        data-testid="latency-range"
-        optionType="button"
-        buttonStyle="solid"
-        value={range}
-        onChange={(e) => onRange(e.target.value as LatencyRange)}
-        options={RANGES.map((r) => ({ value: r, label: t(RANGE_LABEL[r]) }))}
-      />
-    </Space>
+      </span>
+    </div>
   );
 }
