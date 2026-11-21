@@ -842,6 +842,10 @@ export interface LatencySummary {
   loss: number | null;
   /** Percent of answered probes that were TCP retransmits over the range. */
   retrans_rate?: number | null;
+  /** The fastest and slowest answered probe of the range (a retransmit counts
+   *  as the slow probe it is); null when none was answered. */
+  min?: number | null;
+  max?: number | null;
 }
 
 /** GET /admin/nodes/{node_id}/latency. The targets are those of the node's own

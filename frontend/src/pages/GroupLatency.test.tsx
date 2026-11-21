@@ -8,12 +8,13 @@ vi.mock('../api/client', () => ({ default: { get: mockGet } }));
 // reports what it was asked to draw, so the page's choices can be asserted.
 vi.mock('@ant-design/charts', () => ({
   Column: () => null,
-  Line: (props: { data: { key: string }[]; scale?: { color?: { domain?: string[] } } }) => (
+  Line: (props: { data: { key: string; value: number | null }[]; scale?: { color?: { domain?: string[] } } }) => (
     <div
       data-testid="chart"
       data-keys={[...new Set(props.data.map((d) => d.key))].join(',')}
       data-domain={(props.scale?.color?.domain ?? []).join(',')}
       data-n={props.data.length}
+      data-values={props.data.map((d) => (d.value == null ? 'null' : Number(d.value.toFixed(3)))).join(',')}
     />
   ),
 }));
@@ -133,6 +134,7 @@ const level = (nodeId: string, targetId: number) =>
 
 beforeEach(() => {
   mockGet.mockReset();
+  localStorage.clear();
   vi.useFakeTimers();
 });
 afterEach(() => {
@@ -268,6 +270,93 @@ describe('GroupLatency comparison table', () => {
     fireEvent.click(screen.getByTestId('latency-node-n1'));
     await flush();
     expect(screen.getByTestId('where')).toHaveTextContent('/nodes/n1/latency');
+  });
+});
+
+describe('GroupLatency trend chart', () => {
+  const values = () => screen.getByTestId('chart').getAttribute('data-values');
+
+  it('smooth is off by default and draws the buckets\' own means', async () => {
+    serve();
+    renderPage();
+    await flush();
+    expect(screen.getByTestId('latency-smooth')).toHaveAttribute('aria-checked', 'false');
+    // n1: 20, 22; n2: 30
+    expect(values()).toBe('20,22,30');
+  });
+
+  it('turning smooth on changes the plotted data (moving average, alpha 0.35) but not the matrix, and is remembered', async () => {
+    serve();
+    const { unmount } = renderPage();
+    await flush();
+    const cellBefore = screen.getByTestId('latency-cell-n1-1').textContent;
+    fireEvent.click(screen.getByTestId('latency-smooth'));
+    await flush();
+    // n1: 20, then 0.35 * 22 + 0.65 * 20 = 20.7; n2 has a single point
+    expect(values()).toBe('20,20.7,30');
+    expect(screen.getByTestId('latency-smooth')).toHaveAttribute('aria-checked', 'true');
+    // the table, and the strips' numbers, are the raw figures
+    expect(screen.getByTestId('latency-cell-n1-1').textContent).toBe(cellBefore);
+    expect(screen.getByTestId('latency-cell-n1-1')).toHaveTextContent('20.0 ms');
+    expect(screen.getByTestId('strip-current-n1')).toHaveTextContent('22.0');
+    expect(localStorage.getItem('rp.latency.smooth')).toBe('1');
+
+    // a fresh visit starts with the remembered choice
+    unmount();
+    renderPage();
+    await flush();
+    expect(screen.getByTestId('latency-smooth')).toHaveAttribute('aria-checked', 'true');
+    expect(values()).toBe('20,20.7,30');
+
+    fireEvent.click(screen.getByTestId('latency-smooth'));
+    await flush();
+    expect(values()).toBe('20,22,30');
+    expect(localStorage.getItem('rp.latency.smooth')).toBe('0');
+  });
+
+  it('a bucket with no answered probe stays a gap (null) in the series, smoothed or not', async () => {
+    serve(() =>
+      ok(
+        response({
+          series: [
+            { node_id: 'n1', points: [point(NOW - 180, 20), point(NOW - 120, null, 100), point(NOW - 60, 40)] },
+            { node_id: 'n2', points: [] },
+            { node_id: '0123456789abcdef', points: [] },
+            { node_id: 'old', points: [] },
+          ],
+        }),
+      ),
+    );
+    renderPage();
+    await flush();
+    expect(values()).toBe('20,null,40');
+    fireEvent.click(screen.getByTestId('latency-smooth'));
+    await flush();
+    // the gap is neither zero nor interpolated; the average skips it
+    expect(values()).toBe('20,null,27');
+  });
+
+  it('the empty state sits in the same fixed-height box as the chart', async () => {
+    serve(() => ok(response({ series: [{ node_id: 'n1', points: [] }] })));
+    renderPage();
+    await flush();
+    expect(screen.getByText('latencyChartEmpty').closest('.rp-lat-chart-box')).toHaveStyle({ height: '320px' });
+  });
+
+  it('a read over data already shown puts a veil in the box instead of replacing it', async () => {
+    serve();
+    renderPage();
+    await flush();
+    expect(screen.queryByTestId('latency-chart-loading')).toBeNull();
+    let resolve: (v: unknown) => void = () => {};
+    mockGet.mockImplementation(() => new Promise((r) => { resolve = r; }));
+    fireEvent.click(screen.getByText('latencyRange7d'));
+    await flush();
+    expect(screen.getByTestId('latency-chart-loading').closest('.rp-lat-chart-box')).not.toBeNull();
+    expect(screen.getByTestId('chart')).toBeInTheDocument();
+    resolve(ok(response()));
+    await flush();
+    expect(screen.queryByTestId('latency-chart-loading')).toBeNull();
   });
 });
 

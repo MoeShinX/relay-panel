@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes, type KeyboardEvent } from 'react';
 import { Button, Card, Empty, Result, Space, Spin, Table, Tag, Tooltip, Typography } from 'antd';
-import { ArrowLeftOutlined, DownloadOutlined, InfoCircleOutlined, UndoOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
 import type {
@@ -12,16 +12,17 @@ import type {
   LatencyTarget,
 } from '../api/types';
 import { useI18n } from '../i18n/context';
-import LatencyChart, { type LatencyChartHandle } from '../components/LatencyChart';
 import LatencyControls from '../components/LatencyControls';
 import LatencyStrips, { type StripRow } from '../components/LatencyStrips';
+import LatencyTrendCard, { ChartBox, ChartBoxMessage } from '../components/LatencyTrendCard';
+import LevelDot from '../components/LevelDot';
 import SeriesPicker from '../components/SeriesPicker';
-import { useIsMobile } from '../hooks/useIsMobile';
 import { useSeriesPick } from '../hooks/useSeriesPick';
 import { rankByAttention } from '../utils/seriesPick';
 import {
   AUTO_REFRESH_MS,
-  LEVEL_COLORS,
+  LATENCY_LOSS_BAD_PCT,
+  LATENCY_LOSS_WARN_PCT,
   autoRefreshes,
   granularityAllowed,
   latencyLevel,
@@ -70,7 +71,6 @@ export default function GroupLatency() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const { groupId = '' } = useParams();
-  const isMobile = useIsMobile();
 
   const [range, setRange] = useState<LatencyRange>('24h');
   const [granularity, setGranularity] = useState<LatencyGranularity>('1h');
@@ -78,10 +78,6 @@ export default function GroupLatency() {
   const [selected, setSelected] = useState<number | null>(null);
   const [data, setData] = useState<GroupLatencyResponse | null>(null);
   const [state, setState] = useState<LoadState>('loading');
-  // Bumped to remount the chart, which is how "reset zoom" returns the slider
-  // to the full range.
-  const [chartKey, setChartKey] = useState(0);
-  const chartRef = useRef<LatencyChartHandle | null>(null);
   // Only the newest request may write the page (see NodeLatency).
   const requestRef = useRef(0);
 
@@ -171,7 +167,6 @@ export default function GroupLatency() {
     return allPoints.filter((p) => shown.has(p.key));
   }, [allPoints, pick.needsPicker, pick.shown]);
   const withDate = range !== '1h' && range !== '6h';
-  const hasPoints = points.length > 0;
 
   // One strip row per node for the target on show: the chosen target's own
   // series, the table's range-wide loss, and the newest point as "now".
@@ -226,42 +221,53 @@ export default function GroupLatency() {
 
   if (state === 'notfound') {
     return (
-      <>
+      <div className="rp-lat">
         {header}
         <Result status="404" title={t('latencyGroupNotFound')} />
-      </>
+      </div>
     );
   }
   if (state === 'failed') {
     return (
-      <>
+      <div className="rp-lat">
         {header}
-        <Result
-          status="warning"
-          title={t('latencyLoadFailed')}
-          extra={<Button type="primary" onClick={() => load(false)}>{t('refresh')}</Button>}
-        />
-      </>
+        <Card size="small" className="rp-lat-card">
+          <ChartBox>
+            <ChartBoxMessage>
+              <Result
+                status="warning"
+                style={{ padding: 0 }}
+                title={t('latencyLoadFailed')}
+                extra={<Button type="primary" onClick={() => load(false)}>{t('refresh')}</Button>}
+              />
+            </ChartBoxMessage>
+          </ChartBox>
+        </Card>
+      </div>
     );
   }
   if (state === 'loading' && !data) {
     return (
-      <>
+      <div className="rp-lat">
         {header}
-        <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
-      </>
+        <Card size="small" className="rp-lat-card">
+          <ChartBox>
+            <ChartBoxMessage><Spin /></ChartBoxMessage>
+          </ChartBox>
+        </Card>
+      </div>
     );
   }
   if (data && targets.length === 0) {
     return (
-      <>
+      <div className="rp-lat">
         {header}
         <Result
           icon={<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />}
           title={t('latencyGroupNoTargets')}
           extra={<Button type="primary" onClick={() => navigate('/groups')}>{t('latencyGoGroups')}</Button>}
         />
-      </>
+      </div>
     );
   }
 
@@ -284,9 +290,7 @@ export default function GroupLatency() {
           >
             {nodeDisplayName(n)}
           </Button>
-          {n.public_ip ? (
-            <div><Text type="secondary" className="rp-mono" style={{ fontSize: 12 }}>{n.public_ip}</Text></div>
-          ) : null}
+          {n.public_ip ? <span className="rp-lat-node-ip rp-mono">{n.public_ip}</span> : null}
           {!n.supported ? (
             <Tooltip title={n.node_version ? `${t('latencyNodeVersion')}: v${n.node_version}` : t('latencyNodeTooOld')}>
               <Tag color="orange" data-testid={`latency-upgrade-${n.node_id}`} style={{ marginTop: 2 }}>
@@ -306,17 +310,11 @@ export default function GroupLatency() {
         // the title: antd repeats a title in a hidden measuring row, and a
         // second, invisible control there would be reachable by Tab.
         title: (
-          <div
-            style={{
-              color: isActive ? 'var(--ant-color-primary, #6366f1)' : undefined,
-              fontWeight: isActive ? 600 : undefined,
-            }}
-          >
-            <div>{tg.name}</div>
-            <Space size={4}>
-              <Tag style={{ marginInlineEnd: 0, fontWeight: 400 }}>{t(CARRIER_KEY[tg.carrier])}</Tag>
-              <Tag style={{ marginInlineEnd: 0, fontWeight: 400 }}>{tg.kind === 'icmp' ? 'ICMP' : 'TCP'}</Tag>
-            </Space>
+          <div>
+            <div className="rp-lat-colname">{tg.name}</div>
+            <div className="rp-lat-head-sub">
+              {tg.kind === 'icmp' ? 'ICMP' : 'TCP'} · {t(CARRIER_KEY[tg.carrier])}
+            </div>
           </div>
         ),
         onHeaderCell: () =>
@@ -326,9 +324,9 @@ export default function GroupLatency() {
             'data-testid': `latency-col-${tg.id}`,
             onClick: () => pickTarget(tg.id),
             onKeyDown: onActivate(() => pickTarget(tg.id)),
-            style: { cursor: 'pointer' },
+            className: `rp-lat-col-head${isActive ? ' is-active' : ''}`,
           }) as HTMLAttributes<HTMLElement>,
-        onCell: () => ({ style: isActive ? { background: 'var(--ant-color-primary-bg, rgba(99,102,241,0.06))' } : {} }),
+        onCell: () => ({ className: `rp-lat-col-cell${isActive ? ' is-active' : ''}` }),
         render: (_: unknown, n: GroupLatencyNode) => {
           if (!n.supported) {
             return <Text type="secondary" data-testid={`latency-cell-${n.node_id}-${tg.id}`} data-level="none">-</Text>;
@@ -361,18 +359,21 @@ export default function GroupLatency() {
               onKeyDown={onActivate(() => pickTarget(tg.id))}
               style={{ cursor: 'pointer', lineHeight: 1.3 }}
             >
-              <div style={{ fontSize: 16, fontWeight: 600, color: LEVEL_COLORS[level] }}>
+              <div className="rp-lat-num" style={{ fontSize: 15 }}>
+                <LevelDot level={level} />
                 {c.avg == null ? t('latencyAllLost') : formatMs(c.avg)}
               </div>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {t('latencyCardLoss')} {formatLoss(c.loss)}
+              <span className="rp-lat-sub">
+                <span className={c.loss >= LATENCY_LOSS_BAD_PCT ? 'is-bad' : c.loss >= LATENCY_LOSS_WARN_PCT ? 'is-warn' : undefined}>
+                  {t('latencyCardLoss')} {formatLoss(c.loss)}
+                </span>
                 {formatRetrans(c.retrans_rate) == null ? null : (
                   <span data-testid={`latency-cell-retrans-${n.node_id}-${tg.id}`}>
                     {' · '}
                     {t('latencyCardRetrans')} {formatRetrans(c.retrans_rate)}
                   </span>
                 )}
-              </Text>
+              </span>
             </div>
           );
         },
@@ -381,24 +382,36 @@ export default function GroupLatency() {
   ];
 
   return (
-    <>
+    <div className="rp-lat">
       {header}
       <Card
         size="small"
+        className="rp-lat-card"
         style={{ marginBottom: 16 }}
         title={
           <Space size={6}>
             <span>{t('latencyGroupMatrixTitle')}</span>
-            <Tooltip title={t('latencyRetransHelp')}>
-              <InfoCircleOutlined data-testid="latency-retrans-help" style={{ color: 'var(--ant-color-text-tertiary)' }} />
+            <Tooltip
+              placement="bottomLeft"
+              title={
+                <div style={{ maxWidth: 360 }}>
+                  <div>{t('latencyGroupTableHint')}</div>
+                  <div style={{ marginTop: 8 }}>{t('latencyRetransHelp')}</div>
+                </div>
+              }
+            >
+              <InfoCircleOutlined
+                data-testid="latency-retrans-help"
+                tabIndex={0}
+                aria-label={t('latencyGroupTableHint')}
+                style={{ color: 'var(--ant-color-text-tertiary, #6b7280)' }}
+              />
             </Tooltip>
           </Space>
         }
       >
-        <Text type="secondary" style={{ display: 'block', marginBottom: 8, fontSize: 12 }}>
-          {t('latencyGroupTableHint')}
-        </Text>
         <Table<GroupLatencyNode>
+          className="rp-lat-matrix"
           data-testid="latency-matrix"
           size="small"
           rowKey="node_id"
@@ -410,52 +423,22 @@ export default function GroupLatency() {
         />
       </Card>
       {nodes.length === 0 ? null : (
-        <Card
-          size="small"
+        <LatencyTrendCard
           title={
-            <Space size={8} wrap>
-              <span data-testid="latency-current-view">
-                {t('latencyGroupChartFor')}
-                <Text strong>{activeTarget ? activeTarget.name : '-'}</Text>
-              </span>
-            </Space>
+            <span data-testid="latency-current-view">
+              {t('latencyGroupChartFor')}
+              <Text strong>{activeTarget ? activeTarget.name : '-'}</Text>
+            </span>
           }
-          extra={
-            <Space size={8} wrap>
-              {isMobile ? null : picker}
-              {autoRefreshes(range) ? (
-                <Text type="secondary" style={{ fontSize: 12 }}>{t('latencyAutoRefresh')}</Text>
-              ) : null}
-              <Button size="small" icon={<UndoOutlined />} onClick={() => setChartKey((k) => k + 1)}>
-                {t('latencyChartReset')}
-              </Button>
-              <Button
-                size="small"
-                icon={<DownloadOutlined />}
-                disabled={!hasPoints}
-                onClick={() => chartRef.current?.downloadImage?.(`latency-group-${groupId}-${range}`)}
-              >
-                {t('latencyChartDownload')}
-              </Button>
-            </Space>
-          }
-        >
-          {isMobile && picker ? <div style={{ marginBottom: 8 }}>{picker}</div> : null}
-          {!hasPoints ? (
-            <Empty description={t('latencyChartEmpty')} image={Empty.PRESENTED_IMAGE_SIMPLE} />
-          ) : (
-            <LatencyChart
-              key={chartKey}
-              points={points}
-              colorDomain={colorDomain}
-              names={names}
-              withDate={withDate}
-              onReady={(chart) => {
-                chartRef.current = chart;
-              }}
-            />
-          )}
-        </Card>
+          picker={picker}
+          points={points}
+          colorDomain={colorDomain}
+          names={names}
+          withDate={withDate}
+          autoRefresh={autoRefreshes(range)}
+          loading={state === 'loading'}
+          downloadName={`latency-group-${groupId}-${range}`}
+        />
       )}
       {nodes.length === 0 || !data ? null : (
         <LatencyStrips
@@ -467,6 +450,6 @@ export default function GroupLatency() {
           withDate={withDate}
         />
       )}
-    </>
+    </div>
   );
 }

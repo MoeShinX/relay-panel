@@ -590,6 +590,11 @@ pub struct TargetSummary {
     /// Percent of answered probes that were retransmits over the range; null
     /// when no row of the range carries the figure.
     pub retrans_rate: Option<f64>,
+    /// The fastest and slowest answered probe of the range (the smallest of the
+    /// buckets' minimums, the largest of their maximums; a retransmit counts as
+    /// the slow probe it is). Null when no probe was answered.
+    pub min: Option<f64>,
+    pub max: Option<f64>,
 }
 
 fn loss_percent(sent: i64, lost: i64) -> f64 {
@@ -694,6 +699,7 @@ pub fn build_series(
         let mine: Vec<&LatencyBucket> = buckets.iter().filter(|b| b.target_id == t.id).collect();
         let (mut sent, mut lost, mut sum) = (0_i64, 0_i64, 0.0_f64);
         let mut total = RetransTotal::default();
+        let (mut min, mut max): (Option<f64>, Option<f64>) = (None, None);
         let points: Vec<SeriesPoint> = mine
             .iter()
             .map(|b| {
@@ -706,6 +712,14 @@ pub fn build_series(
                     base: b.retrans_base,
                 };
                 total.add(r);
+                min = match (min, b.rtt_min_ms) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
+                max = match (max, b.rtt_max_ms) {
+                    (Some(a), Some(b)) => Some(a.max(b)),
+                    (a, b) => a.or(b),
+                };
                 SeriesPoint {
                     ts: b.ts,
                     avg: mean(b.rtt_sum_ms, b.sent, b.lost, r),
@@ -727,6 +741,8 @@ pub fn build_series(
             avg: mean(sum, sent, lost, total),
             loss: (sent > 0).then(|| loss_percent(sent, lost)),
             retrans_rate: retrans_rate(total),
+            min,
+            max,
         });
         series.push(TargetSeries {
             target_id: t.id,
@@ -1320,6 +1336,9 @@ mod tests {
         assert_eq!(summary[1].avg, None);
         assert_eq!(summary[1].loss, None);
         assert_eq!(summary[1].latest_ts, None);
+        assert_eq!((summary[1].min, summary[1].max), (None, None));
+        // the all-lost bucket has no extremes, the answered one does
+        assert_eq!((summary[0].min, summary[0].max), (Some(8.0), Some(14.0)));
     }
 
     fn rt_sample(retrans: Option<u32>, retrans_sum_ms: Option<f64>) -> LatencySample {
@@ -1526,6 +1545,8 @@ mod tests {
         assert_eq!(p[1].retrans_rate, None, "not reported is not 0 %");
         assert_eq!(summary[0].latest, Some(20.0));
         assert_eq!(summary[0].latest_retrans_rate, Some(20.0));
+        // the range's fastest and slowest answered probe, retransmit included
+        assert_eq!((summary[0].min, summary[0].max), (Some(18.0), Some(1100.0)));
         // range: (1300 - 1100) / (11 - 1) = 20, rate over the 5 that could say
         assert_eq!(summary[0].avg, Some(20.0));
         assert_eq!(summary[0].retrans_rate, Some(20.0));

@@ -7,10 +7,14 @@ import {
   formatRetrans,
   groupChartPoints,
   lossMarkers,
+  maxPointsPerKey,
   nodeDisplayName,
+  smoothPoints,
   stripLatencyLevel,
   stripSegmentCount,
   stripSegments,
+  tooltipText,
+  type ChartPoint,
 } from './latencyChart';
 import type { LatencyPoint } from '../api/types';
 
@@ -94,6 +98,79 @@ describe('retransmit rate', () => {
     expect(none.retrans).toBeNull();
     const [empty] = stripSegments([], 600, 660, 1);
     expect(empty.retrans).toBeNull();
+  });
+});
+
+const cp = (key: string, sec: number, value: number | null, extra: Partial<ChartPoint> = {}): ChartPoint => ({
+  time: new Date(sec * 1000),
+  key,
+  name: key,
+  value,
+  raw: value,
+  min: value,
+  max: value,
+  loss: 0,
+  retrans: null,
+  ...extra,
+});
+
+describe('smoothPoints', () => {
+  it('is an exponential moving average with alpha 0.35, oldest first', () => {
+    const out = smoothPoints([cp('a', 0, 10), cp('a', 60, 20), cp('a', 120, 10)]);
+    expect(out.map((p) => p.value)).toEqual([10, 0.35 * 20 + 0.65 * 10, 0.35 * 10 + 0.65 * (0.35 * 20 + 0.65 * 10)]);
+  });
+
+  it('keeps each line apart, and uses time order whatever the input order', () => {
+    const out = smoothPoints([cp('a', 60, 20), cp('b', 0, 100), cp('a', 0, 10), cp('b', 60, 200)]);
+    // input order is preserved; the average runs along time within a key
+    expect(out.map((p) => p.key)).toEqual(['a', 'b', 'a', 'b']);
+    expect(out[2].value).toBe(10);
+    expect(out[0].value).toBeCloseTo(0.35 * 20 + 0.65 * 10);
+    expect(out[1].value).toBe(100);
+    expect(out[3].value).toBeCloseTo(0.35 * 200 + 0.65 * 100);
+  });
+
+  it('skips gaps: a null stays null, is not zero or interpolated, and the average carries on', () => {
+    const out = smoothPoints([cp('a', 0, 10), cp('a', 60, null, { loss: 100 }), cp('a', 120, 20)]);
+    expect(out[1].value).toBeNull();
+    expect(out[2].value).toBeCloseTo(0.35 * 20 + 0.65 * 10);
+    // a line that starts with a gap starts at its first real value
+    const lead = smoothPoints([cp('a', 0, null), cp('a', 60, 30)]);
+    expect(lead.map((p) => p.value)).toEqual([null, 30]);
+  });
+
+  it('only changes what is drawn: raw, min, max, loss and retrans stay the bucket\'s own', () => {
+    const src = [cp('a', 0, 10), cp('a', 60, 20, { loss: 2, retrans: 5, min: 18, max: 30 })];
+    const out = smoothPoints(src);
+    expect(out[1].raw).toBe(20);
+    expect([out[1].min, out[1].max, out[1].loss, out[1].retrans]).toEqual([18, 30, 2, 5]);
+    // and the input is untouched
+    expect(src[1].value).toBe(20);
+  });
+});
+
+describe('chart helpers', () => {
+  it('chartPoints carry the bucket mean as both the drawn value and raw', () => {
+    const p = chartPoints(series, 1)[0];
+    expect([p.value, p.raw]).toEqual([10, 10]);
+    expect(chartPoints(series, 2)[0].raw).toBeNull();
+  });
+
+  it('counts the most points any one line has', () => {
+    expect(maxPointsPerKey([])).toBe(0);
+    expect(maxPointsPerKey([cp('a', 0, 1), cp('b', 0, 1), cp('a', 60, 1)])).toBe(2);
+  });
+
+  it('writes a tooltip line with the raw mean, loss and, when reported, the retransmit share', () => {
+    const labels = { allLost: 'ALL LOST', loss: 'loss', retrans: 'retrans' };
+    expect(tooltipText({ raw: 20.04, loss: 0.2, retrans: 17 }, labels)).toBe('20.0 ms · loss 0.20% · retrans 17.0%');
+    expect(tooltipText({ raw: 150, loss: 0, retrans: null }, labels)).toBe('150 ms · loss 0%');
+    expect(tooltipText({ raw: null, loss: 100, retrans: null }, labels)).toBe('ALL LOST · loss 100.0%');
+  });
+
+  it('puts a loss marker on the line, and on the baseline under a gap', () => {
+    const m = lossMarkers([cp('a', 0, 25, { loss: 3 }), cp('a', 60, null, { loss: 100 }), cp('a', 120, 30)]);
+    expect(m.map((x) => x.y)).toEqual([25, 0]);
   });
 });
 

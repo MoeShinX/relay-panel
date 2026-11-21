@@ -1015,6 +1015,11 @@ mod tests {
         );
         assert_eq!(d.series[0].points[2].loss, 100.0);
         assert_eq!(d.summary[0].avg, Some(15.0));
+        // min of the buckets' minimums, max of their maximums (row(): avg - 1, avg + 5)
+        assert_eq!(
+            (d.summary[0].min, d.summary[0].max),
+            (Some(9.0), Some(25.0))
+        );
         assert_eq!(d.summary[0].loss.map(|l| (l * 10.0).round()), Some(333.0));
         assert_eq!(
             d.summary[0].latest, None,
