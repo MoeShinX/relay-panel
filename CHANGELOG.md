@@ -33,7 +33,9 @@ independent `v*` / `node-v*` tracks since this release).
   keep "Loss". A "current" reading older than ten minutes now turns grey and says
   "No new data" with the time of its last sample, instead of staying green, and a
   background refresh that fails keeps the old charts but shows a warning with the
-  time of the data on screen.
+  time of the data on screen. The 7-day and 30-day views now refresh themselves
+  every five minutes too, and the group page judges a node's current reading by
+  its newest minute (the group latency API adds `latest_ts` to each node's line).
 
 ## [1.2.24] - 2026-11-21
 
