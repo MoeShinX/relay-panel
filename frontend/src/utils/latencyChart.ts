@@ -1,5 +1,5 @@
 import type { GroupLatencyNode, GroupLatencySeries, LatencyPoint, LatencySeries } from '../api/types';
-import { LATENCY_LOSS_WARN_PCT, STRIP_SEGMENTS, latencyLevel, type LatencyLevel } from './latency';
+import { LATENCY_LOSS_BAD_PCT, STRIP_SEGMENTS, latencyLevel, type LatencyLevel } from './latency';
 
 /** One plotted point of one line. `value` is the bucket's mean round trip,
  *  null when every probe in it was lost (the line then breaks, which is the
@@ -88,13 +88,14 @@ export function groupChartPoints(series: GroupLatencySeries[], nodes: GroupLaten
 }
 
 /** Where probes were lost: one marker per bucket whose loss reaches
- *  LATENCY_LOSS_WARN_PCT (which includes a bucket that lost everything). A
- *  stray dropped packet in a long bucket would otherwise dot the whole chart;
+ *  LATENCY_LOSS_BAD_PCT (the "bad" red level, which includes a bucket that lost
+ *  everything). With short buckets one dropped probe is already a percent or
+ *  two, and a lower bar would dot the whole chart red on an ordinary line;
  *  the tooltip still gives the loss of every point. `baseline` is where a gap
  *  (no line to sit on) gets its marker: the bottom edge of the plot. */
 export function lossMarkers(points: ChartPoint[], baseline = 0): LossMarker[] {
   return points
-    .filter((p) => p.loss >= LATENCY_LOSS_WARN_PCT)
+    .filter((p) => p.loss >= LATENCY_LOSS_BAD_PCT)
     .map((p) => ({ time: p.time, key: p.key, name: p.name, loss: p.loss, y: p.value ?? baseline }));
 }
 

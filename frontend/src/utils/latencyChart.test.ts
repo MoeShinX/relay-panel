@@ -170,19 +170,20 @@ describe('chart helpers', () => {
   });
 
   it('puts a loss marker on the line, and on the given baseline under a gap', () => {
-    const pts = [cp('a', 0, 25, { loss: 3 }), cp('a', 60, null, { loss: 100 }), cp('a', 120, 30)];
+    const pts = [cp('a', 0, 25, { loss: 6 }), cp('a', 60, null, { loss: 100 }), cp('a', 120, 30)];
     expect(lossMarkers(pts).map((x) => x.y)).toEqual([25, 0]);
     expect(lossMarkers(pts, 20).map((x) => x.y)).toEqual([25, 20]);
   });
 
-  it('marks only buckets at or above the warn loss (1%) or fully lost, not every dropped packet', () => {
+  it('marks only buckets at or above the bad loss (5%) or fully lost, not every dropped packet', () => {
     const pts = [
       cp('a', 0, 25, { loss: 0.2 }),
-      cp('a', 60, 25, { loss: 0.99 }),
-      cp('a', 120, 25, { loss: 1 }),
-      cp('a', 180, null, { loss: 100 }),
+      cp('a', 60, 25, { loss: 3.3 }),
+      cp('a', 120, 25, { loss: 4.99 }),
+      cp('a', 180, 25, { loss: 5 }),
+      cp('a', 240, null, { loss: 100 }),
     ];
-    expect(lossMarkers(pts).map((m) => m.loss)).toEqual([1, 100]);
+    expect(lossMarkers(pts).map((m) => m.loss)).toEqual([5, 100]);
   });
 
   it('starts the y axis a little under the lowest value, never below 0', () => {
@@ -199,7 +200,7 @@ describe('chart helpers', () => {
 });
 
 describe('lossMarkers', () => {
-  it('marks each bucket that lost something, however little', () => {
+  it('marks the buckets with heavy loss', () => {
     const m = lossMarkers(chartPoints(series, null));
     expect(m.map((x) => [x.key, x.loss])).toEqual([['1', 16.7], ['2', 100]]);
   });
