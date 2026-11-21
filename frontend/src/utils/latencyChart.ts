@@ -99,6 +99,14 @@ export function lossMarkers(points: ChartPoint[], baseline = 0): LossMarker[] {
     .map((p) => ({ time: p.time, key: p.key, name: p.name, loss: p.loss, y: p.value ?? baseline }));
 }
 
+/** The classic chart's markers: one for every bucket that lost anything, all on
+ *  the x axis (y 0), as the pages drew them before the polish. */
+export function classicLossMarkers(points: ChartPoint[]): LossMarker[] {
+  return points
+    .filter((p) => p.loss > 0)
+    .map((p) => ({ time: p.time, key: p.key, name: p.name, loss: p.loss, y: 0 }));
+}
+
 /** The lowest value the y axis starts at: a little under the lowest drawn
  *  value, rounded down to a tidy step, and never below 0. A chart of lines at
  *  35-70 ms should not spend its lower half on 0-35. */

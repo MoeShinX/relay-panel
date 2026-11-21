@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { LatencySeries } from '../api/types';
 import {
   chartPoints,
+  classicLossMarkers,
   formatLoss,
   formatMs,
   formatRetrans,
@@ -195,6 +196,13 @@ describe('chart helpers', () => {
     expect(yDomainMin([cp('a', 0, null)])).toBe(0);
     // gaps do not count as zero
     expect(yDomainMin([cp('a', 0, 40), cp('a', 60, null), cp('a', 120, 60)])).toBeGreaterThan(0);
+  });
+});
+
+describe('classicLossMarkers', () => {
+  it('marks every bucket that lost anything, on the x axis', () => {
+    const m = classicLossMarkers([cp('a', 0, 25, { loss: 0.2 }), cp('a', 60, null, { loss: 100 }), cp('a', 120, 30)]);
+    expect(m.map((x) => [x.loss, x.y])).toEqual([[0.2, 0], [100, 0]]);
   });
 });
 

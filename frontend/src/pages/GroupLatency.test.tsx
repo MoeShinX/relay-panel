@@ -8,15 +8,28 @@ vi.mock('../api/client', () => ({ default: { get: mockGet } }));
 // reports what it was asked to draw, so the page's choices can be asserted.
 vi.mock('@ant-design/charts', () => ({
   Column: () => null,
-  Line: (props: { data: { key: string; value: number | null }[]; scale?: { color?: { domain?: string[] } } }) => (
+  Line: (props: {
+    data: { key: string; value: number | null }[];
+    scale?: { color?: { domain?: string[] }; y?: { domainMin?: number } };
+    annotations?: { data: unknown[] }[];
+    tooltip?: { items: ((d: unknown) => { name: string; value: string })[] };
+  }) => {
+    const sample = { key: 'n1', name: 'n1', time: new Date(0), value: 20, raw: 20, min: 19, max: 24, loss: 0.2, retrans: 17 };
+    const items = (props.tooltip?.items ?? []).map((f) => f(sample));
+    return (
     <div
       data-testid="chart"
       data-keys={[...new Set(props.data.map((d) => d.key))].join(',')}
       data-domain={(props.scale?.color?.domain ?? []).join(',')}
       data-n={props.data.length}
       data-values={props.data.map((d) => (d.value == null ? 'null' : Number(d.value.toFixed(3)))).join(',')}
+      data-ymin={props.scale?.y?.domainMin}
+      data-markers={props.annotations?.[0]?.data.length}
+      data-tip-names={items.map((i) => i.name).join('|')}
+      data-tip-values={items.map((i) => i.value).join('|')}
     />
-  ),
+    );
+  },
 }));
 
 import GroupLatency from './GroupLatency';
@@ -357,6 +370,76 @@ describe('GroupLatency trend chart', () => {
     resolve(ok(response()));
     await flush();
     expect(screen.queryByTestId('latency-chart-loading')).toBeNull();
+  });
+});
+
+describe('GroupLatency chart look (modern / classic)', () => {
+  const chart = () => screen.getByTestId('chart');
+  const style = () => screen.getByTestId('latency-chart-style');
+
+  it('is modern by default: the y axis starts just under the data, one tooltip line per series', async () => {
+    serve();
+    renderPage();
+    await flush();
+    // data 20-30 ms: a little under the lowest, rounded to a step, not 0
+    expect(Number(chart().getAttribute('data-ymin'))).toBeGreaterThan(0);
+    expect(Number(chart().getAttribute('data-ymin'))).toBeLessThan(20);
+    expect(chart().getAttribute('data-tip-names')).toBe('n1');
+    // only a fully lost bucket gets a marker, and the fixture has none
+    expect(chart().getAttribute('data-markers')).toBe('0');
+    expect(within(style()).getByText('latencyStyleModern').closest('.ant-segmented-item')).toHaveClass(
+      'ant-segmented-item-selected',
+    );
+  });
+
+  it('classic starts the y axis at 0, marks every lossy bucket and lists avg / min / max / loss', async () => {
+    serve();
+    renderPage();
+    await flush();
+    fireEvent.click(within(style()).getByText('latencyStyleClassic'));
+    await flush();
+    expect(chart().getAttribute('data-ymin')).toBe('0');
+    // n2's point lost 10%
+    expect(chart().getAttribute('data-markers')).toBe('1');
+    expect(chart().getAttribute('data-tip-names')).toBe(
+      'n1 · latencyTipAvg|latencyTipMin|latencyTipMax|latencyTipLoss',
+    );
+    // the retransmit share rides along with the loss
+    expect(chart().getAttribute('data-tip-values')).toBe(
+      '20.0 ms|19.0 ms|24.0 ms|0.20% · latencyCardRetrans 17.0%',
+    );
+    // the data is the same, and the table did not move
+    expect(chart().getAttribute('data-values')).toBe('20,22,30');
+    expect(screen.getByTestId('latency-cell-n1-1')).toHaveTextContent('20.0 ms');
+  });
+
+  it('the smooth switch keeps working in the classic look', async () => {
+    serve();
+    renderPage();
+    await flush();
+    fireEvent.click(within(style()).getByText('latencyStyleClassic'));
+    fireEvent.click(screen.getByTestId('latency-smooth'));
+    await flush();
+    expect(chart().getAttribute('data-values')).toBe('20,20.7,30');
+    expect(chart().getAttribute('data-ymin')).toBe('0');
+  });
+
+  it('remembers the look per browser, and switches back', async () => {
+    serve();
+    const { unmount } = renderPage();
+    await flush();
+    fireEvent.click(within(style()).getByText('latencyStyleClassic'));
+    await flush();
+    expect(localStorage.getItem('rp.latency.chartStyle')).toBe('classic');
+    unmount();
+
+    renderPage();
+    await flush();
+    expect(chart().getAttribute('data-ymin')).toBe('0');
+    fireEvent.click(within(style()).getByText('latencyStyleModern'));
+    await flush();
+    expect(Number(chart().getAttribute('data-ymin'))).toBeGreaterThan(0);
+    expect(localStorage.getItem('rp.latency.chartStyle')).toBe('modern');
   });
 });
 

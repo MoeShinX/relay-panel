@@ -1,11 +1,12 @@
 import { useRef, useState, type ReactNode } from 'react';
-import { Button, Card, Empty, Space, Spin, Switch, Tooltip, Typography } from 'antd';
+import { Button, Card, Empty, Segmented, Space, Spin, Switch, Tooltip, Typography } from 'antd';
 import { DownloadOutlined, UndoOutlined } from '@ant-design/icons';
 import { useI18n } from '../i18n/context';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { useLatencyChartStyle } from '../hooks/useLatencyChartStyle';
 import { useLatencySmooth } from '../hooks/useLatencySmooth';
 import type { ChartPoint } from '../utils/latencyChart';
-import LatencyChart, { CHART_HEIGHT, type LatencyChartHandle } from './LatencyChart';
+import LatencyChart, { CHART_HEIGHT, type ChartVariant, type LatencyChartHandle } from './LatencyChart';
 
 const { Text } = Typography;
 
@@ -51,9 +52,11 @@ interface Props {
 
 /**
  * The trend card both latency pages share: a compact header (what is shown on
- * the left; picker, smooth switch, refresh note, reset and download on the
- * right), then a chart box of fixed height. The smooth switch only changes how
- * the lines are drawn (see smoothPoints) and is remembered per browser.
+ * the left; picker, look switch, smooth switch, refresh note, reset and
+ * download on the right), then a chart box of fixed height. The smooth switch
+ * only changes how the lines are drawn (see smoothPoints), the look switch
+ * picks the chart's option set (modern / classic); both are remembered per
+ * browser.
  */
 export default function LatencyTrendCard({
   title,
@@ -70,6 +73,7 @@ export default function LatencyTrendCard({
   const { t } = useI18n();
   const isMobile = useIsMobile();
   const [smooth, setSmooth] = useLatencySmooth();
+  const [variant, setVariant] = useLatencyChartStyle();
   // Bumped to remount the chart, which is how "reset zoom" returns the slider
   // to the full range.
   const [chartKey, setChartKey] = useState(0);
@@ -84,6 +88,17 @@ export default function LatencyTrendCard({
       extra={
         <Space size={[10, 4]} wrap className="rp-lat-card-tools">
           {isMobile ? null : picker}
+          <Segmented<ChartVariant>
+            size="small"
+            data-testid="latency-chart-style"
+            aria-label={t('latencyChartStyle')}
+            value={variant}
+            onChange={setVariant}
+            options={[
+              { value: 'modern', label: t('latencyStyleModern') },
+              { value: 'classic', label: t('latencyStyleClassic') },
+            ]}
+          />
           <Tooltip title={t('latencySmoothTip')}>
             <label className="rp-lat-smooth">
               <Switch size="small" checked={smooth} onChange={setSmooth} data-testid="latency-smooth" aria-label={t('latencySmooth')} />
@@ -123,6 +138,7 @@ export default function LatencyTrendCard({
             names={names}
             withDate={withDate}
             smooth={smooth}
+            variant={variant}
             onReady={(chart) => {
               chartRef.current = chart;
             }}
