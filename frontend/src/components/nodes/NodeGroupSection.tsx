@@ -77,8 +77,8 @@ export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeV
         className={`rp-status-dot is-${online === 0 ? 'offline' : online === total ? 'online' : 'partial'}`}
         aria-hidden="true"
       />
-      <Text strong style={{ fontSize: 14 }} data-upgrade-obstacle="">{head.group_name || '-'}</Text>
-      <Text type="secondary" style={{ fontSize: 12 }} data-upgrade-obstacle="">#{head.group_id}</Text>
+      <Text style={{ fontSize: 14, fontWeight: 500, letterSpacing: '0.01em', color: 'var(--rp-text)' }} data-upgrade-obstacle="">{head.group_name || '-'}</Text>
+      <span className="rp-mono" style={{ fontSize: 12, color: 'var(--rp-text-tertiary)' }} data-upgrade-obstacle="">#{head.group_id}</span>
       {region ? <Tag data-upgrade-obstacle="">{region}</Tag> : null}
       {lineType ? <Tag color="blue" data-upgrade-obstacle="">{lineType}</Tag> : null}
       <Tag color={online > 0 ? 'green' : undefined} data-upgrade-obstacle="">{online}/{total}</Tag>

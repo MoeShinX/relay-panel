@@ -24,10 +24,20 @@ export const rpTheme: ThemeConfig = {
     colorTextDescription: '#475569',
     colorBorder: '#e2e8f0',
     colorBorderSecondary: '#eaecf0',
-    fontWeightStrong: 600,
+    // Weight 500 (Medium) keeps 12–14px Chinese characters open and razor-sharp
+    // on Windows DirectWrite; 600+ is reserved for >=18px headings/figures.
+    fontWeightStrong: 500,
+    // Western UI fonts first (ClearType-hinted Segoe UI / SF Pro for crisp
+    // Latin, digits, slashes & colons), falling through to PingFang / Noto Sans
+    // SC for CJK glyphs (generic `system-ui` omitted before CJK so Windows does
+    // not hijack Chinese to legacy unhinted SimSun/YaHei).
     fontFamily:
-      '"Noto Sans SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", ' +
-      '"PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif',
+      '-apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", ' +
+      '"Helvetica Neue", Arial, "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC", ' +
+      '"Microsoft YaHei UI", "Microsoft YaHei", sans-serif',
+    fontFamilyCode:
+      '"JetBrains Mono", "Cascadia Mono", "Cascadia Code", "SF Mono", ui-monospace, ' +
+      'Menlo, Consolas, monospace',
   },
   components: {
     Menu: {
@@ -69,9 +79,13 @@ export const rpTheme: ThemeConfig = {
       borderRadiusLG: 12,
       headerFontSize: 15,
     },
+    Tooltip: {
+      colorBgSpotlight: '#18181b',
+      borderRadius: 8,
+    },
     Table: {
       headerBg: '#f8fafc',
-      headerColor: '#475569',
+      headerColor: '#64748b',
       rowHoverBg: '#f5f7ff',
       borderColor: '#eef0f4',
     },

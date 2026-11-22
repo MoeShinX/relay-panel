@@ -10,6 +10,7 @@ import 'flag-icons/css/flag-icons.min.css';
 // small sizes — unlike MiSans which rendered heavy/blurry on Windows.
 import '@fontsource/noto-sans-sc/400.css';
 import '@fontsource/noto-sans-sc/500.css';
+import '@fontsource/noto-sans-sc/600.css';
 import './index.css'
 import App from './App.tsx'
 

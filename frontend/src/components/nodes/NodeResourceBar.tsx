@@ -8,11 +8,11 @@ import type { Tfn } from './types';
 
 const { Text } = Typography;
 
-/** Threshold color for a usage percent: <70 calm indigo, 70-89 amber, >=90 rose. */
+/** Threshold color for a usage percent: <70 green, 70-89 orange, >=90 red. */
 export function usageColor(p: number): string {
-  if (p >= 90) return '#e11d48';
-  if (p >= 70) return '#d97706';
-  return '#6366f1';
+  if (p >= 90) return '#ff4d4f';
+  if (p >= 70) return '#faad14';
+  return '#52c41a';
 }
 
 /** A compact CPU/mem progress bar with a precise-value tooltip. Missing → "-"

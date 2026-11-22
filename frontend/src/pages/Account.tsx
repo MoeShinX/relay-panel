@@ -263,7 +263,7 @@ export default function Account() {
                 <Progress
                   percent={trafficPct}
                   size="small"
-                  strokeColor={trafficExhausted ? '#e11d48' : '#4f46e5'}
+                  strokeColor={trafficPct >= 90 ? '#ff4d4f' : trafficPct >= 70 ? '#faad14' : '#52c41a'}
                   status={trafficExhausted ? 'exception' : 'normal'}
                   style={{ marginBottom: 0 }}
                 />

@@ -59,11 +59,13 @@
   --rp-table-header-bg: #f8fafc;
   --rp-table-row-hover: #f5f7ff;
 
-  /* Font */
-  --rp-font: "Noto Sans SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
-  --rp-font-mono: "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas,
-    "Courier New", monospace;
+  /* Font — Western UI precision stack first (crisp ClearType/SF Pro Latin &
+     digits), then CJK (PingFang SC / HarmonyOS Sans SC / Noto Sans SC). */
+  --rp-font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI",
+    "Helvetica Neue", Arial, "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC",
+    "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --rp-font-mono: "JetBrains Mono", "Cascadia Mono", "Cascadia Code", "SF Mono",
+    ui-monospace, Menlo, Consolas, monospace;
 }
 
 /* ---- Global resets ---- */
@@ -74,27 +76,39 @@ html, body, #root {
   background: var(--rp-bg);
   font-family: var(--rp-font);
   font-size: 14px;
+  line-height: 1.55;
   color: var(--rp-text);
+  /* Never let Chromium/DirectWrite synthesize blurry faux-bold or faux-italic */
+  font-synthesis: none;
+  font-feature-settings: "kern" 1, "liga" 1;
+  text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 /* ---- antd overrides ---- */
 
-/* Table: comfortable rows, subtle header */
+/* Table: crisp Medium headers, no vertical pipe clutter, tabular body figures */
 .ant-table {
   font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
+.ant-table-wrapper .ant-table-thead > tr > th,
 .ant-table-thead > tr > th {
-  /* A header is a word or two: wrapping it ("名\a称", "流\a量") only makes the
-     row taller; the table scrolls sideways when it runs out of room. */
   white-space: nowrap;
   background: var(--rp-table-header-bg) !important;
-  font-weight: 500;
-  color: var(--rp-text-secondary);
+  font-size: 12.5px;
+  font-weight: 500 !important;
+  letter-spacing: 0.02em;
+  color: #64748b !important;
   border-bottom: 1px solid var(--rp-border) !important;
+  padding-block: 10px !important;
+}
+.ant-table-wrapper .ant-table-thead > tr > th:not(:last-child):not(.ant-table-selection-column):not(.ant-table-row-expand-icon-cell):not([colspan])::before {
+  display: none !important;
 }
 .ant-table-tbody > tr > td {
+  color: #1e293b;
   border-bottom: 1px solid var(--rp-border) !important;
 }
 
@@ -157,7 +171,34 @@ html, body, #root {
 .ant-card-head {
   min-height: 48px;
   border-bottom: 1px solid var(--rp-border);
-  font-weight: 600;
+  font-weight: 500;
+}
+.ant-card-head-title {
+  font-weight: 500 !important;
+  letter-spacing: 0.01em;
+}
+
+/* Tooltips: opaque dark slate surface + crisp anti-aliased tabular copy so
+   underlying dark table headers never bleed through behind white tooltip text */
+.ant-tooltip .ant-tooltip-container,
+.ant-tooltip .ant-tooltip-inner {
+  padding: 8px 12px !important;
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.6;
+  letter-spacing: 0.01em;
+  color: #f8fafc;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Progress percentage figures: crisp tabular numerals */
+.ant-progress .ant-progress-indicator,
+.ant-progress .ant-progress-text {
+  font-size: 12px !important;
+  color: #475569;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Standalone tables (not already inside an ant-card or collapse): give them an
@@ -198,6 +239,8 @@ html, body, #root {
   line-height: 20px;
   padding-inline: 8px;
   border-width: 1px;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
 }
 .ant-tag-green,
 .ant-tag-success {
@@ -351,7 +394,9 @@ html, body, #root {
 /* Mono fields in tables */
 .rp-mono {
   font-family: var(--rp-font-mono);
-  font-size: 12px;
+  font-size: 12.5px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
 }
 
@@ -728,11 +773,16 @@ html, body, #root {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
+  html:focus-within {
+    scroll-behavior: auto;
+  }
+  .rp-plan-card.ant-card,
+  .rp-kpi-card.ant-card,
+  .rp-user-pill,
+  .rp-lat-target,
+  .rp-lat-matrix .ant-table-thead > tr > th.rp-lat-col-head {
+    transition: none !important;
+    transform: none !important;
   }
 }
 
@@ -830,25 +880,27 @@ html, body, #root {
   flex-shrink: 0;
 }
 
-/* Status indicator dot */
+/* Status indicator dot — crisp solid edge (no blurry halo smudge) */
 .rp-status-dot {
   display: inline-block;
   width: 7px;
   height: 7px;
   border-radius: 50%;
   margin-inline-end: 6px;
-  vertical-align: 0.05em;
+  vertical-align: 0.06em;
+  flex-shrink: 0;
 }
 .rp-status-dot.is-online {
   background: #10b981;
-  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
+  box-shadow: 0 0 0 2px #d1fae5;
 }
 .rp-status-dot.is-partial {
   background: #f59e0b;
-  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18);
+  box-shadow: 0 0 0 2px #fef3c7;
 }
 .rp-status-dot.is-offline {
   background: #94a3b8;
+  box-shadow: 0 0 0 2px #f1f5f9;
 }
 
 /* Node group Collapse: clean single-card shell without nested grey box clutter */
