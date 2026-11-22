@@ -140,7 +140,10 @@ export default function RedeemCodes() {
         </Space>
       ),
     },
-    { title: t('faceValue'), dataIndex: 'amount', key: 'amount' },
+    {
+      title: t('faceValue'), dataIndex: 'amount', key: 'amount',
+      render: (v: string) => <span className="rp-amount">{v}</span>,
+    },
     { title: t('status'), dataIndex: 'status', key: 'status', render: statusTag },
     {
       title: t('usedBy'), dataIndex: 'used_by', key: 'used_by',

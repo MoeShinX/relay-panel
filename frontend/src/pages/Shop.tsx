@@ -164,7 +164,7 @@ export default function Shop() {
         <Card style={{ marginBottom: 20 }} styles={{ body: { padding: '16px 20px' } }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <Space size={12} wrap>
-              <span className="rp-icon-tile" style={{ width: 36, height: 36, fontSize: 16, background: '#eef2ff', color: '#4f46e5' }}>
+              <span className="rp-icon-tile" style={{ width: 36, height: 36, fontSize: 16, background: '#fffbeb', color: '#d97706' }}>
                 <WalletOutlined />
               </span>
               <div>
@@ -231,21 +231,21 @@ export default function Shop() {
 
                 <div style={{ marginBottom: 20 }}>
                   <div className="rp-plan-feature">
-                    <CheckCircleFilled style={{ color: '#4f46e5', marginTop: 4, fontSize: 13 }} />
+                    <CheckCircleFilled style={{ color: '#7c6ee6', marginTop: 4, fontSize: 13 }} />
                     <span>{t('planTraffic')}: <Text strong>{p.traffic > 0 ? formatBytes(p.traffic) : t('unlimited')}</Text></span>
                   </div>
                   <div className="rp-plan-feature">
-                    <CheckCircleFilled style={{ color: '#4f46e5', marginTop: 4, fontSize: 13 }} />
+                    <CheckCircleFilled style={{ color: '#7c6ee6', marginTop: 4, fontSize: 13 }} />
                     <span>{t('planMaxRules')}: <Text strong>{p.max_rules}</Text></span>
                   </div>
                   {p.duration_days > 0 && (
                     <div className="rp-plan-feature">
-                      <CheckCircleFilled style={{ color: '#4f46e5', marginTop: 4, fontSize: 13 }} />
+                      <CheckCircleFilled style={{ color: '#7c6ee6', marginTop: 4, fontSize: 13 }} />
                       <span>{t('planDuration')}: <Text strong>{p.duration_days} {t('days')}</Text></span>
                     </div>
                   )}
                   <div className="rp-plan-feature">
-                    <CheckCircleFilled style={{ color: '#4f46e5', marginTop: 4, fontSize: 13 }} />
+                    <CheckCircleFilled style={{ color: '#7c6ee6', marginTop: 4, fontSize: 13 }} />
                     <span>
                       {t('planGrantGroups')}:{' '}
                       {p.grant_all_groups ? (

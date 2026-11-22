@@ -6,33 +6,34 @@
 
 :root {
   /* Layout */
-  --rp-sidebar-bg: #111318;
-  --rp-sidebar-width: 228px;
-  --rp-header-height: 56px;
+  --rp-sidebar-bg: #ecedf0;
+  --rp-sidebar-border: #dcdfe5;
+  --rp-sidebar-width: 224px;
+  --rp-header-height: 52px;
   --rp-content-padding: 24px;
   /* No cap: wide screens use the full width, as before the refresh (tables such
      as the node list would otherwise scroll sideways). */
   --rp-content-max-width: none;
 
-  /* Colors — cool architectural slate + crisp white surfaces */
-  --rp-bg: #f4f5f8;
+  /* Colors — neutral Zinc monochrome + pure white surfaces */
+  --rp-bg: #f6f6f7;
   --rp-card-bg: #ffffff;
-  --rp-border: #e6e8ee;
-  --rp-border-strong: #d5d9e2;
-  --rp-text: #0f172a;
-  --rp-text-secondary: #475569;
-  --rp-text-tertiary: #64748b;
+  --rp-border: #e4e4e7;
+  --rp-border-strong: #d4d4d8;
+  --rp-text: #09090b;
+  --rp-text-secondary: #52525b;
+  --rp-text-tertiary: #71717a;
 
   /* Offline-node palette (WCAG AA contrast preserved) */
-  --rp-node-offline-text: #64748b;
-  --rp-node-offline-bg: #f8f9fb;
-  --rp-node-offline-bar: #cbd5e1;
+  --rp-node-offline-text: #71717a;
+  --rp-node-offline-bg: #fafafa;
+  --rp-node-offline-bar: #d4d4d8;
 
-  /* Accents — Linear / Stripe indigo */
-  --rp-primary: #4f46e5;
-  --rp-primary-hover: #4338ca;
-  --rp-primary-bg: #eef2ff;
-  --rp-primary-border: #c7d2fe;
+  /* Accents — soft desaturated lilac-lavender */
+  --rp-primary: #7c6ee6;
+  --rp-primary-hover: #6c5dd8;
+  --rp-primary-bg: #f6f5fd;
+  --rp-primary-border: #ded9fa;
   --rp-success: #059669;
   --rp-success-bg: #ecfdf5;
   --rp-warning: #d97706;
@@ -40,9 +41,9 @@
   --rp-danger: #e11d48;
   --rp-danger-bg: #fff1f2;
 
-  /* Tags — desaturated semantic palette */
-  --rp-tag-tcp: #4f46e5;
-  --rp-tag-udp: #7c3aed;
+  /* Tags — desaturated neutral & semantic palette */
+  --rp-tag-tcp: #27272a;
+  --rp-tag-udp: #52525b;
   --rp-tag-in: #059669;
   --rp-tag-out: #0d9488;
   --rp-tag-admin: #d97706;
@@ -51,13 +52,13 @@
   --rp-radius-lg: 14px;
   --rp-radius: 12px;
   --rp-radius-sm: 8px;
-  --rp-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.03), 0 2px 6px rgba(15, 23, 42, 0.02);
-  --rp-shadow: 0 4px 16px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.04);
-  --rp-shadow-lg: 0 12px 36px rgba(15, 23, 42, 0.08), 0 2px 8px rgba(15, 23, 42, 0.04);
+  --rp-shadow-sm: 0 1px 2px rgba(9, 9, 11, 0.03), 0 1px 4px rgba(9, 9, 11, 0.02);
+  --rp-shadow: 0 4px 14px rgba(9, 9, 11, 0.05), 0 1px 3px rgba(9, 9, 11, 0.03);
+  --rp-shadow-lg: 0 12px 36px rgba(9, 9, 11, 0.08), 0 2px 8px rgba(9, 9, 11, 0.04);
 
   /* Table */
-  --rp-table-header-bg: #f8fafc;
-  --rp-table-row-hover: #f5f7ff;
+  --rp-table-header-bg: #fafafa;
+  --rp-table-row-hover: #f9f9fb;
 
   /* Font — Western UI precision stack first (crisp ClearType/SF Pro Latin &
      digits), then CJK (PingFang SC / HarmonyOS Sans SC / Noto Sans SC). */
@@ -215,23 +216,23 @@ html, body, #root {
   margin: 12px 16px !important;
 }
 
-/* Buttons: subtle tactile depth on primary, crisp hairline on default */
+/* Buttons: soft muted lavender primary, crisp hairline default */
 .ant-btn {
   border-radius: var(--rp-radius-sm);
   font-size: 13px;
   font-weight: 500;
 }
 .ant-btn-primary:not(:disabled):not(.ant-btn-dangerous):not(.ant-btn-background-ghost) {
-  background: linear-gradient(180deg, #5b52f0 0%, #4f46e5 100%);
-  border-color: #483fe0;
-  box-shadow: 0 1px 2px rgba(79, 70, 229, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  background: linear-gradient(180deg, #8678ec 0%, #7c6ee6 100%);
+  border-color: #7465e0;
+  box-shadow: 0 1px 2px rgba(124, 110, 230, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
 .ant-btn-primary:not(:disabled):not(.ant-btn-dangerous):not(.ant-btn-background-ghost):hover {
-  background: linear-gradient(180deg, #4f46e5 0%, #4338ca 100%) !important;
-  border-color: #3f36c5 !important;
+  background: linear-gradient(180deg, #7c6ee6 0%, #6c5dd8 100%) !important;
+  border-color: #6555d0 !important;
 }
 
-/* Desaturated Linear-style pill badges — tames Antd's rainbow preset tags */
+/* Neutralized pill badges — zero blue/purple rainbow clutter */
 .ant-tag {
   border-radius: 6px;
   font-size: 12px;
@@ -249,16 +250,20 @@ html, body, #root {
   border-color: #a7f3d0 !important;
 }
 .ant-tag-blue,
-.ant-tag-geekblue,
 .ant-tag-processing {
-  color: #4338ca !important;
+  color: #0369a1 !important;
+  background: #f0f9ff !important;
+  border-color: #bae6fd !important;
+}
+.ant-tag-geekblue {
+  color: #4f46e5 !important;
   background: #eef2ff !important;
   border-color: #c7d2fe !important;
 }
 .ant-tag-purple {
-  color: #6d28d9 !important;
-  background: #f5f3ff !important;
-  border-color: #ddd6fe !important;
+  color: #6350c6 !important;
+  background: #f6f4fe !important;
+  border-color: #dfd9fa !important;
 }
 .ant-tag-gold,
 .ant-tag-orange,
@@ -288,30 +293,50 @@ html, body, #root {
   border-radius: 10px;
 }
 
-/* Air between a dialog's title and its first field: with none, "编辑分组" sat
-   on top of the first label. */
 .ant-modal-header {
   margin-bottom: 16px;
 }
 
-/* Sidebar refinement: subtle right border, sleek collapse trigger, active pill */
+/* Clean Neutral Cool-Grey Sidebar + crisp white floating active pill */
 .ant-layout-sider {
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  border-right: 1px solid var(--rp-sidebar-border);
+  background: var(--rp-sidebar-bg) !important;
 }
 .ant-layout-sider-trigger {
-  background: #111318 !important;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
-  color: #94a3b8 !important;
+  background: var(--rp-sidebar-bg) !important;
+  border-top: 1px solid var(--rp-sidebar-border);
+  border-right: 1px solid var(--rp-sidebar-border);
+  color: #3f3f46 !important;
   transition: color 0.15s, background-color 0.15s;
 }
 .ant-layout-sider-trigger:hover {
-  color: #f8fafc !important;
-  background: rgba(255, 255, 255, 0.04) !important;
+  color: #09090b !important;
+  background: rgba(24, 24, 27, 0.06) !important;
 }
-.ant-menu-dark .ant-menu-item-selected {
+.ant-menu-light.ant-menu-root.ant-menu-inline {
+  background: transparent !important;
+  border-inline-end: 0 !important;
+}
+.ant-menu-light .ant-menu-item,
+.ant-menu-light .ant-menu-submenu-title {
   font-weight: 500;
-  box-shadow: inset 0 0 0 1px rgba(129, 140, 248, 0.28);
+}
+.ant-menu-light .ant-menu-item .ant-menu-item-icon,
+.ant-menu-light .ant-menu-submenu-title .ant-menu-item-icon {
+  color: #3f3f46;
+}
+.ant-menu-light .ant-menu-item-selected {
+  font-weight: 600;
+  background: #ffffff !important;
+  color: #09090b !important;
+  box-shadow: 0 1px 3px rgba(9, 9, 11, 0.09), 0 1px 2px rgba(9, 9, 11, 0.05), inset 0 0 0 1px #e2e4ea;
+}
+.ant-menu-light .ant-menu-item-selected .ant-menu-item-icon {
+  color: #6c5dd8 !important;
+}
+.ant-menu-light .ant-menu-submenu-selected > .ant-menu-submenu-title {
+  color: #09090b !important;
+  font-weight: 600;
 }
 
 /* Form labels */
@@ -338,13 +363,26 @@ html, body, #root {
 /* ---- Layout helpers ---- */
 .rp-page-title {
   font-size: 18px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--rp-text);
   margin: 0 0 16px 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+}
+.rp-page-title > .anticon {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: #f3f0fc;
+  color: #6c5dd8;
+  border: 1px solid #e4dff8;
+  font-size: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 /* Title left, actions right. When the row is too narrow the actions drop
@@ -589,45 +627,75 @@ html, body, #root {
 .rp-lat-matrix .ant-table-thead > tr > th.rp-lat-col-head {
   cursor: pointer;
   vertical-align: top;
-  background: #f8fafc !important;
-  box-shadow: inset 0 2.5px 0 transparent;
+  background: #fafafa !important;
+  box-shadow: inset 0 2px 0 transparent;
   transition: background-color 0.15s, box-shadow 0.15s;
 }
 .rp-lat-matrix .ant-table-thead > tr > th.rp-lat-col-head:hover {
-  background: #f1f5f9 !important;
+  background: #f4f4f5 !important;
 }
 .rp-lat-matrix .ant-table-thead > tr > th.rp-lat-col-head.is-active {
-  background: var(--rp-primary-bg, #eef2ff) !important;
-  box-shadow: inset 0 2.5px 0 var(--rp-primary, #4f46e5),
-    inset 1px 0 0 rgba(79, 70, 229, 0.16),
-    inset -1px 0 0 rgba(79, 70, 229, 0.16);
+  background: var(--rp-primary-bg, #f6f5fd) !important;
+  box-shadow: inset 0 2px 0 var(--rp-primary, #7c6ee6),
+    inset 1px 0 0 #e2defb,
+    inset -1px 0 0 #e2defb;
 }
 .rp-lat-matrix .ant-table-tbody > tr > td.rp-lat-col-cell {
   vertical-align: middle;
   padding-block: 10px !important;
   transition: background-color 0.15s, box-shadow 0.15s;
 }
+/* Whitespace-first matrix: healthy cells stay crisp white; only anomalies get a subtle tint */
 .rp-lat-matrix .ant-table-tbody > tr > td.rp-lat-col-cell.is-heat-good {
-  background: rgba(34, 197, 94, 0.055);
+  background: transparent;
 }
 .rp-lat-matrix .ant-table-tbody > tr > td.rp-lat-col-cell.is-heat-warn {
-  background: rgba(245, 158, 11, 0.075);
+  background: rgba(245, 158, 11, 0.045);
 }
 .rp-lat-matrix .ant-table-tbody > tr > td.rp-lat-col-cell.is-heat-bad {
-  background: rgba(239, 68, 68, 0.08);
+  background: rgba(239, 68, 68, 0.055);
 }
 .rp-lat-matrix .ant-table-tbody > tr > td.rp-lat-col-cell.is-active {
-  box-shadow: inset 1.5px 0 0 rgba(79, 70, 229, 0.28),
-    inset -1.5px 0 0 rgba(79, 70, 229, 0.28);
+  background: rgba(124, 110, 230, 0.025);
+  box-shadow: inset 1px 0 0 #e9e6fc,
+    inset -1px 0 0 #e9e6fc;
 }
 .rp-lat-matrix .ant-table-tbody > tr:hover > td.rp-lat-col-cell.is-heat-good {
-  background: rgba(34, 197, 94, 0.10) !important;
+  background: #fafafa !important;
 }
 .rp-lat-matrix .ant-table-tbody > tr:hover > td.rp-lat-col-cell.is-heat-warn {
-  background: rgba(245, 158, 11, 0.13) !important;
+  background: rgba(245, 158, 11, 0.085) !important;
 }
 .rp-lat-matrix .ant-table-tbody > tr:hover > td.rp-lat-col-cell.is-heat-bad {
-  background: rgba(239, 68, 68, 0.13) !important;
+  background: rgba(239, 68, 68, 0.095) !important;
+}
+.rp-lat-node-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #09090b;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: color 0.15s;
+}
+.rp-lat-node-link svg {
+  color: #a1a1aa;
+  transition: transform 0.15s, color 0.15s;
+}
+.rp-lat-node-link:hover {
+  color: #18181b;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.rp-lat-node-link:hover svg {
+  color: #18181b;
+  transform: translate(1px, -1px);
 }
 .rp-lat-colname {
   font-weight: 500;
@@ -734,22 +802,22 @@ html, body, #root {
   transition: background-color 0.15s, border-color 0.15s, box-shadow 0.15s;
 }
 .rp-lat-target[data-card-level='good'] {
-  background: linear-gradient(180deg, rgba(34, 197, 94, 0.045) 0%, #ffffff 65%);
+  background: #ffffff;
 }
 .rp-lat-target[data-card-level='warn'] {
-  background: linear-gradient(180deg, rgba(245, 158, 11, 0.065) 0%, #ffffff 65%);
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.05) 0%, #ffffff 65%);
 }
 .rp-lat-target[data-card-level='bad'] {
-  background: linear-gradient(180deg, rgba(239, 68, 68, 0.075) 0%, #ffffff 65%);
+  background: linear-gradient(180deg, rgba(239, 68, 68, 0.06) 0%, #ffffff 65%);
 }
 .rp-lat-target:hover {
-  border-color: #cbd5e1;
+  border-color: #a1a1aa;
   box-shadow: var(--rp-shadow-sm);
 }
 .rp-lat-target.is-selected {
-  background: var(--rp-primary-bg, #eef2ff) !important;
-  border-color: var(--rp-primary-border, #c7d2fe) !important;
-  box-shadow: inset 0 2.5px 0 var(--rp-primary, #4f46e5);
+  background: var(--rp-primary-bg, #f6f5fd) !important;
+  border-color: var(--rp-primary-border, #ded9fa) !important;
+  box-shadow: inset 0 2px 0 var(--rp-primary, #7c6ee6);
 }
 .rp-lat-target-value {
   font-size: 22px;
@@ -768,7 +836,7 @@ html, body, #root {
   border-radius: 2px;
 }
 
-/* KPI summary strip above group trend chart */
+/* Interactive KPI legend pills above group trend chart */
 .rp-lat-kpi-strip {
   display: flex;
   flex-wrap: wrap;
@@ -783,9 +851,27 @@ html, body, #root {
   gap: 7px;
   padding: 4px 10px;
   border-radius: 8px;
-  background: #f8fafc;
+  background: #fafafa;
   border: 1px solid var(--rp-border);
+  font-family: inherit;
   font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: opacity 0.15s, border-color 0.15s, background-color 0.15s;
+}
+.rp-lat-kpi-pill:hover {
+  border-color: #c7bff4;
+  background: #f6f5fd;
+  opacity: 1;
+}
+.rp-lat-kpi-pill.is-focused {
+  background: #f6f5fd;
+  border-color: #7c6ee6;
+  box-shadow: 0 1px 3px rgba(124, 110, 230, 0.16);
+}
+.rp-lat-kpi-pill.is-muted {
+  opacity: 0.48;
+  background: transparent;
 }
 .rp-lat-kpi-swatch {
   width: 8px;
@@ -881,7 +967,7 @@ html, body, #root {
   color: var(--ant-color-text-tertiary, #6b7280);
 }
 
-/* Recent status: Better Stack / Uptime Kuma vertical heartbeat pillars */
+/* Recent status: variable-height rhythmic heartbeat pillars + SLA badge */
 .rp-lat-strip-card {
   padding: 12px 16px;
   border-radius: 10px;
@@ -891,19 +977,163 @@ html, body, #root {
 .rp-lat-strip {
   display: flex;
   gap: 3px;
+  height: 26px;
   margin-top: 8px;
-  align-items: center;
+  align-items: flex-end;
 }
 .rp-lat-slice {
   flex: 1;
   min-width: 0;
-  height: 22px;
-  border-radius: 3.5px;
+  height: 100%;
+  border-radius: 3px 3px 2px 2px;
+  transform-origin: bottom center;
   transition: transform 0.12s ease, filter 0.12s ease;
 }
 .rp-lat-slice:hover {
-  transform: scaleY(1.16);
-  filter: brightness(0.95);
+  transform: scaleY(1.12);
+  filter: brightness(0.94);
+}
+.rp-lat-sla-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  height: 18px;
+  border-radius: 999px;
+  font-family: var(--rp-font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+}
+.rp-lat-sla-pill.is-good {
+  background: #ecfdf5;
+  color: #047857;
+  border-color: #bbf7d0;
+}
+.rp-lat-sla-pill.is-warn {
+  background: #fffbeb;
+  color: #b45309;
+  border-color: #fde68a;
+}
+.rp-lat-sla-pill.is-bad {
+  background: #fff1f2;
+  color: #be123c;
+  border-color: #fecdd3;
+}
+
+/* Group Latency 4-card top health snapshot bar */
+.rp-lat-snapshot-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+@media (max-width: 1100px) {
+  .rp-lat-snapshot-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 600px) {
+  .rp-lat-snapshot-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.rp-lat-snap-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 12px 15px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid var(--rp-border);
+  box-shadow: var(--rp-shadow-sm);
+  text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.rp-lat-snap-card.is-clickable {
+  cursor: pointer;
+}
+.rp-lat-snap-card.is-clickable:hover {
+  border-color: #c7bff4;
+  box-shadow: var(--rp-shadow);
+}
+.rp-lat-snap-label {
+  font-size: 12px;
+  color: var(--rp-text-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.rp-lat-snap-main {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--rp-text);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  line-height: 1.35;
+}
+.rp-lat-carrier-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.rp-lat-carrier-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: #f8fafc;
+  border: 1px solid var(--rp-border);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+.rp-lat-carrier-stat:hover,
+.rp-lat-carrier-stat.is-active {
+  background: #f6f5fd;
+  border-color: #c7bff4;
+}
+
+/* Matrix cell inline proportional micro-bar & overall health ratio bar */
+.rp-lat-microbar {
+  height: 3px;
+  width: 100%;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.05);
+  overflow: hidden;
+}
+.rp-lat-microbar > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+.rp-lat-overall-bar {
+  display: flex;
+  height: 4px;
+  width: 100%;
+  margin-top: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #f1f5f9;
+  gap: 1px;
+}
+.rp-lat-mini-strip {
+  display: flex;
+  align-items: flex-end;
+  height: 12px;
+  gap: 2px;
+  margin-top: 8px;
+}
+.rp-lat-mini-slice {
+  flex: 1;
+  border-radius: 2px;
 }
 .rp-lat-slice[data-level='none'] {
   background: #eef2f6 !important;
@@ -981,7 +1211,7 @@ html, body, #root {
   margin: 0 auto;
 }
 
-/* Auth pages: subtle ambient indigo glow + architectural dot grid */
+/* Auth pages: subtle architectural dot grid + neutral carbon light */
 .rp-auth-shell {
   position: relative;
   display: flex;
@@ -992,16 +1222,15 @@ html, body, #root {
   box-sizing: border-box;
   background-color: var(--rp-bg);
   background-image:
-    radial-gradient(ellipse 70% 50% at 50% -10%, rgba(79, 70, 229, 0.13), transparent 70%),
-    radial-gradient(ellipse 50% 40% at 85% 95%, rgba(124, 58, 237, 0.07), transparent 70%),
-    radial-gradient(#cbd5e1 0.85px, transparent 0.85px);
-  background-size: 100% 100%, 100% 100%, 24px 24px;
+    radial-gradient(ellipse 70% 50% at 50% -10%, rgba(124, 110, 230, 0.10), transparent 70%),
+    radial-gradient(#d4d4d8 0.85px, transparent 0.85px);
+  background-size: 100% 100%, 24px 24px;
 }
 .rp-auth-card.ant-card {
   width: 100%;
   max-width: 408px;
   border-radius: 16px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
+  border: 1px solid var(--rp-border);
   box-shadow: var(--rp-shadow-lg);
   background: rgba(255, 255, 255, 0.96);
   backdrop-filter: blur(12px);
@@ -1015,11 +1244,11 @@ html, body, #root {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 34px;
+  height: 32px;
   padding: 3px 10px 3px 4px;
   border-radius: 999px;
   border: 1px solid var(--rp-border);
-  background: #f8fafc;
+  background: #fafafa;
   color: var(--rp-text);
   font-size: 13px;
   font-weight: 500;
@@ -1027,14 +1256,14 @@ html, body, #root {
   transition: background-color 0.15s, border-color 0.15s;
 }
 .rp-user-pill:hover {
-  background: #eef2ff;
+  background: #f6f5fd;
   border-color: var(--rp-primary-border);
 }
 .rp-user-avatar {
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+  background: #7c6ee6;
   color: #ffffff;
   font-size: 12px;
   font-weight: 600;
@@ -1097,6 +1326,134 @@ html, body, #root {
   border-radius: var(--rp-radius);
   box-shadow: var(--rp-shadow-sm);
   overflow: hidden;
+}
+
+/* NodeStatus top telemetry pills & group throughput badges */
+.rp-telemetry-bar {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.rp-telemetry-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #ffffff;
+  border: 1px solid var(--rp-border);
+  box-shadow: 0 1px 2px rgba(9, 9, 11, 0.03);
+  font-weight: 500;
+  color: var(--rp-text);
+}
+.rp-telemetry-pill.is-online {
+  background: #ecfdf5;
+  border-color: #bbf7d0;
+  color: #065f46;
+}
+.rp-telemetry-pill.is-partial {
+  background: #fffbeb;
+  border-color: #fde68a;
+  color: #92400e;
+}
+.rp-telemetry-pill.is-offline {
+  background: #f4f4f5;
+  border-color: #e4e4e7;
+  color: #52525b;
+}
+.rp-telemetry-pill.is-total {
+  background: #ffffff;
+  border-color: var(--rp-border);
+  color: var(--rp-text);
+}
+.rp-telemetry-label {
+  color: var(--rp-text-secondary);
+  font-weight: 500;
+}
+.rp-rate-up,
+.rp-rate-down {
+  color: #18181b;
+  font-family: var(--rp-font-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.rp-rate-up .anticon {
+  color: #10b981;
+  font-size: 11.5px;
+}
+.rp-rate-down .anticon {
+  color: #7c6ee6;
+  font-size: 11.5px;
+}
+.rp-group-rate-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 6px;
+  background: #f8f9fb;
+  border: 1px solid #e5e7eb;
+}
+.rp-monitor-btn.ant-btn {
+  color: #5b4cc4;
+  background: #f6f5fd;
+  border-color: #dcd7f8;
+  font-weight: 500;
+}
+.rp-monitor-btn.ant-btn:hover {
+  color: #4636b3 !important;
+  background: #edeafb !important;
+  border-color: #c7bff4 !important;
+}
+
+/* Unified pastel micro-badges for ports, amounts, and counts across tables */
+.rp-port-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: #f6f5fd;
+  border: 1px solid #e4dff8;
+  color: #5b4cc4;
+  font-family: var(--rp-font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+.rp-amount {
+  font-family: var(--rp-font-mono);
+  font-weight: 600;
+  color: #b45309;
+  font-variant-numeric: tabular-nums;
+}
+.rp-amount.is-zero {
+  font-weight: 400;
+  color: var(--rp-text-tertiary);
+}
+.rp-count-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 7px;
+  height: 21px;
+  border-radius: 6px;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  color: #0369a1;
+  font-family: var(--rp-font-mono);
+  font-size: 12px;
+  font-weight: 500;
+}
+.rp-count-pill.is-zero {
+  background: #f4f4f5;
+  border-color: #e4e4e7;
+  color: var(--rp-text-tertiary);
+  font-weight: 400;
 }
 .rp-node-collapse > .ant-collapse-item {
   border-bottom: 0 !important;

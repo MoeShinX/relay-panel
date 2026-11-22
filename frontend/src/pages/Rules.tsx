@@ -780,11 +780,11 @@ const IMPORT_DEFAULTS = {
       render: (_: unknown, r: ForwardRule) => {
         const g = groupInfo.get(r.device_group_in);
         return g
-          ? <Tag>{g.name}</Tag>
+          ? <Tag color="cyan">{g.name}</Tag>
           : <Text type="secondary">{t('unknownGroup')} (#{r.device_group_in})</Text>;
       },
     },
-    { title: t('name'), dataIndex: 'name', key: 'name' },
+    { title: t('name'), dataIndex: 'name', key: 'name', render: (v: string) => <Text strong>{v}</Text> },
     {
       title: t('listenIp'), key: 'listen_ip', width: 160,
       render: (_: unknown, r: ForwardRule) => {
@@ -797,7 +797,7 @@ const IMPORT_DEFAULTS = {
         );
       },
     },
-    { title: t('listenPort'), dataIndex: 'listen_port', key: 'listen_port', render: (v: number) => <span className="rp-mono">{v}</span> },
+    { title: t('listenPort'), dataIndex: 'listen_port', key: 'listen_port', render: (v: number) => <span className="rp-port-pill">{v}</span> },
     {
       title: t('protocol'), dataIndex: 'protocol', key: 'protocol',
       render: (p: string, r: ForwardRule) => (
@@ -859,7 +859,11 @@ const IMPORT_DEFAULTS = {
     {
       title: t('traffic'), dataIndex: 'traffic_used', key: 'traffic_used',
       sorter: (a: ForwardRule, b: ForwardRule) => (a.traffic_used ?? 0) - (b.traffic_used ?? 0),
-      render: (v: number) => <span style={{ whiteSpace: 'nowrap' }}>{formatBytes(v)}</span>,
+      render: (v: number) => (
+        <span className="rp-mono" style={{ whiteSpace: 'nowrap', color: v > 0 ? '#0f766e' : 'var(--rp-text-tertiary)' }}>
+          {formatBytes(v)}
+        </span>
+      ),
     },
     {
       // v1.2.14: no fixed width, and the buttons wrap, as on the users page.

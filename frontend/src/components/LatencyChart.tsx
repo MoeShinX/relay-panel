@@ -53,6 +53,8 @@ interface Props {
   smooth?: boolean;
   /** Which look to draw. */
   variant?: ChartVariant;
+  /** Hide internal legend when an external interactive legend strip is shown above. */
+  hideLegend?: boolean;
   onReady: (chart: LatencyChartHandle) => void;
 }
 
@@ -61,6 +63,7 @@ interface Ctx {
   plotted: ChartPoint[];
   names: Map<string, string>;
   withDate: boolean;
+  hideLegend: boolean;
   tip: (key: string) => string;
 }
 
@@ -94,7 +97,7 @@ function lossText(d: ChartPoint, labels: TooltipLabels): string {
  * a preview. The tooltip lists the lines at the hovered time, highest first: the
  * bucket's own mean (not the smoothed value), loss and retransmit share.
  */
-function modernOptions({ plotted, names, withDate, tip }: Ctx) {
+function modernOptions({ plotted, names, withDate, hideLegend, tip }: Ctx) {
   const yMin = yDomainMin(plotted);
   const labels = tooltipLabels(tip);
   return {
@@ -110,13 +113,13 @@ function modernOptions({ plotted, names, withDate, tip }: Ctx) {
         size: 16,
         trackSize: 4,
         trackFill: 'rgba(148, 163, 184, 0.16)',
-        selectionFill: 'rgba(79, 70, 229, 0.26)',
+        selectionFill: 'rgba(24, 24, 27, 0.22)',
         selectionFillOpacity: 1,
         showLabel: false,
         handleIconSize: 9,
       },
     },
-    legend: {
+    legend: hideLegend ? false : {
       color: {
         position: 'top',
         layout: { justifyContent: 'flex-end' },
@@ -190,7 +193,7 @@ function modernOptions({ plotted, names, withDate, tip }: Ctx) {
  * is the retransmit-free one the API returns now). The chart box is the same
  * fixed height as in the modern look.
  */
-function classicOptions({ plotted, names, withDate, tip }: Ctx) {
+function classicOptions({ plotted, names, withDate, hideLegend, tip }: Ctx) {
   const labels = tooltipLabels(tip);
   return {
     scale: { x: { type: 'time' }, y: { nice: true, domainMin: 0 } },
@@ -200,12 +203,12 @@ function classicOptions({ plotted, names, withDate, tip }: Ctx) {
         size: 18,
         trackSize: 5,
         trackFill: 'rgba(148, 163, 184, 0.16)',
-        selectionFill: 'rgba(79, 70, 229, 0.22)',
+        selectionFill: 'rgba(24, 24, 27, 0.18)',
         selectionFillOpacity: 1,
         handleIconSize: 10,
       },
     },
-    legend: {
+    legend: hideLegend ? false : {
       color: {
         position: 'top',
         layout: { justifyContent: 'flex-end' },
@@ -267,14 +270,15 @@ export default function LatencyChart({
   withDate,
   smooth = false,
   variant = 'modern',
+  hideLegend = false,
   onReady,
 }: Props) {
   const { t } = useI18n();
   const plotted = useMemo(() => (smooth ? smoothPoints(points) : points), [points, smooth]);
   const { scale, ...rest } = useMemo(() => {
-    const ctx: Ctx = { plotted, names, withDate, tip: t };
+    const ctx: Ctx = { plotted, names, withDate, hideLegend, tip: t };
     return variant === 'classic' ? classicOptions(ctx) : modernOptions(ctx);
-  }, [variant, plotted, names, withDate, t]);
+  }, [variant, plotted, names, withDate, hideLegend, t]);
   return (
     <Line
       /* @ant-design/charts v2 (G2 v5) options. */

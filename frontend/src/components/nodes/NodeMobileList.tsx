@@ -191,7 +191,7 @@ function MobileUpgradeAffordance({
       return (
         <Tooltip title={t('nodeUpgradeTip').replace('{v}', latestNodeVersion)}>
           <span style={tapStyle} aria-label={t('nodeUpgradeTip').replace('{v}', latestNodeVersion)} role="img">
-            <CloudDownloadOutlined style={{ color: 'var(--ant-color-primary, #6366f1)' }} />
+            <CloudDownloadOutlined style={{ color: 'var(--ant-color-primary, #18181b)' }} />
           </span>
         </Tooltip>
       );

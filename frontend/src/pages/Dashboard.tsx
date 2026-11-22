@@ -201,7 +201,9 @@ export default function Dashboard() {
     {
       title: t('groupNodes'), key: 'nodes', width: 90,
       render: (_: unknown, r: ReturnType<typeof aggregateNodesByGroup>[number]) => (
-        <span className="rp-mono">{r.online_nodes}/{r.total_nodes}</span>
+        <Tag color={r.online_nodes > 0 ? 'green' : undefined} style={{ marginInlineEnd: 0 }}>
+          <span className="rp-mono">{r.online_nodes}/{r.total_nodes}</span>
+        </Tag>
       ),
     },
     {
@@ -210,39 +212,31 @@ export default function Dashboard() {
         const c = rulesByGroup.get(r.group_id) ?? { enabled: 0, total: 0 };
         return (
           <Tooltip title={t('groupRulesHint')}>
-            <span className="rp-mono">{c.enabled}/{c.total}</span>
+            <span className={`rp-count-pill${c.total === 0 ? ' is-zero' : ''}`}>{c.enabled}/{c.total}</span>
           </Tooltip>
         );
       },
     },
     {
       title: t('connections'), dataIndex: 'connections', key: 'connections', width: 90,
-      render: (v: number) => <span className="rp-mono">{v}</span>,
+      render: (v: number) => <span className={`rp-count-pill${!v ? ' is-zero' : ''}`}>{v}</span>,
     },
     {
-      title: t('groupRate'), key: 'rate', width: 180,
+      title: t('groupRate'), key: 'rate', width: 196,
       render: (_: unknown, r: ReturnType<typeof aggregateNodesByGroup>[number]) => (
-        <span className="rp-mono" style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 8 }}>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            <ArrowUpOutlined /> {formatBps(r.upload_bps)}
-          </Text>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            <ArrowDownOutlined /> {formatBps(r.download_bps)}
-          </Text>
+        <span className="rp-mono" style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 10 }}>
+          <span className="rp-rate-up"><ArrowUpOutlined /> {formatBps(r.upload_bps)}</span>
+          <span className="rp-rate-down"><ArrowDownOutlined /> {formatBps(r.download_bps)}</span>
         </span>
       ),
     },
     {
-      title: t('groupTraffic'), key: 'traffic', width: 200,
+      title: t('groupTraffic'), key: 'traffic', width: 210,
       render: (_: unknown, r: ReturnType<typeof aggregateNodesByGroup>[number]) => (
         <Tooltip title={t('groupTrafficHint')}>
-          <span className="rp-mono" style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 8 }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              <ArrowUpOutlined /> {formatBytes(r.upload_bytes)}
-            </Text>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              <ArrowDownOutlined /> {formatBytes(r.download_bytes)}
-            </Text>
+          <span className="rp-mono" style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 10 }}>
+            <span className="rp-rate-up"><ArrowUpOutlined /> {formatBytes(r.upload_bytes)}</span>
+            <span className="rp-rate-down"><ArrowDownOutlined /> {formatBytes(r.download_bytes)}</span>
           </span>
         </Tooltip>
       ),
@@ -344,7 +338,7 @@ export default function Dashboard() {
                 <div style={{ fontSize: 13, color: 'var(--rp-text-secondary)', marginBottom: 6 }}>{t('users')}</div>
                 <div className="rp-mono" style={{ fontSize: 30, fontWeight: 600, color: 'var(--rp-text)', lineHeight: 1.15 }}>{stats.users}</div>
               </div>
-              <span className="rp-icon-tile" style={{ background: '#eef2ff', color: '#4f46e5' }}>
+              <span className="rp-icon-tile" style={{ background: '#f6f5fd', color: '#7c6ee6' }}>
                 <UserOutlined />
               </span>
             </div>
@@ -357,7 +351,7 @@ export default function Dashboard() {
                 <div style={{ fontSize: 13, color: 'var(--rp-text-secondary)', marginBottom: 6 }}>{t('forwardRules')}</div>
                 <div className="rp-mono" style={{ fontSize: 30, fontWeight: 600, color: 'var(--rp-text)', lineHeight: 1.15 }}>{stats.rules}</div>
               </div>
-              <span className="rp-icon-tile" style={{ background: '#f5f3ff', color: '#7c3aed' }}>
+              <span className="rp-icon-tile" style={{ background: '#f0f9ff', color: '#0284c7' }}>
                 <ApiOutlined />
               </span>
             </div>

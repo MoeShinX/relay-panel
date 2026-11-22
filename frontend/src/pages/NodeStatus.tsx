@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Spin, Result, Empty, message, Typography, Space } from 'antd';
+import { Spin, Result, Empty, message, Space } from 'antd';
 import {
   DndContext,
   KeyboardSensor,
@@ -364,18 +364,28 @@ export default function NodeStatus() {
       <div ref={pageHeaderRef} className="rp-page-header rp-page-header-sticky">
         <h2 className="rp-page-title" data-upgrade-obstacle=""><LineChartOutlined /> {title}</h2>
         <Space wrap size={[12, 8]}>
-          {all && all.total > 0 && (
-            <Typography.Text type="secondary" style={{ fontSize: 13 }} data-testid="all-nodes-rate" data-upgrade-obstacle="">
-              {t('onlineNodesOfTotal').replace('{online}', String(all.online)).replace('{total}', String(all.total))}
-              {' · '}
-              <ArrowUpOutlined /> {formatBps(all.up)} <ArrowDownOutlined /> {formatBps(all.down)}
-              {all.hasTotals && (
-                <span data-testid="all-nodes-traffic" title={t('allNodesTrafficTip')}>
-                  {' · '}{t('allNodesTraffic')} <ArrowUpOutlined /> {formatBytes(all.totalUp)} <ArrowDownOutlined /> {formatBytes(all.totalDown)}
+          {all && all.total > 0 && (() => {
+            const onlineState = all.online === 0 ? 'offline' : all.online === all.total ? 'online' : 'partial';
+            return (
+              <span className="rp-telemetry-bar" data-testid="all-nodes-rate" data-upgrade-obstacle="">
+                <span className={`rp-telemetry-pill is-${onlineState}`} data-testid="all-nodes-online-pill" data-status={onlineState}>
+                  <span className={`rp-status-dot is-${onlineState}`} style={{ marginInlineEnd: 2 }} aria-hidden="true" />
+                  {t('onlineNodesOfTotal').replace('{online}', String(all.online)).replace('{total}', String(all.total))}
                 </span>
-              )}
-            </Typography.Text>
-          )}
+                <span className="rp-telemetry-pill">
+                  <span className="rp-rate-up"><ArrowUpOutlined /> {formatBps(all.up)}</span>
+                  <span className="rp-rate-down"><ArrowDownOutlined /> {formatBps(all.down)}</span>
+                </span>
+                {all.hasTotals && (
+                  <span className="rp-telemetry-pill is-total" data-testid="all-nodes-traffic" title={t('allNodesTrafficTip')}>
+                    <span className="rp-telemetry-label">{t('allNodesTraffic')}</span>
+                    <span className="rp-rate-up"><ArrowUpOutlined /> {formatBytes(all.totalUp)}</span>
+                    <span className="rp-rate-down"><ArrowDownOutlined /> {formatBytes(all.totalDown)}</span>
+                  </span>
+                )}
+              </span>
+            );
+          })()}
           {upgradableAll.length > 0 && (
             <UpgradeSlot rowRef={pageHeaderRef} tablesRef={groupsRef}>
               <UpgradeAllButton

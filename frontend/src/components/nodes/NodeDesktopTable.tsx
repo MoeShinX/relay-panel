@@ -117,7 +117,7 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
             return (
               <Tooltip title={t('nodeUpgradeTip').replace('{v}', latestNodeVersion)}>
                 <span role="img" aria-label={t('nodeUpgradeTip').replace('{v}', latestNodeVersion)}>
-                  <CloudDownloadOutlined style={{ color: 'var(--ant-color-primary, #6366f1)' }} />
+                  <CloudDownloadOutlined style={{ color: 'var(--ant-color-primary, #18181b)' }} />
                 </span>
               </Tooltip>
             );
@@ -135,7 +135,7 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
     },
     {
       title: t('connections'), dataIndex: 'connections', key: 'connections', width: 70,
-      render: (v: number) => <span className="rp-mono">{v || 0}</span>,
+      render: (v: number) => <span className={`rp-count-pill${!v ? ' is-zero' : ''}`}>{v || 0}</span>,
     },
     {
       title: 'CPU', key: 'cpu', width: nodeDesktopColumnWidths.cpu,
@@ -152,13 +152,17 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
     {
       title: `${t('uploadRate')}/${t('downloadRate')}`, key: 'rate', width: nodeDesktopColumnWidths.rate,
       render: (_: unknown, r: NodeDisplayRow) => (
-        <span className="rp-mono rp-node-throughput">{formatBps(r.upload_bps)} / {formatBps(r.download_bps)}</span>
+        <span className="rp-mono rp-node-throughput" style={{ color: '#18181b', fontWeight: 500 }}>
+          {formatBps(r.upload_bps)} / {formatBps(r.download_bps)}
+        </span>
       ),
     },
     {
       title: `${t('totalUpload')}/${t('totalDownload')}`, key: 'traffic', width: nodeDesktopColumnWidths.traffic,
       render: (_: unknown, r: NodeDisplayRow) => (
-        <span className="rp-mono rp-node-throughput">{formatBytes(r.boot_upload_bytes)} / {formatBytes(r.boot_download_bytes)}</span>
+        <span className="rp-mono rp-node-throughput" style={{ color: '#52525b' }}>
+          {formatBytes(r.boot_upload_bytes)} / {formatBytes(r.boot_download_bytes)}
+        </span>
       ),
     },
     {

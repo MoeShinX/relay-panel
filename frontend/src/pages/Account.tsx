@@ -162,8 +162,8 @@ export default function Account() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, minWidth: 0 }}>
             <div style={{
               width: 48, height: 48, borderRadius: 14, flexShrink: 0,
-              background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
-              boxShadow: '0 4px 12px rgba(79, 70, 229, 0.22)',
+              background: '#7c6ee6',
+              boxShadow: '0 4px 12px rgba(124, 110, 230, 0.22)',
               color: '#fff', fontSize: 20, fontWeight: 600,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>
@@ -198,7 +198,7 @@ export default function Account() {
           <Card className="rp-kpi-card" styles={{ body: { padding: 20, display: 'flex', flexDirection: 'column', height: '100%' } }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
               <Text type="secondary" style={{ fontSize: 13 }}>{t('accountBalance')}</Text>
-              <span className="rp-icon-tile" style={{ background: '#eef2ff', color: '#4f46e5' }}>
+              <span className="rp-icon-tile" style={{ background: '#fffbeb', color: '#d97706' }}>
                 <WalletOutlined />
               </span>
             </div>
@@ -225,7 +225,7 @@ export default function Account() {
           <Card className="rp-kpi-card" styles={{ body: { padding: 20, display: 'flex', flexDirection: 'column', height: '100%' } }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
               <Text type="secondary" style={{ fontSize: 13 }}>{t('accountPlan')}</Text>
-              <span className="rp-icon-tile" style={{ background: '#f5f3ff', color: '#7c3aed' }}>
+              <span className="rp-icon-tile" style={{ background: '#f6f5fd', color: '#6d55c7' }}>
                 <ShoppingOutlined />
               </span>
             </div>

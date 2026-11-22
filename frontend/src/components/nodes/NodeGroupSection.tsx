@@ -98,6 +98,7 @@ export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeV
         {onOpenGroupLatency && (
           <Button
             size="small"
+            className="rp-monitor-btn"
             icon={<LineChartOutlined />}
             data-testid={`group-latency-${head.group_id}`}
             data-upgrade-obstacle=""
@@ -110,10 +111,9 @@ export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeV
             {t('latencyGroupMonitor')}
           </Button>
         )}
-        <span className="rp-mono" data-upgrade-obstacle="">
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            <ArrowUpOutlined /> {formatBps(up)} <ArrowDownOutlined /> {formatBps(down)}
-          </Text>
+        <span className="rp-group-rate-pill" data-upgrade-obstacle="">
+          <span className="rp-rate-up"><ArrowUpOutlined /> {formatBps(up)}</span>
+          <span className="rp-rate-down"><ArrowDownOutlined /> {formatBps(down)}</span>
         </span>
       </span>
     </div>
