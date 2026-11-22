@@ -10,7 +10,9 @@
   --rp-sidebar-width: 228px;
   --rp-header-height: 56px;
   --rp-content-padding: 24px;
-  --rp-content-max-width: 1480px;
+  /* No cap: wide screens use the full width, as before the refresh (tables such
+     as the node list would otherwise scroll sideways). */
+  --rp-content-max-width: none;
 
   /* Colors — cool architectural slate + crisp white surfaces */
   --rp-bg: #f4f5f8;
