@@ -67,10 +67,10 @@ export function latencyLevel(
 }
 
 export const LEVEL_COLORS: Record<LatencyLevel, string> = {
-  good: '#52c41a',
-  warn: '#faad14',
-  bad: '#ff4d4f',
-  none: '#bfbfbf',
+  good: '#22c55e',
+  warn: '#f59e0b',
+  bad: '#ef4444',
+  none: '#cbd5e1',
 };
 
 // ── Status strips ──

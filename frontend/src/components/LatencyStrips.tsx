@@ -139,9 +139,27 @@ export default function LatencyStrips({ rows, since, until, bucketSecs, withDate
 
   const headStyle = { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, minHeight: 26 } as const;
 
+  const startAxis = formatChartTime(new Date(since * 1000), withDate);
+  const legend = (
+    <div className="rp-lat-legend">
+      <span className="rp-lat-legend-item">
+        <span className="rp-lat-legend-swatch" style={{ background: LEVEL_COLORS.good }} />
+        {t('latencyLegendGood')}
+      </span>
+      <span className="rp-lat-legend-item">
+        <span className="rp-lat-legend-swatch" style={{ background: LEVEL_COLORS.warn }} />
+        {t('latencyLegendWarn')}
+      </span>
+      <span className="rp-lat-legend-item">
+        <span className="rp-lat-legend-swatch" style={{ background: LEVEL_COLORS.bad }} />
+        {t('latencyLegendBad')}
+      </span>
+    </div>
+  );
+
   return (
-    <Card size="small" className="rp-lat-card" title={t('latencyStripsTitle')} style={{ marginTop: 16 }} data-testid={testId}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+    <Card size="small" className="rp-lat-card" title={t('latencyStripsTitle')} extra={legend} style={{ marginTop: 16 }} data-testid={testId}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {prepared.map(({ row, segs }) => {
           const cur = row.current;
           const stale = cur?.stale === true;
@@ -154,16 +172,17 @@ export default function LatencyStrips({ rows, since, until, bucketSecs, withDate
             <div
               key={row.key}
               data-testid={`strip-row-${row.key}`}
+              className="rp-lat-strip-card"
               style={{
                 display: 'grid',
                 gridTemplateColumns: mobile ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) minmax(0, 1fr)',
-                columnGap: 28,
-                rowGap: 12,
+                columnGap: 24,
+                rowGap: 14,
               }}
             >
               <div style={{ minWidth: 0 }}>
                 <div style={headStyle}>
-                  <Text strong ellipsis style={{ minWidth: 0 }}>{row.name}</Text>
+                  <Text strong ellipsis style={{ minWidth: 0, fontSize: 13.5 }}>{row.name}</Text>
                   {row.note ? null : (
                     <span data-testid={`strip-current-${row.key}`} data-level={curLevel} style={{ whiteSpace: 'nowrap' }}>
                       {cur == null ? (
@@ -203,13 +222,19 @@ export default function LatencyStrips({ rows, since, until, bucketSecs, withDate
                     {row.note}
                   </Text>
                 ) : (
-                  <Strip rowKey={row.key} kind="lat" segs={segs} levelOf={stripLatencyLevel} describe={describe} />
+                  <>
+                    <Strip rowKey={row.key} kind="lat" segs={segs} levelOf={stripLatencyLevel} describe={describe} />
+                    <div className="rp-lat-strip-axis" aria-hidden="true">
+                      <span>{startAxis}</span>
+                      <span>{t('latencyNowLabel')}</span>
+                    </div>
+                  </>
                 )}
               </div>
               {row.note ? null : (
                 <div style={{ minWidth: 0 }}>
                   <div style={headStyle}>
-                    <Text type="secondary" style={{ fontSize: 13 }}>
+                    <Text type="secondary" style={{ fontSize: 12.5 }}>
                       {t(row.kind === 'tcp' ? 'latencyStripsFailed' : 'latencyStripsLoss')}
                     </Text>
                     <span style={{ whiteSpace: 'nowrap' }}>
@@ -232,6 +257,10 @@ export default function LatencyStrips({ rows, since, until, bucketSecs, withDate
                     levelOf={(g) => lossStripLevel(g.loss)}
                     describe={describe}
                   />
+                  <div className="rp-lat-strip-axis" aria-hidden="true">
+                    <span>{startAxis}</span>
+                    <span>{t('latencyNowLabel')}</span>
+                  </div>
                 </div>
               )}
             </div>

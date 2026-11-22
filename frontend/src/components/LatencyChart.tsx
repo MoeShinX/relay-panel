@@ -37,8 +37,8 @@ export type ChartVariant = 'modern' | 'classic';
 
 /** Axis and grid ink of the modern look. Neutral and translucent, so it reads
  *  on any surface. */
-const INK = 'rgba(75, 85, 99, 0.95)';
-const GRID = 'rgba(100, 108, 120, 0.22)';
+const INK = '#64748b';
+const GRID = 'rgba(148, 163, 184, 0.24)';
 
 interface Props {
   points: ChartPoint[];
@@ -101,19 +101,19 @@ function modernOptions({ plotted, names, withDate, tip }: Ctx) {
     animate: false,
     connectNulls: false,
     scale: { x: { type: 'time' }, y: { nice: true, domainMin: yMin } },
-    style: { lineWidth: 2 },
+    style: { lineWidth: 2.2 },
     point: maxPointsPerKey(plotted) <= SYMBOL_MAX_POINTS ? { shapeField: 'circle', sizeField: 2.5 } : undefined,
     slider: {
       x: {
         // Slim: no data-shadow preview, a thin track, small handles, no value labels.
         sparklineData: [],
-        size: 18,
+        size: 16,
         trackSize: 4,
-        trackFill: 'rgba(100, 108, 120, 0.12)',
-        selectionFill: 'rgba(99, 102, 241, 0.3)',
+        trackFill: 'rgba(148, 163, 184, 0.16)',
+        selectionFill: 'rgba(79, 70, 229, 0.26)',
         selectionFillOpacity: 1,
         showLabel: false,
-        handleIconSize: 10,
+        handleIconSize: 9,
       },
     },
     legend: {
@@ -195,7 +195,16 @@ function classicOptions({ plotted, names, withDate, tip }: Ctx) {
   return {
     scale: { x: { type: 'time' }, y: { nice: true, domainMin: 0 } },
     style: { lineWidth: LINE_WIDTH },
-    slider: { x: {} },
+    slider: {
+      x: {
+        size: 18,
+        trackSize: 5,
+        trackFill: 'rgba(148, 163, 184, 0.16)',
+        selectionFill: 'rgba(79, 70, 229, 0.22)',
+        selectionFillOpacity: 1,
+        handleIconSize: 10,
+      },
+    },
     legend: {
       color: {
         position: 'top',

@@ -589,37 +589,141 @@ html, body, #root {
 .rp-lat-matrix .ant-table-thead > tr > th.rp-lat-col-head {
   cursor: pointer;
   vertical-align: top;
-  background: var(--ant-color-bg-container, #fff);
-  box-shadow: inset 0 2px 0 transparent;
+  background: #f8fafc !important;
+  box-shadow: inset 0 2.5px 0 transparent;
   transition: background-color 0.15s, box-shadow 0.15s;
 }
 .rp-lat-matrix .ant-table-thead > tr > th.rp-lat-col-head:hover {
-  background: var(--ant-color-fill-quaternary, rgba(0, 0, 0, 0.02));
+  background: #f1f5f9 !important;
 }
 .rp-lat-matrix .ant-table-thead > tr > th.rp-lat-col-head.is-active {
-  background: var(--ant-color-primary-bg, #eef2ff);
-  box-shadow: inset 0 2px 0 var(--ant-color-primary, #6366f1);
+  background: var(--rp-primary-bg, #eef2ff) !important;
+  box-shadow: inset 0 2.5px 0 var(--rp-primary, #4f46e5),
+    inset 1px 0 0 rgba(79, 70, 229, 0.16),
+    inset -1px 0 0 rgba(79, 70, 229, 0.16);
+}
+.rp-lat-matrix .ant-table-tbody > tr > td.rp-lat-col-cell {
+  vertical-align: middle;
+  padding-block: 10px !important;
+  transition: background-color 0.15s, box-shadow 0.15s;
+}
+.rp-lat-matrix .ant-table-tbody > tr > td.rp-lat-col-cell.is-heat-good {
+  background: rgba(34, 197, 94, 0.055);
+}
+.rp-lat-matrix .ant-table-tbody > tr > td.rp-lat-col-cell.is-heat-warn {
+  background: rgba(245, 158, 11, 0.075);
+}
+.rp-lat-matrix .ant-table-tbody > tr > td.rp-lat-col-cell.is-heat-bad {
+  background: rgba(239, 68, 68, 0.08);
 }
 .rp-lat-matrix .ant-table-tbody > tr > td.rp-lat-col-cell.is-active {
-  background: color-mix(in srgb, var(--ant-color-primary, #6366f1) 5%, transparent);
+  box-shadow: inset 1.5px 0 0 rgba(79, 70, 229, 0.28),
+    inset -1.5px 0 0 rgba(79, 70, 229, 0.28);
 }
-.rp-lat-matrix .ant-table-tbody > tr:hover > td {
-  background: var(--rp-table-row-hover, #f5f5ff);
+.rp-lat-matrix .ant-table-tbody > tr:hover > td.rp-lat-col-cell.is-heat-good {
+  background: rgba(34, 197, 94, 0.10) !important;
+}
+.rp-lat-matrix .ant-table-tbody > tr:hover > td.rp-lat-col-cell.is-heat-warn {
+  background: rgba(245, 158, 11, 0.13) !important;
+}
+.rp-lat-matrix .ant-table-tbody > tr:hover > td.rp-lat-col-cell.is-heat-bad {
+  background: rgba(239, 68, 68, 0.13) !important;
 }
 .rp-lat-colname {
   font-weight: 500;
-  color: var(--ant-color-text, #18181b);
+  font-size: 13px;
+  color: var(--rp-text, #0f172a);
 }
 .rp-lat-head-sub {
-  font-size: 12px;
+  margin-top: 3px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
   font-weight: 400;
-  color: var(--ant-color-text-tertiary, #6b7280);
+  color: var(--rp-text-tertiary, #64748b);
+}
+.rp-carrier-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  height: 17px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 17px;
+  border: 1px solid transparent;
+}
+.rp-carrier-pill.is-telecom {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+}
+.rp-carrier-pill.is-unicom {
+  background: #fff7ed;
+  color: #c2410c;
+  border-color: #fed7aa;
+}
+.rp-carrier-pill.is-mobile {
+  background: #ecfdf5;
+  color: #047857;
+  border-color: #a7f3d0;
+}
+.rp-carrier-pill.is-other {
+  background: #f1f5f9;
+  color: #475569;
+  border-color: #e2e8f0;
+}
+.rp-lat-best {
+  display: inline-flex;
+  align-items: center;
+  margin-inline-start: 6px;
+  padding: 0 5px;
+  height: 16px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 16px;
+  background: #dcfce7;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
+  vertical-align: 0.1em;
+}
+.rp-lat-metric-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  margin-top: 4px;
+}
+.rp-lat-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 15px;
+  background: rgba(15, 23, 42, 0.045);
+  color: #64748b;
+  white-space: nowrap;
+}
+.rp-lat-chip.is-warn {
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+  font-weight: 500;
+}
+.rp-lat-chip.is-bad {
+  background: rgba(239, 68, 68, 0.14);
+  color: #be123c;
+  font-weight: 500;
 }
 .rp-lat-node-ip {
   display: block;
-  font-size: 11px;
+  margin-top: 2px;
+  font-size: 11.5px;
   line-height: 1.4;
-  color: var(--ant-color-text-tertiary, #6b7280);
+  color: var(--rp-text-tertiary, #64748b);
 }
 
 /* Node page target cards: the same selected look as a matrix column. */
@@ -627,21 +731,67 @@ html, body, #root {
   cursor: pointer;
   position: relative;
   overflow: hidden;
-  transition: background-color 0.15s, border-color 0.15s;
+  transition: background-color 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+.rp-lat-target[data-card-level='good'] {
+  background: linear-gradient(180deg, rgba(34, 197, 94, 0.045) 0%, #ffffff 65%);
+}
+.rp-lat-target[data-card-level='warn'] {
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.065) 0%, #ffffff 65%);
+}
+.rp-lat-target[data-card-level='bad'] {
+  background: linear-gradient(180deg, rgba(239, 68, 68, 0.075) 0%, #ffffff 65%);
 }
 .rp-lat-target:hover {
-  background: var(--ant-color-fill-quaternary, rgba(0, 0, 0, 0.02));
+  border-color: #cbd5e1;
+  box-shadow: var(--rp-shadow-sm);
 }
 .rp-lat-target.is-selected {
-  background: var(--ant-color-primary-bg, #eef2ff);
-  border-color: var(--ant-color-primary-border, #c7d2fe);
-  box-shadow: inset 0 2px 0 var(--ant-color-primary, #6366f1);
+  background: var(--rp-primary-bg, #eef2ff) !important;
+  border-color: var(--rp-primary-border, #c7d2fe) !important;
+  box-shadow: inset 0 2.5px 0 var(--rp-primary, #4f46e5);
 }
 .rp-lat-target-value {
   font-size: 22px;
-  font-weight: 500;
+  font-weight: 600;
   line-height: 1.3;
   white-space: nowrap;
+}
+.rp-lat-mini-strip {
+  display: flex;
+  gap: 2px;
+  margin-top: 8px;
+}
+.rp-lat-mini-slice {
+  flex: 1;
+  height: 6px;
+  border-radius: 2px;
+}
+
+/* KPI summary strip above group trend chart */
+.rp-lat-kpi-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--rp-border);
+}
+.rp-lat-kpi-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid var(--rp-border);
+  font-size: 12px;
+}
+.rp-lat-kpi-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 /* "No data" / "all lost" in place of a number: a quiet line, not a headline. */
@@ -731,27 +881,64 @@ html, body, #root {
   color: var(--ant-color-text-tertiary, #6b7280);
 }
 
-/* Recent status. Thin rounded slices; an empty slice is an outline so the
-   slices that hold data stand out. */
+/* Recent status: Better Stack / Uptime Kuma vertical heartbeat pillars */
+.rp-lat-strip-card {
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid var(--rp-border);
+}
 .rp-lat-strip {
   display: flex;
-  gap: 2px;
+  gap: 3px;
   margin-top: 8px;
+  align-items: center;
 }
 .rp-lat-slice {
   flex: 1;
   min-width: 0;
-  height: 9px;
-  border-radius: 2.5px;
+  height: 22px;
+  border-radius: 3.5px;
+  transition: transform 0.12s ease, filter 0.12s ease;
+}
+.rp-lat-slice:hover {
+  transform: scaleY(1.16);
+  filter: brightness(0.95);
 }
 .rp-lat-slice[data-level='none'] {
-  background: transparent !important;
-  box-shadow: inset 0 0 0 1px var(--ant-color-border, #d9d9de);
-  opacity: 0.8;
+  background: #eef2f6 !important;
+  box-shadow: inset 0 0 0 1px #dce2ec;
+}
+.rp-lat-strip-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 5px;
+  font-size: 11px;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+}
+.rp-lat-legend {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--rp-text-tertiary);
+}
+.rp-lat-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.rp-lat-legend-swatch {
+  width: 8px;
+  height: 12px;
+  border-radius: 2px;
 }
 .rp-lat-big {
-  font-size: 19px;
-  font-weight: 500;
+  font-size: 18px;
+  font-weight: 600;
   line-height: 1.2;
   white-space: nowrap;
 }
