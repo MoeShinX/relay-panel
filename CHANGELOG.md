@@ -10,6 +10,8 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+## [1.2.25] - 2026-11-22
+
 ### Added
 
 - A "Clear history" button at the bottom of a device group's latency-monitor
