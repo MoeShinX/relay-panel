@@ -56,7 +56,18 @@ pub async fn create_group(
     )
     .await
     {
-        Ok(g) => Json(ApiResponse::success(g)),
+        Ok(g) => {
+            crate::service::audit::record(
+                &state,
+                Some(admin.user_id),
+                "create_group",
+                "group",
+                g.id,
+                &format!("{} ({}, 倍率 {})", g.name, g.group_type, g.rate),
+            )
+            .await;
+            Json(ApiResponse::success(g))
+        }
         Err(CreateGroupError::FetchFailed) => Json(err(500, "Failed to fetch created group")),
         Err(CreateGroupError::Database(e)) => {
             tracing::error!("create_group: db error: {}", e);
@@ -198,6 +209,15 @@ pub async fn update_group(
     .await
     {
         Ok(()) => {
+            crate::service::audit::record(
+                &state,
+                Some(_admin.user_id),
+                "update_group",
+                "group",
+                id,
+                &crate::service::audit::group_label(&state, id).await,
+            )
+            .await;
             state
                 .node_connections
                 .broadcast_all(r#"{"type":"config_changed"}"#)

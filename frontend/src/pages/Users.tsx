@@ -1,4 +1,4 @@
-import { Table, Button, Tag, Popconfirm, message, Progress, Tooltip, Modal, Form, Input, InputNumber, Switch, Space, Select, DatePicker, Divider } from 'antd';
+import { Table, Button, Tag, Popconfirm, message, Progress, Tooltip, Modal, Form, Input, InputNumber, Switch, Space, Select, DatePicker, Divider, Alert } from 'antd';
 import { EditOutlined, ReloadOutlined, UndoOutlined, UserOutlined, PlusOutlined, KeyOutlined, ApiOutlined, ShoppingOutlined, SearchOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -58,6 +58,7 @@ export default function Users() {
   // every user, so searching is instant and needs no round-trip.
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<User | null>(null);
   const [creating, setCreating] = useState(false);
@@ -84,13 +85,21 @@ export default function Users() {
   const load = async () => {
     setLoading(true);
     try {
-      const usersRes = await api.get<unknown, ApiEnvelope<User[]>>('/admin/users');
-      setUsers(usersRes.data || []);
-      // v1.0.7: load the plan catalog for the "edit user plan" assign dropdown.
-      try {
-        const pRes = await api.get<unknown, ApiEnvelope<Plan[]>>('/admin/plans');
-        setPlans(pRes.data || []);
-      } catch { setPlans([]); }
+      const [usersSettled, plansSettled] = await Promise.allSettled([
+        api.get<unknown, ApiEnvelope<User[]>>('/admin/users'),
+        api.get<unknown, ApiEnvelope<Plan[]>>('/admin/plans'),
+      ]);
+      if (usersSettled.status === 'fulfilled' && usersSettled.value.code === 0) {
+        setLoadFailed(false);
+        setUsers(usersSettled.value.data || []);
+      } else {
+        setLoadFailed(true);
+      }
+      if (plansSettled.status === 'fulfilled' && plansSettled.value.code === 0) {
+        setPlans(plansSettled.value.data || []);
+      } else {
+        setPlans([]);
+      }
     } finally { setLoading(false); }
   };
 
@@ -196,9 +205,12 @@ export default function Users() {
       max_rules: values.max_rules,
       banned: values.banned,
       suspended: values.suspended,
-      // Convert GB back to the byte count the backend/DB expect.
-      traffic_limit: gbToBytes(values.traffic_limit_gb),
     };
+    // Only rewrite traffic_limit when the displayed GB figure was actually
+    // changed, so non-whole-GB quotas are not mutated by 2-decimal rounding.
+    if (values.traffic_limit_gb !== bytesToGb(editing.traffic_limit)) {
+      payload.traffic_limit = gbToBytes(values.traffic_limit_gb);
+    }
     if (balance !== '') {
       payload.balance = balance;
     }
@@ -404,6 +416,7 @@ export default function Users() {
             allowClear
             prefix={<SearchOutlined />}
             placeholder={t('searchUserPlaceholder')}
+            aria-label={t('searchUserPlaceholder')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{ width: 220 }}
@@ -414,6 +427,15 @@ export default function Users() {
           <Button icon={<ReloadOutlined />} onClick={load}>{t('refresh')}</Button>
         </Space>
       </div>
+      {loadFailed && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 12 }}
+          title={t('loadFailed')}
+          description={t('loadFailedRetry')}
+        />
+      )}
       <Table dataSource={filteredUsers} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 20 }} scroll={tableScroll} />
 
       <Modal

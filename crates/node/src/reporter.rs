@@ -602,7 +602,7 @@ async fn send_batch(config: &NodeConfig, batch: &PendingBatch) -> BatchOutcome {
     };
 
     let url = format!("{}/api/v1/node/report_traffic", config.panel_url);
-    let client = reqwest::Client::new();
+    let client = crate::poller::http_client();
     match client
         .post(&url)
         .timeout(TRAFFIC_REPORT_TIMEOUT)
@@ -1287,7 +1287,7 @@ pub async fn report_status(
     );
 
     let url = format!("{}/api/v1/node/report_status", config.panel_url);
-    let client = reqwest::Client::new();
+    let client = crate::poller::http_client();
     // v0.3.9: check the response so a rejected status report (invalid/rotated
     // token, DB error) is surfaced instead of silently fire-and-forget. Unlike
     // report_traffic there's nothing to retry here (status is ephemeral), but
@@ -1787,6 +1787,7 @@ mod tests {
                 download_limit_bps: None,
                 max_connections: None,
                 proxy_protocol: Default::default(),
+                block_local_targets: false,
             })
             .collect();
         let cfg = NodeConfigResponse {

@@ -147,6 +147,10 @@ pub async fn delete_user(
                 &target_name,
             )
             .await;
+            state
+                .node_connections
+                .broadcast_all(r#"{"type":"config_changed"}"#)
+                .await;
             Json(ApiResponse::success(()))
         }
         Err(e) => {
@@ -313,6 +317,43 @@ pub async fn update_user(
             }
         }
     }
+
+    let mut audit_parts = Vec::new();
+    if let Some(ref b) = canonical_balance {
+        audit_parts.push(format!("余额={b}"));
+    }
+    if let Some(mr) = req.max_rules {
+        audit_parts.push(format!("最大规则数={mr}"));
+    }
+    if let Some(tl) = req.traffic_limit {
+        audit_parts.push(format!("流量限额={tl}"));
+    }
+    if let Some(banned) = req.banned {
+        audit_parts.push(if banned {
+            "封禁".into()
+        } else {
+            "解封".into()
+        });
+    }
+    if let Some(suspended) = req.suspended {
+        audit_parts.push(if suspended {
+            "暂停".into()
+        } else {
+            "恢复".into()
+        });
+    }
+    if req.all_device_groups.is_some() || req.device_group_ids.is_some() {
+        audit_parts.push("更新设备组授权".into());
+    }
+    crate::service::audit::record(
+        &state,
+        Some(_admin.user_id),
+        "update_user",
+        "user",
+        id,
+        &audit_parts.join(" / "),
+    )
+    .await;
 
     // A field update (ban) or an authorization change (pause) both alter what
     // nodes should forward, so refresh node config once at the end.

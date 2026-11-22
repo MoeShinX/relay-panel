@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes, type KeyboardEvent } from 'react';
-import { Alert, Button, Card, Empty, Result, Space, Spin, Table, Tag, Tooltip, Typography } from 'antd';
+import { Alert, Button, Card, Empty, Result, Segmented, Space, Spin, Table, Tag, Tooltip, Typography } from 'antd';
 import { ArrowLeftOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import api from '../api/client';
@@ -20,6 +20,7 @@ import SeriesPicker from '../components/SeriesPicker';
 import { useSeriesPick } from '../hooks/useSeriesPick';
 import { useNowSecs } from '../hooks/useNowSecs';
 import { rankByAttention } from '../utils/seriesPick';
+import { SERIES_COLORS_LIGHT } from '../utils/trafficBuckets';
 import {
   LATENCY_LOSS_BAD_PCT,
   LATENCY_LOSS_WARN_PCT,
@@ -80,6 +81,7 @@ export default function GroupLatency() {
 
   const [range, setRange] = useState<LatencyRange>('24h');
   const [granularity, setGranularity] = useState<LatencyGranularity>('1h');
+  const [carrierFilter, setCarrierFilter] = useState<'all' | LatencyTarget['carrier']>('all');
   // null: let the server pick (the group's first target).
   const [selected, setSelected] = useState<number | null>(null);
   const [data, setData] = useState<GroupLatencyResponse | null>(null);
@@ -152,12 +154,42 @@ export default function GroupLatency() {
   };
 
   const targets: LatencyTarget[] = useMemo(() => data?.targets ?? [], [data]);
+  const availableCarriers = useMemo(() => {
+    const seen = new Set<LatencyTarget['carrier']>();
+    for (const tg of targets) seen.add(tg.carrier);
+    return (['telecom', 'unicom', 'mobile', 'other'] as const).filter((c) => seen.has(c));
+  }, [targets]);
+  const visibleTargets = useMemo(
+    () => (carrierFilter === 'all' ? targets : targets.filter((tg) => tg.carrier === carrierFilter)),
+    [targets, carrierFilter],
+  );
   const nodes: GroupLatencyNode[] = useMemo(() => data?.nodes ?? [], [data]);
   const cells = useMemo(() => {
     const m = new Map<string, GroupLatencyCell>();
     for (const c of data?.matrix ?? []) m.set(cellKey(c.node_id, c.target_id), c);
     return m;
   }, [data]);
+  const bestByTarget = useMemo(() => {
+    const best = new Map<number, string>();
+    for (const tg of targets) {
+      let minVal = Infinity;
+      let minNode = '';
+      let validCount = 0;
+      for (const n of nodes) {
+        if (!n.supported || n.unsupported_targets.includes(tg.id)) continue;
+        const c = cells.get(cellKey(n.node_id, tg.id));
+        if (c && c.avg != null) {
+          validCount += 1;
+          if (c.avg < minVal) {
+            minVal = c.avg;
+            minNode = n.node_id;
+          }
+        }
+      }
+      if (validCount >= 2 && minNode) best.set(tg.id, minNode);
+    }
+    return best;
+  }, [targets, nodes, cells]);
   const activeId = data?.target_id ?? null;
   const activeTarget = targets.find((x) => x.id === activeId);
 
@@ -358,19 +390,17 @@ export default function GroupLatency() {
         </div>
       ),
     },
-    ...targets.map((tg) => {
+    ...visibleTargets.map((tg) => {
       const isActive = activeId === tg.id;
       return {
         key: `t-${tg.id}`,
-        width: 150,
-        // The click and key handlers sit on the header cell itself, not on
-        // the title: antd repeats a title in a hidden measuring row, and a
-        // second, invisible control there would be reachable by Tab.
+        width: 168,
         title: (
           <div>
             <div className="rp-lat-colname">{tg.name}</div>
             <div className="rp-lat-head-sub">
-              {tg.kind === 'icmp' ? 'ICMP' : 'TCP'} · {t(CARRIER_KEY[tg.carrier])}
+              <span>{tg.kind === 'icmp' ? 'ICMP' : 'TCP'}</span>
+              <span className={`rp-carrier-pill is-${tg.carrier}`}>{t(CARRIER_KEY[tg.carrier])}</span>
             </div>
           </div>
         ),
@@ -383,7 +413,13 @@ export default function GroupLatency() {
             onKeyDown: onActivate(() => pickTarget(tg.id)),
             className: `rp-lat-col-head${isActive ? ' is-active' : ''}`,
           }) as HTMLAttributes<HTMLElement>,
-        onCell: () => ({ className: `rp-lat-col-cell${isActive ? ' is-active' : ''}` }),
+        onCell: (n: GroupLatencyNode) => {
+          const supported = n.supported && !n.unsupported_targets.includes(tg.id);
+          const c = supported ? cells.get(cellKey(n.node_id, tg.id)) : undefined;
+          const lvl = c ? latencyLevel(c.avg, c.loss, c.retrans_rate) : 'none';
+          const heat = lvl === 'good' || lvl === 'warn' || lvl === 'bad' ? ` is-heat-${lvl}` : '';
+          return { className: `rp-lat-col-cell${isActive ? ' is-active' : ''}${heat}` };
+        },
         render: (_: unknown, n: GroupLatencyNode) => {
           if (!n.supported) {
             return <Text type="secondary" data-testid={`latency-cell-${n.node_id}-${tg.id}`} data-level="none">-</Text>;
@@ -407,51 +443,104 @@ export default function GroupLatency() {
           }
           const level = latencyLevel(c.avg, c.loss, c.retrans_rate);
           const slow = slowText(c.retrans_rate, tg.kind);
-          return (
-            <div
-              role="button"
-              tabIndex={0}
-              data-testid={`latency-cell-${n.node_id}-${tg.id}`}
-              data-level={level}
-              onClick={() => pickTarget(tg.id)}
-              onKeyDown={onActivate(() => pickTarget(tg.id))}
-              style={{ cursor: 'pointer', lineHeight: 1.3 }}
-            >
-              <div className="rp-lat-num" style={{ fontSize: 15 }}>
-                <LevelDot level={level} />
-                {c.avg == null ? t('latencyAllLost') : formatMs(c.avg)}
-              </div>
+          const isBest = bestByTarget.get(tg.id) === n.node_id;
+          const failKey = tg.kind === 'tcp' ? 'latencyCardFailed' : 'latencyCardLoss';
+          const lossSeverity = c.loss >= LATENCY_LOSS_BAD_PCT ? ' is-bad' : c.loss >= LATENCY_LOSS_WARN_PCT ? ' is-warn' : '';
+          const slowSeverity =
+            c.retrans_rate != null && c.retrans_rate >= LATENCY_SLOW_BAD_PCT
+              ? ' is-bad'
+              : c.retrans_rate != null && c.retrans_rate >= LATENCY_SLOW_WARN_PCT
+                ? ' is-warn'
+                : '';
+          const tipContent = (
+            <div style={{ minWidth: 160 }}>
+              <div style={{ fontWeight: 500, marginBottom: 4 }}>{nodeDisplayName(n)} → {tg.name}</div>
+              <div>{t('latencyCardAvg')}: {c.avg == null ? t('latencyAllLost') : formatMs(c.avg)}</div>
               {showRaw(c.avg, c.raw_avg, c.retrans_rate) ? (
-                <span className="rp-lat-sub" data-testid={`latency-cell-raw-${n.node_id}-${tg.id}`}>
-                  {t('latencyCardRaw')} {formatMs(c.raw_avg)}
-                </span>
+                <div>{t('latencyCardRaw')}: {formatMs(c.raw_avg)}</div>
               ) : null}
-              <span className="rp-lat-sub">
-                <span className={c.loss >= LATENCY_LOSS_BAD_PCT ? 'is-bad' : c.loss >= LATENCY_LOSS_WARN_PCT ? 'is-warn' : undefined}>
-                  {t(tg.kind === 'tcp' ? 'latencyCardFailed' : 'latencyCardLoss')} {formatLoss(c.loss)}
-                </span>
-                {slow == null ? null : (
-                  <span
-                    data-testid={`latency-cell-slow-${n.node_id}-${tg.id}`}
-                    className={
-                      c.retrans_rate != null && c.retrans_rate >= LATENCY_SLOW_BAD_PCT
-                        ? 'is-bad'
-                        : c.retrans_rate != null && c.retrans_rate >= LATENCY_SLOW_WARN_PCT
-                          ? 'is-warn'
-                          : undefined
-                    }
-                  >
-                    {' · '}
-                    {t('latencyCardSlow')} {slow}
-                  </span>
-                )}
-              </span>
+              <div>{t(failKey)}: {formatLoss(c.loss)}</div>
+              {slow == null ? null : <div>{t('latencyCardSlow')}: {slow}</div>}
+              <div style={{ opacity: 0.72 }}>{t('latencyProbesSent')}: {c.sent}</div>
             </div>
+          );
+          return (
+            <Tooltip title={tipContent} mouseEnterDelay={0.25}>
+              <div
+                role="button"
+                tabIndex={0}
+                data-testid={`latency-cell-${n.node_id}-${tg.id}`}
+                data-level={level}
+                onClick={() => pickTarget(tg.id)}
+                onKeyDown={onActivate(() => pickTarget(tg.id))}
+                style={{ cursor: 'pointer', lineHeight: 1.3 }}
+              >
+                <div className="rp-lat-num" style={{ fontSize: 15, display: 'flex', alignItems: 'center' }}>
+                  <LevelDot level={level} />
+                  <span>{c.avg == null ? t('latencyAllLost') : formatMs(c.avg)}</span>
+                  {isBest && <span className="rp-lat-best">{t('latencyBest')}</span>}
+                </div>
+                {showRaw(c.avg, c.raw_avg, c.retrans_rate) ? (
+                  <span className="rp-lat-sub" data-testid={`latency-cell-raw-${n.node_id}-${tg.id}`}>
+                    {t('latencyCardRaw')} {formatMs(c.raw_avg)}
+                  </span>
+                ) : null}
+                <div className="rp-lat-metric-row">
+                  <span className={`rp-lat-chip${lossSeverity}`}>
+                    {t(failKey)} {formatLoss(c.loss)}
+                  </span>
+                  {slow == null ? null : (
+                    <>
+                      <span style={{ color: '#cbd5e1', fontSize: 10 }}>{' · '}</span>
+                      <span className={`rp-lat-chip${slowSeverity}`} data-testid={`latency-cell-slow-${n.node_id}-${tg.id}`}>
+                        {t('latencyCardSlow')} {slow}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+            </Tooltip>
           );
         },
       };
     }),
   ];
+
+  const activeKpiStrip = activeId != null && nodes.length > 0 ? (
+    <div className="rp-lat-kpi-strip">
+      {nodes.filter((n) => n.supported && !n.unsupported_targets.includes(activeId)).map((n) => {
+        const c = cells.get(cellKey(n.node_id, activeId));
+        const colorIdx = Math.max(0, colorDomain.indexOf(n.node_id));
+        const swatch = SERIES_COLORS_LIGHT[colorIdx % SERIES_COLORS_LIGHT.length];
+        const isBest = bestByTarget.get(activeId) === n.node_id;
+        return (
+          <div key={n.node_id} className="rp-lat-kpi-pill">
+            <span className="rp-lat-kpi-swatch" style={{ background: swatch }} />
+            <span style={{ fontWeight: 500, color: 'var(--rp-text)' }}>{nodeDisplayName(n)}</span>
+            <span className="rp-mono" style={{ color: 'var(--rp-text-secondary)' }}>
+              {c ? (c.avg == null ? t('latencyAllLost') : formatMs(c.avg)) : '-'}
+            </span>
+            {c && (
+              <span style={{ fontSize: 11, color: c.loss >= LATENCY_LOSS_BAD_PCT ? '#be123c' : c.loss >= LATENCY_LOSS_WARN_PCT ? '#b45309' : '#64748b' }}>
+                {formatLoss(c.loss)}
+              </span>
+            )}
+            {isBest && <span className="rp-lat-best" style={{ marginInlineStart: 0 }}>{t('latencyBest')}</span>}
+          </div>
+        );
+      })}
+    </div>
+  ) : null;
+
+  const onCarrierFilter = (next: 'all' | LatencyTarget['carrier']) => {
+    setCarrierFilter(next);
+    if (next !== 'all') {
+      const subset = targets.filter((tg) => tg.carrier === next);
+      if (subset.length > 0 && !subset.some((tg) => tg.id === activeId)) {
+        setSelected(subset[0].id);
+      }
+    }
+  };
 
   return (
     <div className="rp-lat">
@@ -482,6 +571,22 @@ export default function GroupLatency() {
             </Tooltip>
           </Space>
         }
+        extra={
+          availableCarriers.length > 1 ? (
+            <Segmented
+              size="small"
+              value={carrierFilter}
+              onChange={(v) => onCarrierFilter(v as 'all' | LatencyTarget['carrier'])}
+              options={[
+                { value: 'all', label: `${t('latencyCarrierAll')} (${targets.length})` },
+                ...availableCarriers.map((c) => ({
+                  value: c,
+                  label: t(CARRIER_KEY[c]),
+                })),
+              ]}
+            />
+          ) : null
+        }
       >
         <Table<GroupLatencyNode>
           className="rp-lat-matrix"
@@ -498,12 +603,20 @@ export default function GroupLatency() {
       {nodes.length === 0 ? null : (
         <LatencyTrendCard
           title={
-            <span data-testid="latency-current-view">
-              {t('latencyGroupChartFor')}
-              <Text strong>{activeTarget ? activeTarget.name : '-'}</Text>
-            </span>
+            <Space size={8} wrap>
+              <span data-testid="latency-current-view">
+                {t('latencyGroupChartFor')}
+                <Text strong>{activeTarget ? activeTarget.name : '-'}</Text>
+              </span>
+              {activeTarget && (
+                <span className={`rp-carrier-pill is-${activeTarget.carrier}`}>
+                  {activeTarget.kind === 'icmp' ? 'ICMP' : 'TCP'} · {t(CARRIER_KEY[activeTarget.carrier])}
+                </span>
+              )}
+            </Space>
           }
           picker={picker}
+          stats={activeKpiStrip}
           points={points}
           colorDomain={colorDomain}
           names={names}

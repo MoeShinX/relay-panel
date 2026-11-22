@@ -740,6 +740,14 @@ pub async fn create_rule(
     let lb_db = req.load_balance_strategy.to_db_str();
     let up_mbps = req.upload_limit_mbps.unwrap_or(0).max(0);
     let down_mbps = req.download_limit_mbps.unwrap_or(0).max(0);
+    let max_conn = req.max_connections.unwrap_or(0).max(0);
+    let auto_restart = req.auto_restart_minutes.unwrap_or(0).max(0);
+    if auto_restart != 0 && auto_restart < relay_shared::models::MIN_AUTO_RESTART_MINUTES {
+        return Err(CreateRuleError::BadRequest(format!(
+            "自动重启间隔最小 {} 分钟（0 = 关闭）",
+            relay_shared::models::MIN_AUTO_RESTART_MINUTES
+        )));
+    }
 
     let proxy_protocol = validate_proxy_protocol(
         db,
@@ -834,7 +842,19 @@ pub async fn create_rule(
                 current_count, max_rules
             )))
         }
-        Ok(Some(_)) => Ok(()),
+        Ok(Some(rule_id)) => {
+            if max_conn != 0 || auto_restart != 0 {
+                db.set_rule_connection_controls(
+                    rule_id,
+                    &ResourceScope::All,
+                    max_conn,
+                    auto_restart,
+                )
+                .await
+                .map_err(CreateRuleError::Database)?;
+            }
+            Ok(())
+        }
         Err(DbError::PortConflict | DbError::UniqueViolation) => {
             Err(CreateRuleError::PortConflict(last_port.unwrap_or(0)))
         }

@@ -179,20 +179,19 @@ pub async fn list_shared_node_summary(
     let mut summaries = aggregate_shared_node_summaries(groups, &rows, chrono::Utc::now(), &labels);
 
     // v0.4.15: enrich each node row with GeoIP country from the KVS cache
-    // (geoip:{ip}). This is a READ of cached results — no third-party call
-    // here (lookups are triggered asynchronously at report_status time). If
-    // GEOIP is disabled or the cache is empty, country stays None ("未知").
+    // (geoip:{ip}). Batch-read once instead of issuing up to 2 queries per row.
+    let geoip_cache = crate::api::geoip::read_all_cache(state.db.as_ref()).await;
     for sm in &mut summaries {
         if let Some(ref ip) = sm.public_ipv4 {
-            if let Some(entry) = crate::api::geoip::read_cache(state.db.as_ref(), ip).await {
-                sm.ipv4_country_code = entry.country_code;
-                sm.ipv4_country_name = entry.country_name;
+            if let Some(entry) = geoip_cache.get(ip) {
+                sm.ipv4_country_code = entry.country_code.clone();
+                sm.ipv4_country_name = entry.country_name.clone();
             }
         }
         if let Some(ref ip) = sm.public_ipv6 {
-            if let Some(entry) = crate::api::geoip::read_cache(state.db.as_ref(), ip).await {
-                sm.ipv6_country_code = entry.country_code;
-                sm.ipv6_country_name = entry.country_name;
+            if let Some(entry) = geoip_cache.get(ip) {
+                sm.ipv6_country_code = entry.country_code.clone();
+                sm.ipv6_country_name = entry.country_name.clone();
             }
         }
     }

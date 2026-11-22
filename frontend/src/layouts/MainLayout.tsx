@@ -1,7 +1,7 @@
 import { Layout, Menu, Button, Space, Typography, Segmented, Modal, Form, Input, message, Spin, Badge, Tooltip, Drawer, Dropdown } from 'antd';
 import type { MenuProps } from 'antd';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { useState, Suspense } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import {
   MenuOutlined,
   EllipsisOutlined,
@@ -101,12 +101,26 @@ export default function MainLayout() {
     ? [dashboardItem, ...sharedItems, ...adminOnlyItems]
     : sharedItems;
 
-  // Expand whichever group holds the current page. Computed from the path, not
-  // stored, so landing on /site-settings from a bookmark opens 系统设置 too.
-  const openKeys = [
-    billingChildren.some((c) => c.key === location.pathname) ? 'grp-billing' : '',
-    systemChildren.some((c) => c.key === location.pathname) ? 'grp-system' : '',
-  ].filter(Boolean);
+  // Expand whichever group holds the current page. Synced with route changes
+  // while still letting the user manually toggle submenus.
+  const routeGroupKey = billingChildren.some((c) => c.key === location.pathname)
+    ? 'grp-billing'
+    : systemChildren.some((c) => c.key === location.pathname)
+      ? 'grp-system'
+      : '';
+  const [openKeys, setOpenKeys] = useState<string[]>(() => (routeGroupKey ? [routeGroupKey] : []));
+  useEffect(() => {
+    if (routeGroupKey) {
+      setOpenKeys((prev) => (prev.includes(routeGroupKey) ? prev : [...prev, routeGroupKey]));
+    }
+  }, [routeGroupKey]);
+
+  const selectedMenuKey =
+    location.pathname === '/node-status' || location.pathname.startsWith('/nodes/')
+      ? '/nodes'
+      : location.pathname.startsWith('/groups/')
+        ? '/groups'
+        : location.pathname;
 
   const logout = () => {
     authLogout();
@@ -124,6 +138,8 @@ export default function MainLayout() {
       message.success(t('passwordChanged'));
       setChangePwOpen(false);
       pwForm.resetFields();
+      authLogout();
+      navigate('/login', { replace: true });
     } catch {
       message.error(t('passwordChangeFailed'));
     } finally {
@@ -132,6 +148,34 @@ export default function MainLayout() {
   };
 
   const brand = site.site_name || t('brand');
+  const brandMark = (size = 24) => (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 28 28"
+      fill="none"
+      style={{ flexShrink: 0 }}
+    >
+      <rect width="28" height="28" rx="8" fill="url(#rp-brand-grad)" />
+      <path
+        d="M8.5 10.5H16.5L14 8M19.5 17.5H11.5L14 20"
+        stroke="#fff"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="19" cy="10.5" r="1.75" fill="#c7d2fe" />
+      <circle cx="9" cy="17.5" r="1.75" fill="#c7d2fe" />
+      <defs>
+        <linearGradient id="rp-brand-grad" x1="0" y1="0" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#6366f1" />
+          <stop offset="1" stopColor="#4f46e5" />
+        </linearGradient>
+      </defs>
+    </svg>
+  );
+
   // The drawer and the sider keep an operator's long site name inside their
   // 56px: a margin each side, at most two lines, then an ellipsis (full name
   // on hover). The collapsed sider is 80px, narrower than RelayPanel itself
@@ -139,13 +183,17 @@ export default function MainLayout() {
   const brandBlock = (collapsed = false) => (
     <div title={brand} style={{
       height: 'var(--rp-header-height)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      padding: collapsed ? '0 4px' : '0 16px',
-      color: '#fff', fontSize: collapsed ? 13 : 17, fontWeight: 600, letterSpacing: collapsed ? 0 : 0.5,
+      display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start',
+      gap: collapsed ? 0 : 10,
+      padding: collapsed ? '0 4px' : '0 18px',
+      borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+      marginBottom: 6,
+      color: '#f8fafc', fontSize: collapsed ? 13 : 17, fontWeight: 600, letterSpacing: collapsed ? 0 : 0.2,
     }}>
+      {!collapsed && brandMark(24)}
       <span style={{
         display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2,
-        overflow: 'hidden', overflowWrap: 'anywhere', textAlign: 'center', lineHeight: 1.3,
+        overflow: 'hidden', overflowWrap: 'anywhere', textAlign: collapsed ? 'center' : 'left', lineHeight: 1.3,
       }}>
         {brand}
       </span>
@@ -156,8 +204,9 @@ export default function MainLayout() {
     <Menu
       theme="dark"
       mode="inline"
-      selectedKeys={[location.pathname]}
-      defaultOpenKeys={openKeys}
+      selectedKeys={[selectedMenuKey]}
+      openKeys={siderCollapsed && !isMobile ? undefined : openKeys}
+      onOpenChange={(keys) => setOpenKeys(keys as string[])}
       items={menuItems}
       // Parent entries carry a `grp-` key and no route — clicking one only
       // expands it, so navigating on them would 404.
@@ -189,6 +238,21 @@ export default function MainLayout() {
     else if (key === 'logout') logout();
   };
 
+  const userMenuItems: MenuProps['items'] = [
+    { key: 'who', label: `${user?.username ?? ''} · ${isAdmin ? t('admin') : t('user')}`, disabled: true },
+    { type: 'divider' },
+    { key: 'account', icon: <UserOutlined />, label: t('personalCenter') },
+    { key: 'password', icon: <LockOutlined />, label: t('changePassword') },
+    { type: 'divider' },
+    { key: 'logout', icon: <LogoutOutlined />, label: t('logout'), danger: true },
+  ];
+  const onUserMenu: MenuProps['onClick'] = ({ key }) => {
+    if (key === 'account') navigate('/account');
+    else if (key === 'password') setChangePwOpen(true);
+    else if (key === 'logout') logout();
+  };
+  const userInitial = (user?.username?.trim()?.[0] || 'U').toUpperCase();
+
   return (
     <Layout style={{ minHeight: '100vh' }}>
       {isMobile ? (
@@ -207,7 +271,7 @@ export default function MainLayout() {
         <Sider
           collapsible
           breakpoint="lg"
-          width={220}
+          width={228}
           onCollapse={(collapsed) => setSiderCollapsed(collapsed)}
           // v1.2.14: the sider stays put while the page scrolls (a long node
           // list used to carry the menu off screen). A menu taller than the
@@ -227,7 +291,10 @@ export default function MainLayout() {
           // Above antd's fixed table columns (z-index 15), which would
           // otherwise scroll over it; below its popups and drawers (1000+).
           position: 'sticky', top: 0, zIndex: 100,
-          background: '#fff', height: 'var(--rp-header-height)',
+          background: 'rgba(255, 255, 255, 0.86)',
+          backdropFilter: 'blur(12px)',
+          WebkitBackdropFilter: 'blur(12px)',
+          height: 'var(--rp-header-height)',
           padding: isMobile ? '0 8px 0 4px' : '0 24px', lineHeight: 'var(--rp-header-height)',
           display: 'flex', justifyContent: isMobile ? 'space-between' : 'flex-end', alignItems: 'center',
           borderBottom: '1px solid var(--rp-border)',
@@ -237,7 +304,7 @@ export default function MainLayout() {
               {/* The site name is the operator's: a long one stays on one line
                   and ends in an ellipsis (full name on tap) — wrapping, each
                   line took the header's 56px line height and burst the bar. */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: '1 1 auto', minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 auto', minWidth: 0 }}>
                 <Button type="text" icon={<MenuOutlined />} aria-label={t('openMenu')} onClick={() => setMenuOpen(true)} style={{ flexShrink: 0 }} />
                 <Text strong ellipsis={{ tooltip: brand }} style={{ fontSize: 16, minWidth: 0 }}>{brand}</Text>
               </div>
@@ -253,17 +320,7 @@ export default function MainLayout() {
               </Space>
             </>
           ) : (
-          <Space size="middle">
-            {/* v1.2.4: announcements live here rather than in the sidebar.
-                The banner already carries the current notice, so a menu row
-                would only be a route to the archive — a low-frequency
-                destination sitting beside pages people use daily. A bell also
-                does what a menu row cannot: say that something is new.
-
-                Labelled, not bare: every other control in this header is icon
-                + text, so an icon alone read as decoration and people did not
-                find it. The Tooltip is gone with it — a tooltip that repeats
-                the visible label is noise. */}
+          <Space size={12}>
             <Badge dot={unread} offset={[-4, 2]}>
               <Button
                 type="text"
@@ -283,15 +340,6 @@ export default function MainLayout() {
                 { value: 'en-US', label: t('langEnUS') },
               ]}
             />
-            <Text type="secondary" style={{ fontSize: 13 }}>
-              {isAdmin ? t('admin') : t('user')}
-            </Text>
-            <Button type="text" size="small" icon={<LockOutlined />} onClick={() => setChangePwOpen(true)}>
-              {t('changePassword')}
-            </Button>
-            {/* Icon-only by request, unlike the labelled controls beside it, so
-                the tooltip and aria-label carry the name. The login page already
-                links the same repository to everyone. */}
             <Tooltip title="GitHub">
               <Button
                 type="text"
@@ -303,9 +351,21 @@ export default function MainLayout() {
                 aria-label="GitHub"
               />
             </Tooltip>
-            <Button type="text" size="small" icon={<LogoutOutlined />} onClick={logout}>
-              {t('logout')}
-            </Button>
+            <Dropdown menu={{ items: userMenuItems, onClick: onUserMenu }} trigger={['click']} placement="bottomRight">
+              <button type="button" className="rp-user-pill">
+                <span className="rp-user-avatar">{userInitial}</span>
+                <span>{user?.username || (isAdmin ? t('admin') : t('user'))}</span>
+                <span style={{
+                  fontSize: 11,
+                  padding: '1px 6px',
+                  borderRadius: 999,
+                  background: isAdmin ? '#eef2ff' : '#f1f5f9',
+                  color: isAdmin ? '#4338ca' : '#475569',
+                }}>
+                  {isAdmin ? t('admin') : t('user')}
+                </span>
+              </button>
+            </Dropdown>
           </Space>
           )}
         </Header>
@@ -314,7 +374,9 @@ export default function MainLayout() {
               navigation to their chunk, showing a centered spinner instead of a
               blank pane. */}
           <Suspense fallback={<div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>}>
-            <Outlet />
+            <div className="rp-main-inner">
+              <Outlet />
+            </div>
           </Suspense>
         </Content>
       </Layout>

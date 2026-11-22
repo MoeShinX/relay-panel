@@ -101,28 +101,52 @@ pub static USERNAME_LIMITER: Lazy<AttemptLimiter<String>> =
 pub static IP_LIMITER: Lazy<AttemptLimiter<IpAddr>> =
     Lazy::new(|| AttemptLimiter::new(20, Duration::from_secs(60), 100_000));
 
+/// Global fallback limiter for unattributed local registration attempts (when
+/// behind a private peer that sent no usable X-Forwarded-For).
+pub static UNATTRIBUTED_REGISTER_LIMITER: Lazy<AttemptLimiter<()>> =
+    Lazy::new(|| AttemptLimiter::new(15, Duration::from_secs(60), 1));
+
+fn trust_proxy_headers() -> bool {
+    match std::env::var("TRUST_PROXY_HEADERS") {
+        Ok(v) => !(v == "0" || v.eq_ignore_ascii_case("false")),
+        Err(_) => true,
+    }
+}
+
 /// The client's address for per-IP limiting, or `None` when it cannot be told.
 ///
 /// Normally the TCP peer. When the peer is loopback or a private address, the
 /// panel sits behind Caddy (compose network) or a reverse proxy on the host —
-/// then the LAST X-Forwarded-For entry, the one the proxy itself appended, is
-/// the client. A public peer's X-Forwarded-For is ignored: that client could
-/// write anything there.
+/// then the last hop of the LAST X-Forwarded-For header, the one the proxy
+/// itself appended, is the client. A public peer's X-Forwarded-For is ignored:
+/// that client could write anything there. `TRUST_PROXY_HEADERS=0` (or
+/// `false`) ignores the header for every peer, for setups where direct clients
+/// can appear with a private address (e.g. Docker's userland proxy).
 ///
-/// A private peer WITHOUT a usable X-Forwarded-For (a proxy configured without
-/// it) gives `None`, not the proxy's own address: every user would share that
-/// one counter, and anyone could lock them all out with 20 bad logins a
-/// minute. Such requests are covered by the per-username limit and the bcrypt
-/// permits only. (Caveat: if Docker's userland proxy publishes the port, a
-/// direct client also appears as a private address and could spoof the
-/// header; the permits still cap the damage.)
+/// A private peer WITHOUT a usable X-Forwarded-For gives `None`, not the
+/// proxy's own address: every user would share that one counter, and anyone
+/// could lock them all out. Login then relies on the per-username limit and the
+/// bcrypt permits; registration on `UNATTRIBUTED_REGISTER_LIMITER`.
 pub fn client_ip(peer: Option<SocketAddr>, headers: &HeaderMap) -> Option<IpAddr> {
+    client_ip_with_trust(peer, headers, trust_proxy_headers())
+}
+
+pub fn client_ip_with_trust(
+    peer: Option<SocketAddr>,
+    headers: &HeaderMap,
+    trust_proxy: bool,
+) -> Option<IpAddr> {
     let peer = peer?.ip();
-    if !is_local(peer) {
+    if !trust_proxy || !is_local(peer) {
         return Some(peer);
     }
+    // Read the LAST X-Forwarded-For header field (not headers.get(), which
+    // returns the first header and can be spoofed when a proxy appends a
+    // second header instead of comma-joining), then take its last hop.
     headers
-        .get("x-forwarded-for")
+        .get_all("x-forwarded-for")
+        .iter()
+        .next_back()
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.rsplit(',').next())
         .and_then(|last| last.trim().parse::<IpAddr>().ok())
@@ -219,6 +243,22 @@ mod tests {
         let proxy: SocketAddr = "172.17.0.1:40000".parse().unwrap();
         assert_eq!(client_ip(Some(proxy), &HeaderMap::new()), None);
         assert_eq!(client_ip(Some(proxy), &xff("not-an-ip")), None);
+    }
+
+    #[test]
+    fn multiple_xff_headers_takes_last_header_and_untrusted_mode_uses_peer() {
+        let caddy: SocketAddr = "172.18.0.3:52000".parse().unwrap();
+        let mut h = HeaderMap::new();
+        h.append("x-forwarded-for", "1.1.1.1".parse().unwrap());
+        h.append("x-forwarded-for", "203.0.113.9".parse().unwrap());
+        assert_eq!(
+            client_ip_with_trust(Some(caddy), &h, true),
+            Some("203.0.113.9".parse().unwrap())
+        );
+        assert_eq!(
+            client_ip_with_trust(Some(caddy), &h, false),
+            Some("172.18.0.3".parse().unwrap())
+        );
     }
 
     /// The permit stays taken until bcrypt itself finishes, even when the

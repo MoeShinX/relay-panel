@@ -6,59 +6,66 @@
 
 :root {
   /* Layout */
-  --rp-sidebar-bg: #18181b;
-  --rp-sidebar-width: 220px;
+  --rp-sidebar-bg: #111318;
+  --rp-sidebar-width: 228px;
   --rp-header-height: 56px;
   --rp-content-padding: 24px;
+  /* No cap: wide screens use the full width, as before the refresh (tables such
+     as the node list would otherwise scroll sideways). */
+  --rp-content-max-width: none;
 
-  /* Colors — muted, not garish */
-  --rp-bg: #fafafa;
+  /* Colors — cool architectural slate + crisp white surfaces */
+  --rp-bg: #f4f5f8;
   --rp-card-bg: #ffffff;
-  --rp-border: #ececef;
-  --rp-text: #18181b;
-  /* Darkened in v1.2.5. The old tertiary (#8f959e) sat at 3.02:1 against white
-     — below the 4.5:1 WCAG AA needs for body text — and it was carrying real
-     content on the node table: CPU, memory and disk percentages, transfer
-     rates. Secondary passed at 5.45:1 but read washed out beside it. */
-  --rp-text-secondary: #4b5563;
-  --rp-text-tertiary: #6b7280;
+  --rp-border: #e6e8ee;
+  --rp-border-strong: #d5d9e2;
+  --rp-text: #0f172a;
+  --rp-text-secondary: #475569;
+  --rp-text-tertiary: #64748b;
 
-  /* v1.2.5: the offline-node palette. Grey enough to read as "not live" beside
-     a row of #18181b text, dark enough (4.83:1 on the tint) to stay legible —
-     these are the last readings before the node went, not decoration. */
-  --rp-node-offline-text: #6b7280;
-  --rp-node-offline-bg: #f7f7f8;
-  --rp-node-offline-bar: #c7c9cf;
+  /* Offline-node palette (WCAG AA contrast preserved) */
+  --rp-node-offline-text: #64748b;
+  --rp-node-offline-bg: #f8f9fb;
+  --rp-node-offline-bar: #cbd5e1;
 
-  /* Accents — indigo */
-  --rp-primary: #6366f1;
+  /* Accents — Linear / Stripe indigo */
+  --rp-primary: #4f46e5;
+  --rp-primary-hover: #4338ca;
   --rp-primary-bg: #eef2ff;
+  --rp-primary-border: #c7d2fe;
   --rp-success: #059669;
+  --rp-success-bg: #ecfdf5;
   --rp-warning: #d97706;
-  --rp-danger: #ef4444;
+  --rp-warning-bg: #fffbeb;
+  --rp-danger: #e11d48;
+  --rp-danger-bg: #fff1f2;
 
-  /* Tags — desaturated for admin comfort */
-  --rp-tag-tcp: #6366f1;
+  /* Tags — desaturated semantic palette */
+  --rp-tag-tcp: #4f46e5;
   --rp-tag-udp: #7c3aed;
   --rp-tag-in: #059669;
   --rp-tag-out: #0d9488;
   --rp-tag-admin: #d97706;
 
-  /* Radii & shadows — subtle */
-  --rp-radius: 10px;
+  /* Radii & layered shadows */
+  --rp-radius-lg: 14px;
+  --rp-radius: 12px;
   --rp-radius-sm: 8px;
-  --rp-shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
-  --rp-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  --rp-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.03), 0 2px 6px rgba(15, 23, 42, 0.02);
+  --rp-shadow: 0 4px 16px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.04);
+  --rp-shadow-lg: 0 12px 36px rgba(15, 23, 42, 0.08), 0 2px 8px rgba(15, 23, 42, 0.04);
 
   /* Table */
-  --rp-table-header-bg: #fafafa;
-  --rp-table-row-hover: #f5f5ff;
+  --rp-table-header-bg: #f8fafc;
+  --rp-table-row-hover: #f5f7ff;
 
-  /* Font */
-  --rp-font: "Noto Sans SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
-  --rp-font-mono: "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas,
-    "Courier New", monospace;
+  /* Font — Western UI precision stack first (crisp ClearType/SF Pro Latin &
+     digits), then CJK (PingFang SC / HarmonyOS Sans SC / Noto Sans SC). */
+  --rp-font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI",
+    "Helvetica Neue", Arial, "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC",
+    "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --rp-font-mono: "JetBrains Mono", "Cascadia Mono", "Cascadia Code", "SF Mono",
+    ui-monospace, Menlo, Consolas, monospace;
 }
 
 /* ---- Global resets ---- */
@@ -69,27 +76,39 @@ html, body, #root {
   background: var(--rp-bg);
   font-family: var(--rp-font);
   font-size: 14px;
+  line-height: 1.55;
   color: var(--rp-text);
+  /* Never let Chromium/DirectWrite synthesize blurry faux-bold or faux-italic */
+  font-synthesis: none;
+  font-feature-settings: "kern" 1, "liga" 1;
+  text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 /* ---- antd overrides ---- */
 
-/* Table: comfortable rows, subtle header */
+/* Table: crisp Medium headers, no vertical pipe clutter, tabular body figures */
 .ant-table {
   font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
+.ant-table-wrapper .ant-table-thead > tr > th,
 .ant-table-thead > tr > th {
-  /* A header is a word or two: wrapping it ("名\a称", "流\a量") only makes the
-     row taller; the table scrolls sideways when it runs out of room. */
   white-space: nowrap;
   background: var(--rp-table-header-bg) !important;
-  font-weight: 500;
-  color: var(--rp-text-secondary);
+  font-size: 12.5px;
+  font-weight: 500 !important;
+  letter-spacing: 0.02em;
+  color: #64748b !important;
   border-bottom: 1px solid var(--rp-border) !important;
+  padding-block: 10px !important;
+}
+.ant-table-wrapper .ant-table-thead > tr > th:not(:last-child):not(.ant-table-selection-column):not(.ant-table-row-expand-icon-cell):not([colspan])::before {
+  display: none !important;
 }
 .ant-table-tbody > tr > td {
+  color: #1e293b;
   border-bottom: 1px solid var(--rp-border) !important;
 }
 
@@ -143,32 +162,156 @@ html, body, #root {
   color: var(--rp-node-offline-text);
 }
 
-/* Cards: clean, minimal shadow */
+/* Cards: clean elevated surface */
 .ant-card {
   border-radius: var(--rp-radius);
   border: 1px solid var(--rp-border);
   box-shadow: var(--rp-shadow-sm);
 }
 .ant-card-head {
-  min-height: 44px;
+  min-height: 48px;
   border-bottom: 1px solid var(--rp-border);
+  font-weight: 500;
+}
+.ant-card-head-title {
+  font-weight: 500 !important;
+  letter-spacing: 0.01em;
 }
 
-/* Buttons: uniform sizing, no wrapping */
+/* Tooltips: opaque dark slate surface + crisp anti-aliased tabular copy so
+   underlying dark table headers never bleed through behind white tooltip text */
+.ant-tooltip .ant-tooltip-container,
+.ant-tooltip .ant-tooltip-inner {
+  padding: 8px 12px !important;
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.6;
+  letter-spacing: 0.01em;
+  color: #f8fafc;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Progress percentage figures: crisp tabular numerals */
+.ant-progress .ant-progress-indicator,
+.ant-progress .ant-progress-text {
+  font-size: 12px !important;
+  color: #475569;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Standalone tables (not already inside an ant-card or collapse): give them an
+   elevated card shell automatically so pages like Rules / Users / Plans /
+   RedeemCodes look crisp instead of floating on grey with unrounded corners. */
+.rp-main-inner > .ant-table-wrapper {
+  background: var(--rp-card-bg);
+  border: 1px solid var(--rp-border);
+  border-radius: var(--rp-radius);
+  box-shadow: var(--rp-shadow-sm);
+  overflow: hidden;
+}
+.rp-main-inner > .ant-table-wrapper .ant-pagination {
+  margin: 12px 16px !important;
+}
+
+/* Buttons: subtle tactile depth on primary, crisp hairline on default */
 .ant-btn {
   border-radius: var(--rp-radius-sm);
   font-size: 13px;
+  font-weight: 500;
+}
+.ant-btn-primary:not(:disabled):not(.ant-btn-dangerous):not(.ant-btn-background-ghost) {
+  background: linear-gradient(180deg, #5b52f0 0%, #4f46e5 100%);
+  border-color: #483fe0;
+  box-shadow: 0 1px 2px rgba(79, 70, 229, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+}
+.ant-btn-primary:not(:disabled):not(.ant-btn-dangerous):not(.ant-btn-background-ghost):hover {
+  background: linear-gradient(180deg, #4f46e5 0%, #4338ca 100%) !important;
+  border-color: #3f36c5 !important;
 }
 
-/* Modal */
+/* Desaturated Linear-style pill badges — tames Antd's rainbow preset tags */
+.ant-tag {
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
+  padding-inline: 8px;
+  border-width: 1px;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.ant-tag-green,
+.ant-tag-success {
+  color: #047857 !important;
+  background: #ecfdf5 !important;
+  border-color: #a7f3d0 !important;
+}
+.ant-tag-blue,
+.ant-tag-geekblue,
+.ant-tag-processing {
+  color: #4338ca !important;
+  background: #eef2ff !important;
+  border-color: #c7d2fe !important;
+}
+.ant-tag-purple {
+  color: #6d28d9 !important;
+  background: #f5f3ff !important;
+  border-color: #ddd6fe !important;
+}
+.ant-tag-gold,
+.ant-tag-orange,
+.ant-tag-warning {
+  color: #b45309 !important;
+  background: #fffbeb !important;
+  border-color: #fde68a !important;
+}
+.ant-tag-red,
+.ant-tag-error {
+  color: #be123c !important;
+  background: #fff1f2 !important;
+  border-color: #fecdd3 !important;
+}
+.ant-tag-cyan {
+  color: #0f766e !important;
+  background: #f0fdfa !important;
+  border-color: #99f6e4 !important;
+}
+
+/* Modal & Alerts */
 .ant-modal-content {
-  border-radius: var(--rp-radius);
+  border-radius: var(--rp-radius-lg);
+  box-shadow: var(--rp-shadow-lg);
+}
+.ant-alert {
+  border-radius: 10px;
 }
 
 /* Air between a dialog's title and its first field: with none, "编辑分组" sat
    on top of the first label. */
 .ant-modal-header {
   margin-bottom: 16px;
+}
+
+/* Sidebar refinement: subtle right border, sleek collapse trigger, active pill */
+.ant-layout-sider {
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+.ant-layout-sider-trigger {
+  background: #111318 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  color: #94a3b8 !important;
+  transition: color 0.15s, background-color 0.15s;
+}
+.ant-layout-sider-trigger:hover {
+  color: #f8fafc !important;
+  background: rgba(255, 255, 255, 0.04) !important;
+}
+.ant-menu-dark .ant-menu-item-selected {
+  font-weight: 500;
+  box-shadow: inset 0 0 0 1px rgba(129, 140, 248, 0.28);
 }
 
 /* Form labels */
@@ -245,12 +388,16 @@ html, body, #root {
 .rp-stat-card .ant-statistic-content {
   font-size: 28px;
   font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Mono fields in tables */
 .rp-mono {
   font-family: var(--rp-font-mono);
-  font-size: 12px;
+  font-size: 12.5px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Transfer values are a single measurement. Breaking between a number and its
@@ -260,25 +407,25 @@ html, body, #root {
   white-space: nowrap;
 }
 
-/* v0.4.17: country-flag pill wrapper. Outer layer sizes & rounds the slot;
- *  the inner .fi (from flag-icons) is pinned to a fixed flag size so the
- *  library's own .fi rules never disturb the surrounding table layout. */
+/* v0.4.17: country-flag pill wrapper. Neutral crisp pill instead of purple. */
 .country-flag-pill {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 40px;
-  height: 28px;
+  min-width: 38px;
+  height: 24px;
   padding: 0 6px;
-  border-radius: 8px;
-  background: #eee7ff;
-  font-size: 12px;
+  border-radius: 6px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  font-size: 11px;
+  font-weight: 500;
   color: var(--rp-text-secondary);
   vertical-align: middle;
 }
 .country-flag-pill .fi {
-  width: 20px;
-  height: 14px;
+  width: 18px;
+  height: 13px;
   border-radius: 2px;
   background-size: cover;
 }
@@ -442,37 +589,141 @@ html, body, #root {
 .rp-lat-matrix .ant-table-thead > tr > th.rp-lat-col-head {
   cursor: pointer;
   vertical-align: top;
-  background: var(--ant-color-bg-container, #fff);
-  box-shadow: inset 0 2px 0 transparent;
+  background: #f8fafc !important;
+  box-shadow: inset 0 2.5px 0 transparent;
   transition: background-color 0.15s, box-shadow 0.15s;
 }
 .rp-lat-matrix .ant-table-thead > tr > th.rp-lat-col-head:hover {
-  background: var(--ant-color-fill-quaternary, rgba(0, 0, 0, 0.02));
+  background: #f1f5f9 !important;
 }
 .rp-lat-matrix .ant-table-thead > tr > th.rp-lat-col-head.is-active {
-  background: var(--ant-color-primary-bg, #eef2ff);
-  box-shadow: inset 0 2px 0 var(--ant-color-primary, #6366f1);
+  background: var(--rp-primary-bg, #eef2ff) !important;
+  box-shadow: inset 0 2.5px 0 var(--rp-primary, #4f46e5),
+    inset 1px 0 0 rgba(79, 70, 229, 0.16),
+    inset -1px 0 0 rgba(79, 70, 229, 0.16);
+}
+.rp-lat-matrix .ant-table-tbody > tr > td.rp-lat-col-cell {
+  vertical-align: middle;
+  padding-block: 10px !important;
+  transition: background-color 0.15s, box-shadow 0.15s;
+}
+.rp-lat-matrix .ant-table-tbody > tr > td.rp-lat-col-cell.is-heat-good {
+  background: rgba(34, 197, 94, 0.055);
+}
+.rp-lat-matrix .ant-table-tbody > tr > td.rp-lat-col-cell.is-heat-warn {
+  background: rgba(245, 158, 11, 0.075);
+}
+.rp-lat-matrix .ant-table-tbody > tr > td.rp-lat-col-cell.is-heat-bad {
+  background: rgba(239, 68, 68, 0.08);
 }
 .rp-lat-matrix .ant-table-tbody > tr > td.rp-lat-col-cell.is-active {
-  background: color-mix(in srgb, var(--ant-color-primary, #6366f1) 5%, transparent);
+  box-shadow: inset 1.5px 0 0 rgba(79, 70, 229, 0.28),
+    inset -1.5px 0 0 rgba(79, 70, 229, 0.28);
 }
-.rp-lat-matrix .ant-table-tbody > tr:hover > td {
-  background: var(--rp-table-row-hover, #f5f5ff);
+.rp-lat-matrix .ant-table-tbody > tr:hover > td.rp-lat-col-cell.is-heat-good {
+  background: rgba(34, 197, 94, 0.10) !important;
+}
+.rp-lat-matrix .ant-table-tbody > tr:hover > td.rp-lat-col-cell.is-heat-warn {
+  background: rgba(245, 158, 11, 0.13) !important;
+}
+.rp-lat-matrix .ant-table-tbody > tr:hover > td.rp-lat-col-cell.is-heat-bad {
+  background: rgba(239, 68, 68, 0.13) !important;
 }
 .rp-lat-colname {
   font-weight: 500;
-  color: var(--ant-color-text, #18181b);
+  font-size: 13px;
+  color: var(--rp-text, #0f172a);
 }
 .rp-lat-head-sub {
-  font-size: 12px;
+  margin-top: 3px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
   font-weight: 400;
-  color: var(--ant-color-text-tertiary, #6b7280);
+  color: var(--rp-text-tertiary, #64748b);
+}
+.rp-carrier-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  height: 17px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 17px;
+  border: 1px solid transparent;
+}
+.rp-carrier-pill.is-telecom {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+}
+.rp-carrier-pill.is-unicom {
+  background: #fff7ed;
+  color: #c2410c;
+  border-color: #fed7aa;
+}
+.rp-carrier-pill.is-mobile {
+  background: #ecfdf5;
+  color: #047857;
+  border-color: #a7f3d0;
+}
+.rp-carrier-pill.is-other {
+  background: #f1f5f9;
+  color: #475569;
+  border-color: #e2e8f0;
+}
+.rp-lat-best {
+  display: inline-flex;
+  align-items: center;
+  margin-inline-start: 6px;
+  padding: 0 5px;
+  height: 16px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 16px;
+  background: #dcfce7;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
+  vertical-align: 0.1em;
+}
+.rp-lat-metric-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  margin-top: 4px;
+}
+.rp-lat-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 15px;
+  background: rgba(15, 23, 42, 0.045);
+  color: #64748b;
+  white-space: nowrap;
+}
+.rp-lat-chip.is-warn {
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+  font-weight: 500;
+}
+.rp-lat-chip.is-bad {
+  background: rgba(239, 68, 68, 0.14);
+  color: #be123c;
+  font-weight: 500;
 }
 .rp-lat-node-ip {
   display: block;
-  font-size: 11px;
+  margin-top: 2px;
+  font-size: 11.5px;
   line-height: 1.4;
-  color: var(--ant-color-text-tertiary, #6b7280);
+  color: var(--rp-text-tertiary, #64748b);
 }
 
 /* Node page target cards: the same selected look as a matrix column. */
@@ -480,21 +731,67 @@ html, body, #root {
   cursor: pointer;
   position: relative;
   overflow: hidden;
-  transition: background-color 0.15s, border-color 0.15s;
+  transition: background-color 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+.rp-lat-target[data-card-level='good'] {
+  background: linear-gradient(180deg, rgba(34, 197, 94, 0.045) 0%, #ffffff 65%);
+}
+.rp-lat-target[data-card-level='warn'] {
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.065) 0%, #ffffff 65%);
+}
+.rp-lat-target[data-card-level='bad'] {
+  background: linear-gradient(180deg, rgba(239, 68, 68, 0.075) 0%, #ffffff 65%);
 }
 .rp-lat-target:hover {
-  background: var(--ant-color-fill-quaternary, rgba(0, 0, 0, 0.02));
+  border-color: #cbd5e1;
+  box-shadow: var(--rp-shadow-sm);
 }
 .rp-lat-target.is-selected {
-  background: var(--ant-color-primary-bg, #eef2ff);
-  border-color: var(--ant-color-primary-border, #c7d2fe);
-  box-shadow: inset 0 2px 0 var(--ant-color-primary, #6366f1);
+  background: var(--rp-primary-bg, #eef2ff) !important;
+  border-color: var(--rp-primary-border, #c7d2fe) !important;
+  box-shadow: inset 0 2.5px 0 var(--rp-primary, #4f46e5);
 }
 .rp-lat-target-value {
   font-size: 22px;
-  font-weight: 500;
+  font-weight: 600;
   line-height: 1.3;
   white-space: nowrap;
+}
+.rp-lat-mini-strip {
+  display: flex;
+  gap: 2px;
+  margin-top: 8px;
+}
+.rp-lat-mini-slice {
+  flex: 1;
+  height: 6px;
+  border-radius: 2px;
+}
+
+/* KPI summary strip above group trend chart */
+.rp-lat-kpi-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--rp-border);
+}
+.rp-lat-kpi-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid var(--rp-border);
+  font-size: 12px;
+}
+.rp-lat-kpi-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 /* "No data" / "all lost" in place of a number: a quiet line, not a headline. */
@@ -584,27 +881,64 @@ html, body, #root {
   color: var(--ant-color-text-tertiary, #6b7280);
 }
 
-/* Recent status. Thin rounded slices; an empty slice is an outline so the
-   slices that hold data stand out. */
+/* Recent status: Better Stack / Uptime Kuma vertical heartbeat pillars */
+.rp-lat-strip-card {
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid var(--rp-border);
+}
 .rp-lat-strip {
   display: flex;
-  gap: 2px;
+  gap: 3px;
   margin-top: 8px;
+  align-items: center;
 }
 .rp-lat-slice {
   flex: 1;
   min-width: 0;
-  height: 9px;
-  border-radius: 2.5px;
+  height: 22px;
+  border-radius: 3.5px;
+  transition: transform 0.12s ease, filter 0.12s ease;
+}
+.rp-lat-slice:hover {
+  transform: scaleY(1.16);
+  filter: brightness(0.95);
 }
 .rp-lat-slice[data-level='none'] {
-  background: transparent !important;
-  box-shadow: inset 0 0 0 1px var(--ant-color-border, #d9d9de);
-  opacity: 0.8;
+  background: #eef2f6 !important;
+  box-shadow: inset 0 0 0 1px #dce2ec;
+}
+.rp-lat-strip-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 5px;
+  font-size: 11px;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+}
+.rp-lat-legend {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--rp-text-tertiary);
+}
+.rp-lat-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.rp-lat-legend-swatch {
+  width: 8px;
+  height: 12px;
+  border-radius: 2px;
 }
 .rp-lat-big {
-  font-size: 19px;
-  font-weight: 500;
+  font-size: 18px;
+  font-weight: 600;
   line-height: 1.2;
   white-space: nowrap;
 }
@@ -623,4 +957,215 @@ html, body, #root {
   .rp-lat-card-tools {
     justify-content: flex-start;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html:focus-within {
+    scroll-behavior: auto;
+  }
+  .rp-plan-card.ant-card,
+  .rp-kpi-card.ant-card,
+  .rp-user-pill,
+  .rp-lat-target,
+  .rp-lat-matrix .ant-table-thead > tr > th.rp-lat-col-head {
+    transition: none !important;
+    transform: none !important;
+  }
+}
+
+/* ---- Modern UI Surface Components (Linear / Stripe refresh) ---- */
+
+.rp-main-inner {
+  max-width: var(--rp-content-max-width);
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* Auth pages: subtle ambient indigo glow + architectural dot grid */
+.rp-auth-shell {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  padding: 56px 16px;
+  box-sizing: border-box;
+  background-color: var(--rp-bg);
+  background-image:
+    radial-gradient(ellipse 70% 50% at 50% -10%, rgba(79, 70, 229, 0.13), transparent 70%),
+    radial-gradient(ellipse 50% 40% at 85% 95%, rgba(124, 58, 237, 0.07), transparent 70%),
+    radial-gradient(#cbd5e1 0.85px, transparent 0.85px);
+  background-size: 100% 100%, 100% 100%, 24px 24px;
+}
+.rp-auth-card.ant-card {
+  width: 100%;
+  max-width: 408px;
+  border-radius: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: var(--rp-shadow-lg);
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(12px);
+}
+.rp-auth-card > .ant-card-body {
+  padding: 34px 32px 28px;
+}
+
+/* Header user profile pill */
+.rp-user-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 3px 10px 3px 4px;
+  border-radius: 999px;
+  border: 1px solid var(--rp-border);
+  background: #f8fafc;
+  color: var(--rp-text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+.rp-user-pill:hover {
+  background: #eef2ff;
+  border-color: var(--rp-primary-border);
+}
+.rp-user-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* Bento & KPI stat cards */
+.rp-kpi-card.ant-card {
+  height: 100%;
+  border-radius: var(--rp-radius);
+  border: 1px solid var(--rp-border);
+  box-shadow: var(--rp-shadow-sm);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.rp-kpi-card.ant-card:hover {
+  border-color: #d0d6e2;
+  box-shadow: var(--rp-shadow);
+}
+.rp-icon-tile {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+/* Status indicator dot — crisp solid edge (no blurry halo smudge) */
+.rp-status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-inline-end: 6px;
+  vertical-align: 0.06em;
+  flex-shrink: 0;
+}
+.rp-status-dot.is-online {
+  background: #10b981;
+  box-shadow: 0 0 0 2px #d1fae5;
+}
+.rp-status-dot.is-partial {
+  background: #f59e0b;
+  box-shadow: 0 0 0 2px #fef3c7;
+}
+.rp-status-dot.is-offline {
+  background: #94a3b8;
+  box-shadow: 0 0 0 2px #f1f5f9;
+}
+
+/* Node group Collapse: clean single-card shell without nested grey box clutter */
+.rp-node-collapse.ant-collapse {
+  background: var(--rp-card-bg);
+  border: 1px solid var(--rp-border);
+  border-radius: var(--rp-radius);
+  box-shadow: var(--rp-shadow-sm);
+  overflow: hidden;
+}
+.rp-node-collapse > .ant-collapse-item {
+  border-bottom: 0 !important;
+}
+.rp-node-collapse > .ant-collapse-item > .ant-collapse-header {
+  background: #ffffff;
+  padding: 12px 16px !important;
+  align-items: center !important;
+}
+.rp-node-collapse > .ant-collapse-item-active > .ant-collapse-header {
+  border-bottom: 1px solid var(--rp-border);
+}
+.rp-node-collapse .ant-collapse-content {
+  border-top: 0 !important;
+}
+.rp-node-collapse .ant-collapse-content > .ant-collapse-content-box {
+  padding: 0 !important;
+}
+.rp-node-collapse .ant-table-wrapper .ant-table {
+  border-radius: 0;
+}
+
+/* Pricing cards in Shop */
+.rp-plan-card.ant-card {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--rp-radius-lg);
+  border: 1px solid var(--rp-border);
+  box-shadow: var(--rp-shadow-sm);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+.rp-plan-card.ant-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--rp-shadow);
+  border-color: #cbd5e1;
+}
+.rp-plan-card.is-featured.ant-card {
+  border-color: var(--rp-primary-border);
+  box-shadow: 0 4px 20px rgba(79, 70, 229, 0.08), inset 0 2px 0 var(--rp-primary);
+}
+.rp-plan-card > .ant-card-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 22px 22px 20px;
+}
+.rp-plan-feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--rp-text-secondary);
+  line-height: 1.65;
+}
+.rp-plan-feature + .rp-plan-feature {
+  margin-top: 6px;
+}
+
+/* Contextual batch-selection bar for Rules */
+.rp-selection-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-radius: 10px;
+  background: var(--rp-primary-bg);
+  border: 1px solid var(--rp-primary-border);
 }

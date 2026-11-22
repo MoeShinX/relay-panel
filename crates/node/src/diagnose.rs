@@ -72,20 +72,22 @@ async fn diagnose(
     // tcp_udp — both have a TCP listener.
     let info: Option<ListenerInfo> = manager.lock().await.listener_info_for_rule_tcp(rule_id);
 
-    let (listener_running, listen_port, protocol, transport, targets) = match &info {
-        Some(i) => (
-            i.running,
-            i.port,
-            i.protocol.clone(),
-            i.transport.clone(),
-            i.targets.clone(),
-        ),
-        None => (false, 0, String::new(), String::new(), Vec::new()),
-    };
+    let (listener_running, listen_port, protocol, transport, targets, block_local_targets) =
+        match &info {
+            Some(i) => (
+                i.running,
+                i.port,
+                i.protocol.clone(),
+                i.transport.clone(),
+                i.targets.clone(),
+                i.block_local_targets,
+            ),
+            None => (false, 0, String::new(), String::new(), Vec::new(), false),
+        };
 
     // Cap targets; probe in bounded-concurrency batches. TCP-only (v0.4.9).
     let targets_to_probe: Vec<String> = targets.into_iter().take(MAX_TARGETS).collect();
-    let results = probe_targets(&targets_to_probe).await;
+    let results = probe_targets(&targets_to_probe, block_local_targets).await;
 
     DiagnoseResult {
         msg_type: "diagnose_result".into(),
@@ -107,7 +109,7 @@ async fn diagnose(
 /// MAX_CONCURRENT_PROBES via a semaphore. Input is capped at MAX_TARGETS
 /// (defensive — callers should already cap, but this guarantees the contract
 /// regardless). v0.4.9: TCP-only; the old UDP route-only branch is gone.
-async fn probe_targets(targets: &[String]) -> Vec<DiagnoseTargetResult> {
+async fn probe_targets(targets: &[String], block_local_targets: bool) -> Vec<DiagnoseTargetResult> {
     let targets_capped: Vec<&String> = targets.iter().take(MAX_TARGETS).collect();
     let sem = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PROBES));
     let mut handles = Vec::with_capacity(targets_capped.len());
@@ -116,7 +118,7 @@ async fn probe_targets(targets: &[String]) -> Vec<DiagnoseTargetResult> {
         let permit = sem.clone();
         handles.push(tokio::spawn(async move {
             let _p = permit.acquire_owned().await.unwrap();
-            let outcome = probe_tcp(&addr).await;
+            let outcome = probe_tcp(&addr, block_local_targets).await;
             DiagnoseTargetResult {
                 address: addr,
                 outcome,
@@ -135,9 +137,42 @@ async fn probe_targets(targets: &[String]) -> Vec<DiagnoseTargetResult> {
 
 /// TCP reachability: connect with a 3s deadline. Success → close immediately.
 /// Recorded time is the connect latency.
-async fn probe_tcp(addr: &str) -> TargetProbeOutcome {
+async fn probe_tcp(addr: &str, block_local_targets: bool) -> TargetProbeOutcome {
     let start = std::time::Instant::now();
-    match tokio::time::timeout(PROBE_TIMEOUT, TcpStream::connect(addr)).await {
+    let connect_fut = async {
+        let resolved: Vec<std::net::SocketAddr> = tokio::net::lookup_host(addr).await?.collect();
+        if resolved.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AddrNotAvailable,
+                "could not resolve target",
+            ));
+        }
+        let allowed: Vec<std::net::SocketAddr> = if block_local_targets {
+            resolved
+                .into_iter()
+                .filter(|a| !relay_shared::protocol::is_local_ip(a.ip()))
+                .collect()
+        } else {
+            resolved
+        };
+        if allowed.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "target resolves to a disallowed local or link-local address",
+            ));
+        }
+        let mut last_err = None;
+        for a in allowed {
+            match TcpStream::connect(a).await {
+                Ok(s) => return Ok(s),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::AddrNotAvailable, "no address")
+        }))
+    };
+    match tokio::time::timeout(PROBE_TIMEOUT, connect_fut).await {
         Ok(Ok(_stream)) => TargetProbeOutcome::Reachable {
             elapsed_ms: start.elapsed().as_millis() as u64,
         },
@@ -151,7 +186,7 @@ async fn probe_tcp(addr: &str) -> TargetProbeOutcome {
 /// POST the result to the panel (same channel/auth as report_status).
 async fn report(config: &NodeConfig, result: DiagnoseResult) -> Result<(), String> {
     let url = format!("{}/api/v1/node/diagnose_result", config.panel_url);
-    let client = reqwest::Client::new();
+    let client = crate::poller::http_client();
     let resp = client
         .post(&url)
         // v1.2.6: the panel stops waiting for a diagnosis after a few seconds,
@@ -190,7 +225,7 @@ mod tests {
     #[tokio::test]
     async fn probe_tcp_unreachable_returns_failed() {
         // 127.0.0.1:1 is almost never listening → connection refused.
-        let o = probe_tcp("127.0.0.1:1").await;
+        let o = probe_tcp("127.0.0.1:1", false).await;
         match o {
             TargetProbeOutcome::Failed { .. } | TargetProbeOutcome::Timeout => {}
             TargetProbeOutcome::Reachable { .. } => {
@@ -204,11 +239,17 @@ mod tests {
         // Bind a throwaway listener, probe its address, expect Reachable.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap().to_string();
-        let o = probe_tcp(&addr).await;
+        let o = probe_tcp(&addr, false).await;
         assert!(
             matches!(o, TargetProbeOutcome::Reachable { .. }),
             "local listener should be reachable: {:?}",
             o
+        );
+        let blocked = probe_tcp(&addr, true).await;
+        assert!(
+            matches!(blocked, TargetProbeOutcome::Failed { ref error } if error.contains("disallowed")),
+            "local listener must be blocked when block_local_targets=true: {:?}",
+            blocked
         );
     }
 
@@ -219,7 +260,7 @@ mod tests {
         // only the cap and that it returns without hanging. v0.4.9: TCP-only,
         // no is_udp flag.
         let addrs: Vec<String> = (0..50).map(|i| format!("127.0.0.1:{}", 1000 + i)).collect();
-        let out = probe_targets(&addrs).await;
+        let out = probe_targets(&addrs, false).await;
         assert!(
             out.len() <= MAX_TARGETS,
             "must cap at MAX_TARGETS, got {}",

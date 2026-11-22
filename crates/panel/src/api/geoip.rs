@@ -101,6 +101,16 @@ async fn fetch_with_fallback(
     None
 }
 
+fn geoip_http_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
+
 /// Call a single GeoIP provider URL and cache the result on success. Returns
 /// None when `should_fallback()` would trigger (timeout, non-2xx, JSON parse
 /// failure, missing country_code). The API response body is never logged.
@@ -111,10 +121,7 @@ async fn try_fetch(
     url_template: &str,
 ) -> Option<GeoIpEntry> {
     let url = url_template.replace("{ip}", ip);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .ok()?;
+    let client = geoip_http_client();
     let resp = client.get(&url).send().await.ok()?;
     if !resp.status().is_success() {
         return None;
@@ -205,11 +212,21 @@ fn is_cache_fresh(cached_at: i64, now: i64, ttl_secs: i64) -> bool {
 
 /// Read a cached GeoIP entry from KVS without triggering a lookup. Returns
 /// None on any miss/parse error (the UI shows "未知"). Stale entries (past
-/// TTL) are still returned — the asynchronous refresher at report_status time
-/// will replace them; a stale country is better than no country.
-pub async fn read_cache(db: &dyn KvsRepository, ip: &str) -> Option<GeoIpEntry> {
-    let raw = db.get(&format!("geoip:{ip}")).await.ok().flatten()?;
-    serde_json::from_str(&raw).ok()
+/// Batch-read all cached GeoIP entries (`geoip:*`) in one prefix scan so
+/// `/nodes` and `/nodes/shared` avoid issuing up to 2 SQL queries per node.
+pub async fn read_all_cache(
+    db: &dyn KvsRepository,
+) -> std::collections::HashMap<String, GeoIpEntry> {
+    let Ok(rows) = db.scan_prefix("geoip:").await else {
+        return std::collections::HashMap::new();
+    };
+    rows.into_iter()
+        .filter_map(|(k, v)| {
+            let ip = k.strip_prefix("geoip:")?.to_string();
+            let entry = serde_json::from_str::<GeoIpEntry>(&v).ok()?;
+            Some((ip, entry))
+        })
+        .collect()
 }
 
 #[cfg(test)]

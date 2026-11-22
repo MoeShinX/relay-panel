@@ -84,6 +84,10 @@ pub async fn get_config(State(state): State<AppState>, headers: HeaderMap) -> Re
     };
 
     let Some(group) = group else {
+        // A token that matches no group means the group was deleted or its
+        // token replaced: the empty config stops this node's forwarding on
+        // purpose (its traffic could no longer be billed). Only a transient
+        // failure (DB error above, network, 5xx) lets the node keep its cache.
         return Json(NodeConfigResponse {
             listeners: vec![],
             latency: None,
@@ -283,6 +287,25 @@ fn display_text(raw: &str) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+const MAX_NODE_ID_LEN: usize = 64;
+
+/// Validate a node-supplied `node_id`: 1..=64 ASCII letters, digits, `-`, or `_`.
+/// Keeps the KVS key delimiter (`:`), the SQL `LIKE` wildcard `%` and oversized
+/// ids out of `node_status:{group}:{node}` keys.
+pub(crate) fn valid_node_id(raw: &str) -> Option<&str> {
+    let s = raw.trim();
+    if s.is_empty() || s.len() > MAX_NODE_ID_LEN {
+        return None;
+    }
+    if s.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        Some(s)
+    } else {
+        None
+    }
+}
+
 pub async fn report_status(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -296,6 +319,20 @@ pub async fn report_status(
             message: "Invalid token".into(),
             data: None,
         });
+    };
+
+    let normalized_node_id = match req.node_id.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(non_empty) => match valid_node_id(non_empty) {
+            Some(valid) => Some(valid.to_string()),
+            None => {
+                return Json(ApiResponse {
+                    code: 400,
+                    message: "Invalid node_id".into(),
+                    data: None,
+                });
+            }
+        },
     };
 
     // Verify token and update node status in kvs
@@ -316,22 +353,18 @@ pub async fn report_status(
         // poller::get_or_create_node_id). Older nodes that don't send node_id
         // fall back to the legacy per-group key (no regression — a single-node
         // group behaves exactly as before).
-        let status_key = match &req.node_id {
-            Some(nid) if !nid.trim().is_empty() => format!("node_status:{}:{}", g.id, nid.trim()),
-            _ => format!("node_status:{}", g.id), // legacy fallback
+        let status_key = match &normalized_node_id {
+            Some(nid) => format!("node_status:{}:{}", g.id, nid),
+            None => format!("node_status:{}", g.id), // legacy fallback
         };
-        let node_id_for_json = req.node_id.clone();
+        let node_id_for_json = normalized_node_id.clone();
         // v1.2.21: latency-monitor samples. Screened against the targets of
         // the node's own group (a target id of another group is dropped like
         // an unknown one) before anything is stored; the targets the node says it
         // cannot probe go into the status below (the latency page reads them
         // from there), the rest are stored after it. Skipped for a node with
         // no node_id — its series would have no owner.
-        let latency_node_id = req
-            .node_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty());
+        let latency_node_id = normalized_node_id.as_deref();
         // A node the admin switched off in the group's node list is ignored for
         // latency: its samples are dropped and its "unsupported" list is not
         // written, exactly as if the report carried no latency at all.
@@ -1261,5 +1294,66 @@ mod tests {
                 ("batch-b".to_string(), false)
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn get_config_with_unknown_token_returns_empty_config() {
+        let (state, _pool) = seeded_state().await;
+        let mut h = auth_headers("revoked-or-wrong-token");
+        h.insert(
+            "X-Config-Protocol-Version",
+            relay_shared::protocol::CONFIG_PROTOCOL_VERSION
+                .to_string()
+                .parse()
+                .unwrap(),
+        );
+        let resp = get_config(State(state), h).await;
+        // A deleted group / replaced token stops the node: 200 + no listeners.
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 65536).await.unwrap();
+        let cfg: relay_shared::protocol::NodeConfigResponse =
+            serde_json::from_slice(&body).unwrap();
+        assert!(cfg.listeners.is_empty());
+    }
+
+    #[tokio::test]
+    async fn report_status_rejects_malformed_node_id() {
+        use relay_shared::protocol::StatusReport;
+        let (state, _pool) = seeded_state().await;
+        for bad in ["a:b", "node%1", &"x".repeat(65)] {
+            let req = StatusReport {
+                cpu_usage: 1.0,
+                mem_usage: 1.0,
+                active_connections: 0,
+                uptime_secs: 10,
+                public_ip: None,
+                public_ipv4: None,
+                public_ipv6: None,
+                disk_total: None,
+                disk_used: None,
+                disk_usage_percent: None,
+                disk_mount: None,
+                upload_bps: None,
+                download_bps: None,
+                boot_upload_bytes: None,
+                boot_download_bytes: None,
+                network_interface: None,
+                node_id: Some(bad.to_string()),
+                process_uptime_secs: None,
+                node_version: None,
+                config_protocol_version: None,
+                listener_errors: None,
+                install_method: None,
+                cpu_model: None,
+                cpu_cores: None,
+                mem_total: None,
+                mem_used: None,
+                disks: Vec::new(),
+                latency: Vec::new(),
+            };
+            let Json(resp) =
+                report_status(State(state.clone()), auth_headers("tok-A"), Json(req)).await;
+            assert_eq!(resp.code, 400, "bad node_id={bad:?} must be rejected");
+        }
     }
 }

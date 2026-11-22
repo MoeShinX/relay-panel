@@ -1,13 +1,14 @@
-import { Card, Row, Col, Button, Spin, Tag, Modal, Table, Typography, message, Result, Alert, Space, Form, Input } from 'antd';
-import { ShoppingOutlined, ReloadOutlined, WalletOutlined } from '@ant-design/icons';
-import { useCallback, useEffect, useState } from 'react';
+import { Card, Row, Col, Button, Spin, Tag, Modal, Table, Typography, message, Result, Alert, Space, Form, Input, Empty } from 'antd';
+import { ShoppingOutlined, ReloadOutlined, WalletOutlined, CheckCircleFilled } from '@ant-design/icons';
+import { useCallback, useContext, useEffect, useState } from 'react';
 import api from '../api/client';
 import type { ApiEnvelope, Plan, Order, UserSelf } from '../api/types';
 import { useI18n } from '../i18n/context';
+import { AuthContext } from '../auth/AuthContext';
 import { useTableScroll } from '../hooks/useIsMobile';
 import { formatBytes } from '../utils/format';
 
-const { Text, Title } = Typography;
+  const { Text } = Typography;
 
 /**
  * v1.0.8: self-service shop. Lists purchasable (non-hidden) plans as cards,
@@ -19,6 +20,7 @@ const { Text, Title } = Typography;
 export default function Shop() {
   const tableScroll = useTableScroll();
   const { t } = useI18n();
+  const auth = useContext(AuthContext);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [me, setMe] = useState<UserSelf | null>(null);
@@ -41,6 +43,10 @@ export default function Shop() {
         api.get<unknown, ApiEnvelope<Order[]>>('/user/orders'),
         api.get<unknown, ApiEnvelope<UserSelf>>('/user/me'),
       ]);
+      if (plansRes.code !== 0 || ordersRes.code !== 0 || meRes.code !== 0) {
+        setLoadFailed(true);
+        return;
+      }
       setPlans(plansRes.data || []);
       setOrders(ordersRes.data || []);
       setMe(meRes.data || null);
@@ -68,6 +74,7 @@ export default function Shop() {
       message.success(t('purchaseSuccess'));
       setBuying(null);
       load();
+      void auth?.refreshCurrentUser();
     } catch {
       message.error(t('purchaseFailed'));
     } finally {
@@ -91,6 +98,7 @@ export default function Shop() {
       setRedeemOpen(false);
       redeemForm.resetFields();
       load(); // the balance shown above the plan cards must reflect the top-up
+      void auth?.refreshCurrentUser();
     } catch {
       message.error(t('redeemFailed'));
     } finally {
@@ -126,6 +134,15 @@ export default function Shop() {
         <Button icon={<ReloadOutlined />} onClick={load}>{t('refresh')}</Button>
       </div>
 
+      {me?.admin && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          title={t('adminPlanNotNeeded')}
+        />
+      )}
+
       {/* v1.0.8: suspended banner — buying is still allowed (does not auto-clear). */}
       {me?.suspended && (
         <Alert
@@ -144,73 +161,125 @@ export default function Shop() {
           afford a plan. Making them go hunt for it on another page is the
           difference between a sale and an abandoned one. */}
       {me && (
-        <Card size="small" style={{ marginBottom: 16 }}>
-          <Space wrap>
-            <Text strong>{t('accountBalance')}:</Text>
-            <span className="rp-mono">{me.balance}</span>
-            <Button
-              size="small"
-              type="primary"
-              ghost
-              icon={<WalletOutlined />}
-              onClick={() => { redeemForm.resetFields(); setRedeemOpen(true); }}
-            >
-              {t('redeem')}
-            </Button>
-            <Text type="secondary" style={{ marginLeft: 16 }}>·</Text>
-            <Text type="secondary">{t('shopTrafficStacksHint')}</Text>
-          </Space>
+        <Card style={{ marginBottom: 20 }} styles={{ body: { padding: '16px 20px' } }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <Space size={12} wrap>
+              <span className="rp-icon-tile" style={{ width: 36, height: 36, fontSize: 16, background: '#eef2ff', color: '#4f46e5' }}>
+                <WalletOutlined />
+              </span>
+              <div>
+                <div style={{ fontSize: 12, color: 'var(--rp-text-tertiary)' }}>{t('accountBalance')}</div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 3 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--rp-text-secondary)' }}>¥</span>
+                  <span className="rp-mono" style={{ fontSize: 20, fontWeight: 600, color: 'var(--rp-text)' }}>{me.balance}</span>
+                </div>
+              </div>
+              <Button
+                type="primary"
+                icon={<WalletOutlined />}
+                onClick={() => { redeemForm.resetFields(); setRedeemOpen(true); }}
+              >
+                {t('redeem')}
+              </Button>
+            </Space>
+            <Text type="secondary" style={{ fontSize: 12 }}>{t('shopTrafficStacksHint')}</Text>
+          </div>
         </Card>
       )}
 
       <Row gutter={[16, 16]}>
         {plans.length === 0 && (
           <Col span={24}>
-            <Card><Text type="secondary">{t('noPlansAvailable')}</Text></Card>
+            <Card><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('noPlansAvailable')} /></Card>
           </Col>
         )}
-        {plans.map((p) => (
-          <Col xs={24} sm={12} md={8} key={p.id}>
-            <Card
-              title={<Space><Text strong>{p.name}</Text>{p.plan_type === 'time' && <Tag color="purple">{t('planTypeTime')}</Tag>}</Space>}
-              extra={p.description ? <Text type="secondary" style={{ fontSize: 12 }}>{p.description}</Text> : null}
-            >
-              <div style={{ marginBottom: 8 }}>
-                <Title level={3} style={{ margin: 0 }}><span className="rp-mono">{p.price}</span></Title>
-              </div>
-              <div style={{ color: 'var(--rp-text-secondary)', fontSize: 13, lineHeight: 1.8 }}>
-                <div>{t('planTraffic')}: {p.traffic > 0 ? formatBytes(p.traffic) : t('unlimited')}</div>
-                <div>{t('planMaxRules')}: {p.max_rules}</div>
-                {p.duration_days > 0 && <div>{t('planDuration')}: {p.duration_days} {t('days')}</div>}
-                {/* v1.0.9: device groups this plan grants on purchase. Names are
-                    resolved server-side (device_group_names) — the buyer isn't
-                    authorized for these groups yet, so the client can't resolve
-                    the ids itself. */}
-                {/* v1.0.10: always render this row (show "无" when a plan grants
-                    no lines) so plan cards stay vertically aligned. */}
-                {p.grant_all_groups ? (
-                  <div>{t('planGrantGroups')}: <Tag color="gold">{t('planGrantAll')}</Tag></div>
-                ) : (p.device_group_names && p.device_group_names.length > 0) ? (
-                  <div>{t('planGrantGroups')}: {p.device_group_names.join(', ')}</div>
+        {plans.map((p) => {
+          const isCurrent = me?.plan_id != null && me.plan_id === p.id;
+          const isFeatured = isCurrent || p.grant_all_groups;
+          return (
+            <Col xs={24} sm={12} lg={8} key={p.id} style={{ display: 'flex' }}>
+              <Card className={`rp-plan-card${isFeatured ? ' is-featured' : ''}`}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
+                  <Text strong style={{ fontSize: 16 }}>{p.name}</Text>
+                  <Space size={4}>
+                    {p.plan_type === 'time' ? <Tag color="purple">{t('planTypeTime')}</Tag> : <Tag color="blue">{t('planTypeData')}</Tag>}
+                  </Space>
+                </div>
+                {p.description ? (
+                  <div style={{ fontSize: 12, color: 'var(--rp-text-tertiary)', marginBottom: 14, minHeight: 18 }}>
+                    {p.description}
+                  </div>
                 ) : (
-                  <div>{t('planGrantGroups')}: <Text type="secondary">{t('planGrantNone')}</Text></div>
+                  <div style={{ marginBottom: 14, minHeight: 18 }} />
                 )}
-                {p.reset_traffic && <div><Tag color="green">{t('planResetTraffic')}</Tag></div>}
-              </div>
-              {/* Free plans can be claimed once per user (server-enforced);
-                  the list marks the ones this user already has. */}
-              <Button
-                type="primary"
-                block
-                style={{ marginTop: 16 }}
-                disabled={p.claimed === true}
-                onClick={() => setBuying(p)}
-              >
-                {p.claimed === true ? t('planClaimed') : t('buyNow')}
-              </Button>
-            </Card>
-          </Col>
-        ))}
+
+                <div style={{
+                  display: 'flex', alignItems: 'baseline', gap: 4,
+                  paddingBottom: 16, marginBottom: 16,
+                  borderBottom: '1px solid var(--rp-border)',
+                }}>
+                  <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--rp-text-secondary)' }}>¥</span>
+                  <span className="rp-mono" style={{ fontSize: 32, fontWeight: 700, color: 'var(--rp-text)', lineHeight: 1.1, letterSpacing: -0.5 }}>
+                    {p.price}
+                  </span>
+                  {p.duration_days > 0 && (
+                    <span style={{ fontSize: 13, color: 'var(--rp-text-tertiary)' }}>
+                      / {p.duration_days} {t('days')}
+                    </span>
+                  )}
+                </div>
+
+                <div style={{ marginBottom: 20 }}>
+                  <div className="rp-plan-feature">
+                    <CheckCircleFilled style={{ color: '#4f46e5', marginTop: 4, fontSize: 13 }} />
+                    <span>{t('planTraffic')}: <Text strong>{p.traffic > 0 ? formatBytes(p.traffic) : t('unlimited')}</Text></span>
+                  </div>
+                  <div className="rp-plan-feature">
+                    <CheckCircleFilled style={{ color: '#4f46e5', marginTop: 4, fontSize: 13 }} />
+                    <span>{t('planMaxRules')}: <Text strong>{p.max_rules}</Text></span>
+                  </div>
+                  {p.duration_days > 0 && (
+                    <div className="rp-plan-feature">
+                      <CheckCircleFilled style={{ color: '#4f46e5', marginTop: 4, fontSize: 13 }} />
+                      <span>{t('planDuration')}: <Text strong>{p.duration_days} {t('days')}</Text></span>
+                    </div>
+                  )}
+                  <div className="rp-plan-feature">
+                    <CheckCircleFilled style={{ color: '#4f46e5', marginTop: 4, fontSize: 13 }} />
+                    <span>
+                      {t('planGrantGroups')}:{' '}
+                      {p.grant_all_groups ? (
+                        <Tag color="gold" style={{ marginInlineEnd: 0 }}>{t('planGrantAll')}</Tag>
+                      ) : (p.device_group_names && p.device_group_names.length > 0) ? (
+                        <Text strong>{p.device_group_names.join(', ')}</Text>
+                      ) : (
+                        <Text type="secondary">{t('planGrantNone')}</Text>
+                      )}
+                    </span>
+                  </div>
+                  {p.reset_traffic && (
+                    <div className="rp-plan-feature">
+                      <CheckCircleFilled style={{ color: '#059669', marginTop: 4, fontSize: 13 }} />
+                      <span><Tag color="green" style={{ marginInlineEnd: 0 }}>{t('planResetTraffic')}</Tag></span>
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ marginTop: 'auto' }}>
+                  <Button
+                    type={p.claimed === true ? 'default' : 'primary'}
+                    block
+                    size="large"
+                    disabled={p.claimed === true || me?.admin === true}
+                    onClick={() => setBuying(p)}
+                  >
+                    {p.claimed === true ? t('planClaimed') : t('buyNow')}
+                  </Button>
+                </div>
+              </Card>
+            </Col>
+          );
+        })}
       </Row>
 
       {/* Order history. */}

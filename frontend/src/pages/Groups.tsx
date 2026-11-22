@@ -77,37 +77,41 @@ export default function Groups() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const g = await api.get<unknown, ApiEnvelope<DeviceGroup[]>>('/groups');
-      // `code: 500` arrives inside a 200 response with `data: null`, so without
-      // this check a database outage renders as "no groups" — and from here an
-      // operator would go create duplicates of groups that still exist.
-      if (g.code !== 0) {
-        setLoadFailed(true);
-      } else {
-        setLoadFailed(false);
-        setGroups(g.data || []);
-      }
       if (isAdmin) {
-        try {
-          const u = await api.get<unknown, ApiEnvelope<User[]>>('/admin/users');
-          setUsers(u.data || []);
-        } catch { setUsers([]); }
-        // v1.0.4: fetch node status for expandable node lists.
-        try {
-          const n = await api.get<unknown, ApiEnvelope<NodeStatus[]>>('/nodes');
-          setNodes(n.data || []);
-        } catch { setNodes([]); }
-        // v1.2.21: which groups have latency targets, for the button's count.
-        try {
-          const l = await api.get<unknown, ApiEnvelope<LatencyGroupCount[]>>('/admin/latency/groups');
-          setLatencyCounts(new Map(l.code === 0 ? (l.data || []).map((c) => [c.group_id, c.targets]) : []));
-        } catch { setLatencyCounts(new Map()); }
+        const [gRes, uRes, nRes, lRes] = await Promise.allSettled([
+          api.get<unknown, ApiEnvelope<DeviceGroup[]>>('/groups'),
+          api.get<unknown, ApiEnvelope<User[]>>('/admin/users'),
+          api.get<unknown, ApiEnvelope<NodeStatus[]>>('/nodes'),
+          api.get<unknown, ApiEnvelope<LatencyGroupCount[]>>('/admin/latency/groups'),
+        ]);
+        if (gRes.status === 'fulfilled' && gRes.value.code === 0) {
+          setLoadFailed(false);
+          setGroups(gRes.value.data || []);
+        } else {
+          setLoadFailed(true);
+        }
+        setUsers(uRes.status === 'fulfilled' && uRes.value.code === 0 ? (uRes.value.data || []) : []);
+        setNodes(nRes.status === 'fulfilled' && nRes.value.code === 0 ? (nRes.value.data || []) : []);
+        setLatencyCounts(
+          new Map(
+            lRes.status === 'fulfilled' && lRes.value.code === 0
+              ? (lRes.value.data || []).map((c) => [c.group_id, c.targets])
+              : [],
+          ),
+        );
       } else {
+        const [gRes, nRes] = await Promise.allSettled([
+          api.get<unknown, ApiEnvelope<DeviceGroup[]>>('/groups'),
+          api.get<unknown, ApiEnvelope<NodeStatus[]>>('/nodes/shared'),
+        ]);
+        if (gRes.status === 'fulfilled' && gRes.value.code === 0) {
+          setLoadFailed(false);
+          setGroups(gRes.value.data || []);
+        } else {
+          setLoadFailed(true);
+        }
         setUsers([]);
-        try {
-          const n = await api.get<unknown, ApiEnvelope<NodeStatus[]>>('/nodes/shared');
-          setNodes(n.data || []);
-        } catch { setNodes([]); }
+        setNodes(nRes.status === 'fulfilled' && nRes.value.code === 0 ? (nRes.value.data || []) : []);
       }
     } catch {
       setLoadFailed(true);

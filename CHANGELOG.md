@@ -36,6 +36,44 @@ independent `v*` / `node-v*` tracks since this release).
   time of the data on screen. The 7-day and 30-day views now refresh themselves
   every five minutes too, and the group page judges a node's current reading by
   its newest minute (the group latency API adds `latest_ts` to each node's line).
+- A refreshed look: new colour theme, sidebar and page styling, a user menu in
+  the top-right corner (account, change password, log out), status dots on node
+  groups and rows, and calmer CPU / memory bar colours.
+- Rule changes now notify only the nodes of the affected device groups instead
+  of every node, and building a node's configuration and the node-status pages
+  take far fewer database queries.
+- More admin actions are on the audit trail: creating and editing groups, plans
+  and tunnel profiles, deleting plans, editing users, registration settings, and
+  plan purchases.
+
+### Fixed
+
+- An administrator can no longer buy a plan for themselves in the shop (it would
+  have put a quota on an unlimited account); the shop says plans are not needed.
+- A plan used as the default or an allowed plan for public registration can no
+  longer be deleted (409 until the registration settings are changed).
+- Deleting a node no longer drops the cached country of an IP address another
+  node still reports.
+- The Telegram bot token and the SMTP password in the notification settings can
+  now be cleared explicitly.
+- Resetting a user's traffic and deleting a user now refresh node configs right
+  away.
+
+### Security
+
+- A regular user's rule can no longer forward to a loopback or link-local
+  address even when its target is a domain name that resolves to one: the node
+  checks the resolved address before it connects (TCP, UDP and diagnostics).
+  Administrators' rules are not restricted. Needs the new node version.
+- Redeeming codes is limited to 15 attempts a minute per user, and one delete
+  request takes at most one batch of codes.
+- Registration checks the username and password length before anything else,
+  and registrations whose client address cannot be told share one limit. The
+  client address is taken from the last X-Forwarded-For header behind a local
+  proxy; `TRUST_PROXY_HEADERS=0` ignores the header altogether.
+- A node id may only contain letters, digits, `-` and `_` (at most 64).
+- The panel drops a node's WebSocket when it stops reading pushes, instead of
+  queueing messages for it without limit.
 
 ## [1.2.24] - 2026-11-21
 

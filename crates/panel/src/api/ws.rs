@@ -20,14 +20,17 @@ use tokio::sync::{mpsc, RwLock};
 /// such a connection still receives config_changed broadcasts but cannot be
 /// targeted by directed diagnosis.
 struct ConnEntry {
-    tx: mpsc::UnboundedSender<String>,
+    tx: mpsc::Sender<String>,
     node_id: Option<String>,
     /// v1.2.11: the node's latest pushed NIC rate (upload, download, received
     /// at). Lives on the connection on purpose: when the socket goes away the
     /// entry goes with it, so a disconnected node can never keep showing its
-    /// last live figure.
-    rate: Option<(u64, u64, Instant)>,
+    /// last live figure. Guarded by its own sync Mutex so `record_rate` only
+    /// needs a shared `read()` lock on the global connection map.
+    rate: std::sync::Mutex<Option<(u64, u64, Instant)>>,
 }
+
+const WS_PUSH_BUFFER: usize = 64;
 
 /// v1.2.11: a pushed rate older than this is ignored and the page falls back
 /// to the status report's figure. Three push intervals: one late frame is not
@@ -63,9 +66,9 @@ impl NodeConnections {
         &self,
         group_id: i64,
         node_id: Option<String>,
-    ) -> (u64, mpsc::UnboundedReceiver<String>) {
+    ) -> (u64, mpsc::Receiver<String>) {
         let conn_id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(WS_PUSH_BUFFER);
         self.inner
             .write()
             .await
@@ -76,7 +79,7 @@ impl NodeConnections {
                 ConnEntry {
                     tx,
                     node_id,
-                    rate: None,
+                    rate: std::sync::Mutex::new(None),
                 },
             );
         (conn_id, rx)
@@ -94,11 +97,11 @@ impl NodeConnections {
     }
 
     /// Fan a message out to every live connection across every group.
-    /// Dead senders (receiver dropped) are pruned opportunistically.
+    /// Dead or wedged (buffer-full) senders are pruned opportunistically.
     pub async fn broadcast_all(&self, msg: &str) {
         let mut map = self.inner.write().await;
         for conns in map.values_mut() {
-            conns.retain(|_, e| e.tx.send(msg.to_string()).is_ok());
+            conns.retain(|_, e| e.tx.try_send(msg.to_string()).is_ok());
         }
     }
 
@@ -115,7 +118,7 @@ impl NodeConnections {
         };
         let mut sent = 0usize;
         conns.retain(|_, e| {
-            if e.tx.send(msg.to_string()).is_ok() {
+            if e.tx.try_send(msg.to_string()).is_ok() {
                 sent += 1;
                 true
             } else {
@@ -153,10 +156,11 @@ impl NodeConnections {
         upload_bps: u64,
         download_bps: u64,
     ) {
-        let mut map = self.inner.write().await;
-        if let Some(entry) = map.get_mut(&group_id).and_then(|c| c.get_mut(&conn_id)) {
+        let map = self.inner.read().await;
+        if let Some(entry) = map.get(&group_id).and_then(|c| c.get(&conn_id)) {
             if entry.node_id.is_some() {
-                entry.rate = Some((upload_bps, download_bps, Instant::now()));
+                *entry.rate.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some((upload_bps, download_bps, Instant::now()));
             }
         }
     }
@@ -174,7 +178,8 @@ impl NodeConnections {
         let mut best: HashMap<(i64, String), (u64, u64, Instant)> = HashMap::new();
         for (&group_id, conns) in map.iter() {
             for e in conns.values() {
-                let (Some(node_id), Some(rate)) = (&e.node_id, e.rate) else {
+                let rate_opt = *e.rate.lock().unwrap_or_else(|err| err.into_inner());
+                let (Some(node_id), Some(rate)) = (&e.node_id, rate_opt) else {
                     continue;
                 };
                 if now.saturating_duration_since(rate.2) > LIVE_RATE_MAX_AGE {
@@ -214,7 +219,7 @@ impl NodeConnections {
             if e.node_id.as_deref() != Some(node_id) {
                 return true; // not the target node — leave untouched
             }
-            if e.tx.send(msg.to_string()).is_ok() {
+            if e.tx.try_send(msg.to_string()).is_ok() {
                 sent += 1;
                 true
             } else {
@@ -327,11 +332,17 @@ pub async fn node_ws_handler(
     // v0.4.14: optional per-node identity. None for an older node that didn't
     // send X-Node-ID — it still connects and gets config_changed, it just can't
     // be targeted by directed diagnosis.
-    let node_id = headers
+    let node_id = match headers
         .get("X-Node-ID")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+        .map(str::trim)
+    {
+        None | Some("") => None,
+        Some(raw) => match crate::api::node::valid_node_id(raw) {
+            Some(valid) => Some(valid.to_string()),
+            None => return axum::http::StatusCode::BAD_REQUEST.into_response(),
+        },
+    };
     // Clone the Arc<dyn Repository> so the WS task can keep using it after the
     // upgrade handler returns. The pool snapshot is shared read-only.
     let db = state.db.clone();
@@ -375,6 +386,7 @@ async fn handle_node_ws(
     // half-open TCP) is eventually cleaned up. The node's heartbeat is
     // expected well within this window.
     const READ_TIMEOUT: Duration = Duration::from_secs(120);
+    const WRITE_TIMEOUT: Duration = Duration::from_secs(15);
 
     // Drive both halves. `receiver.recv()` (wrapped in a timeout) and
     // `push_rx.recv()` borrow different variables, so select! can hold both
@@ -392,7 +404,9 @@ async fn handle_node_ws(
                     break;
                 }
                 Ok(Some(Ok(Message::Ping(data)))) => {
-                    let _ = sender.send(Message::Pong(data)).await;
+                    if timeout(WRITE_TIMEOUT, sender.send(Message::Pong(data))).await.is_err() {
+                        break;
+                    }
                 }
                 Ok(Some(Ok(Message::Pong(_)))) => {
                     // keepalive acknowledged
@@ -419,12 +433,15 @@ async fn handle_node_ws(
             },
             pushed = push_rx.recv() => match pushed {
                 Some(text) => {
-                    if sender.send(Message::Text(text.into())).await.is_err() {
-                        tracing::warn!(
-                            "websocket send failed: group_id={}, closing",
-                            group_id
-                        );
-                        break;
+                    match timeout(WRITE_TIMEOUT, sender.send(Message::Text(text.into()))).await {
+                        Ok(Ok(())) => {}
+                        _ => {
+                            tracing::warn!(
+                                "websocket send failed or timed out: group_id={}, closing",
+                                group_id
+                            );
+                            break;
+                        }
                     }
                 }
                 None => break, // all senders dropped — shouldn't happen here

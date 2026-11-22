@@ -88,6 +88,9 @@ pub async fn buy_plan(
     State(state): State<AppState>,
     Json(req): Json<BuyPlanRequest>,
 ) -> Json<ApiResponse<()>> {
+    if user.admin {
+        return Json(err(400, "无法给管理员用户分配套餐"));
+    }
     // Resolve the plan row first (outside the buy tx — read-only lookup).
     // Hidden plans are not self-purchasable even if the caller knows the id.
     let plan = match state.db.find_plan_by_id(req.plan_id).await {
@@ -187,6 +190,15 @@ pub async fn buy_plan(
         .await
     {
         Ok(()) => {
+            crate::service::audit::record(
+                &state,
+                Some(user.user_id),
+                "buy_plan",
+                "user",
+                user.user_id,
+                &format!("购买套餐 {} ({})", plan.name, plan.price),
+            )
+            .await;
             // The purchase can change what the user's nodes forward (max_rules
             // / traffic_limit / expiry all feed list_active_for_config), so
             // refresh node configs.

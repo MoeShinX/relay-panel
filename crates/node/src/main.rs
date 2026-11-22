@@ -269,6 +269,18 @@ async fn run() {
         });
     }
 
+    // Node-wide UDP tracker sweeper (runs once globally instead of per-listener).
+    {
+        let connections_sweep = connections.clone();
+        tokio::spawn(async move {
+            let mut sweep_interval = tokio::time::interval(Duration::from_secs(15));
+            loop {
+                sweep_interval.tick().await;
+                connections_sweep.udp_prune_expired().await;
+            }
+        });
+    }
+
     // --- Fork 2: HTTP poll loop (fallback + traffic/status reporting) ---
     // This loop NEVER exits. Even if the panel is down, it keeps retrying
     // and reporting (report calls fail silently). Existing forwarding rules
@@ -295,12 +307,12 @@ async fn run() {
                     in_mismatch_backoff = false;
                 }
             }
-            poller::FetchResult::ProtocolMismatch => {
-                // Permanent: upgrade required. Switch to a long interval if we
-                // haven't already (avoids re-logging every tick).
+            poller::FetchResult::ProtocolMismatch | poller::FetchResult::AuthRejected => {
+                // Permanent: upgrade or token update required. Switch to a long
+                // interval if we haven't already (avoids re-logging every tick).
                 if !in_mismatch_backoff {
                     tracing::warn!(
-                        "switching poll interval to {}s due to config protocol mismatch",
+                        "switching poll interval to {}s due to permanent config/auth rejection",
                         MISMATCH_BACKOFF_SECS
                     );
                     interval = tokio::time::interval(Duration::from_secs(MISMATCH_BACKOFF_SECS));

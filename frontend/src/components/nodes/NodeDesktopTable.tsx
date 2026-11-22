@@ -52,11 +52,11 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
         }
         return r.online ? (
           <>
-            <Tag color="green">{t('online')}</Tag>
+            <Tag color="green"><span className="rp-status-dot is-online" aria-hidden="true" />{t('online')}</Tag>
             {wsDownTag(r, t)}
           </>
         ) : (
-          <Tag>{t('offline')}</Tag>
+          <Tag><span className="rp-status-dot is-offline" aria-hidden="true" />{t('offline')}</Tag>
         );
       },
     },
@@ -189,7 +189,7 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
             okButtonProps={{ danger: true }}
             onConfirm={() => onDelete(r)}
           >
-            <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+            <Button size="small" type="text" danger icon={<DeleteOutlined />} aria-label={t('removeNodeTitle')} />
           </Popconfirm>
         ),
     });

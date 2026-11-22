@@ -73,8 +73,12 @@ export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeV
       style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, ...dragHeaderProps?.style }}
     >
       {dragHandle}
-      <Text strong data-upgrade-obstacle="">{head.group_name || '-'}</Text>
-      <Text type="secondary" style={{ fontSize: 12 }} data-upgrade-obstacle="">ID: {head.group_id}</Text>
+      <span
+        className={`rp-status-dot is-${online === 0 ? 'offline' : online === total ? 'online' : 'partial'}`}
+        aria-hidden="true"
+      />
+      <Text style={{ fontSize: 14, fontWeight: 500, letterSpacing: '0.01em', color: 'var(--rp-text)' }} data-upgrade-obstacle="">{head.group_name || '-'}</Text>
+      <span className="rp-mono" style={{ fontSize: 12, color: 'var(--rp-text-tertiary)' }} data-upgrade-obstacle="">#{head.group_id}</span>
       {region ? <Tag data-upgrade-obstacle="">{region}</Tag> : null}
       {lineType ? <Tag color="blue" data-upgrade-obstacle="">{lineType}</Tag> : null}
       <Tag color={online > 0 ? 'green' : undefined} data-upgrade-obstacle="">{online}/{total}</Tag>
@@ -116,11 +120,11 @@ export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeV
   );
 
   const body = onlyPlaceholder ? (
-    <div style={{ padding: 12 }}>
+    <div style={{ padding: '14px 18px' }}>
       <Text type="secondary">{t('noNodeReportingInGroup')}</Text>
     </div>
   ) : isMobile ? (
-    <div style={{ padding: 8 }}>
+    <div style={{ padding: 12 }}>
       <NodeMobileList
         rows={rows}
         panelProtocol={panelProtocol}
@@ -139,6 +143,7 @@ export function NodeGroupSection({ rows, panelProtocol, latestNodeVersion, nodeV
   return (
     <div ref={sectionRef}>
       <Collapse
+        className="rp-node-collapse"
         defaultActiveKey={['1']}
         style={{ marginBottom: 16 }}
         items={[{ key: '1', label: header, children: body }]}

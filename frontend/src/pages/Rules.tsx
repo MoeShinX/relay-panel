@@ -20,12 +20,17 @@ import type { TargetRow } from '../utils/rulesIO';
 const { Text } = Typography;
 const { TextArea } = Input;
 
+function formatTargetHostPort(host: string, port: number): string {
+  const h = host.trim();
+  return h.includes(':') && !h.startsWith('[') ? `[${h}]:${port}` : `${h}:${port}`;
+}
+
 function targetSummary(rule: ForwardRule): string {
   const targets = ruleTargets(rule).filter(t => t.enabled);
   const first = targets[0] ?? ruleTargets(rule)[0];
   if (!first) return '-';
   const suffix = targets.length > 1 ? ` (+${targets.length - 1})` : '';
-  return `${first.host}:${first.port}${suffix}`;
+  return `${formatTargetHostPort(first.host, first.port)}${suffix}`;
 }
 
 function formTargets(values: { targets?: RuleTargetInput[]; target_addr?: string; target_port?: number }): RuleTargetInput[] {
@@ -198,65 +203,46 @@ export default function Rules() {
       // The rejection is handled here rather than in a `catch` block because
       // this body is inside a useCallback, and wrapping it in try/catch/finally
       // trips react-hooks/preserve-manual-memoization.
-      const [rulesRes, groupsRes] = await Promise.allSettled([
-        api.get<unknown, ApiEnvelope<ForwardRule[]>>(rulesUrl),
-        api.get<unknown, ApiEnvelope<DeviceGroup[]>>('/groups'),
-      ]);
-      // A read that failed keeps whatever is already on screen rather than
-      // blanking it: the rows are still the last known truth, and replacing
-      // them with an empty table is the false statement this guard exists to
-      // stop. Each list is applied on its own.
-      const rules = rulesRes.status === 'fulfilled' && rulesRes.value.code === 0
-        ? rulesRes.value
-        : null;
-      const groups = groupsRes.status === 'fulfilled' && groupsRes.value.code === 0
-        ? groupsRes.value
-        : null;
-      if (rules) setRules(rules.data || []);
-      if (groups) setGroups(groups.data || []);
-      setListLoadFailed(!rules || !groups);
       if (isAdmin) {
-        try {
-          const u = await api.get<unknown, ApiEnvelope<User[]>>('/admin/users');
-          setUsers(u.data || []);
-        } catch {
-          // Non-fatal: owner column falls back to "#uid" labels.
-          setUsers([]);
-        }
+        const [rulesRes, groupsRes, uRes] = await Promise.allSettled([
+          api.get<unknown, ApiEnvelope<ForwardRule[]>>(rulesUrl),
+          api.get<unknown, ApiEnvelope<DeviceGroup[]>>('/groups'),
+          api.get<unknown, ApiEnvelope<User[]>>('/admin/users'),
+        ]);
+        const okRules = rulesRes.status === 'fulfilled' && rulesRes.value.code === 0 ? rulesRes.value : null;
+        const okGroups = groupsRes.status === 'fulfilled' && groupsRes.value.code === 0 ? groupsRes.value : null;
+        if (okRules) setRules(okRules.data || []);
+        if (okGroups) setGroups(okGroups.data || []);
+        setListLoadFailed(!okRules || !okGroups);
+        setUsers(uRes.status === 'fulfilled' && uRes.value.code === 0 ? (uRes.value.data || []) : []);
         setSelfQuota(null);
+        setSharedLoadFailed(false);
+        setSharedGroups([]);
       } else {
+        const [rulesRes, groupsRes, meRes, sgRes] = await Promise.allSettled([
+          api.get<unknown, ApiEnvelope<ForwardRule[]>>(rulesUrl),
+          api.get<unknown, ApiEnvelope<DeviceGroup[]>>('/groups'),
+          api.get<unknown, ApiEnvelope<UserSelf>>('/user/me'),
+          api.get<unknown, ApiEnvelope<SharedGroupSummary[]>>('/groups/shared'),
+        ]);
+        const okRules = rulesRes.status === 'fulfilled' && rulesRes.value.code === 0 ? rulesRes.value : null;
+        const okGroups = groupsRes.status === 'fulfilled' && groupsRes.value.code === 0 ? groupsRes.value : null;
+        if (okRules) setRules(okRules.data || []);
+        if (okGroups) setGroups(okGroups.data || []);
+        setListLoadFailed(!okRules || !okGroups);
         setUsers([]);
-        // v1.0.7: a regular user only ever sees their own rules, so one /user/me
-        // read gives the quota needed to flag all of them. Non-fatal on failure.
-        try {
-          const me = await api.get<unknown, ApiEnvelope<UserSelf>>('/user/me');
-          setSelfQuota(me.data ? { used: me.data.traffic_used, limit: me.data.traffic_limit } : null);
-        } catch {
-          setSelfQuota(null);
-        }
-      }
-      // v0.4.12 PR1: shared inbound groups (admin-owned) for regular users.
-      // The endpoint wraps the payload in ApiResponse — a non-zero code is a
-      // load failure (NOT an empty "no lines" state), so we flag it and block
-      // rule creation rather than show an empty inbound dropdown.
-      // Admins get an empty list (they manage groups directly).
-      if (!isAdmin) {
-        try {
-          const sg = await api.get<unknown, ApiEnvelope<SharedGroupSummary[]>>('/groups/shared');
-          if (sg.code !== 0) {
-            setSharedLoadFailed(true);
-            setSharedGroups([]);
-          } else {
-            setSharedLoadFailed(false);
-            setSharedGroups(sg.data || []);
-          }
-        } catch {
+        setSelfQuota(
+          meRes.status === 'fulfilled' && meRes.value.code === 0 && meRes.value.data
+            ? { used: meRes.value.data.traffic_used, limit: meRes.value.data.traffic_limit }
+            : null,
+        );
+        if (sgRes.status === 'fulfilled' && sgRes.value.code === 0) {
+          setSharedLoadFailed(false);
+          setSharedGroups(sgRes.value.data || []);
+        } else {
           setSharedLoadFailed(true);
           setSharedGroups([]);
         }
-      } else {
-        setSharedLoadFailed(false);
-        setSharedGroups([]);
       }
     } finally { setLoading(false); }
   }, [filterOwnerUid, isAdmin, user?.id]);
@@ -323,6 +309,8 @@ export default function Rules() {
     load_balance_strategy?: string;
     upload_limit_mbps?: number;
     download_limit_mbps?: number;
+    max_connections?: number;
+    auto_restart_minutes?: number;
     tunnel_profile_id?: number | null;
     owner_uid?: number | null;
   }) => {
@@ -388,28 +376,27 @@ export default function Rules() {
   /** Copy: open the create modal pre-filled with the rule's values, but with
    *  a "-copy" name suffix and no listen_port (auto-assign). */
   const handleCopy = (r: ForwardRule) => {
-    createForm.setFieldsValue({
-      name: `${r.name}-copy`,
-      listen_port: null,
-      protocol: r.protocol,
-      device_group_in: r.device_group_in,
-      target_addr: r.target_addr,
-      target_port: r.target_port,
-      targets: ruleTargets(r),
-      load_balance_strategy: r.load_balance_strategy ?? 'first',
-      upload_limit_mbps: r.upload_limit_mbps ?? 0,
-      download_limit_mbps: r.download_limit_mbps ?? 0,
-      // v1.2.0: max_connections / auto_restart_minutes are NOT carried over —
-      // they're edit-only (the create path can't store them), so the copy starts
-      // uncapped and the user sets them via Edit if wanted.
-      // v1.2.15: PROXY protocol is part of how the rule talks to its target,
-      // and the create path stores it, so a copy keeps it.
-      proxy_protocol_send: r.proxy_protocol_send ?? 'off',
-      proxy_protocol_accept: r.proxy_protocol_accept ?? false,
-      proxy_protocol_trusted: r.proxy_protocol_trusted ?? '',
-    });
     setCreateTab('basic');
     setCreateOpen(true);
+    queueMicrotask(() => {
+      createForm.setFieldsValue({
+        name: `${r.name}-copy`,
+        listen_port: null,
+        protocol: r.protocol,
+        device_group_in: r.device_group_in,
+        target_addr: r.target_addr,
+        target_port: r.target_port,
+        targets: ruleTargets(r),
+        load_balance_strategy: r.load_balance_strategy ?? 'first',
+        upload_limit_mbps: r.upload_limit_mbps ?? 0,
+        download_limit_mbps: r.download_limit_mbps ?? 0,
+        max_connections: r.max_connections ?? 0,
+        auto_restart_minutes: r.auto_restart_minutes ?? 0,
+        proxy_protocol_send: r.proxy_protocol_send ?? 'off',
+        proxy_protocol_accept: r.proxy_protocol_accept ?? false,
+        proxy_protocol_trusted: r.proxy_protocol_trusted ?? '',
+      });
+    });
   };
 
   /** After an export: success, or a warning naming how many rules had no
@@ -840,7 +827,7 @@ const IMPORT_DEFAULTS = {
       render: (_: unknown, r: ForwardRule) => {
         // v1.0.9: a multi-target rule shows "first (+N)"; hovering lists every
         // enabled target IP so the admin can see the failover/round-robin pool.
-        const all = ruleTargets(r).filter(t => t.enabled).map(t => `${t.host}:${t.port}`);
+        const all = ruleTargets(r).filter(t => t.enabled).map(t => formatTargetHostPort(t.host, t.port));
         const summary = <span className="rp-mono">{targetSummary(r)}</span>;
         return (
           <Space size={4} wrap>
@@ -1163,60 +1150,6 @@ const IMPORT_DEFAULTS = {
                 return { value: gid, label: g ? g.name : `${t('unknownGroup')} (#${gid})` };
               })}
           />
-          {selectedRowKeys.length > 0 && (
-            <Button icon={<DownloadOutlined />} onClick={handleExportSelected}>
-              {t('batchExport')} ({selectedRowKeys.length})
-            </Button>
-          )}
-          {selectedRowKeys.length > 0 && (
-            <Button icon={<PlayCircleOutlined />} onClick={() => handleBatchSetPaused(false)}>
-              {t('batchResume')} ({selectedRowKeys.length})
-            </Button>
-          )}
-          {selectedRowKeys.length > 0 && (
-            <Button icon={<PauseCircleOutlined />} onClick={() => handleBatchSetPaused(true)}>
-              {t('batchPause')} ({selectedRowKeys.length})
-            </Button>
-          )}
-          {selectedRowKeys.length > 0 && (
-            <Button onClick={() => { setMoveTarget(undefined); setMoveOpen(true); }}>
-              {t('batchMove')} ({selectedRowKeys.length})
-            </Button>
-          )}
-          {selectedRowKeys.length > 0 && (
-            <Popconfirm
-              title={t('batchRestartConfirm').replace('{count}', String(selectedRowKeys.length))}
-              description={t('restartConfirmDesc')}
-              onConfirm={handleBatchRestart}
-              okButtonProps={{ danger: true }}
-            >
-              <Button icon={<ThunderboltOutlined />}>
-                {t('batchRestart')} ({selectedRowKeys.length})
-              </Button>
-            </Popconfirm>
-          )}
-          {selectedRowKeys.length > 0 && (
-            <Popconfirm
-              title={t('batchResetTrafficConfirm').replace('{count}', String(selectedRowKeys.length))}
-              description={t('batchResetTrafficDesc')}
-              onConfirm={handleBatchResetTraffic}
-            >
-              <Button>
-                {t('batchResetTraffic')} ({selectedRowKeys.length})
-              </Button>
-            </Popconfirm>
-          )}
-          {selectedRowKeys.length > 0 && (
-            <Popconfirm
-              title={t('batchDeleteConfirm').replace('{count}', String(selectedRowKeys.length))}
-              onConfirm={handleBatchDelete}
-              okButtonProps={{ danger: true }}
-            >
-              <Button danger icon={<DeleteOutlined />}>
-                {t('batchDelete')} ({selectedRowKeys.length})
-              </Button>
-            </Popconfirm>
-          )}
           <Button icon={<ReloadOutlined />} onClick={load}>{t('refresh')}</Button>
           <Dropdown menu={{ items: exportMenuItems }}>
             <Button icon={<DownloadOutlined />}>{t('exportImport')}</Button>
@@ -1250,6 +1183,56 @@ const IMPORT_DEFAULTS = {
           title={t('loadFailed')}
           description={t('loadFailedRetry')}
         />
+      )}
+      {selectedRowKeys.length > 0 && (
+        <div className="rp-selection-bar">
+          <Space size={8} wrap>
+            <Tag color="blue" style={{ marginInlineEnd: 0 }}>{selectedRowKeys.length}</Tag>
+            <Button size="small" icon={<PlayCircleOutlined />} onClick={() => handleBatchSetPaused(false)}>
+              {t('batchResume')} ({selectedRowKeys.length})
+            </Button>
+            <Button size="small" icon={<PauseCircleOutlined />} onClick={() => handleBatchSetPaused(true)}>
+              {t('batchPause')} ({selectedRowKeys.length})
+            </Button>
+            <Button size="small" onClick={() => { setMoveTarget(undefined); setMoveOpen(true); }}>
+              {t('batchMove')} ({selectedRowKeys.length})
+            </Button>
+            <Button size="small" icon={<DownloadOutlined />} onClick={handleExportSelected}>
+              {t('batchExport')} ({selectedRowKeys.length})
+            </Button>
+            <Popconfirm
+              title={t('batchRestartConfirm').replace('{count}', String(selectedRowKeys.length))}
+              description={t('restartConfirmDesc')}
+              onConfirm={handleBatchRestart}
+              okButtonProps={{ danger: true }}
+            >
+              <Button size="small" icon={<ThunderboltOutlined />}>
+                {t('batchRestart')} ({selectedRowKeys.length})
+              </Button>
+            </Popconfirm>
+            <Popconfirm
+              title={t('batchResetTrafficConfirm').replace('{count}', String(selectedRowKeys.length))}
+              description={t('batchResetTrafficDesc')}
+              onConfirm={handleBatchResetTraffic}
+            >
+              <Button size="small">
+                {t('batchResetTraffic')} ({selectedRowKeys.length})
+              </Button>
+            </Popconfirm>
+            <Popconfirm
+              title={t('batchDeleteConfirm').replace('{count}', String(selectedRowKeys.length))}
+              onConfirm={handleBatchDelete}
+              okButtonProps={{ danger: true }}
+            >
+              <Button size="small" danger icon={<DeleteOutlined />}>
+                {t('batchDelete')} ({selectedRowKeys.length})
+              </Button>
+            </Popconfirm>
+          </Space>
+          <Button size="small" type="text" onClick={() => setSelectedRowKeys([])}>
+            {t('cancel')}
+          </Button>
+        </div>
       )}
       <Table
         rowSelection={{ selectedRowKeys, onChange: (keys) => setSelectedRowKeys(keys as number[]) }}
@@ -1298,6 +1281,7 @@ const IMPORT_DEFAULTS = {
             },
             {
               key: 'forward',
+              forceRender: true,
               label: t('tabForward'),
               children: (<>
                 {renderTargetsEditor()}
@@ -1312,12 +1296,7 @@ const IMPORT_DEFAULTS = {
                   </Space>
                 </Form.Item>
                 <ProxyProtocolFields proto={createProto} t={t} />
-                {/* v1.2.0: the connection cap / auto-restart controls are
-                    deliberately EDIT-ONLY. The atomic create transaction
-                    (create_rule_with_guard) doesn't carry them, so offering them
-                    here would silently discard whatever the user typed. They are
-                    also settings you tune after watching a rule misbehave, not
-                    ones you can guess up front. */}
+                {renderConnectionControls(createProto)}
               </>),
             },
           ]} />

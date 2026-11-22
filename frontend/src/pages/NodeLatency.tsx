@@ -17,6 +17,9 @@ import { rankByAttention } from '../utils/seriesPick';
 import {
   autoRefreshMs,
   autoRefreshNoteKey,
+  LATENCY_LOSS_BAD_PCT,
+  LATENCY_LOSS_WARN_PCT,
+  LEVEL_COLORS,
   granularityAllowed,
   isStaleSample,
   latencyLevel,
@@ -31,6 +34,8 @@ import {
   formatSampleTime,
   showRaw,
   slowText,
+  stripLatencyLevel,
+  stripSegments,
   type ChartPoint,
 } from '../utils/latencyChart';
 
@@ -392,7 +397,7 @@ export default function NodeLatency() {
 
   const cards = (
     <div
-      style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 190px), 1fr))', gap: 12, marginBottom: 16 }}
+      style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 205px), 1fr))', gap: 12, marginBottom: 16 }}
       data-testid="latency-cards"
     >
       {series.map((s) => {
@@ -417,6 +422,11 @@ export default function NodeLatency() {
         else if (hasLatest) big = t('latencyAllLost');
         else big = t('latencyNoData');
         const toggle = () => setSelected(isSelected ? null : s.target_id);
+        const miniSegs = !unsupported && data
+          ? stripSegments(s.points, data.since, data.until, 12)
+          : [];
+        const lossVal = sum?.loss ?? 0;
+        const lossClass = lossVal >= LATENCY_LOSS_BAD_PCT ? ' is-bad' : lossVal >= LATENCY_LOSS_WARN_PCT ? ' is-warn' : '';
         return (
           <Card
             key={s.target_id}
@@ -426,6 +436,7 @@ export default function NodeLatency() {
             tabIndex={0}
             aria-pressed={isSelected}
             data-testid={`latency-card-${s.target_id}`}
+            data-card-level={unsupported ? 'none' : level}
             onClick={toggle}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
@@ -435,9 +446,13 @@ export default function NodeLatency() {
             }}
             className={`rp-lat-target${isSelected ? ' is-selected' : ''}`}
           >
-            <div className="rp-lat-colname">{s.name}</div>
-            <div className="rp-lat-head-sub" style={{ marginBottom: 6 }}>
-              {s.kind === 'icmp' ? 'ICMP' : 'TCP'} · {t(CARRIER_KEY[s.carrier])}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+              <div className="rp-lat-colname" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {s.name}
+              </div>
+              <span className={`rp-carrier-pill is-${s.carrier}`} style={{ flexShrink: 0 }}>
+                {s.kind === 'icmp' ? 'ICMP' : 'TCP'} · {t(CARRIER_KEY[s.carrier])}
+              </span>
             </div>
             <div
               className={`rp-lat-target-value${unsupported || (!stale && hasLatest && sum?.latest != null) ? '' : ' is-text'}`}
@@ -470,7 +485,7 @@ export default function NodeLatency() {
                     </span>
                   </span>
                 ) : null}
-                <span className="rp-lat-sub">
+                <span className="rp-lat-sub" style={{ marginTop: 2 }}>
                   <span className="rp-lat-nowrap">{t('latencyCardAvg')} {formatMs(sum?.avg)}</span>
                   {showRaw(sum?.avg, sum?.raw_avg, sum?.retrans_rate) ? (
                     <>
@@ -481,17 +496,31 @@ export default function NodeLatency() {
                     </>
                   ) : null}
                 </span>
-                <span className="rp-lat-sub">
-                  <span className="rp-lat-nowrap">{failLabel} {formatLoss(sum?.loss)}</span>
+                <div className="rp-lat-metric-row">
+                  <span className={`rp-lat-chip${lossClass}`}>{failLabel} {formatLoss(sum?.loss)}</span>
                   {rangeSlow == null ? null : (
                     <>
-                      {' · '}
-                      <span className="rp-lat-nowrap" data-testid={`latency-card-slow-${s.target_id}`}>
+                      <span style={{ color: '#cbd5e1', fontSize: 10 }}>{' · '}</span>
+                      <span className="rp-lat-chip" data-testid={`latency-card-slow-${s.target_id}`}>
                         {t('latencyCardSlow')} {rangeSlow}
                       </span>
                     </>
                   )}
-                </span>
+                </div>
+                {miniSegs.length > 0 && (
+                  <div className="rp-lat-mini-strip" aria-hidden="true">
+                    {miniSegs.map((g, idx) => {
+                      const sl = stripLatencyLevel(g);
+                      return (
+                        <span
+                          key={idx}
+                          className="rp-lat-mini-slice"
+                          style={{ background: sl === 'none' ? '#e2e8f0' : LEVEL_COLORS[sl] }}
+                        />
+                      );
+                    })}
+                  </div>
+                )}
               </>
             )}
           </Card>

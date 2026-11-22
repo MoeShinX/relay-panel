@@ -72,6 +72,15 @@ pub async fn create_tunnel_profile(
     .await
     {
         Ok(p) => {
+            crate::service::audit::record(
+                &state,
+                Some(admin.user_id),
+                "create_tunnel_profile",
+                "tunnel_profile",
+                p.id,
+                &p.name,
+            )
+            .await;
             state
                 .node_connections
                 .broadcast_all(r#"{"type":"config_changed"}"#)
@@ -109,6 +118,15 @@ pub async fn update_tunnel_profile(
     .await
     {
         Ok(()) => {
+            crate::service::audit::record(
+                &state,
+                Some(_admin.user_id),
+                "update_tunnel_profile",
+                "tunnel_profile",
+                id,
+                req.name.as_deref().unwrap_or(""),
+            )
+            .await;
             state
                 .node_connections
                 .broadcast_all(r#"{"type":"config_changed"}"#)
@@ -152,6 +170,15 @@ pub async fn delete_tunnel_profile(
                 profile_id = id,
                 "admin op"
             );
+            crate::service::audit::record(
+                &state,
+                Some(_admin.user_id),
+                "delete_tunnel_profile",
+                "tunnel_profile",
+                id,
+                "",
+            )
+            .await;
             state
                 .node_connections
                 .broadcast_all(r#"{"type":"config_changed"}"#)

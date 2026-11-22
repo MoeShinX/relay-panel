@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Card, Descriptions, Spin, Button, Space, Modal, Form, Input, message, Typography, Result, Progress, Alert, Tag } from 'antd';
-import { LockOutlined, LogoutOutlined, WalletOutlined } from '@ant-design/icons';
+import { Card, Row, Col, Spin, Button, Space, Modal, Form, Input, message, Typography, Result, Progress, Alert, Tag } from 'antd';
+import { LockOutlined, LogoutOutlined, WalletOutlined, ShoppingOutlined, ThunderboltOutlined, ApiOutlined, CustomerServiceOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
 import type { ApiEnvelope, UserSelf } from '../api/types';
@@ -33,7 +33,7 @@ const { Text } = Typography;
 export default function Account() {
   const { t } = useI18n();
   const navigate = useNavigate();
-  const { logout: authLogout } = useAuth();
+  const { logout: authLogout, refreshCurrentUser } = useAuth();
   const notice = useSiteNotice();
   const [me, setMe] = useState<UserSelf | null>(null);
   const [loading, setLoading] = useState(true);
@@ -65,6 +65,7 @@ export default function Account() {
       setRedeemOpen(false);
       redeemForm.resetFields();
       load(); // refresh the balance shown above
+      void refreshCurrentUser();
     } catch {
       message.error(t('redeemFailed'));
     } finally {
@@ -110,6 +111,8 @@ export default function Account() {
       message.success(t('passwordChanged'));
       setChangePwOpen(false);
       pwForm.resetFields();
+      authLogout();
+      navigate('/login', { replace: true });
     } catch {
       message.error(t('passwordChangeFailed'));
     } finally {
@@ -131,13 +134,18 @@ export default function Account() {
     );
   }
 
+  const trafficPct = me.traffic_limit > 0
+    ? Math.min(100, Math.round((me.traffic_used / me.traffic_limit) * 100))
+    : 0;
+  const trafficExhausted = me.traffic_limit > 0 && me.traffic_used >= me.traffic_limit;
+  const rulePct = me.max_rules > 0
+    ? Math.min(100, Math.round((me.current_rules / me.max_rules) * 100))
+    : 0;
+  const avatarInitial = (me.username.trim()[0] || 'U').toUpperCase();
+
   return (
     <>
-      {/* v1.2.4: operator announcement. Regular users land here rather than on
-          the dashboard, so without this they would never see one. */}
       <SiteAnnouncement />
-      {/* v1.0.8: suspended banner — the user can still log in and buy a plan
-          (buying does NOT auto-unsuspend), but forwarding is gated off. */}
       {me.suspended && (
         <Alert
           type="warning"
@@ -147,91 +155,159 @@ export default function Account() {
           description={t('accountSuspendedHint')}
         />
       )}
-      <Card
-        title={t('myAccount')}
-        extra={
-          <Space>
+
+      {/* Profile Header Card */}
+      <Card style={{ marginBottom: 16 }} styles={{ body: { padding: '20px 24px' } }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, minWidth: 0 }}>
+            <div style={{
+              width: 48, height: 48, borderRadius: 14, flexShrink: 0,
+              background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+              boxShadow: '0 4px 12px rgba(79, 70, 229, 0.22)',
+              color: '#fff', fontSize: 20, fontWeight: 600,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              {avatarInitial}
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <Space size={8} wrap>
+                <Text strong style={{ fontSize: 18 }}>{me.username}</Text>
+                <Tag color={me.admin ? 'gold' : 'blue'}>{me.admin ? t('admin') : t('user')}</Tag>
+              </Space>
+              <div style={{ marginTop: 4, fontSize: 12, color: 'var(--rp-text-tertiary)' }}>
+                {t('accountMemberSince')}: <span className="rp-mono">{me.registered_at || '-'}</span>
+                {notice.contact && (
+                  <span style={{ marginLeft: 14 }}>
+                    <CustomerServiceOutlined style={{ marginRight: 4 }} />
+                    {t('siteContact')}: <span style={{ color: 'var(--rp-text-secondary)' }}>{notice.contact}</span>
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+          <Space wrap>
             <Button icon={<LockOutlined />} onClick={() => setChangePwOpen(true)}>{t('changePassword')}</Button>
             <Button danger icon={<LogoutOutlined />} onClick={logout}>{t('logout')}</Button>
           </Space>
-        }
-      >
-        <Descriptions column={1} bordered size="small">
-          <Descriptions.Item label={t('accountUsername')}>
-            <Text strong>{me.username}</Text>
-            {me.admin && <Text type="secondary"> ({t('admin')})</Text>}
-          </Descriptions.Item>
-          <Descriptions.Item label={t('accountPlan')}>
-            {me.plan_name || '-'}
-          </Descriptions.Item>
-          {/* v1.0.8: plan expiry (null = no expiry). */}
-          <Descriptions.Item label={t('accountPlanExpiry')}>
-            {me.plan_expire_at ? <span className="rp-mono">{me.plan_expire_at}</span> : t('unlimited')}
-          </Descriptions.Item>
-          {/* v1.0.8: available lines — "全部" when unrestricted (admin or
-              all_device_groups), otherwise the specific authorized group names. */}
-          <Descriptions.Item label={t('accountAvailableGroups')}>
-            {me.all_groups ? (
-              <Tag color="green">{t('allGroups')}</Tag>
-            ) : me.available_groups && me.available_groups.length > 0 ? (
-              <Space wrap>
-                {me.available_groups.map((name) => <Tag key={name}>{name}</Tag>)}
-              </Space>
-            ) : (
-              <Text type="secondary">{t('noneAssigned')}</Text>
-            )}
-          </Descriptions.Item>
-          <Descriptions.Item label={t('accountBalance')}>
-            <Space wrap>
-              <span className="rp-mono">{me.balance}</span>
-              {/* v1.2.0: self-service top-up. It lives on the balance row
-                  because that is exactly where a user looks when they find
-                  they can't afford a plan.
+        </div>
+      </Card>
 
-                  Ghost-primary with an icon, not a bare text link: as a `link`
-                  button beside a number it read as a label rather than a
-                  control, and users reported finding no way to top up at all. */}
+      {/* Bento Overview Grid */}
+      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+        <Col xs={24} sm={12} lg={6}>
+          <Card className="rp-kpi-card" styles={{ body: { padding: 20, display: 'flex', flexDirection: 'column', height: '100%' } }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+              <Text type="secondary" style={{ fontSize: 13 }}>{t('accountBalance')}</Text>
+              <span className="rp-icon-tile" style={{ background: '#eef2ff', color: '#4f46e5' }}>
+                <WalletOutlined />
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginBottom: 14 }}>
+              <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--rp-text-secondary)' }}>¥</span>
+              <span className="rp-mono" style={{ fontSize: 28, fontWeight: 600, color: 'var(--rp-text)', lineHeight: 1.2 }}>
+                {me.balance}
+              </span>
+            </div>
+            <div style={{ marginTop: 'auto' }}>
               <Button
                 size="small"
                 type="primary"
-                ghost
                 icon={<WalletOutlined />}
                 onClick={() => { redeemForm.resetFields(); setRedeemOpen(true); }}
               >
                 {t('redeem')}
               </Button>
-            </Space>
-          </Descriptions.Item>
-          <Descriptions.Item label={t('accountRulesLimit')}>
-            {me.current_rules} / {me.max_rules}
-          </Descriptions.Item>
-          {/* v1.0.8: traffic usage with a progress bar (used / limit). */}
-          <Descriptions.Item label={t('accountTrafficUsed')}>
-            {me.traffic_limit > 0 ? (
-              <Space orientation="vertical" style={{ width: '100%', maxWidth: 360 }}>
-                <span>{formatBytes(me.traffic_used)} / {formatBytes(me.traffic_limit)}</span>
-                <Progress
-                  percent={Math.min(100, Math.round((me.traffic_used / me.traffic_limit) * 100))}
-                  size="small"
-                  status={me.traffic_used >= me.traffic_limit ? 'exception' : 'active'}
-                />
-              </Space>
-            ) : (
-              <span>{formatBytes(me.traffic_used)} / {t('unlimited')}</span>
+            </div>
+          </Card>
+        </Col>
+
+        <Col xs={24} sm={12} lg={6}>
+          <Card className="rp-kpi-card" styles={{ body: { padding: 20, display: 'flex', flexDirection: 'column', height: '100%' } }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+              <Text type="secondary" style={{ fontSize: 13 }}>{t('accountPlan')}</Text>
+              <span className="rp-icon-tile" style={{ background: '#f5f3ff', color: '#7c3aed' }}>
+                <ShoppingOutlined />
+              </span>
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 600, color: 'var(--rp-text)', marginBottom: 6 }}>
+              {me.plan_name || '-'}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--rp-text-tertiary)', marginBottom: 12 }}>
+              {t('accountPlanExpiry')}:{' '}
+              {me.plan_expire_at ? <span className="rp-mono">{me.plan_expire_at}</span> : t('unlimited')}
+            </div>
+            {!me.admin && (
+              <div style={{ marginTop: 'auto' }}>
+                <Button size="small" onClick={() => navigate('/shop')}>{t('shop')}</Button>
+              </div>
             )}
-          </Descriptions.Item>
-          <Descriptions.Item label={t('accountMemberSince')}>
-            <span className="rp-mono">{me.registered_at || '-'}</span>
-          </Descriptions.Item>
-          {/* v1.2.4: only rendered when the operator filled it in — an empty
-              "Support" row would just look like something is broken. */}
-          {notice.contact && (
-            <Descriptions.Item label={t('siteContact')}>
-              <span style={{ whiteSpace: 'pre-wrap' }}>{notice.contact}</span>
-            </Descriptions.Item>
-          )}
-        </Descriptions>
-      </Card>
+          </Card>
+        </Col>
+
+        <Col xs={24} sm={12} lg={6}>
+          <Card className="rp-kpi-card" styles={{ body: { padding: 20, display: 'flex', flexDirection: 'column', height: '100%' } }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+              <Text type="secondary" style={{ fontSize: 13 }}>{t('accountTrafficUsed')}</Text>
+              <span className="rp-icon-tile" style={{ background: '#ecfdf5', color: '#059669' }}>
+                <ThunderboltOutlined />
+              </span>
+            </div>
+            <div className="rp-mono" style={{ fontSize: 20, fontWeight: 600, color: 'var(--rp-text)', marginBottom: 4 }}>
+              {formatBytes(me.traffic_used)}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--rp-text-tertiary)', marginBottom: 10 }}>
+              / {me.traffic_limit > 0 ? formatBytes(me.traffic_limit) : t('unlimited')}
+            </div>
+            <div style={{ marginTop: 'auto' }}>
+              {me.traffic_limit > 0 ? (
+                <Progress
+                  percent={trafficPct}
+                  size="small"
+                  strokeColor={trafficPct >= 90 ? '#ff4d4f' : trafficPct >= 70 ? '#faad14' : '#52c41a'}
+                  status={trafficExhausted ? 'exception' : 'normal'}
+                  style={{ marginBottom: 0 }}
+                />
+              ) : (
+                <Tag color="green">{t('unlimited')}</Tag>
+              )}
+            </div>
+          </Card>
+        </Col>
+
+        <Col xs={24} sm={12} lg={6}>
+          <Card className="rp-kpi-card" styles={{ body: { padding: 20, display: 'flex', flexDirection: 'column', height: '100%' } }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+              <Text type="secondary" style={{ fontSize: 13 }}>{t('accountRulesLimit')}</Text>
+              <span className="rp-icon-tile" style={{ background: '#f0fdfa', color: '#0d9488' }}>
+                <ApiOutlined />
+              </span>
+            </div>
+            <div className="rp-mono" style={{ fontSize: 22, fontWeight: 600, color: 'var(--rp-text)', marginBottom: 8 }}>
+              {me.current_rules}{' '}
+              <span style={{ fontSize: 14, fontWeight: 400, color: 'var(--rp-text-tertiary)' }}>
+                / {me.max_rules > 0 ? me.max_rules : t('unlimited')}
+              </span>
+            </div>
+            {me.max_rules > 0 && (
+              <Progress percent={rulePct} size="small" strokeColor="#0d9488" showInfo={false} style={{ marginBottom: 10 }} />
+            )}
+            <div style={{ marginTop: 'auto' }}>
+              <div style={{ fontSize: 12, color: 'var(--rp-text-tertiary)', marginBottom: 4 }}>
+                {t('accountAvailableGroups')}
+              </div>
+              {me.all_groups ? (
+                <Tag color="green">{t('allGroups')}</Tag>
+              ) : me.available_groups && me.available_groups.length > 0 ? (
+                <Space size={[4, 4]} wrap>
+                  {me.available_groups.map((name) => <Tag key={name}>{name}</Tag>)}
+                </Space>
+              ) : (
+                <Text type="secondary" style={{ fontSize: 12 }}>{t('noneAssigned')}</Text>
+              )}
+            </div>
+          </Card>
+        </Col>
+      </Row>
 
       {/* v1.2.0: the user's own traffic trend. No rule filter here — the API
           pins non-admins to their own uid, so the total IS their usage.

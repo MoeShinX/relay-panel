@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import api from '../api/client';
 import type { ApiEnvelope, RegistrationStatus, Plan } from '../api/types';
 import { useI18n } from '../i18n/context';
+import { useSite } from '../hooks/useSite';
 import { makePasswordValidator } from '../utils/password';
 
 const { Title, Text } = Typography;
@@ -17,6 +18,7 @@ const { Title, Text } = Typography;
 export default function Register() {
   const navigate = useNavigate();
   const { t, lang, setLang } = useI18n();
+  const site = useSite();
   const [status, setStatus] = useState<RegistrationStatus | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -77,16 +79,8 @@ export default function Register() {
   const plans: Plan[] = status?.plans ?? [];
 
   return (
-    <div style={{
-      display: 'flex', justifyContent: 'center', alignItems: 'center',
-      minHeight: '100vh', background: 'var(--rp-bg)',
-      // A gutter on phones; the top leaves room for the language switch. The
-      // same at the bottom, and inside the 100vh (border-box), so the card
-      // stays exactly centred on a desktop with no scrollbar.
-      padding: '56px 16px',
-      boxSizing: 'border-box',
-    }}>
-      <div style={{ position: 'absolute', top: 20, right: 24 }}>
+    <div className="rp-auth-shell">
+      <div style={{ position: 'absolute', top: 'max(20px, env(safe-area-inset-top))', right: 24 }}>
         <Segmented
           size="small"
           value={lang}
@@ -97,10 +91,24 @@ export default function Register() {
           ]}
         />
       </div>
-      <Card style={{ width: '100%', maxWidth: 380, boxShadow: 'var(--rp-shadow)' }}>
+      <Card className="rp-auth-card">
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
-          <Title level={3} style={{ margin: 0, fontWeight: 600 }}>{t('registerTitle')}</Title>
-          <Text type="secondary" style={{ fontSize: 13 }}>{t('subtitle')}</Text>
+          <div style={{
+            width: 44, height: 44, margin: '0 auto 14px', borderRadius: 12,
+            background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+            boxShadow: '0 6px 18px rgba(79, 70, 229, 0.26)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <svg aria-hidden="true" width="24" height="24" viewBox="0 0 28 28" fill="none">
+              <path d="M8 10.5H17L14.2 7.7M20 17.5H11L13.8 20.3" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+              <circle cx="19.5" cy="10.5" r="1.8" fill="#c7d2fe" />
+              <circle cx="8.5" cy="17.5" r="1.8" fill="#c7d2fe" />
+            </svg>
+          </div>
+          <Title level={3} style={{ margin: '0 0 4px', fontWeight: 600, letterSpacing: -0.3 }}>
+            {site.site_name ? `${site.site_name} · ${t('registerTitle')}` : t('registerTitle')}
+          </Title>
+          <Text type="secondary" style={{ fontSize: 13 }}>{site.subtitle || t('subtitle')}</Text>
         </div>
 
         {loadFailed ? (
@@ -117,7 +125,13 @@ export default function Register() {
               name="username"
               rules={[{ required: true, message: t('usernameRequired') }]}
             >
-              <Input prefix={<UserOutlined style={{ color: 'var(--rp-text-tertiary)' }} />} placeholder={t('username')} aria-label={t('username')} />
+              <Input
+                prefix={<UserOutlined style={{ color: 'var(--rp-text-tertiary)' }} />}
+                placeholder={t('username')}
+                aria-label={t('username')}
+                autoComplete="username"
+                spellCheck={false}
+              />
             </Form.Item>
             <Form.Item
               name="password"
@@ -126,7 +140,12 @@ export default function Register() {
                 { validator: makePasswordValidator(t('passwordTooShort'), t('passwordTooLong')) },
               ]}
             >
-              <Input.Password prefix={<LockOutlined style={{ color: 'var(--rp-text-tertiary)' }} />} placeholder={t('password')} aria-label={t('password')} />
+              <Input.Password
+                prefix={<LockOutlined style={{ color: 'var(--rp-text-tertiary)' }} />}
+                placeholder={t('password')}
+                aria-label={t('password')}
+                autoComplete="new-password"
+              />
             </Form.Item>
             <Form.Item
               name="confirm_password"
@@ -172,6 +191,11 @@ export default function Register() {
             </Form.Item>
           </Form>
         )}
+        <div style={{ marginTop: 4, textAlign: 'center' }}>
+          <Button type="link" size="small" style={{ padding: 0 }} onClick={() => navigate('/login')}>
+            {t('backToLogin')}
+          </Button>
+        </div>
       </Card>
     </div>
   );
