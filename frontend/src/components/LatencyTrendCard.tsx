@@ -46,6 +46,8 @@ interface Props {
   autoRefreshNote: string;
   /** A read is in flight over data already on screen: shown as a veil. */
   loading?: boolean;
+  /** Hide the chart's internal legend when an external interactive KPI strip is rendered. */
+  hideLegend?: boolean;
   /** File name stem of the PNG download. */
   downloadName: string;
 }
@@ -68,6 +70,7 @@ export default function LatencyTrendCard({
   withDate,
   autoRefreshNote,
   loading = false,
+  hideLegend = false,
   downloadName,
 }: Props) {
   const { t } = useI18n();
@@ -140,6 +143,7 @@ export default function LatencyTrendCard({
             withDate={withDate}
             smooth={smooth}
             variant={variant}
+            hideLegend={hideLegend}
             onReady={(chart) => {
               chartRef.current = chart;
             }}

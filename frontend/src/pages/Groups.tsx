@@ -342,7 +342,7 @@ export default function Groups() {
     { title: t('id'), dataIndex: 'id', key: 'id', width: 60 },
     // A floor on the width: with the table's other columns the name was squeezed
     // to a few characters and wrapped one character per line.
-    { title: t('name'), dataIndex: 'name', key: 'name', width: 160, ellipsis: { showTitle: true } },
+    { title: t('name'), dataIndex: 'name', key: 'name', width: 160, ellipsis: { showTitle: true }, render: (v: string) => <Text strong>{v}</Text> },
     {
       title: t('type'), dataIndex: 'group_type', key: 'group_type',
       render: (gt: string) => <Tag color={typeColor(gt)}>{typeLabel(gt)}</Tag>,
@@ -352,7 +352,12 @@ export default function Groups() {
       render: (_: unknown, g: DeviceGroup) => {
         const total = nodeCount(g.id);
         const online = onlineCount(g.id);
-        return <span>{total > 0 ? `${online}/${total}` : '-'}</span>;
+        if (total <= 0) return <span style={{ color: 'var(--rp-text-tertiary)' }}>-</span>;
+        return (
+          <Tag color={online > 0 ? 'green' : undefined} style={{ marginInlineEnd: 0 }}>
+            <span className="rp-mono">{online}/{total}</span>
+          </Tag>
+        );
       },
     },
     {
@@ -373,7 +378,7 @@ export default function Groups() {
     // stored value that looks like configuration but is inert. The value itself
     // is kept in the DB; see handleUpdate.
     { title: t('connectHost'), dataIndex: 'connect_host', key: 'connect_host', render: (v: string, g: DeviceGroup) => isMonitorOnly(g) ? dash : <HostSummary value={v} empty={dash} /> },
-    { title: t('portRange'), dataIndex: 'port_range', key: 'port_range', render: (v: string, g: DeviceGroup) => isMonitorOnly(g) ? dash : <span className="rp-mono">{v}</span> },
+    { title: t('portRange'), dataIndex: 'port_range', key: 'port_range', render: (v: string, g: DeviceGroup) => isMonitorOnly(g) ? dash : <span className="rp-port-pill">{v}</span> },
     {
       // v1.0.8: billing rate. Only show a tag when it differs from 1.0 — a 1x
       // column on every row is noise. The tag color reflects the multiplier

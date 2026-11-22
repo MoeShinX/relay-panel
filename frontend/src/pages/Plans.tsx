@@ -158,16 +158,16 @@ export default function Plans() {
 
   const columns = [
     { title: t('id'), dataIndex: 'id', key: 'id', width: 60 },
-    { title: t('name'), dataIndex: 'name', key: 'name' },
+    { title: t('name'), dataIndex: 'name', key: 'name', render: (v: string) => <Text strong>{v}</Text> },
     {
       title: t('type'), dataIndex: 'plan_type', key: 'plan_type', width: 90,
       render: (pt: string) => <Tag color={pt === 'time' ? 'purple' : 'blue'}>{pt === 'time' ? t('planTypeTime') : t('planTypeData')}</Tag>,
     },
     {
       title: t('planTraffic'), dataIndex: 'traffic', key: 'traffic',
-      render: (v: number) => v > 0 ? formatBytes(v) : t('unlimited'),
+      render: (v: number) => v > 0 ? <span className="rp-mono" style={{ color: '#0f766e' }}>{formatBytes(v)}</span> : <Tag color="green">{t('unlimited')}</Tag>,
     },
-    { title: t('planMaxRules'), dataIndex: 'max_rules', key: 'max_rules', width: 90 },
+    { title: t('planMaxRules'), dataIndex: 'max_rules', key: 'max_rules', width: 90, render: (v: number) => <span className={`rp-count-pill${!v ? ' is-zero' : ''}`}>{v}</span> },
     { title: t('planDuration'), key: 'duration', width: 100, render: (_: unknown, p: Plan) => p.duration_days ? `${p.duration_days} ${t('days')}` : '-' },
     {
       // v1.0.9: device groups this plan grants on purchase.
@@ -179,7 +179,10 @@ export default function Plans() {
         return <span>{ids.map(groupName).join(', ')}</span>;
       },
     },
-    { title: t('planPrice'), dataIndex: 'price', key: 'price', render: (v: string) => <span className="rp-mono">{v}</span> },
+    {
+      title: t('planPrice'), dataIndex: 'price', key: 'price',
+      render: (v: string) => <span className={`rp-amount${Number(v) <= 0 ? ' is-zero' : ''}`}>{v}</span>,
+    },
     {
       title: t('planHidden'), dataIndex: 'hidden', key: 'hidden', width: 80,
       render: (h: boolean) => h ? <Tag>{t('yes')}</Tag> : <Text type="secondary">{t('no')}</Text>,

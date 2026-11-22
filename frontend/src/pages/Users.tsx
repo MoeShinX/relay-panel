@@ -298,7 +298,7 @@ export default function Users() {
 
   const columns = [
     { title: t('id'), dataIndex: 'id', key: 'id', width: 60 },
-    { title: t('username'), dataIndex: 'username', key: 'username' },
+    { title: t('username'), dataIndex: 'username', key: 'username', render: (v: string) => <span style={{ fontWeight: 500, color: 'var(--rp-text)' }}>{v}</span> },
     {
       title: t('role'), dataIndex: 'admin', key: 'admin',
       render: (a: boolean) => a ? <Tag color="gold">{t('admin')}</Tag> : <Tag>{t('user')}</Tag>,
@@ -312,7 +312,12 @@ export default function Users() {
         return <Tag color="green">{t('active')}</Tag>;
       },
     },
-    { title: t('balance'), dataIndex: 'balance', key: 'balance' },
+    {
+      title: t('balance'), dataIndex: 'balance', key: 'balance',
+      render: (v: string) => (
+        <span className={`rp-amount${Number(v) <= 0 ? ' is-zero' : ''}`}>{v}</span>
+      ),
+    },
     {
       title: t('deviceGroupAccess'), dataIndex: 'all_device_groups', key: 'all_device_groups', width: 110,
       render: (all: boolean, u: User) => {
@@ -344,6 +349,7 @@ export default function Users() {
               <Progress
                 percent={pct}
                 size="small"
+                strokeColor={pct >= 90 ? '#ff4d4f' : pct >= 70 ? '#faad14' : '#52c41a'}
                 status={overQuota ? 'exception' : 'normal'}
               />
               <span style={{ fontSize: 11 }}>

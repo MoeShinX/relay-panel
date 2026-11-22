@@ -10,6 +10,23 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Added
+
+- Group latency page: an overview row (probe health, carrier averages, the most
+  stable node and the weakest link, each clickable), an "Overall" column per
+  node, sorting (default / best overall / fastest in the selected column), an
+  "Issues only" switch, and per-node focus: clicking a node pill shows only
+  that node in the chart and the status strips. Status strips get pillar heights
+  that follow latency and loss, and a delivery percentage per row. Slow
+  handshakes count in every one of these judgements, as they do in the cells.
+
+### Changed
+
+- New look: a soft lavender accent, a light sidebar with a collapse button and
+  the current page name in the header, a new logo, calmer upload / download and
+  count styling, and an online-nodes badge on the node page that turns grey,
+  amber or green with the share of nodes online.
+
 ## [1.2.25] - 2026-11-22
 
 ### Added

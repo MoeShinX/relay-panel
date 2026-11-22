@@ -34,6 +34,7 @@ import {
   formatSampleTime,
   showRaw,
   slowText,
+  stripLatHeights,
   stripLatencyLevel,
   stripSegments,
   type ChartPoint,
@@ -425,6 +426,7 @@ export default function NodeLatency() {
         const miniSegs = !unsupported && data
           ? stripSegments(s.points, data.since, data.until, 12)
           : [];
+        const miniHeights = stripLatHeights(miniSegs);
         const lossVal = sum?.loss ?? 0;
         const lossClass = lossVal >= LATENCY_LOSS_BAD_PCT ? ' is-bad' : lossVal >= LATENCY_LOSS_WARN_PCT ? ' is-warn' : '';
         return (
@@ -515,7 +517,10 @@ export default function NodeLatency() {
                         <span
                           key={idx}
                           className="rp-lat-mini-slice"
-                          style={{ background: sl === 'none' ? '#e2e8f0' : LEVEL_COLORS[sl] }}
+                          style={{
+                            background: sl === 'none' ? '#e2e8f0' : LEVEL_COLORS[sl],
+                            height: `${miniHeights[idx] ?? 50}%`,
+                          }}
                         />
                       );
                     })}

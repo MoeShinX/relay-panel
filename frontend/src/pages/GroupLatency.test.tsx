@@ -510,6 +510,109 @@ describe('GroupLatency chart', () => {
     expect(screen.getByText('latencyChartEmpty')).toBeInTheDocument();
     expect(screen.getByTestId('latency-matrix')).toBeInTheDocument();
   });
+
+  it('clicking a node pill focuses only that node in both chart and strips, clicking again restores all', async () => {
+    serve();
+    renderPage();
+    await flush();
+    expect(screen.getByTestId('chart').getAttribute('data-keys')).toBe('n1,n2');
+    expect(screen.getByTestId('strip-row-n1')).toBeInTheDocument();
+    expect(screen.getByTestId('strip-row-n2')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('latency-focus-n1'));
+    expect(screen.getByTestId('chart').getAttribute('data-keys')).toBe('n1');
+    expect(screen.getByTestId('strip-row-n1')).toBeInTheDocument();
+    expect(screen.queryByTestId('strip-row-n2')).toBeNull();
+
+    // switching to another node pill focuses it directly
+    fireEvent.click(screen.getByTestId('latency-focus-n2'));
+    expect(screen.getByTestId('chart').getAttribute('data-keys')).toBe('n2');
+    expect(screen.queryByTestId('strip-row-n1')).toBeNull();
+    expect(screen.getByTestId('strip-row-n2')).toBeInTheDocument();
+
+    // clicking the same pill again (or "all") returns to every node
+    fireEvent.click(screen.getByTestId('latency-focus-n2'));
+    expect(screen.getByTestId('chart').getAttribute('data-keys')).toBe('n1,n2');
+    expect(screen.getByTestId('strip-row-n1')).toBeInTheDocument();
+    expect(screen.getByTestId('strip-row-n2')).toBeInTheDocument();
+  });
+
+  it('keeps the focused node plotted after switching targets even on >10-node groups where auto-pick drops it', async () => {
+    const ids = Array.from({ length: 13 }, (_, i) => `n${i + 1}`);
+    const manyNodes = ids.map((id) => node(id, { label: id }));
+    // Target 1: n13 has worst latency (500ms) so it is inside the default top 10.
+    // Target 2: n13 has best latency (5ms) so it drops out of the default top 10.
+    const matrixT1 = ids.map((id, i) => cell(id, 1, id === 'n13' ? 500 : 10 + i, 0));
+    const matrixT2 = ids.map((id, i) => cell(id, 2, id === 'n13' ? 5 : 100 + i * 10, 0));
+    const seriesFor = (tid: number) =>
+      ids.map((id) => ({ node_id: id, points: [point(NOW - 60, tid === 1 ? 20 : 30)] }));
+
+    serve((url) => {
+      const tid = /target_id=2/.test(url) ? 2 : 1;
+      return ok(response({
+        nodes: manyNodes,
+        matrix: [...matrixT1, ...matrixT2],
+        target_id: tid,
+        series: seriesFor(tid),
+      }));
+    });
+    renderPage();
+    await flush();
+
+    // Focus n13 on target 1, then switch to target 2.
+    fireEvent.click(screen.getByTestId('latency-focus-n13'));
+    expect(screen.getByTestId('chart').getAttribute('data-keys')).toBe('n13');
+
+    fireEvent.click(screen.getByTestId('latency-col-2'));
+    await flush();
+
+    // Focus takes priority over auto-pick: both chart and strip keep n13 visible.
+    expect(screen.getByTestId('chart').getAttribute('data-keys')).toBe('n13');
+    expect(screen.getByTestId('strip-row-n13')).toBeInTheDocument();
+    expect(screen.getByTestId('latency-focus-n13')).toBeInTheDocument();
+  });
+
+  it('renders the snapshot banner, overall column, and variable-height strips with SLA badge', async () => {
+    serve();
+    renderPage();
+    await flush();
+
+    expect(screen.getByTestId('latency-snapshot')).toBeInTheDocument();
+    expect(screen.getByTestId('latency-snap-best')).toHaveTextContent('HK-1');
+    expect(screen.getByTestId('latency-overall-n1')).toBeInTheDocument();
+
+    expect(screen.getByTestId('strip-sla-n1')).toHaveTextContent('100%');
+    expect((screen.getByTestId('strip-lat-n1-29') as HTMLElement).style.height).not.toBe('');
+  });
+
+  it('filters out healthy nodes when the issues-only switch is turned on', async () => {
+    serve(() =>
+      ok(
+        response({
+          nodes: [
+            node('fast', { label: 'Fast-OK' }),
+            node('slow', { label: 'Slow-Bad' }),
+          ],
+          matrix: [
+            cell('fast', 1, 20, 0),
+            cell('fast', 2, 25, 0),
+            cell('slow', 1, 260, 8),
+            cell('slow', 2, 30, 0),
+          ],
+        }),
+      ),
+    );
+    renderPage();
+    await flush();
+
+    const matrix = screen.getByTestId('latency-matrix');
+    expect(within(matrix).getByText('Fast-OK')).toBeInTheDocument();
+    expect(within(matrix).getByText('Slow-Bad')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('latency-only-anomalies'));
+    expect(within(matrix).queryByText('Fast-OK')).toBeNull();
+    expect(within(matrix).getByText('Slow-Bad')).toBeInTheDocument();
+  });
 });
 
 describe('GroupLatency range and refresh', () => {
@@ -1088,5 +1191,90 @@ describe('GroupLatency stale readings and failed refreshes', () => {
     await flush(MIN);
     expect(screen.getByTestId('strip-current-n1')).toHaveAttribute('data-level', 'good');
     expect(screen.queryByTestId('strip-stale-n1')).toBeNull();
+  });
+});
+
+describe('GroupLatency snapshot edge cases', () => {
+  it('does not claim all-healthy when a probeable pair has no data, and includes missing pairs in the denominator', async () => {
+    serve(() =>
+      ok(
+        response({
+          targets: [target(1, 'Beijing Telecom')],
+          nodes: [node('n1', { label: 'HK-1' }), node('n2', { label: 'HK-2' })],
+          matrix: [cell('n1', 1, 25, 0)],
+          series: [{ node_id: 'n1', points: [point(NOW - 60, 25)] }, { node_id: 'n2', points: [] }],
+        }),
+      ),
+    );
+    renderPage();
+    await flush();
+
+    const health = screen.getByTestId('latency-snap-health');
+    expect(health).not.toHaveTextContent('latencySnapAllHealthy');
+    expect(health).toHaveTextContent('latencySnapMeasuredHealthy');
+    // 1 healthy out of 2 expected probeable pairs, plus 1 missing badge
+    const ratio = screen.getByTestId('latency-snap-ratio');
+    expect(ratio).toHaveAttribute('data-good', '1');
+    expect(ratio).toHaveAttribute('data-total', '2');
+    expect(screen.getByTestId('latency-snap-missing')).toHaveAttribute('data-missing', '1');
+
+    // Weakest-link card also avoids claiming all-clear when pairs are unmeasured
+    const worst = screen.getByTestId('latency-snap-worst');
+    expect(worst).not.toHaveTextContent('latencySnapNoIssue');
+    expect(worst).toHaveTextContent('latencySnapMeasuredNoIssue');
+  });
+
+  it('keeps an escape control to exit issues-only mode on a 1-node group after the node recovers', async () => {
+    let recovered = false;
+    serve(() =>
+      ok(
+        response({
+          targets: [target(1, 'Beijing Telecom')],
+          nodes: [node('n1', { label: 'Solo-HK' })],
+          matrix: [cell('n1', 1, recovered ? 22 : 260, 0)],
+          series: [{ node_id: 'n1', points: [point(NOW - 60, recovered ? 22 : 260)] }],
+        }),
+      ),
+    );
+    renderPage();
+    await flush();
+
+    // Turn on issues-only via the health snapshot card on a single-node group
+    fireEvent.click(screen.getByTestId('latency-snap-health'));
+    expect(within(screen.getByTestId('latency-matrix')).getByText('Solo-HK')).toBeInTheDocument();
+
+    // Node recovers on next auto-refresh -> matrix becomes empty, but exit controls remain active
+    recovered = true;
+    await flush(60_000);
+    expect(within(screen.getByTestId('latency-matrix')).queryByText('Solo-HK')).toBeNull();
+    expect(screen.getByTestId('latency-only-anomalies')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('latencyShowAllNodes'));
+    expect(within(screen.getByTestId('latency-matrix')).getByText('Solo-HK')).toBeInTheDocument();
+  });
+
+  it('includes slow-handshake share when ranking the weakest link so 90% slow beats 10% slow at equal latency/loss', async () => {
+    serve(() =>
+      ok(
+        response({
+          targets: [target(1, 'Beijing Telecom', { kind: 'tcp' })],
+          nodes: [node('n1', { label: 'Mild-Slow' }), node('n2', { label: 'Heavy-Slow' })],
+          matrix: [
+            { ...cell('n1', 1, 30, 0), retrans_rate: 10 },
+            { ...cell('n2', 1, 30, 0), retrans_rate: 90 },
+          ],
+          series: [
+            { node_id: 'n1', points: [point(NOW - 60, 30)] },
+            { node_id: 'n2', points: [point(NOW - 60, 30)] },
+          ],
+        }),
+      ),
+    );
+    renderPage();
+    await flush();
+
+    const worst = screen.getByTestId('latency-snap-worst');
+    expect(worst).toHaveTextContent('Heavy-Slow');
+    expect(worst).toHaveTextContent('90.0%');
   });
 });

@@ -1,36 +1,31 @@
 import type { ThemeConfig } from 'antd';
 
-// RelayPanel — "石墨靛蓝 / Modern Minimal Light (Linear · Stripe direction)".
-// Cool architectural slate canvas (#f4f5f8), crisp pure-white elevated cards,
-// obsidian-graphite sidebar (#111318), refined indigo accent (#4f46e5), and
-// desaturated semantic tokens.
+// RelayPanel — "雾感丁香紫 / Soft Muted Lavender + Light Zinc".
+// Integrated light zinc sidebar (#f3f3f5), crisp white elevated surfaces,
+// soft lavender primary accent (#6c5dd8; white text on it is about 5:1).
 export const rpTheme: ThemeConfig = {
   token: {
-    colorPrimary: '#4f46e5',
-    colorInfo: '#4f46e5',
+    colorPrimary: '#6c5dd8',
+    colorInfo: '#6c5dd8',
+    colorInfoBg: '#f6f5fd',
+    colorInfoBorder: '#e2defb',
     colorSuccess: '#059669',
     colorWarning: '#d97706',
     colorError: '#e11d48',
-    colorLink: '#4f46e5',
-    colorLinkHover: '#4338ca',
+    colorLink: '#5b4cc4',
+    colorLinkHover: '#4c3db0',
     borderRadius: 8,
     borderRadiusSM: 6,
     borderRadiusLG: 12,
-    colorBgLayout: '#f4f5f8',
+    colorBgLayout: '#f6f6f7',
     colorBgContainer: '#ffffff',
-    colorText: '#0f172a',
-    colorTextSecondary: '#475569',
-    colorTextTertiary: '#64748b',
-    colorTextDescription: '#475569',
-    colorBorder: '#e2e8f0',
-    colorBorderSecondary: '#eaecf0',
-    // Weight 500 (Medium) keeps 12–14px Chinese characters open and razor-sharp
-    // on Windows DirectWrite; 600+ is reserved for >=18px headings/figures.
+    colorText: '#09090b',
+    colorTextSecondary: '#52525b',
+    colorTextTertiary: '#71717a',
+    colorTextDescription: '#52525b',
+    colorBorder: '#e4e4e7',
+    colorBorderSecondary: '#ececee',
     fontWeightStrong: 500,
-    // Western UI fonts first (ClearType-hinted Segoe UI / SF Pro for crisp
-    // Latin, digits, slashes & colons), falling through to PingFang / Noto Sans
-    // SC for CJK glyphs (generic `system-ui` omitted before CJK so Windows does
-    // not hijack Chinese to legacy unhinted SimSun/YaHei).
     fontFamily:
       '-apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", ' +
       '"Helvetica Neue", Arial, "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC", ' +
@@ -41,17 +36,18 @@ export const rpTheme: ThemeConfig = {
   },
   components: {
     Menu: {
-      darkItemBg: 'transparent',
-      darkSubMenuItemBg: 'transparent',
-      darkItemColor: '#94a3b8',
-      darkItemHoverColor: '#f8fafc',
-      darkItemHoverBg: 'rgba(255, 255, 255, 0.06)',
-      darkItemSelectedBg: 'rgba(99, 102, 241, 0.18)',
-      darkItemSelectedColor: '#ffffff',
+      itemBg: 'transparent',
+      subMenuItemBg: 'transparent',
+      itemColor: '#27272a',
+      itemHoverColor: '#09090b',
+      itemHoverBg: 'rgba(24, 24, 27, 0.06)',
+      itemSelectedBg: '#ffffff',
+      itemSelectedColor: '#09090b',
+      activeBarBorderWidth: 0,
       itemBorderRadius: 8,
       itemMarginInline: 10,
       itemMarginBlock: 3,
-      itemHeight: 38,
+      itemHeight: 37,
     },
     Button: {
       primaryShadow: 'none',
@@ -65,11 +61,11 @@ export const rpTheme: ThemeConfig = {
     Input: {
       controlHeight: 34,
       controlHeightLG: 42,
-      activeShadow: '0 0 0 3px rgba(79, 70, 229, 0.12)',
+      activeShadow: '0 0 0 3px rgba(108, 93, 216, 0.14)',
     },
     InputNumber: {
       controlHeight: 34,
-      activeShadow: '0 0 0 3px rgba(79, 70, 229, 0.12)',
+      activeShadow: '0 0 0 3px rgba(108, 93, 216, 0.14)',
     },
     Select: {
       controlHeight: 34,
@@ -84,20 +80,20 @@ export const rpTheme: ThemeConfig = {
       borderRadius: 8,
     },
     Table: {
-      headerBg: '#f8fafc',
-      headerColor: '#64748b',
-      rowHoverBg: '#f5f7ff',
-      borderColor: '#eef0f4',
+      headerBg: '#fafafa',
+      headerColor: '#71717a',
+      rowHoverBg: '#fafafa',
+      borderColor: '#f0f0f2',
     },
     Modal: {
       borderRadiusLG: 14,
     },
     Layout: {
-      bodyBg: '#f4f5f8',
-      headerBg: 'rgba(255, 255, 255, 0.86)',
-      siderBg: '#111318',
-      triggerBg: '#111318',
-      triggerColor: '#94a3b8',
+      bodyBg: '#f6f6f7',
+      headerBg: 'rgba(255, 255, 255, 0.90)',
+      siderBg: '#ecedf0',
+      triggerBg: '#ecedf0',
+      triggerColor: '#3f3f46',
     },
   },
 };

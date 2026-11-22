@@ -1,5 +1,13 @@
-import type { GroupLatencyNode, GroupLatencySeries, LatencyPoint, LatencySeries } from '../api/types';
+import type {
+  GroupLatencyCell,
+  GroupLatencyNode,
+  GroupLatencySeries,
+  LatencyPoint,
+  LatencySeries,
+  LatencyTarget,
+} from '../api/types';
 import { STRIP_SEGMENTS, latencyLevel, type LatencyKind, type LatencyLevel } from './latency';
+import { rankByAttention } from './seriesPick';
 
 /** One plotted point of one line. `value` is the bucket's mean round trip,
  *  null when every probe in it was lost (the line then breaks, which is the
@@ -368,4 +376,279 @@ export function stripLatencyLevel(
   if (seg.count === 0) return 'none';
   if (seg.allLost) return 'bad';
   return latencyLevel(seg.avg, null, seg.slow ?? null);
+}
+
+/** Percentage heights (0–100) for variable-height latency heartbeat pillars.
+ *  Empty slices stay at a quiet 28% baseline; all-lost slices rise to 100%;
+ *  answered slices scale across [42%, 100%] when the row's range exceeds 2 ms,
+ *  avoiding false visual drama when a rock-solid line only jitters by < 2 ms. */
+export function stripLatHeights(segs: StripSegment[]): number[] {
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const g of segs) {
+    if (g.count > 0 && g.avg != null) {
+      lo = Math.min(lo, g.avg);
+      hi = Math.max(hi, g.avg);
+    }
+  }
+  const span = Number.isFinite(lo) ? hi - lo : 0;
+  return segs.map((g) => {
+    if (g.count === 0) return 28;
+    if (g.allLost || g.avg == null) return 100;
+    if (span < 2) return 60;
+    return Math.round(42 + ((g.avg - lo) / span) * 58);
+  });
+}
+
+/** Percentage heights (0–100) for variable-height packet-loss pillars.
+ *  0% loss sits at a calm 46% baseline; any non-zero loss pops taller (64%–100%). */
+export function stripLossHeights(segs: StripSegment[]): number[] {
+  return segs.map((g) => {
+    if (g.count === 0 || g.loss == null) return 28;
+    if (g.loss <= 0) return 46;
+    const ratio = Math.min(1, g.loss / 10);
+    return Math.round(64 + ratio * 36);
+  });
+}
+
+/** Delivery / connectivity percentage formatted from range packet loss. */
+export function formatAvailability(loss: number | null | undefined): string | null {
+  if (loss == null) return null;
+  const avail = Math.max(0, Math.min(100, 100 - loss));
+  if (avail >= 99.995) return '100%';
+  return `${avail.toFixed(avail >= 99 ? 2 : 1)}%`;
+}
+
+export interface NodeOverallSummary {
+  nodeId: string;
+  avgMs: number | null;
+  avgLoss: number | null;
+  goodCount: number;
+  warnCount: number;
+  badCount: number;
+  missingCount: number;
+  totalCount: number;
+  level: LatencyLevel;
+  hasIssue: boolean;
+  /** Lower is better; Infinity when the node has no valid readings. */
+  score: number;
+}
+
+export function computeNodeOverall(
+  node: GroupLatencyNode,
+  targets: LatencyTarget[],
+  getCell: (nodeId: string, targetId: number) => GroupLatencyCell | undefined,
+): NodeOverallSummary {
+  if (!node.supported) {
+    return {
+      nodeId: node.node_id, avgMs: null, avgLoss: null,
+      goodCount: 0, warnCount: 0, badCount: 0, missingCount: 0, totalCount: 0,
+      level: 'none', hasIssue: false, score: Infinity,
+    };
+  }
+  let msSum = 0;
+  let msN = 0;
+  let lossSum = 0;
+  let lossN = 0;
+  let slowSum = 0;
+  let slowN = 0;
+  let goodCount = 0;
+  let warnCount = 0;
+  let badCount = 0;
+  let missingCount = 0;
+  for (const tg of targets) {
+    if (node.unsupported_targets.includes(tg.id)) continue;
+    const c = getCell(node.node_id, tg.id);
+    if (!c) {
+      missingCount += 1;
+      continue;
+    }
+    const slow = tg.kind === 'icmp' ? null : c.retrans_rate;
+    const lvl = latencyLevel(c.avg, c.loss, slow);
+    if (lvl === 'good') goodCount += 1;
+    else if (lvl === 'warn') warnCount += 1;
+    else if (lvl === 'bad') badCount += 1;
+    else missingCount += 1;
+    lossSum += c.loss;
+    lossN += 1;
+    if (slow != null) {
+      slowSum += slow;
+      slowN += 1;
+    }
+    if (c.avg != null) {
+      msSum += c.avg;
+      msN += 1;
+    }
+  }
+  const totalCount = goodCount + warnCount + badCount;
+  const avgMs = msN > 0 ? msSum / msN : null;
+  const avgLoss = lossN > 0 ? lossSum / lossN : null;
+  const avgSlow = slowN > 0 ? slowSum / slowN : 0;
+  const hasIssue = warnCount > 0 || badCount > 0;
+  let level: LatencyLevel = 'none';
+  if (totalCount > 0) {
+    if (badCount > 0) level = 'bad';
+    else if (warnCount > 0) level = 'warn';
+    else level = latencyLevel(avgMs, avgLoss, slowN > 0 ? avgSlow : null);
+  }
+  const score = avgMs == null
+    ? (lossN > 0 ? 100_000 + (avgLoss ?? 100) * 100 : Infinity)
+    : avgMs + (avgLoss ?? 0) * 15 + avgSlow * 5 + badCount * 150 + warnCount * 25 + missingCount * 40;
+  return {
+    nodeId: node.node_id,
+    avgMs,
+    avgLoss,
+    goodCount,
+    warnCount,
+    badCount,
+    missingCount,
+    totalCount,
+    level,
+    hasIssue,
+    score,
+  };
+}
+
+export interface GroupSnapshot {
+  goodPairs: number;
+  warnPairs: number;
+  badPairs: number;
+  missingPairs: number;
+  /** Measured pairs (good + warn + bad). */
+  totalPairs: number;
+  /** All probeable pairs (measured + missing). */
+  expectedPairs: number;
+  carrierAvgs: Array<{ carrier: LatencyTarget['carrier']; avgMs: number | null; avgLoss: number; level: LatencyLevel }>;
+  bestNode: NodeOverallSummary | null;
+  worstPair: {
+    nodeId: string;
+    targetId: number;
+    avg: number | null;
+    loss: number;
+    slow: number | null;
+    level: LatencyLevel;
+  } | null;
+}
+
+export function computeGroupSnapshot(
+  nodes: GroupLatencyNode[],
+  targets: LatencyTarget[],
+  overalls: NodeOverallSummary[],
+  getCell: (nodeId: string, targetId: number) => GroupLatencyCell | undefined,
+): GroupSnapshot {
+  let goodPairs = 0;
+  let warnPairs = 0;
+  let badPairs = 0;
+  let missingPairs = 0;
+
+  interface CandidatePair {
+    key: string;
+    nodeId: string;
+    targetId: number;
+    avg: number | null;
+    loss: number;
+    slow: number | null;
+    level: LatencyLevel;
+  }
+  const degraded: CandidatePair[] = [];
+
+  const byCarrier = new Map<LatencyTarget['carrier'], { msSum: number; msN: number; lossSum: number; lossN: number }>();
+
+  for (const tg of targets) {
+    let bucket = byCarrier.get(tg.carrier);
+    if (!bucket) {
+      bucket = { msSum: 0, msN: 0, lossSum: 0, lossN: 0 };
+      byCarrier.set(tg.carrier, bucket);
+    }
+    for (const n of nodes) {
+      if (!n.supported || n.unsupported_targets.includes(tg.id)) continue;
+      const c = getCell(n.node_id, tg.id);
+      if (!c) {
+        missingPairs += 1;
+        continue;
+      }
+      const slow = tg.kind === 'icmp' ? null : (c.retrans_rate ?? null);
+      const lvl = latencyLevel(c.avg, c.loss, slow);
+      if (lvl === 'good') goodPairs += 1;
+      else if (lvl === 'warn') warnPairs += 1;
+      else if (lvl === 'bad') badPairs += 1;
+      else missingPairs += 1;
+
+      bucket.lossSum += c.loss;
+      bucket.lossN += 1;
+      if (c.avg != null) {
+        bucket.msSum += c.avg;
+        bucket.msN += 1;
+      }
+
+      if (lvl === 'warn' || lvl === 'bad') {
+        degraded.push({
+          key: `${n.node_id}\u0000${tg.id}`,
+          nodeId: n.node_id,
+          targetId: tg.id,
+          avg: c.avg,
+          loss: c.loss,
+          slow,
+          level: lvl,
+        });
+      }
+    }
+  }
+
+  let worstPair: GroupSnapshot['worstPair'] = null;
+  if (degraded.length > 0) {
+    const byKey = new Map(degraded.map((d) => [d.key, d]));
+    const [worstKey] = rankByAttention(
+      degraded.map((d) => d.key),
+      (k) => {
+        const d = byKey.get(k);
+        return d ? { avg: d.avg, loss: d.loss, slow: d.slow } : null;
+      },
+    );
+    const picked = byKey.get(worstKey);
+    if (picked) {
+      worstPair = {
+        nodeId: picked.nodeId,
+        targetId: picked.targetId,
+        avg: picked.avg,
+        loss: picked.loss,
+        slow: picked.slow,
+        level: picked.level,
+      };
+    }
+  }
+
+  const carrierOrder: LatencyTarget['carrier'][] = ['telecom', 'unicom', 'mobile', 'other'];
+  const carrierAvgs = carrierOrder
+    .filter((cr) => byCarrier.has(cr))
+    .map((cr) => {
+      const b = byCarrier.get(cr)!;
+      const avgMs = b.msN > 0 ? b.msSum / b.msN : null;
+      const avgLoss = b.lossN > 0 ? b.lossSum / b.lossN : 0;
+      return {
+        carrier: cr,
+        avgMs,
+        avgLoss,
+        level: b.lossN === 0 ? ('none' as LatencyLevel) : latencyLevel(avgMs, avgLoss),
+      };
+    });
+
+  let bestNode: NodeOverallSummary | null = null;
+  for (const o of overalls) {
+    if (!Number.isFinite(o.score) || o.avgMs == null) continue;
+    if (!bestNode || o.score < bestNode.score) bestNode = o;
+  }
+
+  const totalPairs = goodPairs + warnPairs + badPairs;
+  return {
+    goodPairs,
+    warnPairs,
+    badPairs,
+    missingPairs,
+    totalPairs,
+    expectedPairs: totalPairs + missingPairs,
+    carrierAvgs,
+    bestNode,
+    worstPair,
+  };
 }

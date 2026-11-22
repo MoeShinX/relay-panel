@@ -509,6 +509,38 @@ describe('NodeStatus total rate of every online node', () => {
     expect(total).toContain(formatBps(13_000));
     expect(total).toContain(formatBps(24_000));
   });
+
+  it('reflects offline / partial / online state on the top online-nodes badge instead of hardcoding green', async () => {
+    const allOff = [
+      { ...adminNode, node_id: 'n1', online: false },
+      { ...adminNode, node_id: 'n2', online: false },
+      { ...adminNode, node_id: 'n3', online: false },
+    ];
+    serve(allOff);
+    const { unmount } = render(<MemoryRouter><NodeStatus /></MemoryRouter>);
+    await flush();
+    const offPill = screen.getByTestId('all-nodes-online-pill');
+    expect(offPill).toHaveAttribute('data-status', 'offline');
+    expect(offPill.className).toContain('is-offline');
+    expect(offPill.className).not.toContain('is-online');
+    unmount();
+
+    const partial = [
+      { ...adminNode, node_id: 'n1', online: true },
+      { ...adminNode, node_id: 'n2', online: false },
+    ];
+    serve(partial);
+    const { unmount: unmount2 } = render(<MemoryRouter><NodeStatus /></MemoryRouter>);
+    await flush();
+    expect(screen.getByTestId('all-nodes-online-pill')).toHaveAttribute('data-status', 'partial');
+    unmount2();
+
+    const allOn = [{ ...adminNode, node_id: 'n1', online: true }];
+    serve(allOn);
+    render(<MemoryRouter><NodeStatus /></MemoryRouter>);
+    await flush();
+    expect(screen.getByTestId('all-nodes-online-pill')).toHaveAttribute('data-status', 'online');
+  });
 });
 
 describe('NodeStatus control channel', () => {

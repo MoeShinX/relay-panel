@@ -93,16 +93,16 @@ export default function Register() {
       </div>
       <Card className="rp-auth-card">
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
-          <div style={{
-            width: 44, height: 44, margin: '0 auto 14px', borderRadius: 12,
-            background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
-            boxShadow: '0 6px 18px rgba(79, 70, 229, 0.26)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <svg aria-hidden="true" width="24" height="24" viewBox="0 0 28 28" fill="none">
-              <path d="M8 10.5H17L14.2 7.7M20 17.5H11L13.8 20.3" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-              <circle cx="19.5" cy="10.5" r="1.8" fill="#c7d2fe" />
-              <circle cx="8.5" cy="17.5" r="1.8" fill="#c7d2fe" />
+          <div style={{ margin: '0 auto 14px', width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <svg aria-hidden="true" width="44" height="44" viewBox="0 0 64 64" fill="none" style={{ filter: 'drop-shadow(0 6px 14px rgba(79, 70, 229, 0.22))' }}>
+              <defs>
+                <linearGradient id="rp-reg-logo" x1="8" y1="5" x2="57" y2="61" gradientUnits="userSpaceOnUse">
+                  <stop stopColor="#818CF8" />
+                  <stop offset="1" stopColor="#4F46E5" />
+                </linearGradient>
+              </defs>
+              <rect x="3" y="3" width="58" height="58" rx="16" fill="url(#rp-reg-logo)" />
+              <path d="M15 23h27m0 0-7-7m7 7-7 7M49 41H22m0 0 7 7m-7-7 7-7" stroke="#FFFFFF" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </div>
           <Title level={3} style={{ margin: '0 0 4px', fontWeight: 600, letterSpacing: -0.3 }}>

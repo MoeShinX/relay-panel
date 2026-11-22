@@ -6,13 +6,16 @@ import type { LatencyPoint } from '../api/types';
 import LevelDot from './LevelDot';
 import { LEVEL_COLORS, latencyLevel, lossStripLevel, type LatencyKind, type LatencyLevel } from '../utils/latency';
 import {
+  formatAvailability,
   formatChartTime,
   formatLoss,
   formatMs,
   formatSampleTime,
   showRaw,
   slowText,
+  stripLatHeights,
   stripLatencyLevel,
+  stripLossHeights,
   stripSegmentCount,
   stripSegments,
   type StripSegment,
@@ -68,12 +71,14 @@ function Strip({
   rowKey,
   kind,
   segs,
+  heights,
   levelOf,
   describe,
 }: {
   rowKey: string;
   kind: 'lat' | 'loss';
   segs: StripSegment[];
+  heights: number[];
   levelOf: (g: StripSegment) => LatencyLevel;
   describe: (g: StripSegment) => string;
 }) {
@@ -82,6 +87,7 @@ function Strip({
       {segs.map((g, i) => {
         const level = levelOf(g);
         const text = describe(g);
+        const h = heights[i] ?? 60;
         return (
           <div
             key={i}
@@ -91,7 +97,7 @@ function Strip({
             data-testid={`strip-${kind}-${rowKey}-${i}`}
             data-level={level}
             className="rp-lat-slice"
-            style={{ background: LEVEL_COLORS[level] }}
+            style={{ background: LEVEL_COLORS[level], height: `${h}%` }}
           />
         );
       })}
@@ -117,7 +123,15 @@ export default function LatencyStrips({ rows, since, until, bucketSecs, withDate
   const prepared = useMemo(
     () => {
       const n = stripSegmentCount(since, until, bucketSecs);
-      return rows.map((r) => ({ row: r, segs: r.note ? [] : stripSegments(r.points, since, until, n) }));
+      return rows.map((r) => {
+        const segs = r.note ? [] : stripSegments(r.points, since, until, n);
+        return {
+          row: r,
+          segs,
+          latHeights: stripLatHeights(segs),
+          lossHeights: stripLossHeights(segs),
+        };
+      });
     },
     [rows, since, until, bucketSecs],
   );
@@ -160,7 +174,7 @@ export default function LatencyStrips({ rows, since, until, bucketSecs, withDate
   return (
     <Card size="small" className="rp-lat-card" title={t('latencyStripsTitle')} extra={legend} style={{ marginTop: 16 }} data-testid={testId}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {prepared.map(({ row, segs }) => {
+        {prepared.map(({ row, segs, latHeights, lossHeights }) => {
           const cur = row.current;
           const stale = cur?.stale === true;
           const curLevel: LatencyLevel =
@@ -168,6 +182,8 @@ export default function LatencyStrips({ rows, since, until, bucketSecs, withDate
           const rangeSlow = slowText(row.slow, row.kind);
           const describe = describeFor(row.kind);
           const lossLevel = lossStripLevel(row.loss);
+          const avail = formatAvailability(row.loss);
+          const slaClass = row.loss == null ? '' : row.loss >= 5 ? 'is-bad' : row.loss >= 1 ? 'is-warn' : 'is-good';
           return (
             <div
               key={row.key}
@@ -182,7 +198,18 @@ export default function LatencyStrips({ rows, since, until, bucketSecs, withDate
             >
               <div style={{ minWidth: 0 }}>
                 <div style={headStyle}>
-                  <Text strong ellipsis style={{ minWidth: 0, fontSize: 13.5 }}>{row.name}</Text>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    <Text strong ellipsis style={{ minWidth: 0, fontSize: 13.5 }}>{row.name}</Text>
+                    {!row.note && avail != null && (
+                      <span
+                        className={`rp-lat-sla-pill ${slaClass}`}
+                        data-testid={`strip-sla-${row.key}`}
+                        title={`${t('latencyAvailability')} ${avail}`}
+                      >
+                        {t('latencyAvailability')} {avail}
+                      </span>
+                    )}
+                  </span>
                   {row.note ? null : (
                     <span data-testid={`strip-current-${row.key}`} data-level={curLevel} style={{ whiteSpace: 'nowrap' }}>
                       {cur == null ? (
@@ -223,7 +250,7 @@ export default function LatencyStrips({ rows, since, until, bucketSecs, withDate
                   </Text>
                 ) : (
                   <>
-                    <Strip rowKey={row.key} kind="lat" segs={segs} levelOf={stripLatencyLevel} describe={describe} />
+                    <Strip rowKey={row.key} kind="lat" segs={segs} heights={latHeights} levelOf={stripLatencyLevel} describe={describe} />
                     <div className="rp-lat-strip-axis" aria-hidden="true">
                       <span>{startAxis}</span>
                       <span>{t('latencyNowLabel')}</span>
@@ -254,6 +281,7 @@ export default function LatencyStrips({ rows, since, until, bucketSecs, withDate
                     rowKey={row.key}
                     kind="loss"
                     segs={segs}
+                    heights={lossHeights}
                     levelOf={(g) => lossStripLevel(g.loss)}
                     describe={describe}
                   />

@@ -153,31 +153,29 @@ export default function MainLayout() {
       aria-hidden="true"
       width={size}
       height={size}
-      viewBox="0 0 28 28"
+      viewBox="0 0 64 64"
       fill="none"
       style={{ flexShrink: 0 }}
     >
-      <rect width="28" height="28" rx="8" fill="url(#rp-brand-grad)" />
+      <defs>
+        <linearGradient id="rp-logo-grad" x1="8" y1="5" x2="57" y2="61" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#818CF8" />
+          <stop offset="1" stopColor="#4F46E5" />
+        </linearGradient>
+      </defs>
+      <rect x="3" y="3" width="58" height="58" rx="16" fill="url(#rp-logo-grad)" />
       <path
-        d="M8.5 10.5H16.5L14 8M19.5 17.5H11.5L14 20"
-        stroke="#fff"
-        strokeWidth="2"
+        d="M15 23h27m0 0-7-7m7 7-7 7M49 41H22m0 0 7 7m-7-7 7-7"
+        stroke="#FFFFFF"
+        strokeWidth="6"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
-      <circle cx="19" cy="10.5" r="1.75" fill="#c7d2fe" />
-      <circle cx="9" cy="17.5" r="1.75" fill="#c7d2fe" />
-      <defs>
-        <linearGradient id="rp-brand-grad" x1="0" y1="0" x2="28" y2="28" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#6366f1" />
-          <stop offset="1" stopColor="#4f46e5" />
-        </linearGradient>
-      </defs>
     </svg>
   );
 
   // The drawer and the sider keep an operator's long site name inside their
-  // 56px: a margin each side, at most two lines, then an ellipsis (full name
+  // 52px: a margin each side, at most two lines, then an ellipsis (full name
   // on hover). The collapsed sider is 80px, narrower than RelayPanel itself
   // at 17px, so there the name drops to 13px.
   const brandBlock = (collapsed = false) => (
@@ -186,9 +184,9 @@ export default function MainLayout() {
       display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start',
       gap: collapsed ? 0 : 10,
       padding: collapsed ? '0 4px' : '0 18px',
-      borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+      borderBottom: '1px solid var(--rp-sidebar-border, var(--rp-border))',
       marginBottom: 6,
-      color: '#f8fafc', fontSize: collapsed ? 13 : 17, fontWeight: 600, letterSpacing: collapsed ? 0 : 0.2,
+      color: '#09090b', fontSize: collapsed ? 13 : 17, fontWeight: 600, letterSpacing: collapsed ? 0 : -0.2,
     }}>
       {!collapsed && brandMark(24)}
       <span style={{
@@ -202,7 +200,7 @@ export default function MainLayout() {
   // One menu for both homes: the desktop sider and the phone drawer.
   const menu = (
     <Menu
-      theme="dark"
+      theme="light"
       mode="inline"
       selectedKeys={[selectedMenuKey]}
       openKeys={siderCollapsed && !isMobile ? undefined : openKeys}
@@ -215,7 +213,7 @@ export default function MainLayout() {
         navigate(key);
         setMenuOpen(false);
       }}
-      style={{ borderRight: 0 }}
+      style={{ borderRight: 0, background: 'transparent' }}
     />
   );
 
@@ -253,6 +251,25 @@ export default function MainLayout() {
   };
   const userInitial = (user?.username?.trim()?.[0] || 'U').toUpperCase();
 
+  const flatNavLabels: Record<string, string> = {
+    '/': t('dashboard'),
+    '/account': t('personalCenter'),
+    '/shop': t('shop'),
+    '/rules': t('myRules'),
+    '/nodes': t('availableNodes'),
+    '/groups': t('deviceGroups'),
+    '/users': t('users'),
+    '/plans': t('planManagement'),
+    '/redeem-codes': t('redeemCodes'),
+    '/site-settings': t('siteSettings'),
+    '/settings': t('basicSettings'),
+    '/notify-settings': t('notifySettings'),
+    '/announcement-admin': t('announcementAdmin'),
+    '/audit-log': t('auditLog'),
+    '/announcements': t('announcements'),
+  };
+  const currentSectionLabel = flatNavLabels[selectedMenuKey] || '';
+
   return (
     <Layout style={{ minHeight: '100vh' }}>
       {isMobile ? (
@@ -270,12 +287,10 @@ export default function MainLayout() {
       ) : (
         <Sider
           collapsible
+          collapsed={siderCollapsed}
           breakpoint="lg"
-          width={228}
+          width={224}
           onCollapse={(collapsed) => setSiderCollapsed(collapsed)}
-          // v1.2.14: the sider stays put while the page scrolls (a long node
-          // list used to carry the menu off screen). A menu taller than the
-          // window scrolls inside it.
           style={{
             background: 'var(--rp-sidebar-bg)',
             position: 'sticky', top: 0, height: '100vh', overflow: 'auto',
@@ -287,30 +302,22 @@ export default function MainLayout() {
       )}
       <Layout>
         <Header style={{
-          // v1.2.14: the header bar stays at the top while the page scrolls.
-          // Above antd's fixed table columns (z-index 15), which would
-          // otherwise scroll over it; below its popups and drawers (1000+).
           position: 'sticky', top: 0, zIndex: 100,
-          background: 'rgba(255, 255, 255, 0.86)',
+          background: 'rgba(255, 255, 255, 0.88)',
           backdropFilter: 'blur(12px)',
           WebkitBackdropFilter: 'blur(12px)',
           height: 'var(--rp-header-height)',
           padding: isMobile ? '0 8px 0 4px' : '0 24px', lineHeight: 'var(--rp-header-height)',
-          display: 'flex', justifyContent: isMobile ? 'space-between' : 'flex-end', alignItems: 'center',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           borderBottom: '1px solid var(--rp-border)',
         }}>
           {isMobile ? (
             <>
-              {/* The site name is the operator's: a long one stays on one line
-                  and ends in an ellipsis (full name on tap) — wrapping, each
-                  line took the header's 56px line height and burst the bar. */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 auto', minWidth: 0 }}>
                 <Button type="text" icon={<MenuOutlined />} aria-label={t('openMenu')} onClick={() => setMenuOpen(true)} style={{ flexShrink: 0 }} />
                 <Text strong ellipsis={{ tooltip: brand }} style={{ fontSize: 16, minWidth: 0 }}>{brand}</Text>
               </div>
               <Space size={4} style={{ flexShrink: 0 }}>
-                {/* Icon-only here: a phone header cannot fit the labelled
-                    button. The dot still says there is something new. */}
                 <Badge dot={unread} offset={[-6, 6]}>
                   <Button type="text" icon={<NotificationOutlined />} aria-label={t('announcements')} onClick={() => navigate('/announcements')} />
                 </Badge>
@@ -320,53 +327,63 @@ export default function MainLayout() {
               </Space>
             </>
           ) : (
-          <Space size={12}>
-            <Badge dot={unread} offset={[-4, 2]}>
-              <Button
-                type="text"
-                size="small"
-                icon={<NotificationOutlined />}
-                onClick={() => navigate('/announcements')}
-              >
-                {t('announcements')}
-              </Button>
-            </Badge>
-            <Segmented
-              size="small"
-              value={lang}
-              onChange={(v) => setLang(v as 'zh-CN' | 'en-US')}
-              options={[
-                { value: 'zh-CN', label: t('langZhCN') },
-                { value: 'en-US', label: t('langEnUS') },
-              ]}
-            />
-            <Tooltip title="GitHub">
-              <Button
-                type="text"
-                size="small"
-                icon={<GithubOutlined />}
-                href="https://github.com/MoeShinX/relay-panel"
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="GitHub"
-              />
-            </Tooltip>
-            <Dropdown menu={{ items: userMenuItems, onClick: onUserMenu }} trigger={['click']} placement="bottomRight">
-              <button type="button" className="rp-user-pill">
-                <span className="rp-user-avatar">{userInitial}</span>
-                <span>{user?.username || (isAdmin ? t('admin') : t('user'))}</span>
-                <span style={{
-                  fontSize: 11,
-                  padding: '1px 6px',
-                  borderRadius: 999,
-                  background: isAdmin ? '#eef2ff' : '#f1f5f9',
-                  color: isAdmin ? '#4338ca' : '#475569',
-                }}>
-                  {isAdmin ? t('admin') : t('user')}
-                </span>
-              </button>
-            </Dropdown>
-          </Space>
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                {currentSectionLabel && (
+                  <Text style={{ fontSize: 13, color: 'var(--rp-text-secondary)', fontWeight: 500 }}>
+                    {currentSectionLabel}
+                  </Text>
+                )}
+              </div>
+              <Space size={12}>
+                <Badge dot={unread} offset={[-4, 2]}>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<NotificationOutlined />}
+                    onClick={() => navigate('/announcements')}
+                  >
+                    {t('announcements')}
+                  </Button>
+                </Badge>
+                <Segmented
+                  size="small"
+                  value={lang}
+                  onChange={(v) => setLang(v as 'zh-CN' | 'en-US')}
+                  options={[
+                    { value: 'zh-CN', label: t('langZhCN') },
+                    { value: 'en-US', label: t('langEnUS') },
+                  ]}
+                />
+                <Tooltip title="GitHub">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<GithubOutlined />}
+                    href="https://github.com/MoeShinX/relay-panel"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="GitHub"
+                  />
+                </Tooltip>
+                <Dropdown menu={{ items: userMenuItems, onClick: onUserMenu }} trigger={['click']} placement="bottomRight">
+                  <button type="button" className="rp-user-pill">
+                    <span className="rp-user-avatar">{userInitial}</span>
+                    <span>{user?.username || (isAdmin ? t('admin') : t('user'))}</span>
+                    <span style={{
+                      fontSize: 11,
+                      padding: '1px 6px',
+                      borderRadius: 999,
+                      background: '#f4f4f5',
+                      color: '#52525b',
+                      border: '1px solid #e4e4e7',
+                    }}>
+                      {isAdmin ? t('admin') : t('user')}
+                    </span>
+                  </button>
+                </Dropdown>
+              </Space>
+            </>
           )}
         </Header>
         <Content style={{ margin: 'var(--rp-content-padding)', background: 'var(--rp-bg)' }}>
