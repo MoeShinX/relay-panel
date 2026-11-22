@@ -32,8 +32,10 @@
 - 🛒 **套餐与计费** — 用户自助买套餐、卡密充值余额；按「(上行 + 下行) × 线路倍率」扣额度；一人一个当前套餐，续费叠加、换套餐整体替换
 - 📊 **流量可视** — 按规则 / 用户计量，近 1 / 7 / 30 天趋势图按线路分色堆叠，看得出是哪条线路在吃额度
 - 🖥️ **节点管理** — 实时 CPU（含型号）/ 内存 / 连接数、地区识别、掉线推送 Telegram 或邮件、面板一键升级节点（免 SSH）
+- 📶 **延迟监控** — 每个分组的节点定时测三网 TCP / ICMP 延迟、丢包和慢握手；分组对比矩阵带健康度概览和综合排名，趋势图可以只看一台节点，近况色块一眼看出哪段时间在波动
 - 👤 **用户与分组** — 管理任意用户的规则与套餐、重置流量密码、封禁；设备分组可隐藏，节点卸载不影响规则
 - 🗄️ **部署友好** — SQLite（零配置）或 PostgreSQL；面板与节点均支持 amd64 / arm64；面板手机上也能用
+- 🎨 **全新界面** — v1.3.1 起整体重新设计，配色柔和、信息层次更清楚，中英文一键切换
 - 🔒 **安全** — 首次登录强制改密码，节点 Bearer Token 鉴权
 
 完整功能说明与使用文档：**[relaypanel.dev](https://relaypanel.dev)**
@@ -66,6 +68,12 @@
   <tr>
     <td><a href="docs/screenshots/zh/shop.png"><img src="docs/screenshots/zh/shop.png" alt="套餐商店" /></a></td>
     <td><a href="docs/screenshots/zh/plans.png"><img src="docs/screenshots/zh/plans.png" alt="套餐管理" /></a></td>
+  </tr>
+  <tr>
+    <th colspan="2">延迟监控</th>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><a href="docs/screenshots/zh/latency.png"><img src="docs/screenshots/zh/latency.png" alt="延迟监控" /></a></td>
   </tr>
 </table>
 

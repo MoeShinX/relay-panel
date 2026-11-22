@@ -33,8 +33,10 @@
 - 🛒 **Plans & billing** — self-service plan purchase and redeem-code top-ups; charged as `(upload + download) × line rate`; one plan per user, renewals stack and switching replaces
 - 📊 **Traffic visibility** — per-rule and per-user metering, with 1 / 7 / 30-day charts stacked by line so you can see which one is consuming the quota
 - 🖥️ **Node management** — live CPU (with model) / memory / connections, region detection, Telegram or email alerts on offline, one-click upgrade from the panel (no SSH)
+- 📶 **Latency monitor** — each group's nodes probe carrier targets over TCP / ICMP for latency, loss and slow handshakes; a comparison matrix with a health overview and overall ranking, trend charts that can focus on one node, and recent-status strips that show when a line wobbled
 - 👤 **Users & groups** — manage any user's rules and plan, reset traffic or password, ban; device groups can be hidden, and removing a node doesn't affect rules
 - 🗄️ **Deployment-friendly** — SQLite (zero-config) or PostgreSQL; panel and node both support amd64 / arm64; the panel works on a phone too
+- 🎨 **Redesigned UI** — a fresh look since v1.3.1, with a soft palette, clearer layout and one-click Chinese / English switching
 - 🔒 **Security** — first login forces password change; node auth via Bearer token
 
 Full feature reference and user docs: **[relaypanel.dev](https://relaypanel.dev)**
@@ -67,6 +69,12 @@ Full feature reference and user docs: **[relaypanel.dev](https://relaypanel.dev)
   <tr>
     <td><a href="docs/screenshots/en/shop.png"><img src="docs/screenshots/en/shop.png" alt="Shop" /></a></td>
     <td><a href="docs/screenshots/en/plans.png"><img src="docs/screenshots/en/plans.png" alt="Plans" /></a></td>
+  </tr>
+  <tr>
+    <th colspan="2">Latency Monitor</th>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><a href="docs/screenshots/en/latency.png"><img src="docs/screenshots/en/latency.png" alt="Latency Monitor" /></a></td>
   </tr>
 </table>
 
