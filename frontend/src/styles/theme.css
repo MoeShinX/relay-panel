@@ -548,7 +548,8 @@ html, body, #root {
 }
 .rp-lat-stats {
   width: 100%;
-  min-width: 560px;
+  /* Nine columns: below this it scrolls instead of squeezing the headers. */
+  min-width: 780px;
   table-layout: fixed;
   border-collapse: collapse;
   font-size: 13px;
@@ -561,6 +562,9 @@ html, body, #root {
   font-weight: 400;
 }
 .rp-lat-stats thead th {
+  /* Long headers ("最高（不含慢握手）") wrap rather than run into the next one. */
+  white-space: normal;
+  vertical-align: bottom;
   font-size: 12px;
   color: var(--ant-color-text-tertiary, #6b7280);
   border-bottom: 1px solid var(--ant-color-border-secondary, #ececef);

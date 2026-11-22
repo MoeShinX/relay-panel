@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
-  autoRefreshes,
+  AUTO_REFRESH_MS,
+  LONG_RANGE_REFRESH_MS,
+  autoRefreshMs,
+  autoRefreshNoteKey,
   granularityAllowed,
+  LATENCY_STALE_SECS,
   intervalValid,
+  isStaleSample,
   latencyLevel,
   lossStripLevel,
   rowError,
@@ -19,6 +24,42 @@ const row = (over: Partial<TargetRow> = {}): TargetRow => ({
   host: '192.0.2.1',
   port: 443,
   ...over,
+});
+
+describe('latencyLevel with the slow-handshake share', () => {
+  it('the 20 ms / 90 % slow example is not green', () => {
+    expect(latencyLevel(20, 0, 90)).toBe('bad');
+    expect(latencyLevel(20, 0, 0)).toBe('good');
+  });
+
+  it('warns from 2 % and is bad from 10 %, like loss does at 1 % and 5 %', () => {
+    expect(latencyLevel(20, 0, 1.99)).toBe('good');
+    expect(latencyLevel(20, 0, 2)).toBe('warn');
+    expect(latencyLevel(20, 0, 9.99)).toBe('warn');
+    expect(latencyLevel(20, 0, 10)).toBe('bad');
+    // a slow line stays at least as bad as its latency says
+    expect(latencyLevel(300, 0, 2)).toBe('bad');
+    expect(latencyLevel(150, 0, 0)).toBe('warn');
+  });
+
+  it('an unknown share is ignored, never read as 0 % or as a problem', () => {
+    expect(latencyLevel(20, 0, null)).toBe('good');
+    expect(latencyLevel(20, 0, undefined)).toBe('good');
+    expect(latencyLevel(150, 0, null)).toBe('warn');
+    expect(latencyLevel(null, null, null)).toBe('none');
+  });
+});
+
+describe('isStaleSample', () => {
+  it('is older than ten minutes, and no sample at all is not stale', () => {
+    expect(LATENCY_STALE_SECS).toBe(600);
+    expect(isStaleSample(1000, 1600)).toBe(false);
+    expect(isStaleSample(1000, 1601)).toBe(true);
+    expect(isStaleSample(null, 99999)).toBe(false);
+    expect(isStaleSample(undefined, 99999)).toBe(false);
+    // a sample from slightly in the future (clock skew) is fresh
+    expect(isStaleSample(1700, 1600)).toBe(false);
+  });
 });
 
 describe('validHost (same rule as the server)', () => {
@@ -78,8 +119,17 @@ describe('granularity rules', () => {
     }
   });
 
-  it('only ranges up to a day refresh themselves', () => {
-    expect(['1h', '6h', '24h', '7d', '30d'].map((r) => autoRefreshes(r as never))).toEqual([true, true, true, false, false]);
+  it('every range refreshes itself: a minute up to a day, five minutes for 7d / 30d', () => {
+    expect(['1h', '6h', '24h', '7d', '30d'].map((r) => autoRefreshMs(r as never))).toEqual([
+      AUTO_REFRESH_MS,
+      AUTO_REFRESH_MS,
+      AUTO_REFRESH_MS,
+      LONG_RANGE_REFRESH_MS,
+      LONG_RANGE_REFRESH_MS,
+    ]);
+    expect([AUTO_REFRESH_MS, LONG_RANGE_REFRESH_MS]).toEqual([60_000, 300_000]);
+    expect(autoRefreshNoteKey('24h')).toBe('latencyAutoRefresh');
+    expect(autoRefreshNoteKey('7d')).toBe('latencyAutoRefreshLong');
   });
 });
 

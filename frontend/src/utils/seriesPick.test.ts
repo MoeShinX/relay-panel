@@ -109,6 +109,47 @@ describe('rankByAttention', () => {
   });
 });
 
+describe('rankByAttention with the slow-handshake share', () => {
+  const rank = (readings: Record<string, LatencyReading | undefined>) =>
+    rankByAttention(Object.keys(readings), (k) => readings[k]);
+
+  it('a 20 ms line that is 90 % slow outranks a clean one', () => {
+    expect(
+      rank({
+        clean: { avg: 60, loss: 0, slow: 0 },
+        slow: { avg: 20, loss: 0, slow: 90 },
+      }),
+    ).toEqual(['slow', 'clean']);
+  });
+
+  it('within a level more slow handshakes come first, after loss', () => {
+    expect(
+      rank({
+        a: { avg: 300, loss: 0, slow: 12 },
+        b: { avg: 20, loss: 0, slow: 40 },
+        c: { avg: 20, loss: 6, slow: 0 },
+      }),
+    ).toEqual(['c', 'b', 'a']);
+  });
+
+  it('an unknown share does not rank as the best: it ties with 0 % and the mean decides', () => {
+    expect(
+      rank({
+        known0: { avg: 20, loss: 0, slow: 0 },
+        unknown: { avg: 30, loss: 0, slow: null },
+        absent: { avg: 25, loss: 0 },
+      }),
+    ).toEqual(['unknown', 'absent', 'known0']);
+    // and it never outranks a real problem
+    expect(
+      rank({
+        unknown: { avg: 70, loss: 0, slow: null },
+        warn: { avg: 20, loss: 0, slow: 3 },
+      }),
+    ).toEqual(['warn', 'unknown']);
+  });
+});
+
 describe('pruneSelection', () => {
   it('is null (automatic) with nothing picked', () => {
     expect(pruneSelection(null, ['a', 'b'])).toBeNull();

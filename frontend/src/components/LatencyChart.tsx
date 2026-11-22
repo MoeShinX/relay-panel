@@ -8,13 +8,16 @@ import {
   formatChartTime,
   formatLoss,
   formatMs,
-  formatRetrans,
+  lossLabel,
   lossMarkers,
   maxPointsPerKey,
+  showRaw,
+  slowText,
   smoothPoints,
   tooltipText,
   yDomainMin,
   type ChartPoint,
+  type TooltipLabels,
 } from '../utils/latencyChart';
 import { LEVEL_COLORS } from '../utils/latency';
 
@@ -61,12 +64,24 @@ interface Ctx {
   tip: (key: string) => string;
 }
 
-/** "0.20% · Retrans 17%": the loss text with the retransmit share beside it when
- *  the data carries one. */
-function lossText(d: ChartPoint, retransLabel: string): string {
+/** The labels of a chart's tooltips, in the page's language. */
+function tooltipLabels(tip: (key: string) => string): TooltipLabels {
+  return {
+    allLost: tip('latencyAllLost'),
+    loss: tip('latencyTipLoss'),
+    failed: tip('latencyTipFailed'),
+    slow: tip('latencyCardSlow'),
+    rawAvg: tip('latencyTipRaw'),
+  };
+}
+
+/** "0.20% · Slow 17%": the loss (TCP: failed) text with the slow-handshake
+ *  share beside it where the target has one (a TCP target whose data lacks it
+ *  says "—", an ICMP target has none). */
+function lossText(d: ChartPoint, labels: TooltipLabels): string {
   const loss = formatLoss(d.loss);
-  const r = formatRetrans(d.retrans);
-  return r == null ? loss : `${loss} · ${retransLabel} ${r}`;
+  const s = slowText(d.slow, d.kind);
+  return s == null ? loss : `${loss} · ${labels.slow} ${s}`;
 }
 
 /**
@@ -81,7 +96,7 @@ function lossText(d: ChartPoint, retransLabel: string): string {
  */
 function modernOptions({ plotted, names, withDate, tip }: Ctx) {
   const yMin = yDomainMin(plotted);
-  const labels = { allLost: tip('latencyAllLost'), loss: tip('latencyTipLoss'), retrans: tip('latencyCardRetrans') };
+  const labels = tooltipLabels(tip);
   return {
     animate: false,
     connectNulls: false,
@@ -176,7 +191,7 @@ function modernOptions({ plotted, names, withDate, tip }: Ctx) {
  * fixed height as in the modern look.
  */
 function classicOptions({ plotted, names, withDate, tip }: Ctx) {
-  const retransLabel = tip('latencyCardRetrans');
+  const labels = tooltipLabels(tip);
   return {
     scale: { x: { type: 'time' }, y: { nice: true, domainMin: 0 } },
     style: { lineWidth: LINE_WIDTH },
@@ -212,11 +227,16 @@ function classicOptions({ plotted, names, withDate, tip }: Ctx) {
       items: [
         (d: ChartPoint) => ({
           name: `${d.name} · ${tip('latencyTipAvg')}`,
-          value: d.raw == null ? tip('latencyAllLost') : formatMs(d.raw),
+          value:
+            d.raw == null
+              ? tip('latencyAllLost')
+              : showRaw(d.raw, d.rawAvg, d.slow)
+                ? `${formatMs(d.raw)} (${labels.rawAvg} ${formatMs(d.rawAvg)})`
+                : formatMs(d.raw),
         }),
         (d: ChartPoint) => ({ name: tip('latencyTipMin'), value: formatMs(d.min) }),
         (d: ChartPoint) => ({ name: tip('latencyTipMax'), value: formatMs(d.max) }),
-        (d: ChartPoint) => ({ name: tip('latencyTipLoss'), value: lossText(d, retransLabel) }),
+        (d: ChartPoint) => ({ name: lossLabel(d.kind, labels), value: lossText(d, labels) }),
       ],
     },
   };

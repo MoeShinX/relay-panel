@@ -20,6 +20,7 @@ vi.mock('@ant-design/charts', () => ({
 
 import NodeLatency from './NodeLatency';
 import type { NodeLatencyResponse } from '../api/types';
+import { formatClock, formatSampleTime } from '../utils/latencyChart';
 
 const ok = <T,>(data: T) => ({ code: 0, message: 'ok', data });
 
@@ -89,6 +90,8 @@ const latencyCalls = () => mockGet.mock.calls.map((c) => c[0] as string).filter(
 beforeEach(() => {
   mockGet.mockReset();
   vi.useFakeTimers();
+  // The pages judge how old a reading is by the browser's clock.
+  vi.setSystemTime(NOW * 1000);
 });
 afterEach(() => {
   vi.runOnlyPendingTimers();
@@ -192,13 +195,14 @@ describe('NodeLatency cards', () => {
     expect(within(screen.getByTestId('latency-card-3')).getByText('latencyIcmpUnsupported')).toBeInTheDocument();
   });
 
-  it('shows the retransmit share on a card only when the node reported it', async () => {
+  it('shows the slow-handshake share on a TCP card, and none on an ICMP one', async () => {
     const base = response();
     serve(() =>
       ok(
         response({
           summary: [
             { ...base.summary[0], retrans_rate: 17 },
+            // ICMP has no handshake: even a stray figure is not shown
             { ...base.summary[1], retrans_rate: 0 },
             base.summary[2],
           ],
@@ -207,19 +211,19 @@ describe('NodeLatency cards', () => {
     );
     renderPage();
     await flush();
-    expect(screen.getByTestId('latency-card-retrans-1')).toHaveTextContent('latencyCardRetrans 17.0%');
-    expect(screen.getByTestId('latency-card-retrans-2')).toHaveTextContent('latencyCardRetrans 0%');
+    expect(screen.getByTestId('latency-card-slow-1')).toHaveTextContent('latencyCardSlow 17.0%');
+    expect(screen.queryByTestId('latency-card-slow-2')).toBeNull();
     // the unsupported target has no figure and no stray "0%"
-    expect(screen.queryByTestId('latency-card-retrans-3')).toBeNull();
+    expect(screen.queryByTestId('latency-card-slow-3')).toBeNull();
   });
 
-  it('has a stats row per target: now, average, fastest, slowest, loss and retransmit share', async () => {
+  it('has a stats row per target: now, average, fastest, slowest, raw figures, failed / loss and slow-handshake share', async () => {
     const base = response();
     serve(() =>
       ok(
         response({
           summary: [
-            { ...base.summary[0], min: 9.5, max: 1210, retrans_rate: 12.5 },
+            { ...base.summary[0], min: 9.5, max: 1210, raw_avg: 40, raw_max: 1500, retrans_rate: 12.5 },
             { ...base.summary[1], min: 200, max: 400 },
             base.summary[2],
           ],
@@ -235,9 +239,14 @@ describe('NodeLatency cards', () => {
     expect(col(1, 'min')).toBe('9.5 ms');
     expect(col(1, 'max')).toBe('1210 ms');
     expect(col(1, 'loss')).toBe('5.0%');
-    expect(col(1, 'retrans')).toBe('12.5%');
-    // not reported: the cell is empty, not 0%
-    expect(col(2, 'retrans')).toBe('');
+    expect(col(1, 'raw-avg')).toBe('40.0 ms');
+    expect(col(1, 'raw-max')).toBe('1500 ms');
+    expect(col(1, 'slow')).toBe('12.5%');
+    // ICMP (target 2) has no slow-handshake figure: the cell stays empty
+    expect(col(2, 'slow')).toBe('');
+    // no raw figure from the API: the raw columns equal the filtered ones
+    expect(col(2, 'raw-avg')).toBe('250 ms');
+    expect(col(2, 'raw-max')).toBe('400 ms');
     // the newest minute lost everything
     expect(col(2, 'latest')).toBe('latencyAllLost');
     // a target the node cannot probe has a note instead of figures
@@ -344,7 +353,7 @@ describe('NodeLatency range and granularity', () => {
 });
 
 describe('NodeLatency auto-refresh', () => {
-  it('re-reads every minute for a range up to a day, and not for longer ones', async () => {
+  it('re-reads every minute for a range up to a day, and every five minutes for longer ones', async () => {
     serve(() => ok(response()));
     renderPage();
     await flush();
@@ -357,8 +366,18 @@ describe('NodeLatency auto-refresh', () => {
     fireEvent.click(screen.getByText('latencyRange7d'));
     await flush();
     const after = latencyCalls().length;
-    await flush(180_000);
+    // a long range re-reads every five minutes, not every minute
+    await flush(4 * 60_000);
     expect(latencyCalls()).toHaveLength(after);
+    await flush(60_000);
+    expect(latencyCalls()).toHaveLength(after + 1);
+    expect(latencyCalls().at(-1)).toContain('range=7d');
+    expect(screen.getByText('latencyAutoRefreshLong')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('latencyRange30d'));
+    await flush();
+    const n30 = latencyCalls().length;
+    await flush(5 * 60_000);
+    expect(latencyCalls()).toHaveLength(n30 + 1);
   });
 
   it('a refresh that fails keeps the picture on screen', async () => {
@@ -649,5 +668,324 @@ describe('NodeLatency series picker', () => {
     expect(drawn()).toEqual(inOrder(TOP));
     await openPicker();
     expect(screen.getByTestId('series-picker-auto')).toBeInTheDocument();
+  });
+});
+
+// ── v1.2.25: honest freshness and slow handshakes ──
+
+describe('NodeLatency stale readings and failed refreshes', () => {
+  /** One healthy TCP target: 20 ms, nothing lost, nothing slow, sampled a minute ago. */
+  const healthy = (latestTs = NOW - 60): NodeLatencyResponse =>
+    response({
+      series: [
+        {
+          target_id: 1,
+          name: 'Beijing Telecom',
+          carrier: 'telecom',
+          kind: 'tcp',
+          points: [point(NOW - 120, 20), point(NOW - 60, 20)],
+        },
+      ],
+      summary: [
+        {
+          target_id: 1,
+          latest: 20,
+          latest_ts: latestTs,
+          latest_loss: 0,
+          latest_retrans_rate: 0,
+          avg: 20,
+          loss: 0,
+          retrans_rate: 0,
+        },
+      ],
+      unsupported_targets: [],
+    });
+  const MIN = 60_000;
+  const card = () => screen.getByTestId('latency-card-value-1');
+  const clock = (ts: number) => formatClock(new Date(ts * 1000), true);
+
+  it('keeps failing for 20 minutes: a warning with the last good time, readings go grey after 10, charts stay', async () => {
+    let failing = false;
+    serve(() => (failing ? { code: 500, message: 'x', data: null } : ok(healthy())));
+    renderPage();
+    await flush();
+    expect(card()).toHaveAttribute('data-level', 'good');
+    expect(card()).toHaveTextContent('20.0 ms');
+    expect(screen.getByTestId('latency-updated-at')).toHaveAttribute('data-time', clock(NOW));
+    expect(screen.queryByTestId('latency-refresh-failed')).toBeNull();
+
+    failing = true;
+    await flush(5 * MIN);
+    // the failure is said, with the time of the last good load; the reading is still young
+    expect(screen.getByTestId('latency-refresh-failed')).toHaveAttribute('data-time', clock(NOW));
+    expect(card()).toHaveAttribute('data-level', 'good');
+
+    // the sample is 60 s old at the load; 9 minutes later it is 600 s old: still current
+    await flush(4 * MIN);
+    expect(card()).toHaveAttribute('data-level', 'good');
+    // one more tick and it is older than ten minutes
+    await flush(MIN);
+    expect(card()).toHaveAttribute('data-level', 'none');
+    expect(card()).toHaveTextContent('latencyNoNewData');
+    expect(card()).not.toHaveTextContent('20.0');
+    expect(screen.getByTestId('latency-card-stale-time-1')).toHaveTextContent(formatSampleTime(NOW - 60, Date.now()));
+    // it no longer counts as current anywhere: the stats cell and the strip too
+    expect(screen.getByTestId('latency-stats-row-1').querySelector('[data-col="latest"]')?.textContent).toBe('—');
+    expect(screen.getByTestId('strip-current-1')).toHaveAttribute('data-level', 'none');
+    expect(screen.getByTestId('strip-stale-1')).toHaveTextContent('latencyNoNewData');
+
+    await flush(10 * MIN);
+    // 20 minutes on: the warning is still there, the history is still drawn
+    expect(screen.getByTestId('latency-refresh-failed')).toHaveAttribute('data-time', clock(NOW));
+    expect(screen.getByTestId('chart')).toBeInTheDocument();
+    expect(screen.getByTestId('latency-strips')).toBeInTheDocument();
+    expect(screen.queryByText('latencyLoadFailed')).toBeNull();
+    // the range figures are history: they keep their normal reading
+    expect(within(screen.getByTestId('latency-card-1')).getByText(/latencyCardAvg 20\.0 ms/)).toBeInTheDocument();
+  });
+
+  it('requests that succeed without a newer sample go stale after 10 minutes, with no failure warning', async () => {
+    serve(() => ok(healthy()));
+    renderPage();
+    await flush();
+    await flush(9 * MIN);
+    expect(card()).toHaveAttribute('data-level', 'good');
+    await flush(MIN);
+    expect(card()).toHaveAttribute('data-level', 'none');
+    expect(card()).toHaveTextContent('latencyNoNewData');
+    // the requests themselves are fine: not a failed refresh
+    expect(screen.queryByTestId('latency-refresh-failed')).toBeNull();
+    expect(latencyCalls().length).toBeGreaterThan(5);
+    // and the header says when the page last heard from the panel
+    expect(screen.getByTestId('latency-updated-at')).toHaveAttribute('data-time', clock(Date.now() / 1000));
+  });
+
+  it('a node that stopped reporting 15 minutes ago is grey with its last time, never coloured from the range', async () => {
+    // the server keeps the newest minute whatever its age; the range figures are
+    // bad (300 ms, 8 % lost), which must not colour a reading that is not current
+    serve(() =>
+      ok(
+        response({
+          series: [
+            { target_id: 1, name: 'Beijing Telecom', carrier: 'telecom', kind: 'tcp', points: [point(NOW - 900, 20)] },
+            { target_id: 2, name: 'Shanghai Unicom', carrier: 'unicom', kind: 'tcp', points: [] },
+          ],
+          summary: [
+            { target_id: 1, latest: 20, latest_ts: NOW - 900, latest_loss: 0, avg: 300, loss: 8 },
+            // never reported (within 48 hours): no sample at all
+            { target_id: 2, latest: null, latest_ts: null, latest_loss: null, avg: null, loss: null },
+          ],
+          unsupported_targets: [],
+        }),
+      ),
+    );
+    renderPage();
+    await flush();
+    expect(card()).toHaveAttribute('data-level', 'none');
+    expect(card()).toHaveTextContent('latencyNoNewData');
+    expect(card()).not.toHaveTextContent('latencyNoData');
+    expect(screen.getByTestId('latency-card-stale-time-1')).toHaveTextContent(formatSampleTime(NOW - 900, Date.now()));
+    expect(screen.getByTestId('strip-current-1')).toHaveAttribute('data-level', 'none');
+    // the range figures are still shown, with their own colours elsewhere
+    expect(within(screen.getByTestId('latency-card-1')).getByText(/latencyCardAvg 300 ms/)).toBeInTheDocument();
+    // a target the node never reported: "no data", also grey, also not from the range
+    expect(screen.getByTestId('latency-card-value-2')).toHaveTextContent('latencyNoData');
+    expect(screen.getByTestId('latency-card-value-2')).toHaveAttribute('data-level', 'none');
+    expect(screen.queryByTestId('latency-card-stale-2')).toBeNull();
+  });
+
+  it('a fresh sample clears the stale state and the failure warning', async () => {
+    let mode: 'ok' | 'fail' | 'fresh' = 'ok';
+    serve(() => {
+      if (mode === 'fail') return { code: 500, message: 'x', data: null };
+      return ok(healthy(mode === 'fresh' ? Math.floor(Date.now() / 1000) - 30 : NOW - 60));
+    });
+    renderPage();
+    await flush();
+    mode = 'fail';
+    await flush(20 * MIN);
+    expect(screen.getByTestId('latency-refresh-failed')).toBeInTheDocument();
+    expect(card()).toHaveAttribute('data-level', 'none');
+
+    mode = 'fresh';
+    await flush(MIN);
+    expect(screen.queryByTestId('latency-refresh-failed')).toBeNull();
+    expect(card()).toHaveAttribute('data-level', 'good');
+    expect(card()).toHaveTextContent('20.0 ms');
+    expect(screen.queryByTestId('latency-card-stale-1')).toBeNull();
+    expect(screen.getByTestId('strip-current-1')).toHaveAttribute('data-level', 'good');
+  });
+
+  it('answers that keep an old sample stay stale until a newer one arrives', async () => {
+    let fresh = false;
+    serve(() => ok(healthy(fresh ? Math.floor(Date.now() / 1000) - 30 : NOW - 60)));
+    renderPage();
+    await flush();
+    await flush(15 * MIN);
+    expect(card()).toHaveAttribute('data-level', 'none');
+    fresh = true;
+    await flush(MIN);
+    expect(card()).toHaveAttribute('data-level', 'good');
+  });
+});
+
+describe('NodeLatency slow handshakes', () => {
+  /** 1 probe of 20 ms and 9 of 1100 ms, all answered: filtered 20 ms, raw 992 ms, 90 % slow. */
+  const slowSummary = {
+    target_id: 1,
+    latest: 20,
+    latest_ts: NOW - 60,
+    latest_loss: 0,
+    latest_retrans_rate: 90,
+    latest_raw_avg: 992,
+    avg: 20,
+    raw_avg: 992,
+    min: 20,
+    max: 20,
+    raw_max: 1100,
+    loss: 0,
+    retrans_rate: 90,
+  };
+  const slowPoint = { ts: NOW - 60, avg: 20, raw_avg: 992, min: 20, max: 20, raw_max: 1100, loss: 0, retrans_rate: 90 };
+  const slowResponse = () =>
+    response({
+      series: [{ target_id: 1, name: 'Beijing Telecom', carrier: 'telecom', kind: 'tcp', points: [slowPoint] }],
+      summary: [slowSummary],
+      unsupported_targets: [],
+    });
+
+  it('90 % slow handshakes are not green on the card, and the raw 992 ms is shown', async () => {
+    serve(() => ok(slowResponse()));
+    renderPage();
+    await flush();
+    expect(screen.getByTestId('latency-card-value-1')).toHaveAttribute('data-level', 'bad');
+    expect(screen.getByTestId('latency-card-value-1')).toHaveTextContent('20.0 ms');
+    expect(screen.getByTestId('latency-card-raw-1')).toHaveTextContent('latencyCardRaw 992 ms');
+    expect(screen.getByTestId('latency-card-rawavg-1')).toHaveTextContent('latencyCardRaw 992 ms');
+    expect(screen.getByTestId('latency-card-slow-1')).toHaveTextContent('latencyCardSlow 90.0%');
+    // the stats table has both: filtered and raw
+    const col = (c: string) => screen.getByTestId('latency-stats-row-1').querySelector(`[data-col="${c}"]`)?.textContent;
+    expect([col('avg'), col('max'), col('raw-avg'), col('raw-max'), col('slow')]).toEqual([
+      '20.0 ms',
+      '20.0 ms',
+      '992 ms',
+      '1100 ms',
+      '90.0%',
+    ]);
+  });
+
+  it('is not green on the strip either: the current reading and its slices', async () => {
+    serve(() => ok(slowResponse()));
+    renderPage();
+    await flush();
+    expect(screen.getByTestId('strip-current-1')).toHaveAttribute('data-level', 'bad');
+    expect(screen.getByTestId('strip-raw-1')).toHaveTextContent('latencyCardRaw 992 ms');
+    expect(screen.getByTestId('strip-lat-1-29')).toHaveAttribute('data-level', 'bad');
+    expect(screen.getByTestId('strip-lat-1-29').getAttribute('title')).toContain('latencyCardRaw 992 ms');
+    expect(screen.getByTestId('strip-lat-1-29').getAttribute('title')).toContain('latencyCardSlow 90.0%');
+  });
+
+  it('a lower share still warns from 2 %, and a trace under that does not', async () => {
+    const withShare = (share: number) =>
+      response({
+        series: [{ target_id: 1, name: 'Beijing Telecom', carrier: 'telecom', kind: 'tcp', points: [slowPoint] }],
+        summary: [{ ...slowSummary, latest_retrans_rate: share, latest_raw_avg: 20 + share, avg: 20 }],
+        unsupported_targets: [],
+      });
+    for (const [share, level] of [
+      [1.5, 'good'],
+      [2, 'warn'],
+      [9.9, 'warn'],
+      [10, 'bad'],
+    ] as const) {
+      serve(() => ok(withShare(share)));
+      const { unmount } = renderPage();
+      await flush();
+      expect(screen.getByTestId('latency-card-value-1'), `${share}%`).toHaveAttribute('data-level', level);
+      unmount();
+    }
+  });
+
+  it('auto line pick ranks the slow line ahead of a clean one', async () => {
+    // twelve targets: eleven clean ones at 50 + id ms and T12, 20 ms but 90 % slow
+    const ids = Array.from({ length: 12 }, (_, i) => i + 1);
+    serve(() =>
+      ok(
+        response({
+          series: ids.map((id) => ({
+            target_id: id,
+            name: `T${id}`,
+            carrier: 'telecom' as const,
+            kind: 'tcp' as const,
+            points: [point(NOW - 120, 50 + id), point(NOW - 60, 50 + id)],
+          })),
+          summary: ids.map((id) => ({
+            target_id: id,
+            latest: id === 12 ? 20 : 50 + id,
+            latest_ts: NOW - 60,
+            latest_loss: 0,
+            avg: id === 12 ? 20 : 50 + id,
+            loss: 0,
+            retrans_rate: id === 12 ? 90 : 0,
+          })),
+          unsupported_targets: [],
+        }),
+      ),
+    );
+    renderPage();
+    await flush();
+    const drawn = (screen.getByTestId('chart').getAttribute('data-keys') ?? '').split(',');
+    // without the slow share T12 (the lowest mean) would be the first one left out
+    expect(drawn).toContain('12');
+    expect(drawn).toHaveLength(10);
+    expect(drawn).not.toContain('1');
+    expect(drawn).not.toContain('2');
+  });
+
+  it('data without the figure says "Slow —" for TCP, never 0 %, and colours from latency and failures only', async () => {
+    serve(() =>
+      ok(
+        response({
+          series: [
+            { target_id: 1, name: 'Beijing Telecom', carrier: 'telecom', kind: 'tcp', points: [point(NOW - 60, 20)] },
+            { target_id: 2, name: 'Shanghai Unicom', carrier: 'unicom', kind: 'icmp', points: [point(NOW - 60, 30)] },
+          ],
+          summary: [
+            // an older node: no retrans_rate, no latest_retrans_rate, no raw figures
+            { target_id: 1, latest: 20, latest_ts: NOW - 60, latest_loss: 0, avg: 20, loss: 0 },
+            { target_id: 2, latest: 30, latest_ts: NOW - 60, latest_loss: 0, avg: 30, loss: 0 },
+          ],
+          unsupported_targets: [],
+        }),
+      ),
+    );
+    renderPage();
+    await flush();
+    expect(screen.getByTestId('latency-card-slow-1')).toHaveTextContent('latencyCardSlow —');
+    expect(screen.getByTestId('latency-card-1')).not.toHaveTextContent('latencyCardSlow 0');
+    // the colour comes from the latency and the failures alone
+    expect(screen.getByTestId('latency-card-value-1')).toHaveAttribute('data-level', 'good');
+    // no raw figure to show next to the plain one
+    expect(screen.queryByTestId('latency-card-raw-1')).toBeNull();
+    expect(screen.queryByTestId('latency-card-rawavg-1')).toBeNull();
+    // the stats table and the strip: "—" for TCP
+    expect(screen.getByTestId('latency-stats-row-1').querySelector('[data-col="slow"]')?.textContent).toBe('—');
+    expect(screen.getByTestId('strip-slow-value-1')).toHaveTextContent('latencyCardSlow —');
+    // ICMP has no slow-handshake figure at all
+    expect(screen.queryByTestId('latency-card-slow-2')).toBeNull();
+    expect(screen.getByTestId('latency-stats-row-2').querySelector('[data-col="slow"]')?.textContent).toBe('');
+    expect(screen.queryByTestId('strip-slow-value-2')).toBeNull();
+  });
+
+  it('a TCP target says "failed", an ICMP one "loss"', async () => {
+    serve(() => ok(response()));
+    renderPage();
+    await flush();
+    expect(screen.getByTestId('latency-card-1')).toHaveTextContent('latencyCardFailed');
+    expect(screen.getByTestId('latency-card-1')).not.toHaveTextContent('latencyCardLoss');
+    expect(screen.getByTestId('latency-card-2')).toHaveTextContent('latencyCardLoss');
+    expect(screen.getByTestId('latency-card-2')).not.toHaveTextContent('latencyCardFailed');
+    expect(screen.getByTestId('strip-row-1')).toHaveTextContent('latencyStripsFailed');
+    expect(screen.getByTestId('strip-row-2')).toHaveTextContent('latencyStripsLoss');
   });
 });

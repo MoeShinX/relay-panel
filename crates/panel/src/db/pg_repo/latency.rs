@@ -436,6 +436,44 @@ impl LatencyRepository for PgRepository {
             .await?)
     }
 
+    async fn query_latest_minute_ts(
+        &self,
+        node_ids: &[String],
+        target_id: i64,
+        since_ts: i64,
+    ) -> Result<Vec<(String, i64)>, DbError> {
+        if node_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(sqlx::query_as(
+            "SELECT node_id, MAX(minute_ts) FROM latency_minute
+             WHERE node_id = ANY($1) AND target_id = $2 AND minute_ts >= $3
+             GROUP BY node_id ORDER BY node_id",
+        )
+        .bind(node_ids)
+        .bind(target_id)
+        .bind(since_ts)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    async fn clear_latency_history(&self, group_id: i64) -> Result<u64, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let mut deleted = 0;
+        for table in ["latency_minute", "latency_hourly"] {
+            deleted += sqlx::query(&format!(
+                "DELETE FROM {table} WHERE target_id IN
+                 (SELECT id FROM latency_targets WHERE group_id = $1)"
+            ))
+            .bind(group_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        }
+        tx.commit().await?;
+        Ok(deleted)
+    }
+
     async fn prune_latency_history(
         &self,
         minute_before: i64,
