@@ -13,6 +13,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.2.14] - 2026-11-22
+
+Runs against any current panel (still protocol version 4). The loopback guard
+below needs panel 1.2.25 or newer to switch it on; with an older panel the node
+behaves as before.
+
+### Security
+
+- For a regular user's rule the node now refuses to connect to a loopback or
+  link-local address, also when the target is a domain name that resolves to
+  one. The check runs on the resolved address before every TCP and UDP
+  connection and in rule diagnostics. Administrators' rules are not restricted.
+
+### Changed
+
+- When the panel rejects the node's token (HTTP 401 / 403) while fetching the
+  configuration, the node keeps forwarding with its cached configuration and
+  retries every five minutes instead of every few seconds; the WebSocket closes
+  the same way.
+- A "config changed" message over the WebSocket now re-fetches the configuration
+  in place instead of reconnecting the socket, and is recognised by its message
+  type only.
+- All requests to the panel share one HTTP client with a five-second connect
+  timeout; the DNS cache holds at most 4096 names; expired UDP sessions are
+  swept once per node instead of once per listener.
+
 ## [1.2.13] - 2026-11-21
 
 ### Changed
