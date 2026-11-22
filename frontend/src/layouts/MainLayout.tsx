@@ -4,8 +4,6 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useEffect, useState, Suspense } from 'react';
 import {
   MenuOutlined,
-  MenuFoldOutlined,
-  MenuUnfoldOutlined,
   EllipsisOutlined,
   TranslationOutlined,
   DashboardOutlined,
@@ -331,13 +329,6 @@ export default function MainLayout() {
           ) : (
             <>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                <Button
-                  type="text"
-                  size="small"
-                  icon={siderCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-                  onClick={() => setSiderCollapsed((v) => !v)}
-                  style={{ color: 'var(--rp-text-secondary)' }}
-                />
                 {currentSectionLabel && (
                   <Text style={{ fontSize: 13, color: 'var(--rp-text-secondary)', fontWeight: 500 }}>
                     {currentSectionLabel}

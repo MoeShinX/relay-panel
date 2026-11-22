@@ -30,8 +30,8 @@
   --rp-node-offline-bar: #d4d4d8;
 
   /* Accents — soft desaturated lilac-lavender */
-  --rp-primary: #7c6ee6;
-  --rp-primary-hover: #6c5dd8;
+  --rp-primary: #6c5dd8;
+  --rp-primary-hover: #5b4cc4;
   --rp-primary-bg: #f6f5fd;
   --rp-primary-border: #ded9fa;
   --rp-success: #059669;
@@ -223,12 +223,12 @@ html, body, #root {
   font-weight: 500;
 }
 .ant-btn-primary:not(:disabled):not(.ant-btn-dangerous):not(.ant-btn-background-ghost) {
-  background: linear-gradient(180deg, #8678ec 0%, #7c6ee6 100%);
+  background: linear-gradient(180deg, #7061dc 0%, #6c5dd8 100%);
   border-color: #7465e0;
-  box-shadow: 0 1px 2px rgba(124, 110, 230, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  box-shadow: 0 1px 2px rgba(108, 93, 216, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
 .ant-btn-primary:not(:disabled):not(.ant-btn-dangerous):not(.ant-btn-background-ghost):hover {
-  background: linear-gradient(180deg, #7c6ee6 0%, #6c5dd8 100%) !important;
+  background: linear-gradient(180deg, #6c5dd8 0%, #5b4cc4 100%) !important;
   border-color: #6555d0 !important;
 }
 
@@ -332,7 +332,7 @@ html, body, #root {
   box-shadow: 0 1px 3px rgba(9, 9, 11, 0.09), 0 1px 2px rgba(9, 9, 11, 0.05), inset 0 0 0 1px #e2e4ea;
 }
 .ant-menu-light .ant-menu-item-selected .ant-menu-item-icon {
-  color: #6c5dd8 !important;
+  color: #5b4cc4 !important;
 }
 .ant-menu-light .ant-menu-submenu-selected > .ant-menu-submenu-title {
   color: #09090b !important;
@@ -376,7 +376,7 @@ html, body, #root {
   height: 30px;
   border-radius: 9px;
   background: #f3f0fc;
-  color: #6c5dd8;
+  color: #5b4cc4;
   border: 1px solid #e4dff8;
   font-size: 15px;
   display: inline-flex;
@@ -636,7 +636,7 @@ html, body, #root {
 }
 .rp-lat-matrix .ant-table-thead > tr > th.rp-lat-col-head.is-active {
   background: var(--rp-primary-bg, #f6f5fd) !important;
-  box-shadow: inset 0 2px 0 var(--rp-primary, #7c6ee6),
+  box-shadow: inset 0 2px 0 var(--rp-primary, #6c5dd8),
     inset 1px 0 0 #e2defb,
     inset -1px 0 0 #e2defb;
 }
@@ -656,7 +656,7 @@ html, body, #root {
   background: rgba(239, 68, 68, 0.055);
 }
 .rp-lat-matrix .ant-table-tbody > tr > td.rp-lat-col-cell.is-active {
-  background: rgba(124, 110, 230, 0.025);
+  background: rgba(108, 93, 216, 0.025);
   box-shadow: inset 1px 0 0 #e9e6fc,
     inset -1px 0 0 #e9e6fc;
 }
@@ -817,7 +817,7 @@ html, body, #root {
 .rp-lat-target.is-selected {
   background: var(--rp-primary-bg, #f6f5fd) !important;
   border-color: var(--rp-primary-border, #ded9fa) !important;
-  box-shadow: inset 0 2px 0 var(--rp-primary, #7c6ee6);
+  box-shadow: inset 0 2px 0 var(--rp-primary, #6c5dd8);
 }
 .rp-lat-target-value {
   font-size: 22px;
@@ -866,8 +866,8 @@ html, body, #root {
 }
 .rp-lat-kpi-pill.is-focused {
   background: #f6f5fd;
-  border-color: #7c6ee6;
-  box-shadow: 0 1px 3px rgba(124, 110, 230, 0.16);
+  border-color: #6c5dd8;
+  box-shadow: 0 1px 3px rgba(108, 93, 216, 0.16);
 }
 .rp-lat-kpi-pill.is-muted {
   opacity: 0.48;
@@ -1222,7 +1222,7 @@ html, body, #root {
   box-sizing: border-box;
   background-color: var(--rp-bg);
   background-image:
-    radial-gradient(ellipse 70% 50% at 50% -10%, rgba(124, 110, 230, 0.10), transparent 70%),
+    radial-gradient(ellipse 70% 50% at 50% -10%, rgba(108, 93, 216, 0.10), transparent 70%),
     radial-gradient(#d4d4d8 0.85px, transparent 0.85px);
   background-size: 100% 100%, 24px 24px;
 }
@@ -1263,7 +1263,7 @@ html, body, #root {
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: #7c6ee6;
+  background: #6c5dd8;
   color: #ffffff;
   font-size: 12px;
   font-weight: 600;
@@ -1387,7 +1387,7 @@ html, body, #root {
   font-size: 11.5px;
 }
 .rp-rate-down .anticon {
-  color: #7c6ee6;
+  color: #6c5dd8;
   font-size: 11.5px;
 }
 .rp-group-rate-pill {

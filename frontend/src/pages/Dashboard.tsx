@@ -338,7 +338,7 @@ export default function Dashboard() {
                 <div style={{ fontSize: 13, color: 'var(--rp-text-secondary)', marginBottom: 6 }}>{t('users')}</div>
                 <div className="rp-mono" style={{ fontSize: 30, fontWeight: 600, color: 'var(--rp-text)', lineHeight: 1.15 }}>{stats.users}</div>
               </div>
-              <span className="rp-icon-tile" style={{ background: '#f6f5fd', color: '#7c6ee6' }}>
+              <span className="rp-icon-tile" style={{ background: '#f6f5fd', color: '#6c5dd8' }}>
                 <UserOutlined />
               </span>
             </div>

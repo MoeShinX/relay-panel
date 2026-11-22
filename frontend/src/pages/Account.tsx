@@ -162,8 +162,8 @@ export default function Account() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, minWidth: 0 }}>
             <div style={{
               width: 48, height: 48, borderRadius: 14, flexShrink: 0,
-              background: '#7c6ee6',
-              boxShadow: '0 4px 12px rgba(124, 110, 230, 0.22)',
+              background: '#6c5dd8',
+              boxShadow: '0 4px 12px rgba(108, 93, 216, 0.22)',
               color: '#fff', fontSize: 20, fontWeight: 600,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>

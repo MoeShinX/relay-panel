@@ -2,18 +2,18 @@ import type { ThemeConfig } from 'antd';
 
 // RelayPanel — "雾感丁香紫 / Soft Muted Lavender + Light Zinc".
 // Integrated light zinc sidebar (#f3f3f5), crisp white elevated surfaces,
-// soft desaturated lilac-lavender primary accent (#7c6ee6).
+// soft lavender primary accent (#6c5dd8; white text on it is about 5:1).
 export const rpTheme: ThemeConfig = {
   token: {
-    colorPrimary: '#7c6ee6',
-    colorInfo: '#7c6ee6',
+    colorPrimary: '#6c5dd8',
+    colorInfo: '#6c5dd8',
     colorInfoBg: '#f6f5fd',
     colorInfoBorder: '#e2defb',
     colorSuccess: '#059669',
     colorWarning: '#d97706',
     colorError: '#e11d48',
-    colorLink: '#6c5dd8',
-    colorLinkHover: '#5848c2',
+    colorLink: '#5b4cc4',
+    colorLinkHover: '#4c3db0',
     borderRadius: 8,
     borderRadiusSM: 6,
     borderRadiusLG: 12,
@@ -61,11 +61,11 @@ export const rpTheme: ThemeConfig = {
     Input: {
       controlHeight: 34,
       controlHeightLG: 42,
-      activeShadow: '0 0 0 3px rgba(124, 110, 230, 0.14)',
+      activeShadow: '0 0 0 3px rgba(108, 93, 216, 0.14)',
     },
     InputNumber: {
       controlHeight: 34,
-      activeShadow: '0 0 0 3px rgba(124, 110, 230, 0.14)',
+      activeShadow: '0 0 0 3px rgba(108, 93, 216, 0.14)',
     },
     Select: {
       controlHeight: 34,

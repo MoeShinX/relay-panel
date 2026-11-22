@@ -231,21 +231,21 @@ export default function Shop() {
 
                 <div style={{ marginBottom: 20 }}>
                   <div className="rp-plan-feature">
-                    <CheckCircleFilled style={{ color: '#7c6ee6', marginTop: 4, fontSize: 13 }} />
+                    <CheckCircleFilled style={{ color: '#6c5dd8', marginTop: 4, fontSize: 13 }} />
                     <span>{t('planTraffic')}: <Text strong>{p.traffic > 0 ? formatBytes(p.traffic) : t('unlimited')}</Text></span>
                   </div>
                   <div className="rp-plan-feature">
-                    <CheckCircleFilled style={{ color: '#7c6ee6', marginTop: 4, fontSize: 13 }} />
+                    <CheckCircleFilled style={{ color: '#6c5dd8', marginTop: 4, fontSize: 13 }} />
                     <span>{t('planMaxRules')}: <Text strong>{p.max_rules}</Text></span>
                   </div>
                   {p.duration_days > 0 && (
                     <div className="rp-plan-feature">
-                      <CheckCircleFilled style={{ color: '#7c6ee6', marginTop: 4, fontSize: 13 }} />
+                      <CheckCircleFilled style={{ color: '#6c5dd8', marginTop: 4, fontSize: 13 }} />
                       <span>{t('planDuration')}: <Text strong>{p.duration_days} {t('days')}</Text></span>
                     </div>
                   )}
                   <div className="rp-plan-feature">
-                    <CheckCircleFilled style={{ color: '#7c6ee6', marginTop: 4, fontSize: 13 }} />
+                    <CheckCircleFilled style={{ color: '#6c5dd8', marginTop: 4, fontSize: 13 }} />
                     <span>
                       {t('planGrantGroups')}:{' '}
                       {p.grant_all_groups ? (
