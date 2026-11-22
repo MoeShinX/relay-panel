@@ -86,11 +86,6 @@ pub async fn run_ws_loop(
 
         let exit = connect_and_run(&ws_url, &config.token, config, manager, node_id, metrics).await;
         match exit {
-            WsExit::ConfigChanged => {
-                tracing::info!("websocket: config_changed received, reconnecting immediately");
-                backoff = 1;
-                last_permanent_msg = None;
-            }
             WsExit::Disconnected => {
                 tracing::warn!(
                     "websocket disconnected, reconnecting in {} seconds",
@@ -130,7 +125,6 @@ pub async fn run_ws_loop(
 }
 
 enum WsExit {
-    ConfigChanged,
     Disconnected,
     /// A permanent error (426 protocol mismatch, 401/403 auth). The node backs
     /// off 5 minutes — the only fix is an upgrade or reconfiguration.
@@ -138,6 +132,17 @@ enum WsExit {
     /// A transient error (network, 5xx, proxy hiccup). Standard exponential
     /// backoff.
     Error(String),
+}
+
+fn is_config_changed_frame(text: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| {
+            v.get("type")
+                .and_then(|t| t.as_str())
+                .map(|t| t == "config_changed")
+        })
+        .unwrap_or(false)
 }
 
 /// Classify a tungstenite connect error into PermanentError (426/401/403) or
@@ -300,7 +305,7 @@ async fn connect_and_run(
                             let mut mgr = manager.lock().await;
                             mgr.apply_config(&resp).await;
                             tracing::info!("websocket: config applied");
-                        } else if text.contains("config_changed") {
+                        } else if is_config_changed_frame(&text) {
                             tracing::info!("websocket: config_changed received, re-fetching");
                             match poller::fetch_config(config).await {
                                 poller::FetchResult::Ok(resp) => {
@@ -311,11 +316,14 @@ async fn connect_and_run(
                                 poller::FetchResult::ProtocolMismatch => {
                                     tracing::warn!("websocket: config fetch returned protocol mismatch; keeping cached config");
                                 }
+                                poller::FetchResult::AuthRejected => {
+                                    tracing::warn!("websocket: config fetch rejected auth; closing socket");
+                                    return WsExit::PermanentError("authentication rejected (HTTP 401): invalid or revoked token".into());
+                                }
                                 poller::FetchResult::Transient => {
                                     tracing::warn!("websocket: config fetch failed transiently; keeping cached config");
                                 }
                             }
-                            return WsExit::ConfigChanged;
                         } else if let Some(rm) =
                             serde_json::from_str::<relay_shared::protocol::RestartRuleMessage>(&text)
                                 .ok()

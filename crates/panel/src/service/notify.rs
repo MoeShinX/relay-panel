@@ -346,6 +346,16 @@ pub async fn send_all(cfg: &NotifyConfig, subject: &str, text: &str) -> SendRepo
     SendReport { telegram, email }
 }
 
+fn telegram_http_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
+
 /// Post to the Telegram Bot API. Uses the existing reqwest dependency — no bot
 /// framework needed for one HTTP call.
 pub async fn send_telegram(cfg: &NotifyConfig, text: &str) -> Result<(), String> {
@@ -356,11 +366,7 @@ pub async fn send_telegram(cfg: &NotifyConfig, text: &str) -> Result<(), String>
         "https://api.telegram.org/bot{}/sendMessage",
         cfg.telegram_bot_token
     );
-    let client = reqwest::Client::builder()
-        // A hung notification must not wedge the alert loop.
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("HTTP 客户端构建失败: {e}"))?;
+    let client = telegram_http_client();
 
     let resp = client
         .post(&url)

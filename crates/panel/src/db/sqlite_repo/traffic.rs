@@ -106,8 +106,8 @@ impl TrafficRepository for SqliteRepository {
         // Aggregate duplicate rule_ids INTO ONE delta first so the per-rule
         // overflow check below sees the true batch total, not a per-row slice.
         // (Rule keyed by id; we resolve owner/uid in pass 2.)
-        let mut rule_delta: std::collections::HashMap<i64, (u64, u64)> =
-            std::collections::HashMap::new();
+        let mut rule_delta: std::collections::BTreeMap<i64, (u64, u64)> =
+            std::collections::BTreeMap::new();
         for entry in entries {
             if entry.upload > i64::MAX as u64 || entry.download > i64::MAX as u64 {
                 let _ = tx.rollback().await;
@@ -147,7 +147,8 @@ impl TrafficRepository for SqliteRepository {
         let mut resolved: Vec<Resolved> = Vec::with_capacity(rule_delta.len());
         // Track the per-USER aggregate delta (a user may own several rules in
         // this batch) for the cumulative overflow check.
-        let mut user_delta: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+        let mut user_delta: std::collections::BTreeMap<i64, i64> =
+            std::collections::BTreeMap::new();
         for (rule_id, (dup, ddown)) in &rule_delta {
             // The rule's own delta must fit in i64 (upload+download summed).
             let rule_delta_sum = match dup.checked_add(*ddown) {
@@ -244,13 +245,8 @@ impl TrafficRepository for SqliteRepository {
             .bind(r.rule_id)
             .execute(&mut *tx)
             .await?;
-            sqlx::query("UPDATE users SET traffic_used = traffic_used + ? WHERE id = ?")
-                .bind(r.billed_delta)
-                .bind(r.uid)
-                .execute(&mut *tx)
-                .await?;
             // v1.2.0: history accumulates the SAME billed_delta charged to the
-            // user above — inside the same tx, so the chart and the quota can
+            // user below — inside the same tx, so the chart and the quota can
             // never disagree, not even by a crashed half-batch.
             sqlx::query(
                 "INSERT INTO traffic_history \
@@ -275,6 +271,13 @@ impl TrafficRepository for SqliteRepository {
             .bind(r.billed_delta)
             .execute(&mut *tx)
             .await?;
+        }
+        for (&uid, &billed) in &user_delta {
+            sqlx::query("UPDATE users SET traffic_used = traffic_used + ? WHERE id = ?")
+                .bind(billed)
+                .bind(uid)
+                .execute(&mut *tx)
+                .await?;
         }
 
         tx.commit().await?;

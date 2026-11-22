@@ -1,4 +1,4 @@
-import { Table, Button, Modal, Form, Input, InputNumber, Select, Switch, Space, message, Popconfirm, Typography, Tag } from 'antd';
+import { Table, Button, Modal, Form, Input, InputNumber, Select, Switch, Space, message, Popconfirm, Typography, Tag, Alert } from 'antd';
 import { PlusOutlined, ReloadOutlined, EditOutlined, ShoppingOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState } from 'react';
 import api from '../api/client';
@@ -29,6 +29,7 @@ export default function Plans() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [groups, setGroups] = useState<DeviceGroup[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editing, setEditing] = useState<Plan | null>(null);
@@ -51,9 +52,16 @@ export default function Plans() {
         api.get<unknown, ApiEnvelope<Plan[]>>('/admin/plans'),
         api.get<unknown, ApiEnvelope<DeviceGroup[]>>('/groups'),
       ]);
+      if (plansRes.code !== 0 || groupsRes.code !== 0) {
+        setLoadFailed(true);
+        return;
+      }
+      setLoadFailed(false);
       setPlans(plansRes.data || []);
       // Only inbound groups are meaningful as plan grants (rules bind inbound).
       setGroups((groupsRes.data || []).filter((g) => g.group_type === 'in'));
+    } catch {
+      setLoadFailed(true);
     } finally { setLoading(false); }
   }, []);
 
@@ -110,7 +118,7 @@ export default function Plans() {
     const payload: Record<string, unknown> = {};
     if (values.name !== undefined && values.name !== editing.name) payload.name = values.name;
     if (values.max_rules !== undefined && values.max_rules !== editing.max_rules) payload.max_rules = values.max_rules;
-    if (values.traffic_gb !== undefined && gbToBytes(values.traffic_gb) !== editing.traffic) payload.traffic = gbToBytes(values.traffic_gb);
+    if (values.traffic_gb !== undefined && values.traffic_gb !== bytesToGb(editing.traffic)) payload.traffic = gbToBytes(values.traffic_gb);
     if (values.price !== undefined && values.price !== editing.price) payload.price = values.price;
     if (values.plan_type !== undefined && values.plan_type !== (editing.plan_type || 'data')) payload.plan_type = values.plan_type;
     if (values.duration_days !== undefined && values.duration_days !== (editing.duration_days || 0)) payload.duration_days = values.duration_days;
@@ -198,6 +206,15 @@ export default function Plans() {
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>{t('addPlan')}</Button>
         </Space>
       </div>
+      {loadFailed && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 12 }}
+          title={t('loadFailed')}
+          description={t('loadFailedRetry')}
+        />
+      )}
       <Table dataSource={plans} columns={columns} rowKey="id" loading={loading} pagination={{ pageSize: 20 }} scroll={tableScroll} />
 
       {/* v1.2.4: the operator's view of every purchase. Below the plan

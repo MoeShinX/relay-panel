@@ -161,6 +161,10 @@ pub async fn reset_user_traffic(
                 "",
             )
             .await;
+            state
+                .node_connections
+                .broadcast_all(r#"{"type":"config_changed"}"#)
+                .await;
             Json(ApiResponse::success(()))
         }
         Err(e) => {

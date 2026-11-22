@@ -54,7 +54,7 @@ export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', no
             // table's offline rows — every figure on the card is the node's
             // last report rather than a live reading.
             className={r.online ? undefined : 'rp-node-offline-card'}
-            style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 10 }}
+            style={{ border: '1px solid var(--rp-border)', borderRadius: 10, padding: 12, background: r.online ? '#ffffff' : undefined }}
           >
             {/* The machine's name has a line of its own: squeezed in beside the
                 status and version tags it shrank to a bare "…". */}

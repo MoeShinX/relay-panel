@@ -78,6 +78,7 @@ struct ListenerFingerprint {
     /// these to every connection it spawns, so a change restarts the listener
     /// (live connections are not dropped, as with the cap above).
     proxy_protocol: ProxyProtocolConfig,
+    block_local_targets: bool,
 }
 
 impl ListenerFingerprint {
@@ -92,6 +93,7 @@ impl ListenerFingerprint {
             download_limit_bps: l.download_limit_bps,
             max_connections: l.max_connections,
             proxy_protocol: l.proxy_protocol.clone(),
+            block_local_targets: l.block_local_targets,
         }
     }
 }
@@ -111,6 +113,7 @@ pub struct ListenerInfo {
     pub transport: String,
     pub targets: Vec<String>,
     pub running: bool,
+    pub block_local_targets: bool,
 }
 
 pub struct ForwarderManager {
@@ -250,6 +253,7 @@ impl ForwarderManager {
                     transport: format!("{:?}", transport).to_lowercase(),
                     targets: ml.fingerprint.targets.clone(),
                     running: !ml.handle.is_finished(),
+                    block_local_targets: ml.fingerprint.block_local_targets,
                 });
             }
         }
@@ -564,6 +568,7 @@ impl ForwarderManager {
                         .gate(listener.max_connections);
                     let gate6 = gate4.clone();
                     let pp = Arc::new(listener.proxy_protocol.clone());
+                    let block_local = listener.block_local_targets;
                     tokio::spawn(async move {
                         type SrvResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
                         let (tgt4, sel4, rl4, ctr4, cn4, pp4) = (
@@ -577,7 +582,17 @@ impl ForwarderManager {
                         let v4_fut = async move {
                             if let Some(l) = v4_listener {
                                 tcp::serve_tcp_listener(
-                                    l, tgt4, sel4, rl4, ctr4, cn4, rid, ipv4_src, gate4, pp4,
+                                    l,
+                                    tgt4,
+                                    sel4,
+                                    rl4,
+                                    ctr4,
+                                    cn4,
+                                    rid,
+                                    ipv4_src,
+                                    gate4,
+                                    pp4,
+                                    block_local,
                                 )
                                 .await
                             } else {
@@ -587,7 +602,17 @@ impl ForwarderManager {
                         let v6_fut = async move {
                             if let Some(l) = v6_listener {
                                 tcp::serve_tcp_listener(
-                                    l, tgt, sel, rl, ctr, cn, rid, ipv4_src, gate6, pp,
+                                    l,
+                                    tgt,
+                                    sel,
+                                    rl,
+                                    ctr,
+                                    cn,
+                                    rid,
+                                    ipv4_src,
+                                    gate6,
+                                    pp,
+                                    block_local,
                                 )
                                 .await
                             } else {
@@ -666,6 +691,7 @@ impl ForwarderManager {
                     let cn = connections.clone();
                     let rid = rule_id;
                     let ipv4_src = src_ipv4;
+                    let block_local = listener.block_local_targets;
                     tokio::spawn(async move {
                         type SrvResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
                         let (tgt4, sel4, rl4, ctr4, cn4) = (
@@ -678,7 +704,15 @@ impl ForwarderManager {
                         let v4_fut = async move {
                             if let Some(s) = v4_sock {
                                 udp::serve_udp_listener(
-                                    s, tgt4, sel4, rl4, ctr4, cn4, rid, ipv4_src,
+                                    s,
+                                    tgt4,
+                                    sel4,
+                                    rl4,
+                                    ctr4,
+                                    cn4,
+                                    rid,
+                                    ipv4_src,
+                                    block_local,
                                 )
                                 .await
                             } else {
@@ -687,8 +721,18 @@ impl ForwarderManager {
                         };
                         let v6_fut = async move {
                             if let Some(s) = v6_sock {
-                                udp::serve_udp_listener(s, tgt, sel, rl, ctr, cn, rid, ipv4_src)
-                                    .await
+                                udp::serve_udp_listener(
+                                    s,
+                                    tgt,
+                                    sel,
+                                    rl,
+                                    ctr,
+                                    cn,
+                                    rid,
+                                    ipv4_src,
+                                    block_local,
+                                )
+                                .await
                             } else {
                                 std::future::pending::<SrvResult>().await
                             }
@@ -929,6 +973,7 @@ mod tests {
                 download_limit_bps: None,
                 max_connections: None,
                 proxy_protocol: Default::default(),
+                block_local_targets: false,
             }],
         }
     }
@@ -954,6 +999,7 @@ mod tests {
                 download_limit_bps: None,
                 max_connections: None,
                 proxy_protocol: Default::default(),
+                block_local_targets: false,
             }],
         }
     }
@@ -1280,6 +1326,7 @@ mod tests {
                     download_limit_bps: None,
                     max_connections: None,
                     proxy_protocol: Default::default(),
+                    block_local_targets: false,
                 },
                 ListenerConfig {
                     rule_id: 2,
@@ -1293,6 +1340,7 @@ mod tests {
                     download_limit_bps: None,
                     max_connections: None,
                     proxy_protocol: Default::default(),
+                    block_local_targets: false,
                 },
             ],
         };
@@ -1363,6 +1411,7 @@ mod tests {
                     download_limit_bps: None,
                     max_connections: None,
                     proxy_protocol: Default::default(),
+                    block_local_targets: false,
                 },
                 ListenerConfig {
                     rule_id: 2,
@@ -1376,6 +1425,7 @@ mod tests {
                     download_limit_bps: None,
                     max_connections: None,
                     proxy_protocol: Default::default(),
+                    block_local_targets: false,
                 },
             ],
         };
@@ -1499,6 +1549,7 @@ mod tests {
                 download_limit_bps: None,
                 max_connections: None,
                 proxy_protocol: Default::default(),
+                block_local_targets: false,
             }],
         };
         mgr.apply_config(&mk(LoadBalanceStrategy::First)).await;
@@ -1534,6 +1585,7 @@ mod tests {
                 download_limit_bps: None,
                 max_connections: None,
                 proxy_protocol: Default::default(),
+                block_local_targets: false,
             }],
         };
         mgr.apply_config(&mk(NodeTransport::Raw)).await;
@@ -1602,6 +1654,7 @@ mod tests {
                     download_limit_bps: None,
                     max_connections: None,
                     proxy_protocol: Default::default(),
+                    block_local_targets: false,
                 },
                 ListenerConfig {
                     rule_id: 2,
@@ -1615,6 +1668,7 @@ mod tests {
                     download_limit_bps: None,
                     max_connections: None,
                     proxy_protocol: Default::default(),
+                    block_local_targets: false,
                 },
             ],
         };
@@ -1638,6 +1692,7 @@ mod tests {
                     download_limit_bps: None,
                     max_connections: None,
                     proxy_protocol: Default::default(),
+                    block_local_targets: false,
                 },
                 ListenerConfig {
                     rule_id: 2,
@@ -1651,6 +1706,7 @@ mod tests {
                     download_limit_bps: None,
                     max_connections: None,
                     proxy_protocol: Default::default(),
+                    block_local_targets: false,
                 },
             ],
         };
@@ -1707,6 +1763,7 @@ mod tests {
                     download_limit_bps: None,
                     max_connections: None,
                     proxy_protocol: ProxyProtocolConfig::default(),
+                    block_local_targets: false,
                 },
             },
         );
@@ -1768,6 +1825,7 @@ mod tests {
                     download_limit_bps: None,
                     max_connections: None,
                     proxy_protocol: ProxyProtocolConfig::default(),
+                    block_local_targets: false,
                 },
             },
         );
@@ -1785,6 +1843,7 @@ mod tests {
                     download_limit_bps: None,
                     max_connections: None,
                     proxy_protocol: ProxyProtocolConfig::default(),
+                    block_local_targets: false,
                 },
             },
         );
@@ -1825,6 +1884,7 @@ mod tests {
                     download_limit_bps: None,
                     max_connections: None,
                     proxy_protocol: ProxyProtocolConfig::default(),
+                    block_local_targets: false,
                 },
             },
         );
@@ -1924,6 +1984,7 @@ mod tests {
                     download_limit_bps: None,
                     max_connections: None,
                     proxy_protocol: Default::default(),
+                    block_local_targets: false,
                 },
                 ListenerConfig {
                     rule_id: 1,
@@ -1937,6 +1998,7 @@ mod tests {
                     download_limit_bps: None,
                     max_connections: None,
                     proxy_protocol: Default::default(),
+                    block_local_targets: false,
                 },
             ],
         };
@@ -1959,6 +2021,7 @@ mod tests {
                 download_limit_bps: None,
                 max_connections: None,
                 proxy_protocol: Default::default(),
+                block_local_targets: false,
             }],
         };
         mgr.apply_config(&tcp_cfg).await;

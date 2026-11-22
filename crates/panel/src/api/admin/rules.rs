@@ -73,7 +73,7 @@ pub async fn create_rule(
         Ok(()) => {
             state
                 .node_connections
-                .broadcast_all(r#"{"type":"config_changed"}"#)
+                .send_group(req.device_group_in, r#"{"type":"config_changed"}"#)
                 .await;
             Json(ApiResponse::success(()))
         }
@@ -163,12 +163,32 @@ pub async fn update_rule(
             }
         }
     }
+    let old_group_id = state
+        .db
+        .find_rule_by_id(id, &scope)
+        .await
+        .ok()
+        .flatten()
+        .map(|r| r.device_group_in);
     match crate::service::rules::update_rule(state.db.as_ref(), id, &scope, &req).await {
         Ok(()) => {
-            state
-                .node_connections
-                .broadcast_all(r#"{"type":"config_changed"}"#)
-                .await;
+            if let Some(old_gid) = old_group_id {
+                state
+                    .node_connections
+                    .send_group(old_gid, r#"{"type":"config_changed"}"#)
+                    .await;
+                if let Some(new_gid) = req.device_group_in.filter(|&g| g != old_gid) {
+                    state
+                        .node_connections
+                        .send_group(new_gid, r#"{"type":"config_changed"}"#)
+                        .await;
+                }
+            } else {
+                state
+                    .node_connections
+                    .broadcast_all(r#"{"type":"config_changed"}"#)
+                    .await;
+            }
             Json(ApiResponse::success(()))
         }
         Err(UpdateRuleError::BadRequest(msg)) => Json(err(400, msg)),
@@ -234,11 +254,11 @@ pub async fn delete_rule(
     Path(id): Path<i64>,
 ) -> Json<ApiResponse<()>> {
     let scope = user.resource_scope();
-    // Snapshot the name before the delete — afterwards there is no row to read
-    // it from, and "rule 12" alone doesn't answer "who deleted my rule".
-    let rule_name = match state.db.find_rule_by_id(id, &scope).await {
-        Ok(Some(r)) => r.name,
-        _ => String::new(),
+    // Snapshot the name and inbound group before the delete — afterwards there
+    // is no row to read them from.
+    let (rule_name, rule_group_id) = match state.db.find_rule_by_id(id, &scope).await {
+        Ok(Some(r)) => (r.name, Some(r.device_group_in)),
+        _ => (String::new(), None),
     };
     // v0.3.6: check rows_affected(). A non-existent rule previously returned
     // success AND broadcast config_changed — a no-op mutation that needlessly
@@ -266,10 +286,17 @@ pub async fn delete_rule(
                 &rule_name,
             )
             .await;
-            state
-                .node_connections
-                .broadcast_all(r#"{"type":"config_changed"}"#)
-                .await;
+            if let Some(gid) = rule_group_id {
+                state
+                    .node_connections
+                    .send_group(gid, r#"{"type":"config_changed"}"#)
+                    .await;
+            } else {
+                state
+                    .node_connections
+                    .broadcast_all(r#"{"type":"config_changed"}"#)
+                    .await;
+            }
             Json(ApiResponse::success(()))
         }
         Err(e) => {

@@ -17,6 +17,7 @@ const CACHE_TTL: Duration = Duration::from_secs(1800); // 30 minutes
 #[derive(Clone)]
 pub struct ReleaseCache {
     inner: Arc<RwLock<Option<CachedRelease>>>,
+    fetch_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 struct CachedRelease {
@@ -60,7 +61,25 @@ impl ReleaseCache {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(RwLock::new(None)),
+            fetch_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
+    }
+
+    async fn get_or_fetch(&self, force_refresh: bool) -> Result<CachedReleases, String> {
+        if !force_refresh {
+            if let Some(r) = self.get().await {
+                return Ok(r);
+            }
+        }
+        let _guard = self.fetch_lock.lock().await;
+        if force_refresh {
+            self.invalidate().await;
+        } else if let Some(r) = self.get().await {
+            return Ok(r);
+        }
+        let fetched = fetch_github_releases().await?;
+        self.set(fetched.clone()).await;
+        Ok(fetched)
     }
 
     async fn get(&self) -> Option<CachedReleases> {
@@ -103,28 +122,12 @@ impl ReleaseCache {
     /// means the check worked and found no panel release, `Err` means the check
     /// itself failed.
     pub async fn resolve_latest_panel_version(&self) -> Result<Option<String>, String> {
-        let releases = match self.get().await {
-            Some(r) => r,
-            None => {
-                let fetched = fetch_github_releases().await?;
-                self.set(fetched.clone()).await;
-                fetched
-            }
-        };
+        let releases = self.get_or_fetch(false).await?;
         Ok(releases.panel.as_ref().map(|r| r.tag_name.clone()))
     }
 
     pub async fn resolve_latest_node_version(&self) -> Result<Option<String>, String> {
-        // Reuse the cache if fresh; otherwise fetch + repopulate. On fetch
-        // failure, do NOT cache (so the next request retries).
-        let releases = match self.get().await {
-            Some(r) => r,
-            None => {
-                let fetched = fetch_github_releases().await?;
-                self.set(fetched.clone()).await;
-                fetched
-            }
-        };
+        let releases = self.get_or_fetch(false).await?;
         Ok(releases
             .node
             .as_ref()
@@ -238,7 +241,7 @@ fn with_prefix(prefix: &str, url: &str) -> String {
 }
 
 fn releases_api_url() -> String {
-    format!("https://api.github.com/repos/{REPO}/releases?per_page=30")
+    format!("https://api.github.com/repos/{REPO}/releases?per_page=100")
 }
 
 fn raw_cargo_toml_url(krate: &str) -> String {
@@ -361,7 +364,34 @@ where
         let url = with_prefix(prefix, &releases_api_url());
         match get(url.clone()).await {
             Ok(body) => match serde_json::from_str::<Vec<GitHubRelease>>(&body) {
-                Ok(releases) => return Ok(select_latest(releases)),
+                Ok(releases) => {
+                    let mut selected = select_latest(releases);
+                    // If one track has aged past the first 100 releases (e.g.
+                    // many panel releases since the last node release) while
+                    // the other track had releases, backfill ONLY the missing
+                    // track from Cargo.toml on main so node upgrades never break.
+                    if selected.panel.is_some() != selected.node.is_some() {
+                        if selected.panel.is_none() {
+                            if let Ok(b) =
+                                get(with_prefix(prefix, &raw_cargo_toml_url("panel"))).await
+                            {
+                                if let Some(v) = parse_cargo_package_version(&b) {
+                                    selected.panel = release_from_cargo_version("v", v);
+                                }
+                            }
+                        }
+                        if selected.node.is_none() {
+                            if let Ok(b) =
+                                get(with_prefix(prefix, &raw_cargo_toml_url("node"))).await
+                            {
+                                if let Some(v) = parse_cargo_package_version(&b) {
+                                    selected.node = release_from_cargo_version("node-v", v);
+                                }
+                            }
+                        }
+                    }
+                    return Ok(selected);
+                }
                 Err(e) => {
                     // GitHub occasionally returns null for body/html_url/
                     // published_at on old releases; GitHubRelease tolerates
@@ -461,20 +491,21 @@ async fn http_get_text(client: &reqwest::Client, url: String) -> Result<String, 
 /// - `Err(msg)`             - every route failed (logged, surfaced to client).
 ///   NOTE: a single shared error covers BOTH tracks; the caller maps this to
 ///   `check_failed` AND `node_version_check_failed` both true.
+fn version_http_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent("RelayPanel-Version-Check")
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
+
 async fn fetch_github_releases() -> Result<CachedReleases, String> {
-    let client = match reqwest::Client::builder()
-        .user_agent("RelayPanel-Version-Check")
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(error = %e, "version-check: failed to build HTTP client");
-            return Err(format!("build client: {}", e));
-        }
-    };
-    fetch_releases_with(|url| http_get_text(&client, url)).await
+    let client = version_http_client();
+    fetch_releases_with(|url| http_get_text(client, url)).await
 }
 
 /// Query parameters for `get_version`. `refresh=true` (or `1`) bypasses the
@@ -524,48 +555,20 @@ pub async fn get_version(
     let current_ver_str = app_version();
     let current = parse_version(current_ver_str);
 
-    // Try cache first, unless `?refresh=true` (manual "check update" button).
     let want_refresh = q.want_refresh();
-    let cached = if want_refresh {
-        // Invalidate the cache so the next get_version populates it fresh.
-        // (We could also just skip cache below; invalidating prevents
-        // concurrent requests from also serving stale data.)
-        state.release_cache.invalidate().await;
-        None
-    } else {
-        state.release_cache.get().await
-    };
-
-    // v1.2: a single fetch returns BOTH tracks (panel + node). A network/HTTP
-    // failure is shared (one HTTP call), so it sets BOTH check_failed flags;
-    // an empty track (e.g. no node release yet) sets only its own flag false
-    // with an empty version string (NOT a failure — the check succeeded, there
-    // just was nothing to find).
     let (releases, check_failed, error_message): (CachedReleases, bool, String) =
-        if let Some(r) = cached {
-            // Cached data — assume the cached fetch succeeded.
-            (r, false, String::new())
-        } else {
-            match fetch_github_releases().await {
-                Ok(got) => {
-                    // Cache the successful result (even if a track is None — that
-                    // means "succeeded but no eligible release on that track").
-                    // Only Err (network failure) is NOT cached, so the next
-                    // request retries.
-                    state.release_cache.set(got.clone()).await;
-                    (got, false, String::new())
-                }
-                Err(msg) => {
-                    tracing::warn!("version-check: surfacing failure to client: {}", msg);
-                    (
-                        CachedReleases {
-                            panel: None,
-                            node: None,
-                        },
-                        true,
-                        msg,
-                    )
-                }
+        match state.release_cache.get_or_fetch(want_refresh).await {
+            Ok(got) => (got, false, String::new()),
+            Err(msg) => {
+                tracing::warn!("version-check: surfacing failure to client: {}", msg);
+                (
+                    CachedReleases {
+                        panel: None,
+                        node: None,
+                    },
+                    true,
+                    msg,
+                )
             }
         };
 
@@ -1001,8 +1004,8 @@ mod tests {
     use std::sync::Mutex;
 
     const API_DIRECT: &str =
-        "https://api.github.com/repos/MoeShinX/relay-panel/releases?per_page=30";
-    const API_DOWN: &str = "https://down.relaypanel.dev/https://api.github.com/repos/MoeShinX/relay-panel/releases?per_page=30";
+        "https://api.github.com/repos/MoeShinX/relay-panel/releases?per_page=100";
+    const API_DOWN: &str = "https://down.relaypanel.dev/https://api.github.com/repos/MoeShinX/relay-panel/releases?per_page=100";
     const PANEL_TOML: &str = "crates/panel/Cargo.toml";
     const NODE_TOML: &str = "crates/node/Cargo.toml";
 

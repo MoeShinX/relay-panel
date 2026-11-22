@@ -175,6 +175,7 @@ pub async fn tcp_connect(
     target: &str,
     source_ipv4: Option<Ipv4Addr>,
     _timeout_secs: u64,
+    block_local_targets: bool,
 ) -> Result<TcpStream, OutboundError> {
     // v1.0.9: resolve through the DNS cache instead of re-resolving on every
     // connection. The caller (tcp.rs) still wraps this in a per-attempt timeout.
@@ -187,9 +188,23 @@ pub async fn tcp_connect(
             "could not resolve target",
         )));
     }
+    let allowed_addrs: Vec<SocketAddr> = if block_local_targets {
+        addrs
+            .into_iter()
+            .filter(|a| !relay_shared::protocol::is_local_ip(a.ip()))
+            .collect()
+    } else {
+        addrs
+    };
+    if allowed_addrs.is_empty() {
+        return Err(OutboundError::Connect(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "target resolves to a disallowed local or link-local address",
+        )));
+    }
     let stream = match source_ipv4 {
-        None => connect_first(&addrs).await?,
-        Some(src) => tcp_connect_bound(&addrs, src).await?,
+        None => connect_first(&allowed_addrs).await?,
+        Some(src) => tcp_connect_bound(&allowed_addrs, src).await?,
     };
     // Non-fatal: a socket that just connected virtually never rejects this.
     if let Err(e) = stream.set_nodelay(true) {
@@ -313,7 +328,14 @@ pub(super) async fn resolve_cached(target: &str) -> std::io::Result<Vec<SocketAd
         Ok(it) => {
             let addrs: Vec<SocketAddr> = it.collect();
             if !addrs.is_empty() {
-                dns_cache().lock().await.insert(
+                let mut cache = dns_cache().lock().await;
+                if cache.len() >= 4096 {
+                    cache.retain(|_, c| c.at.elapsed() < DNS_CACHE_TTL * 10);
+                    if cache.len() >= 4096 {
+                        cache.clear();
+                    }
+                }
+                cache.insert(
                     target.to_string(),
                     CachedDns {
                         addrs: addrs.clone(),
@@ -618,7 +640,7 @@ mod tests {
 
         let accept = tokio::spawn(async move { listener.accept().await.map(|(s, _)| s) });
 
-        let stream = tcp_connect(&target, Some(Ipv4Addr::LOCALHOST), 5)
+        let stream = tcp_connect(&target, Some(Ipv4Addr::LOCALHOST), 5, false)
             .await
             .expect("connect with source bind must succeed");
         // The connection's local (source) address must be the bound 127.0.0.1.
@@ -637,11 +659,17 @@ mod tests {
         let target = format!("127.0.0.1:{}", port);
         let accept = tokio::spawn(async move { listener.accept().await.map(|(s, _)| s) });
 
-        let stream = tcp_connect(&target, None, 5)
+        let stream = tcp_connect(&target, None, 5, false)
             .await
             .expect("auto-route connect must succeed");
         assert!(stream.peer_addr().unwrap().port() == port);
         assert!(accept.await.unwrap().is_ok());
+
+        let blocked = tcp_connect(&target, None, 5, true).await;
+        assert!(
+            blocked.is_err(),
+            "block_local_targets=true must reject 127.0.0.1"
+        );
     }
 
     #[tokio::test]
@@ -659,13 +687,15 @@ mod tests {
             (a, b)
         });
 
-        let auto = tcp_connect(&target, None, 5).await.expect("auto connect");
+        let auto = tcp_connect(&target, None, 5, false)
+            .await
+            .expect("auto connect");
         assert!(
             auto.nodelay().unwrap(),
             "auto-route stream must have NODELAY"
         );
 
-        let bound = tcp_connect(&target, Some(Ipv4Addr::LOCALHOST), 5)
+        let bound = tcp_connect(&target, Some(Ipv4Addr::LOCALHOST), 5, false)
             .await
             .expect("bound connect");
         assert!(

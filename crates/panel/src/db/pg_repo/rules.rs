@@ -17,8 +17,37 @@ impl RuleRepository for PgRepository {
         }
         .fetch_all(&self.pool)
         .await?;
+        if rules.is_empty() {
+            return Ok(rules);
+        }
+        let all_targets: Vec<relay_shared::models::ForwardRuleTarget> = match scope.owner_id() {
+            None => {
+                sqlx::query_as("SELECT * FROM forward_rule_targets ORDER BY rule_id, position, id")
+                    .fetch_all(&self.pool)
+                    .await?
+            }
+            Some(uid) => {
+                sqlx::query_as(
+                    "SELECT frt.* FROM forward_rule_targets frt \
+                 JOIN forward_rules fr ON fr.id = frt.rule_id \
+                 WHERE fr.uid = $1 ORDER BY frt.rule_id, frt.position, frt.id",
+                )
+                .bind(uid)
+                .fetch_all(&self.pool)
+                .await?
+            }
+        };
+        let mut by_rule: std::collections::HashMap<
+            i64,
+            Vec<relay_shared::models::ForwardRuleTarget>,
+        > = std::collections::HashMap::with_capacity(rules.len());
+        for t in all_targets {
+            by_rule.entry(t.rule_id).or_default().push(t);
+        }
         for rule in &mut rules {
-            rule.targets = self.list_rule_targets(rule.id, scope).await?;
+            if let Some(ts) = by_rule.remove(&rule.id) {
+                rule.targets = ts;
+            }
         }
         Ok(rules)
     }
@@ -1023,12 +1052,34 @@ impl RuleRepository for PgRepository {
              WHERE fr.device_group_in = $1 AND fr.paused = FALSE \
              AND u.banned = FALSE \
              AND u.suspended = FALSE \
-             AND (u.traffic_limit = 0 OR u.traffic_used < u.traffic_limit) \
-             AND (u.plan_expire_at IS NULL OR u.plan_expire_at > to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))",
+             AND (u.admin = TRUE OR u.traffic_limit = 0 OR u.traffic_used < u.traffic_limit) \
+             AND (u.admin = TRUE OR u.plan_expire_at IS NULL OR u.plan_expire_at > to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))",
         )
         .bind(group_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rules)
+    }
+
+    async fn list_enabled_targets_for_group(
+        &self,
+        group_id: i64,
+    ) -> Result<std::collections::HashMap<i64, Vec<relay_shared::models::ForwardRuleTarget>>, DbError>
+    {
+        let rows: Vec<relay_shared::models::ForwardRuleTarget> = sqlx::query_as(
+            "SELECT frt.* FROM forward_rule_targets frt \
+             JOIN forward_rules fr ON fr.id = frt.rule_id \
+             WHERE fr.device_group_in = $1 AND fr.paused = FALSE AND frt.enabled = TRUE \
+             ORDER BY frt.rule_id, frt.position, frt.id",
+        )
+        .bind(group_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut map: std::collections::HashMap<i64, Vec<relay_shared::models::ForwardRuleTarget>> =
+            std::collections::HashMap::new();
+        for t in rows {
+            map.entry(t.rule_id).or_default().push(t);
+        }
+        Ok(map)
     }
 }

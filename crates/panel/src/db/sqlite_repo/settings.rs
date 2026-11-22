@@ -257,17 +257,24 @@ impl PlanRepository for SqliteRepository {
 
         // Read the user's current balance (canonical TEXT) + expiry + plan_id.
         // plan_id decides renew-vs-switch below.
-        let row: Option<(String, Option<String>, Option<i64>)> =
-            sqlx::query_as("SELECT balance, plan_expire_at, plan_id FROM users WHERE id = ?")
-                .bind(user_id)
-                .fetch_optional(&mut *tx)
-                .await?;
-        let Some((balance_str, current_expire, current_plan_id)) = row else {
+        let row: Option<(String, Option<String>, Option<i64>, i64, bool)> = sqlx::query_as(
+            "SELECT balance, plan_expire_at, plan_id, traffic_limit, admin FROM users WHERE id = ?",
+        )
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some((balance_str, current_expire, current_plan_id, current_traffic_limit, is_admin)) =
+            row
+        else {
             let _ = tx.rollback().await;
             // A missing user mid-purchase is a DB integrity issue, not a
             // balance issue — surface as a 500.
             return Err(BuyPlanError::Database(DbError::NotFound));
         };
+        if is_admin {
+            let _ = tx.rollback().await;
+            return Err(BuyPlanError::Database(DbError::NotFound));
+        }
 
         // Decimal math in integer cents (no floats). balance_to_cents returns
         // None on a non-canonical string — treat that as a data-integrity fault
@@ -339,13 +346,14 @@ impl PlanRepository for SqliteRepository {
         };
 
         // Apply the user update per the renew/switch split above.
+        let stacked_limit = current_traffic_limit.saturating_add(traffic_to_add);
         if is_switch {
             // Switch: traffic_limit = new quota, traffic_used reset to 0.
             sqlx::query(
                 "UPDATE users SET \
                  balance = ?, traffic_limit = ?, traffic_used = 0, max_rules = ?, \
                  plan_id = ?, plan_expire_at = ? \
-                 WHERE id = ?",
+                 WHERE id = ? AND admin = 0",
             )
             .bind(&new_balance)
             .bind(traffic_to_add)
@@ -359,12 +367,12 @@ impl PlanRepository for SqliteRepository {
             // Renew + the plan's reset_traffic flag: stack quota, zero usage.
             sqlx::query(
                 "UPDATE users SET \
-                 balance = ?, traffic_limit = traffic_limit + ?, traffic_used = 0, \
+                 balance = ?, traffic_limit = ?, traffic_used = 0, \
                  max_rules = ?, plan_id = ?, plan_expire_at = ? \
-                 WHERE id = ?",
+                 WHERE id = ? AND admin = 0",
             )
             .bind(&new_balance)
-            .bind(traffic_to_add)
+            .bind(stacked_limit)
             .bind(plan_max_rules)
             .bind(plan_id)
             .bind(&new_expire)
@@ -375,12 +383,12 @@ impl PlanRepository for SqliteRepository {
             // Renew: stack quota, keep usage.
             sqlx::query(
                 "UPDATE users SET \
-                 balance = ?, traffic_limit = traffic_limit + ?, max_rules = ?, \
+                 balance = ?, traffic_limit = ?, max_rules = ?, \
                  plan_id = ?, plan_expire_at = ? \
-                 WHERE id = ?",
+                 WHERE id = ? AND admin = 0",
             )
             .bind(&new_balance)
-            .bind(traffic_to_add)
+            .bind(stacked_limit)
             .bind(plan_max_rules)
             .bind(plan_id)
             .bind(&new_expire)

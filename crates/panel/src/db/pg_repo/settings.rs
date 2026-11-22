@@ -266,16 +266,22 @@ impl PlanRepository for PgRepository {
         let mut tx = self.pool.begin().await?;
 
         // FOR UPDATE locks the user row for the tx's duration.
-        let row: Option<(String, Option<String>, Option<i64>)> = sqlx::query_as(
-            "SELECT balance, plan_expire_at, plan_id FROM users WHERE id = $1 FOR UPDATE",
+        let row: Option<(String, Option<String>, Option<i64>, i64, bool)> = sqlx::query_as(
+            "SELECT balance, plan_expire_at, plan_id, traffic_limit, admin FROM users WHERE id = $1 FOR UPDATE",
         )
         .bind(user_id)
         .fetch_optional(&mut *tx)
         .await?;
-        let Some((balance_str, current_expire, current_plan_id)) = row else {
+        let Some((balance_str, current_expire, current_plan_id, current_traffic_limit, is_admin)) =
+            row
+        else {
             let _ = tx.rollback().await;
             return Err(BuyPlanError::Database(DbError::NotFound));
         };
+        if is_admin {
+            let _ = tx.rollback().await;
+            return Err(BuyPlanError::Database(DbError::NotFound));
+        }
 
         let balance_cents =
             relay_shared::money::balance_to_cents(&balance_str).ok_or_else(|| {
@@ -347,13 +353,14 @@ impl PlanRepository for PgRepository {
             Some(row.0)
         };
 
+        let stacked_limit = current_traffic_limit.saturating_add(traffic_to_add);
         if is_switch {
             // Switch: traffic_limit = new quota, traffic_used reset to 0.
             sqlx::query(
                 "UPDATE users SET \
                  balance = $1, traffic_limit = $2, traffic_used = 0, max_rules = $3, \
                  plan_id = $4, plan_expire_at = $5 \
-                 WHERE id = $6",
+                 WHERE id = $6 AND admin = FALSE",
             )
             .bind(&new_balance)
             .bind(traffic_to_add)
@@ -367,12 +374,12 @@ impl PlanRepository for PgRepository {
             // Renew + the plan's reset_traffic flag: stack quota, zero usage.
             sqlx::query(
                 "UPDATE users SET \
-                 balance = $1, traffic_limit = traffic_limit + $2, traffic_used = 0, \
+                 balance = $1, traffic_limit = $2, traffic_used = 0, \
                  max_rules = $3, plan_id = $4, plan_expire_at = $5 \
-                 WHERE id = $6",
+                 WHERE id = $6 AND admin = FALSE",
             )
             .bind(&new_balance)
-            .bind(traffic_to_add)
+            .bind(stacked_limit)
             .bind(plan_max_rules)
             .bind(plan_id)
             .bind(&new_expire)
@@ -383,12 +390,12 @@ impl PlanRepository for PgRepository {
             // Renew: stack quota, keep usage.
             sqlx::query(
                 "UPDATE users SET \
-                 balance = $1, traffic_limit = traffic_limit + $2, max_rules = $3, \
+                 balance = $1, traffic_limit = $2, max_rules = $3, \
                  plan_id = $4, plan_expire_at = $5 \
-                 WHERE id = $6",
+                 WHERE id = $6 AND admin = FALSE",
             )
             .bind(&new_balance)
-            .bind(traffic_to_add)
+            .bind(stacked_limit)
             .bind(plan_max_rules)
             .bind(plan_id)
             .bind(&new_expire)

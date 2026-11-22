@@ -1,5 +1,6 @@
 use crate::api::auth_throttle::{
-    client_ip, run_bcrypt, IP_LIMITER, MAX_LOGIN_PASSWORD, MAX_LOGIN_USERNAME, USERNAME_LIMITER,
+    client_ip, run_bcrypt, IP_LIMITER, MAX_LOGIN_PASSWORD, MAX_LOGIN_USERNAME,
+    UNATTRIBUTED_REGISTER_LIMITER, USERNAME_LIMITER,
 };
 use crate::api::AppState;
 use crate::service::password::{
@@ -143,16 +144,15 @@ pub async fn register(
     headers: HeaderMap,
     Json(req): Json<RegisterRequest>,
 ) -> Json<ApiResponse<()>> {
-    // v1.2.12: registration also runs bcrypt for anyone, so it shares the
-    // per-IP limit and the bcrypt permits with login.
-    if let Some(ip) = client_ip(peer.map(|Extension(ConnectInfo(a))| a), &headers) {
-        if IP_LIMITER.hit(&ip) {
-            return Json(ApiResponse {
-                code: 429,
-                message: "Too many attempts. Please wait a minute and try again.".into(),
-                data: None,
-            });
-        }
+    if req.username.is_empty()
+        || req.username.len() > MAX_LOGIN_USERNAME
+        || req.password.len() > MAX_LOGIN_PASSWORD
+    {
+        return Json(ApiResponse {
+            code: 400,
+            message: "Invalid username or password length.".into(),
+            data: None,
+        });
     }
     // v0.4.10 PR3: registration toggle now lives in app_settings (admin-managed),
     // NOT the REGISTRATION_ENABLED env var. The env var only seeds the row on
@@ -177,6 +177,29 @@ pub async fn register(
             message: "Registration is disabled. Ask an admin to create your account.".into(),
             data: None,
         });
+    }
+
+    // v1.2.12: registration also runs bcrypt for anyone, so it shares the
+    // per-IP limit and the bcrypt permits with login.
+    match client_ip(peer.map(|Extension(ConnectInfo(a))| a), &headers) {
+        Some(ip) => {
+            if IP_LIMITER.hit(&ip) {
+                return Json(ApiResponse {
+                    code: 429,
+                    message: "Too many attempts. Please wait a minute and try again.".into(),
+                    data: None,
+                });
+            }
+        }
+        None => {
+            if UNATTRIBUTED_REGISTER_LIMITER.hit(&()) {
+                return Json(ApiResponse {
+                    code: 429,
+                    message: "Too many attempts. Please wait a minute and try again.".into(),
+                    data: None,
+                });
+            }
+        }
     }
 
     // v0.4.21 PR2: resolve plan_id from request, falling back to the default.

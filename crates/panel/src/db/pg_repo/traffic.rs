@@ -89,8 +89,8 @@ impl TrafficRepository for PgRepository {
         // ── Pass 1: validate u64→i64 per entry + aggregate duplicate rule_ids
         // into one per-rule delta (so the cumulative overflow check sees the
         // true batch total, not a per-row slice). ──
-        let mut rule_delta: std::collections::HashMap<i64, (u64, u64)> =
-            std::collections::HashMap::new();
+        let mut rule_delta: std::collections::BTreeMap<i64, (u64, u64)> =
+            std::collections::BTreeMap::new();
         for entry in entries {
             if entry.upload > i64::MAX as u64 || entry.download > i64::MAX as u64 {
                 let _ = tx.rollback().await;
@@ -127,7 +127,8 @@ impl TrafficRepository for PgRepository {
             billed_delta: i64,
         }
         let mut resolved: Vec<Resolved> = Vec::with_capacity(rule_delta.len());
-        let mut user_delta: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+        let mut user_delta: std::collections::BTreeMap<i64, i64> =
+            std::collections::BTreeMap::new();
         for (rule_id, (dup, ddown)) in &rule_delta {
             let rule_delta_sum = match dup.checked_add(*ddown) {
                 Some(v) if v <= i64::MAX as u64 => v as i64,
@@ -211,12 +212,7 @@ impl TrafficRepository for PgRepository {
             .bind(r.rule_id)
             .execute(&mut *tx)
             .await?;
-            sqlx::query("UPDATE users SET traffic_used = traffic_used + $1 WHERE id = $2")
-                .bind(r.billed_delta)
-                .bind(r.uid)
-                .execute(&mut *tx)
-                .await?;
-            // v1.2.0: same billed_delta as the user charge above, in the same
+            // v1.2.0: same billed_delta as the user charge below, in the same
             // tx — the history chart can never disagree with the quota.
             sqlx::query(
                 "INSERT INTO traffic_history \
@@ -240,6 +236,15 @@ impl TrafficRepository for PgRepository {
             .bind(r.billed_delta)
             .execute(&mut *tx)
             .await?;
+        }
+        // Update users in deterministic ascending uid order, once per user,
+        // preventing AB-BA row-lock deadlocks across concurrent batches.
+        for (&uid, &billed) in &user_delta {
+            sqlx::query("UPDATE users SET traffic_used = traffic_used + $1 WHERE id = $2")
+                .bind(billed)
+                .bind(uid)
+                .execute(&mut *tx)
+                .await?;
         }
 
         tx.commit().await?;

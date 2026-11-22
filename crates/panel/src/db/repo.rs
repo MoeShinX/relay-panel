@@ -572,6 +572,12 @@ pub trait RuleRepository: Send + Sync {
     /// List active rules for config build (the JOIN+filter query).
     /// This returns raw ForwardRule rows; config assembly is service-layer.
     async fn list_active_for_config(&self, group_id: i64) -> Result<Vec<ForwardRule>, DbError>;
+    /// Batch-fetch enabled targets for all active (non-paused) rules in one
+    /// inbound group, keyed by `rule_id`, ordered by `(position, id)`.
+    async fn list_enabled_targets_for_group(
+        &self,
+        group_id: i64,
+    ) -> Result<std::collections::HashMap<i64, Vec<ForwardRuleTarget>>, DbError>;
 }
 
 // ── Group (device_groups) ──

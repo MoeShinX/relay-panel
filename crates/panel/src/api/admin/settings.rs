@@ -38,7 +38,26 @@ pub async fn update_registration_settings(
     )
     .await
     {
-        Ok(settings) => Json(ApiResponse::success(settings)),
+        Ok(settings) => {
+            crate::service::audit::record(
+                &state,
+                Some(_admin.user_id),
+                "update_registration_settings",
+                "settings",
+                "registration",
+                &format!(
+                    "公开注册 {} / 默认套餐 #{}",
+                    if settings.registration_enabled {
+                        "开启"
+                    } else {
+                        "关闭"
+                    },
+                    settings.default_registration_plan_id
+                ),
+            )
+            .await;
+            Json(ApiResponse::success(settings))
+        }
         Err(e) => {
             let (code, msg): (i32, String) = match e {
                 RegistrationSettingsError::DefaultPlanMissing => (400, "默认套餐不存在".into()),

@@ -189,8 +189,20 @@ export default function NodeStatus() {
       loadLatencyGroups();
     }
     refresh();
-    const ti = setInterval(refresh, 5000);
-    return () => clearInterval(ti);
+    const ti = setInterval(() => {
+      if (!document.hidden) void refresh();
+    }, 5000);
+    const onVis = () => {
+      if (!document.hidden) {
+        void refresh();
+        void loadLiveRates();
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearInterval(ti);
+      document.removeEventListener('visibilitychange', onVis);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
 

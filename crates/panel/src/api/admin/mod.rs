@@ -600,15 +600,16 @@ mod tests {
         .unwrap();
     }
 
-    /// Count how many config_changed broadcasts a handler call produced, by
-    /// registering a live WS connection on the shared NodeConnections and
-    /// draining its receiver for ~50ms after the call.
+    /// Count how many config_changed broadcasts a handler call produced on
+    /// group 20 (the group seeded by `seed_rule_and_group`), by registering a
+    /// live WS connection on the shared NodeConnections and draining its
+    /// receiver after the call.
     async fn expect_broadcasts(
         state: &AppState,
         expected: usize,
         f: impl std::future::Future<Output = ()>,
     ) {
-        let (_id, mut rx) = state.node_connections.register(99, None).await;
+        let (_id, mut rx) = state.node_connections.register(20, None).await;
         f.await;
         let mut n = 0;
         for _ in 0..20 {
@@ -1339,6 +1340,8 @@ mod tests {
             upload_limit_mbps: None,
             download_limit_mbps: None,
             tunnel_profile_id: None,
+            max_connections: None,
+            auto_restart_minutes: None,
             proxy_protocol_send: Default::default(),
             proxy_protocol_accept: false,
             proxy_protocol_trusted: String::new(),
@@ -2499,6 +2502,8 @@ mod tests {
             upload_limit_mbps: None,
             download_limit_mbps: None,
             tunnel_profile_id: profile_id,
+            max_connections: None,
+            auto_restart_minutes: None,
             proxy_protocol_send: Default::default(),
             proxy_protocol_accept: false,
             proxy_protocol_trusted: String::new(),
@@ -3981,5 +3986,153 @@ mod tests {
             .collect();
         order.sort();
         assert_eq!(order, vec![(1, 2), (2, 1)]);
+    }
+
+    #[tokio::test]
+    async fn admin_cannot_self_buy_plan_in_shop() {
+        let (state, pool) = test_state().await;
+        sqlx::query(
+            "INSERT INTO plans (id, name, max_rules, traffic, price, plan_type, duration_days, hidden) \
+             VALUES (10, 'Free Trial', 2, 1024, '0.00', 'time', 7, 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let Json(resp) = super::buy_plan(
+            AuthUser {
+                user_id: 1,
+                admin: true,
+            },
+            State(state),
+            Json(relay_shared::protocol::BuyPlanRequest { plan_id: 10 }),
+        )
+        .await;
+        assert_eq!(resp.code, 400, "{}", resp.message);
+        let (plan_id, expire): (Option<i64>, Option<String>) =
+            sqlx::query_as("SELECT plan_id, plan_expire_at FROM users WHERE id = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(plan_id.is_none() && expire.is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_plan_referenced_by_registration_settings_returns_409() {
+        let (state, pool) = test_state().await;
+        sqlx::query(
+            "INSERT INTO plans (id, name, max_rules, traffic, price, plan_type, duration_days, hidden) \
+             VALUES (10, 'Reg Plan', 5, 0, '0.00', 'data', 0, 0), \
+                    (11, 'Unused Plan', 5, 0, '9.99', 'data', 0, 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        state
+            .db
+            .set_registration_settings(true, 10, &[10])
+            .await
+            .unwrap();
+
+        let Json(in_use) =
+            super::delete_plan(AdminOnly { user_id: 1 }, State(state.clone()), Path(10)).await;
+        assert_eq!(in_use.code, 409, "{}", in_use.message);
+
+        let Json(unused) =
+            super::delete_plan(AdminOnly { user_id: 1 }, State(state.clone()), Path(11)).await;
+        assert_eq!(unused.code, 0, "{}", unused.message);
+    }
+
+    #[tokio::test]
+    async fn rule_update_notifies_target_group_not_unrelated_groups() {
+        let (state, pool) = test_state().await;
+        seed_rule_and_group(&pool).await;
+        add_group(&pool, 21, 1, "g-other").await;
+
+        let (_id20, mut rx20) = state.node_connections.register(20, None).await;
+        let (_id21, mut rx21) = state.node_connections.register(21, None).await;
+        let (_id99, mut rx99) = state.node_connections.register(99, None).await;
+
+        let Json(resp) = update_rule(
+            AuthUser {
+                user_id: 1,
+                admin: true,
+            },
+            State(state.clone()),
+            Path(200),
+            Json(UpdateRuleRequest {
+                device_group_in: Some(21),
+                ..Default::default()
+            }),
+        )
+        .await;
+        assert_eq!(resp.code, 0, "{}", resp.message);
+        assert!(rx20.try_recv().is_ok(), "old group 20 must be notified");
+        assert!(rx21.try_recv().is_ok(), "new group 21 must be notified");
+        assert!(
+            rx99.try_recv().is_err(),
+            "unrelated group 99 must stay quiet"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_node_status_preserves_geoip_for_sibling_sharing_ip() {
+        use crate::api::stats::{delete_node_status, DeleteStatusQuery};
+        let (state, pool) = test_state().await;
+        add_group(&pool, 1, 1, "alpha").await;
+        state
+            .db
+            .set(
+                "node_status:1:node-a",
+                r#"{"updated_at":"2000-01-01T00:00:00Z","public_ipv4":"203.0.113.10"}"#,
+            )
+            .await
+            .unwrap();
+        state
+            .db
+            .set(
+                "node_status:1:node-b",
+                r#"{"updated_at":"2000-01-01T00:00:00Z","public_ipv4":"203.0.113.10"}"#,
+            )
+            .await
+            .unwrap();
+        state
+            .db
+            .set(
+                "geoip:203.0.113.10",
+                r#"{"country_code":"JP","country_name":"Japan","cached_at":"2026-01-01T00:00:00Z"}"#,
+            )
+            .await
+            .unwrap();
+
+        let Json(r1) = delete_node_status(
+            AdminOnly { user_id: 1 },
+            State(state.clone()),
+            Path((1,)),
+            Query(DeleteStatusQuery {
+                node_id: Some("node-a".into()),
+            }),
+        )
+        .await;
+        assert_eq!(r1.code, 0, "{}", r1.message);
+        assert!(
+            state.db.get("geoip:203.0.113.10").await.unwrap().is_some(),
+            "shared GeoIP cache must survive while sibling node-b still uses it"
+        );
+
+        let Json(r2) = delete_node_status(
+            AdminOnly { user_id: 1 },
+            State(state.clone()),
+            Path((1,)),
+            Query(DeleteStatusQuery {
+                node_id: Some("node-b".into()),
+            }),
+        )
+        .await;
+        assert_eq!(r2.code, 0, "{}", r2.message);
+        assert!(
+            state.db.get("geoip:203.0.113.10").await.unwrap().is_none(),
+            "GeoIP cache must be deleted once the last node using it is removed"
+        );
     }
 }

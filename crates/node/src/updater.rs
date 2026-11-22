@@ -89,18 +89,10 @@ pub async fn report_failure(
         error,
     );
     let url = format!("{}/api/v1/node/upgrade_result", panel_url);
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("upgrade_result: build client: {}", e);
-            return;
-        }
-    };
+    let client = crate::poller::http_client();
     match client
         .post(&url)
+        .timeout(std::time::Duration::from_secs(10))
         .header("Authorization", format!("Bearer {token}"))
         .json(&result)
         .send()

@@ -75,6 +75,22 @@ pub async fn build_node_config(
     //    unfiltered cached config ("forward over bill" trade-off). Do not change
     //    without a product decision.
     let rules: Vec<ForwardRule> = db.list_active_for_config(group.id).await?;
+    if rules.is_empty() {
+        return Ok(NodeConfigResponse {
+            listeners: vec![],
+            latency,
+        });
+    }
+
+    let mut targets_by_rule = db.list_enabled_targets_for_group(group.id).await?;
+    let mut profile_cache: std::collections::HashMap<
+        i64,
+        Option<relay_shared::models::TunnelProfile>,
+    > = std::collections::HashMap::new();
+    let mut outbound_group_cache: std::collections::HashMap<i64, Option<DeviceGroup>> =
+        std::collections::HashMap::new();
+    let mut owner_admin_cache: std::collections::HashMap<i64, bool> =
+        std::collections::HashMap::new();
 
     // 3 + 4. Resolve targets and build listener configs. Target resolution needs
     //    a DB lookup (outbound group's connect_host), so it stays async and lives
@@ -99,7 +115,16 @@ pub async fn build_node_config(
             // binding. The dirty-data migration + list_active_for_config filter
             // (this PR) ensure a regular user's rule can't reach this point bound
             // to a non-builtin profile.
-            match TunnelProfileRepository::find_profile_by_id(db, pid, &ProfileScope::All).await? {
+            let profile = if let Some(cached) = profile_cache.get(&pid) {
+                cached.clone()
+            } else {
+                let fetched =
+                    TunnelProfileRepository::find_profile_by_id(db, pid, &ProfileScope::All)
+                        .await?;
+                profile_cache.insert(pid, fetched.clone());
+                fetched
+            };
+            match profile {
                 Some(profile) => {
                     // Profile transport vocab: "direct" → node "raw"; "ws" → "ws";
                     // "tls_simple" → "tls_simple".
@@ -126,14 +151,32 @@ pub async fn build_node_config(
                 }
             }
         }
-        let targets = resolve_targets(db, rule).await?;
-        listeners.extend(relay_shared::protocol::build_listeners_for_rule(
+        let owner_is_admin = if let Some(&adm) = owner_admin_cache.get(&rule.uid) {
+            adm
+        } else {
+            let adm = db.is_admin(rule.uid).await?;
+            owner_admin_cache.insert(rule.uid, adm);
+            adm
+        };
+        let preloaded = targets_by_rule.remove(&rule.id).unwrap_or_default();
+        let targets = resolve_targets(db, rule, preloaded, &mut outbound_group_cache).await?;
+        listeners.extend(relay_shared::protocol::build_listeners_for_rule_scoped(
             &effective_rule,
             targets,
+            !owner_is_admin,
         ));
     }
 
     Ok(NodeConfigResponse { listeners, latency })
+}
+
+fn format_host_port(host: &str, port: i32) -> String {
+    let h = host.trim();
+    if h.contains(':') && !h.starts_with('[') {
+        format!("[{}]:{}", h, port)
+    } else {
+        format!("{}:{}", h, port)
+    }
 }
 
 /// Resolve a rule's target address list.
@@ -146,10 +189,12 @@ pub async fn build_node_config(
 ///
 /// `targets` is the single place target resolution happens — both config paths
 /// used to duplicate this `match` block.
-async fn resolve_targets(db: &dyn Repository, rule: &ForwardRule) -> Result<Vec<String>, DbError> {
-    let mut targets = db
-        .list_enabled_rule_targets(rule.id, &ResourceScope::All)
-        .await?;
+async fn resolve_targets(
+    db: &dyn Repository,
+    rule: &ForwardRule,
+    mut targets: Vec<relay_shared::models::ForwardRuleTarget>,
+    outbound_group_cache: &mut std::collections::HashMap<i64, Option<DeviceGroup>>,
+) -> Result<Vec<String>, DbError> {
     if targets.is_empty() {
         targets.push(relay_shared::models::ForwardRuleTarget {
             id: 0,
@@ -165,19 +210,26 @@ async fn resolve_targets(db: &dyn Repository, rule: &ForwardRule) -> Result<Vec<
     match (rule.forward_mode.as_str(), rule.device_group_out) {
         ("direct", _) | (_, None) => Ok(targets
             .into_iter()
-            .map(|t| format!("{}:{}", t.host, t.port))
+            .map(|t| format_host_port(&t.host, t.port))
             .collect()),
         (_, Some(out_id)) => {
             // Qualify: find_by_id is on both UserRepository and GroupRepository.
-            let og = GroupRepository::find_by_id(db, out_id, &ResourceScope::All).await?;
-            Ok(match og {
-                Some(DeviceGroup { connect_host, .. }) if !connect_host.is_empty() => targets
+            let connect_host = if let Some(cached) = outbound_group_cache.get(&out_id) {
+                cached.as_ref().map(|g| g.connect_host.clone())
+            } else {
+                let og = GroupRepository::find_by_id(db, out_id, &ResourceScope::All).await?;
+                let ch = og.as_ref().map(|g| g.connect_host.clone());
+                outbound_group_cache.insert(out_id, og);
+                ch
+            };
+            Ok(match connect_host {
+                Some(ch) if !ch.is_empty() => targets
                     .into_iter()
-                    .map(|t| format!("{}:{}", connect_host, t.port))
+                    .map(|t| format_host_port(&ch, t.port))
                     .collect(),
                 _ => targets
                     .into_iter()
-                    .map(|t| format!("{}:{}", t.host, t.port))
+                    .map(|t| format_host_port(&t.host, t.port))
                     .collect(),
             })
         }

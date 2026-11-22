@@ -390,6 +390,7 @@ pub async fn serve_udp_listener(
     connections: Arc<ConnectionTracker>,
     rule_id: i64,
     source_ipv4: Option<Ipv4Addr>,
+    block_local_targets: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listen_addr = inbound
         .local_addr()
@@ -415,17 +416,13 @@ pub async fn serve_udp_listener(
     let sessions: Arc<Sessions> = Arc::new(DashMap::new());
 
     // Background cleanup of expired local session entries (outbound sockets).
-    // This mirrors the ConnectionTracker's own expiry; together they make sure
-    // idle UDP state is reclaimed promptly.
+    // Node-wide ConnectionTracker pruning runs once globally in main.rs so N
+    // listeners do not redundantly scan the global DashMap N times per cycle.
     let sessions_clone = sessions.clone();
-    let connections_clone = connections.clone();
     let sweeper = tokio::spawn(async move {
         let mut interval = time::interval(CLEANUP_INTERVAL);
         loop {
             interval.tick().await;
-            // Prune the tracker's session table (drops expired (addr,rule)
-            // entries, which is what the panel's count ultimately reads).
-            connections_clone.udp_prune_expired().await;
             // Drop our local outbound sockets for clients whose local entry is
             // older than the timeout. The tracker already stopped counting
             // them; here we release the socket resources too.
@@ -516,8 +513,12 @@ pub async fn serve_udp_listener(
             // IPv6 socket that cannot be had means this host has no IPv6, so
             // that target really is unreachable from here; reporting it lets
             // the rule fail over to an IPv4 standby.
-            let Some((target, sock)) =
-                connect_udp_target(&targets, &selector, port, |addr| async move {
+            let Some((target, sock)) = connect_udp_target(
+                &targets,
+                &selector,
+                port,
+                block_local_targets,
+                |addr| async move {
                     let sock = super::outbound::udp_outbound_socket(addr, source_ipv4)
                         .await
                         .map_err(|e| match addr {
@@ -528,8 +529,9 @@ pub async fn serve_udp_listener(
                         })?;
                     sock.connect(addr).await?;
                     Ok(sock)
-                })
-                .await
+                },
+            )
+            .await
             else {
                 continue;
             };
@@ -713,6 +715,7 @@ async fn connect_udp_target<F, Fut, S>(
     targets: &[String],
     selector: &TargetSelector,
     port: u16,
+    block_local_targets: bool,
     mut connect: F,
 ) -> Option<(SocketAddr, S)>
 where
@@ -722,13 +725,22 @@ where
     for idx in selector.order() {
         let Some(t) = targets.get(idx) else { continue };
         let addr = match super::outbound::resolve_cached(t).await {
-            Ok(addrs) => match addrs.into_iter().next() {
-                Some(addr) => addr,
-                None => {
-                    tracing::debug!("UDP port {}: target {} resolved to no address", port, t);
-                    continue;
+            Ok(addrs) => {
+                let mut filtered = addrs.into_iter().filter(|a| {
+                    !block_local_targets || !relay_shared::protocol::is_local_ip(a.ip())
+                });
+                match filtered.next() {
+                    Some(addr) => addr,
+                    None => {
+                        tracing::debug!(
+                            "UDP port {}: target {} resolved to no allowed address",
+                            port,
+                            t
+                        );
+                        continue;
+                    }
                 }
-            },
+            }
             Err(e) => {
                 tracing::debug!("UDP port {}: failed to resolve target {}: {}", port, t, e);
                 continue;
@@ -811,8 +823,18 @@ mod tests {
     async fn connect_udp_target_picks_first_in_order() {
         let targets = vec!["127.0.0.1:9".to_string(), "127.0.0.2:9".to_string()];
         let selector = TargetSelector::new(LoadBalanceStrategy::Failover, 2);
-        let got = connect_udp_target(&targets, &selector, 5000, always_ok).await;
+        let got = connect_udp_target(&targets, &selector, 5000, false, always_ok).await;
         assert_eq!(addr_of(got), Some("127.0.0.1:9".parse().unwrap()));
+    }
+
+    /// Non-admin rules with block_local_targets=true must never connect to a
+    /// loopback / link-local target even after DNS resolution.
+    #[tokio::test]
+    async fn connect_udp_target_blocks_local_targets_when_enforced() {
+        let targets = vec!["127.0.0.1:9".to_string(), "169.254.169.254:80".to_string()];
+        let selector = TargetSelector::new(LoadBalanceStrategy::Failover, 2);
+        let got = connect_udp_target(&targets, &selector, 5000, true, always_ok).await;
+        assert!(got.is_none());
     }
 
     /// Round-robin advances the shared cursor across successive new sessions,
@@ -821,10 +843,10 @@ mod tests {
     async fn connect_udp_target_follows_round_robin() {
         let targets = vec!["127.0.0.1:9".to_string(), "127.0.0.2:9".to_string()];
         let selector = TargetSelector::new(LoadBalanceStrategy::RoundRobin, 2);
-        let (a, ()) = connect_udp_target(&targets, &selector, 5000, always_ok)
+        let (a, ()) = connect_udp_target(&targets, &selector, 5000, false, always_ok)
             .await
             .unwrap();
-        let (b, ()) = connect_udp_target(&targets, &selector, 5000, always_ok)
+        let (b, ()) = connect_udp_target(&targets, &selector, 5000, false, always_ok)
             .await
             .unwrap();
         assert_eq!(a, "127.0.0.1:9".parse().unwrap());
@@ -837,7 +859,7 @@ mod tests {
     async fn connect_udp_target_skips_unresolvable() {
         let targets = vec!["nocolon-no-port".to_string(), "127.0.0.1:9".to_string()];
         let selector = TargetSelector::new(LoadBalanceStrategy::Failover, 2);
-        let got = connect_udp_target(&targets, &selector, 5000, always_ok).await;
+        let got = connect_udp_target(&targets, &selector, 5000, false, always_ok).await;
         assert_eq!(addr_of(got), Some("127.0.0.1:9".parse().unwrap()));
     }
 
@@ -849,7 +871,7 @@ mod tests {
         let primary: SocketAddr = "127.0.0.1:9".parse().unwrap();
         let selector = TargetSelector::new(LoadBalanceStrategy::Failover, 2);
 
-        let chosen = connect_udp_target(&targets, &selector, 5000, |target| async move {
+        let chosen = connect_udp_target(&targets, &selector, 5000, false, |target| async move {
             if target == primary {
                 Err(std::io::Error::other("primary connect failed").into())
             } else {
@@ -870,7 +892,7 @@ mod tests {
         let selector = TargetSelector::new(LoadBalanceStrategy::Failover, 2);
         let attempted = std::cell::Cell::new(0usize);
         for _ in 0..10 {
-            let got = connect_udp_target(&targets, &selector, 5000, |_| {
+            let got = connect_udp_target(&targets, &selector, 5000, false, |_| {
                 attempted.set(attempted.get() + 1);
                 async move {
                     Err::<(), _>(AttemptError::Local(OutboundError::Bind(
@@ -900,15 +922,17 @@ mod tests {
         };
         let targets = vec![echo.local_addr().unwrap().to_string()];
         let selector = TargetSelector::new(LoadBalanceStrategy::Failover, 1);
-        let (addr, sock) = connect_udp_target(&targets, &selector, 5000, |addr| async move {
-            let sock = super::super::outbound::udp_outbound_socket(addr, Some(Ipv4Addr::LOCALHOST))
-                .await
-                .map_err(|e| AttemptError::Target(std::io::Error::other(e.to_string())))?;
-            sock.connect(addr).await?;
-            Ok(sock)
-        })
-        .await
-        .expect("the IPv6 target must be reachable");
+        let (addr, sock) =
+            connect_udp_target(&targets, &selector, 5000, false, |addr| async move {
+                let sock =
+                    super::super::outbound::udp_outbound_socket(addr, Some(Ipv4Addr::LOCALHOST))
+                        .await
+                        .map_err(|e| AttemptError::Target(std::io::Error::other(e.to_string())))?;
+                sock.connect(addr).await?;
+                Ok(sock)
+            })
+            .await
+            .expect("the IPv6 target must be reachable");
         assert!(addr.is_ipv6());
         sock.send(b"ping").await.unwrap();
         let mut buf = [0u8; 16];
@@ -927,7 +951,7 @@ mod tests {
         let targets = vec!["127.0.0.1:9".to_string(), "127.0.0.2:9".to_string()];
         let selector = TargetSelector::new(LoadBalanceStrategy::Failover, 2);
         let attempted = std::cell::Cell::new(0usize);
-        let got = connect_udp_target(&targets, &selector, 5000, |_| {
+        let got = connect_udp_target(&targets, &selector, 5000, false, |_| {
             attempted.set(attempted.get() + 1);
             async move { Ok(()) }
         })
@@ -1418,6 +1442,9 @@ mod tests {
     async fn connect_udp_target_none_when_no_target_exists() {
         let targets: Vec<String> = vec![];
         let selector = TargetSelector::new(LoadBalanceStrategy::RoundRobin, 0);
-        assert!(addr_of(connect_udp_target(&targets, &selector, 5000, always_ok).await).is_none());
+        assert!(
+            addr_of(connect_udp_target(&targets, &selector, 5000, false, always_ok).await)
+                .is_none()
+        );
     }
 }

@@ -12,10 +12,16 @@ use relay_shared::money;
 use relay_shared::protocol::ApiResponse;
 use serde::{Deserialize, Serialize};
 
+use crate::api::auth_throttle::AttemptLimiter;
 use crate::api::middleware::{AdminOnly, AuthUser};
 use crate::api::AppState;
 use crate::db::repo::{NewRedeemCode, RedeemCodeError, RedeemCodeFilter};
 use crate::service::redeem;
+use once_cell::sync::Lazy;
+use std::time::Duration;
+
+static REDEEM_LIMITER: Lazy<AttemptLimiter<i64>> =
+    Lazy::new(|| AttemptLimiter::new(15, Duration::from_secs(60), 10_000));
 
 fn err<T: Serialize>(code: i32, msg: &str) -> ApiResponse<T> {
     ApiResponse {
@@ -89,8 +95,16 @@ pub async fn create_codes(
         },
     };
 
-    let batch_id = format!("B{}", chrono::Utc::now().format("%Y%m%d%H%M%S"));
-    let display: Vec<String> = (0..req.count).map(|_| redeem::generate_code()).collect();
+    let suffix = &redeem::to_stored(&redeem::generate_code())[..4];
+    let batch_id = format!("B{}-{suffix}", chrono::Utc::now().format("%Y%m%d%H%M%S"));
+    let mut seen_codes = std::collections::HashSet::with_capacity(req.count as usize);
+    let mut display: Vec<String> = Vec::with_capacity(req.count as usize);
+    while (display.len() as i64) < req.count {
+        let code = redeem::generate_code();
+        if seen_codes.insert(redeem::to_stored(&code)) {
+            display.push(code);
+        }
+    }
     let rows: Vec<NewRedeemCode> = display
         .iter()
         .map(|d| NewRedeemCode {
@@ -358,6 +372,12 @@ pub async fn delete_codes(
     if req.ids.is_empty() {
         return Json(err(400, "未选择卡密"));
     }
+    if req.ids.len() > MAX_REDEEM_BATCH as usize {
+        return Json(err(
+            400,
+            &format!("单次最多删除 {} 张卡密", MAX_REDEEM_BATCH),
+        ));
+    }
     match state.db.delete_unused_redeem_codes(&req.ids).await {
         Ok(n) => {
             tracing::info!(
@@ -409,6 +429,9 @@ pub async fn redeem_code(
     let Some(code) = redeem::normalize_code(&req.code) else {
         return Json(err(400, "请输入卡密"));
     };
+    if REDEEM_LIMITER.hit(&user.user_id) {
+        return Json(err(429, "尝试次数过多，请一分钟后再试"));
+    }
 
     match state.db.redeem_code(&code, user.user_id, &now_utc()).await {
         Ok((amount, balance)) => {

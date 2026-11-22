@@ -22,6 +22,7 @@ export default function Login() {
   // v0.4.22: whether to show the "change default password" security banner.
   // Driven by the server's must_change_password flag on the admin account.
   const [showPwdWarning, setShowPwdWarning] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     api
@@ -34,6 +35,7 @@ export default function Login() {
   }, []);
 
   const onFinish = async (values: { username: string; password: string }) => {
+    setSubmitting(true);
     try {
       const res = await api.post<unknown, ApiEnvelope<LoginResponse>>('/auth/login', values);
       if (res.code !== 0 || !res.data) {
@@ -49,20 +51,14 @@ export default function Login() {
       navigate('/');
     } catch {
       message.error(t('loginFailed'));
+    } finally {
+      setSubmitting(false);
     }
   };
 
   return (
-    <div style={{
-      display: 'flex', justifyContent: 'center', alignItems: 'center',
-      minHeight: '100vh', background: 'var(--rp-bg)',
-      // A gutter on phones; the top leaves room for the language switch. The
-      // same at the bottom, and inside the 100vh (border-box), so the card
-      // stays exactly centred on a desktop with no scrollbar.
-      padding: '56px 16px',
-      boxSizing: 'border-box',
-    }}>
-      <div style={{ position: 'absolute', top: 20, right: 24 }}>
+    <div className="rp-auth-shell">
+      <div style={{ position: 'absolute', top: 'max(20px, env(safe-area-inset-top))', right: 24 }}>
         <Segmented
           size="small"
           value={lang}
@@ -73,11 +69,21 @@ export default function Login() {
           ]}
         />
       </div>
-      <Card style={{ width: '100%', maxWidth: 380, boxShadow: 'var(--rp-shadow)' }}>
+      <Card className="rp-auth-card">
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
-          {/* v1.2.4: operator-configurable branding, falling back to the
-              translated default so an unconfigured panel looks unchanged. */}
-          <Title level={3} style={{ margin: 0, fontWeight: 600 }}>{site.site_name || t('brand')}</Title>
+          <div style={{
+            width: 44, height: 44, margin: '0 auto 14px', borderRadius: 12,
+            background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+            boxShadow: '0 6px 18px rgba(79, 70, 229, 0.26)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <svg aria-hidden="true" width="24" height="24" viewBox="0 0 28 28" fill="none">
+              <path d="M8 10.5H17L14.2 7.7M20 17.5H11L13.8 20.3" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+              <circle cx="19.5" cy="10.5" r="1.8" fill="#c7d2fe" />
+              <circle cx="8.5" cy="17.5" r="1.8" fill="#c7d2fe" />
+            </svg>
+          </div>
+          <Title level={3} style={{ margin: '0 0 4px', fontWeight: 600, letterSpacing: -0.3 }}>{site.site_name || t('brand')}</Title>
           <Text type="secondary" style={{ fontSize: 13 }}>{site.subtitle || t('subtitle')}</Text>
         </div>
 
@@ -96,13 +102,24 @@ export default function Login() {
 
         <Form onFinish={onFinish} size="large">
           <Form.Item name="username" rules={[{ required: true, message: t('usernameRequired') }]}>
-            <Input prefix={<UserOutlined style={{ color: 'var(--rp-text-tertiary)' }} />} placeholder={t('username')} aria-label={t('username')} />
+            <Input
+              prefix={<UserOutlined style={{ color: 'var(--rp-text-tertiary)' }} />}
+              placeholder={t('username')}
+              aria-label={t('username')}
+              autoComplete="username"
+              spellCheck={false}
+            />
           </Form.Item>
           <Form.Item name="password" rules={[{ required: true, message: t('passwordRequired') }]}>
-            <Input.Password prefix={<LockOutlined style={{ color: 'var(--rp-text-tertiary)' }} />} placeholder={t('password')} aria-label={t('password')} />
+            <Input.Password
+              prefix={<LockOutlined style={{ color: 'var(--rp-text-tertiary)' }} />}
+              placeholder={t('password')}
+              aria-label={t('password')}
+              autoComplete="current-password"
+            />
           </Form.Item>
           <Form.Item style={{ marginBottom: 12 }}>
-            <Button type="primary" htmlType="submit" block>{t('login')}</Button>
+            <Button type="primary" htmlType="submit" block loading={submitting}>{t('login')}</Button>
           </Form.Item>
         </Form>
         {regEnabled && (

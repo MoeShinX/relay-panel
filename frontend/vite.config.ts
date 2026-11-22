@@ -28,6 +28,9 @@ export default defineConfig({
           antd: ['antd'],
           // The icon set is large and tree-shaken, but still worth isolating.
           icons: ['@ant-design/icons'],
+          // Charting (@antv/g2) is large and shared across Dashboard, Account,
+          // and Latency pages; isolate it so business page chunks stay tiny.
+          charts: ['@ant-design/charts'],
           // semver is used by the node-version compare util.
           semver: ['semver'],
         },

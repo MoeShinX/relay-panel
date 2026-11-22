@@ -87,6 +87,8 @@ pub struct UpdateNotifyRequest {
     /// never receives the real value, so it cannot echo it back.
     #[serde(default)]
     pub telegram_bot_token: Option<String>,
+    #[serde(default)]
+    pub clear_telegram_bot_token: bool,
     pub email_enabled: bool,
     pub smtp_host: String,
     pub smtp_port: u16,
@@ -94,6 +96,8 @@ pub struct UpdateNotifyRequest {
     /// Empty / omitted = keep the stored password.
     #[serde(default)]
     pub smtp_password: Option<String>,
+    #[serde(default)]
+    pub clear_smtp_password: bool,
     pub smtp_from: String,
     pub smtp_to: String,
     pub smtp_tls: bool,
@@ -119,13 +123,21 @@ pub async fn update_notify_settings(
     // Keep-if-empty: the browser was never given these values, so an empty
     // field means "unchanged", not "clear it". Clearing is done by disabling
     // the channel, not by blanking a field the user cannot see.
-    let telegram_bot_token = match req.telegram_bot_token {
-        Some(t) if !t.trim().is_empty() => t.trim().to_string(),
-        _ => existing.telegram_bot_token.clone(),
+    let telegram_bot_token = if req.clear_telegram_bot_token {
+        String::new()
+    } else {
+        match req.telegram_bot_token {
+            Some(t) if !t.trim().is_empty() => t.trim().to_string(),
+            _ => existing.telegram_bot_token.clone(),
+        }
     };
-    let smtp_password = match req.smtp_password {
-        Some(p) if !p.is_empty() => p,
-        _ => existing.smtp_password.clone(),
+    let smtp_password = if req.clear_smtp_password {
+        String::new()
+    } else {
+        match req.smtp_password {
+            Some(p) if !p.is_empty() => p,
+            _ => existing.smtp_password.clone(),
+        }
     };
 
     // Refuse to enable a channel that cannot possibly work — otherwise the

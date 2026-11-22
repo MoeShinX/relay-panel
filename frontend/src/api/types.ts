@@ -254,28 +254,6 @@ export interface AnnouncementList {
   total: number;
 }
 
-/** v1.2.4: one site announcement. Replaces the single announcement string that
- *  used to live in the site config. */
-export interface Announcement {
-  id: number;
-  title: string;
-  content: string;
-  /** "info" | "success" | "warning" | "error". */
-  kind: string;
-  pinned: boolean;
-  published_at: string;
-  /** null = never auto-hides. */
-  expires_at: string | null;
-  author_id: number | null;
-  /** Snapshot — survives deletion of the admin who posted it. */
-  author_name: string;
-}
-
-export interface AnnouncementList {
-  items: Announcement[];
-  total: number;
-}
-
 /** v1.2.4: public site branding. No announcement/contact — those are behind
  *  the authenticated /user/site-notice endpoint. */
 export interface PublicSite {

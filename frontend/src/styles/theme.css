@@ -6,53 +6,56 @@
 
 :root {
   /* Layout */
-  --rp-sidebar-bg: #18181b;
-  --rp-sidebar-width: 220px;
+  --rp-sidebar-bg: #111318;
+  --rp-sidebar-width: 228px;
   --rp-header-height: 56px;
   --rp-content-padding: 24px;
+  --rp-content-max-width: 1480px;
 
-  /* Colors — muted, not garish */
-  --rp-bg: #fafafa;
+  /* Colors — cool architectural slate + crisp white surfaces */
+  --rp-bg: #f4f5f8;
   --rp-card-bg: #ffffff;
-  --rp-border: #ececef;
-  --rp-text: #18181b;
-  /* Darkened in v1.2.5. The old tertiary (#8f959e) sat at 3.02:1 against white
-     — below the 4.5:1 WCAG AA needs for body text — and it was carrying real
-     content on the node table: CPU, memory and disk percentages, transfer
-     rates. Secondary passed at 5.45:1 but read washed out beside it. */
-  --rp-text-secondary: #4b5563;
-  --rp-text-tertiary: #6b7280;
+  --rp-border: #e6e8ee;
+  --rp-border-strong: #d5d9e2;
+  --rp-text: #0f172a;
+  --rp-text-secondary: #475569;
+  --rp-text-tertiary: #64748b;
 
-  /* v1.2.5: the offline-node palette. Grey enough to read as "not live" beside
-     a row of #18181b text, dark enough (4.83:1 on the tint) to stay legible —
-     these are the last readings before the node went, not decoration. */
-  --rp-node-offline-text: #6b7280;
-  --rp-node-offline-bg: #f7f7f8;
-  --rp-node-offline-bar: #c7c9cf;
+  /* Offline-node palette (WCAG AA contrast preserved) */
+  --rp-node-offline-text: #64748b;
+  --rp-node-offline-bg: #f8f9fb;
+  --rp-node-offline-bar: #cbd5e1;
 
-  /* Accents — indigo */
-  --rp-primary: #6366f1;
+  /* Accents — Linear / Stripe indigo */
+  --rp-primary: #4f46e5;
+  --rp-primary-hover: #4338ca;
   --rp-primary-bg: #eef2ff;
+  --rp-primary-border: #c7d2fe;
   --rp-success: #059669;
+  --rp-success-bg: #ecfdf5;
   --rp-warning: #d97706;
-  --rp-danger: #ef4444;
+  --rp-warning-bg: #fffbeb;
+  --rp-danger: #e11d48;
+  --rp-danger-bg: #fff1f2;
 
-  /* Tags — desaturated for admin comfort */
-  --rp-tag-tcp: #6366f1;
+  /* Tags — desaturated semantic palette */
+  --rp-tag-tcp: #4f46e5;
   --rp-tag-udp: #7c3aed;
   --rp-tag-in: #059669;
   --rp-tag-out: #0d9488;
   --rp-tag-admin: #d97706;
 
-  /* Radii & shadows — subtle */
-  --rp-radius: 10px;
+  /* Radii & layered shadows */
+  --rp-radius-lg: 14px;
+  --rp-radius: 12px;
   --rp-radius-sm: 8px;
-  --rp-shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
-  --rp-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  --rp-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.03), 0 2px 6px rgba(15, 23, 42, 0.02);
+  --rp-shadow: 0 4px 16px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.04);
+  --rp-shadow-lg: 0 12px 36px rgba(15, 23, 42, 0.08), 0 2px 8px rgba(15, 23, 42, 0.04);
 
   /* Table */
-  --rp-table-header-bg: #fafafa;
-  --rp-table-row-hover: #f5f5ff;
+  --rp-table-header-bg: #f8fafc;
+  --rp-table-row-hover: #f5f7ff;
 
   /* Font */
   --rp-font: "Noto Sans SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -143,32 +146,127 @@ html, body, #root {
   color: var(--rp-node-offline-text);
 }
 
-/* Cards: clean, minimal shadow */
+/* Cards: clean elevated surface */
 .ant-card {
   border-radius: var(--rp-radius);
   border: 1px solid var(--rp-border);
   box-shadow: var(--rp-shadow-sm);
 }
 .ant-card-head {
-  min-height: 44px;
+  min-height: 48px;
   border-bottom: 1px solid var(--rp-border);
+  font-weight: 600;
 }
 
-/* Buttons: uniform sizing, no wrapping */
+/* Standalone tables (not already inside an ant-card or collapse): give them an
+   elevated card shell automatically so pages like Rules / Users / Plans /
+   RedeemCodes look crisp instead of floating on grey with unrounded corners. */
+.rp-main-inner > .ant-table-wrapper {
+  background: var(--rp-card-bg);
+  border: 1px solid var(--rp-border);
+  border-radius: var(--rp-radius);
+  box-shadow: var(--rp-shadow-sm);
+  overflow: hidden;
+}
+.rp-main-inner > .ant-table-wrapper .ant-pagination {
+  margin: 12px 16px !important;
+}
+
+/* Buttons: subtle tactile depth on primary, crisp hairline on default */
 .ant-btn {
   border-radius: var(--rp-radius-sm);
   font-size: 13px;
+  font-weight: 500;
+}
+.ant-btn-primary:not(:disabled):not(.ant-btn-dangerous):not(.ant-btn-background-ghost) {
+  background: linear-gradient(180deg, #5b52f0 0%, #4f46e5 100%);
+  border-color: #483fe0;
+  box-shadow: 0 1px 2px rgba(79, 70, 229, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+}
+.ant-btn-primary:not(:disabled):not(.ant-btn-dangerous):not(.ant-btn-background-ghost):hover {
+  background: linear-gradient(180deg, #4f46e5 0%, #4338ca 100%) !important;
+  border-color: #3f36c5 !important;
 }
 
-/* Modal */
+/* Desaturated Linear-style pill badges — tames Antd's rainbow preset tags */
+.ant-tag {
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
+  padding-inline: 8px;
+  border-width: 1px;
+}
+.ant-tag-green,
+.ant-tag-success {
+  color: #047857 !important;
+  background: #ecfdf5 !important;
+  border-color: #a7f3d0 !important;
+}
+.ant-tag-blue,
+.ant-tag-geekblue,
+.ant-tag-processing {
+  color: #4338ca !important;
+  background: #eef2ff !important;
+  border-color: #c7d2fe !important;
+}
+.ant-tag-purple {
+  color: #6d28d9 !important;
+  background: #f5f3ff !important;
+  border-color: #ddd6fe !important;
+}
+.ant-tag-gold,
+.ant-tag-orange,
+.ant-tag-warning {
+  color: #b45309 !important;
+  background: #fffbeb !important;
+  border-color: #fde68a !important;
+}
+.ant-tag-red,
+.ant-tag-error {
+  color: #be123c !important;
+  background: #fff1f2 !important;
+  border-color: #fecdd3 !important;
+}
+.ant-tag-cyan {
+  color: #0f766e !important;
+  background: #f0fdfa !important;
+  border-color: #99f6e4 !important;
+}
+
+/* Modal & Alerts */
 .ant-modal-content {
-  border-radius: var(--rp-radius);
+  border-radius: var(--rp-radius-lg);
+  box-shadow: var(--rp-shadow-lg);
+}
+.ant-alert {
+  border-radius: 10px;
 }
 
 /* Air between a dialog's title and its first field: with none, "编辑分组" sat
    on top of the first label. */
 .ant-modal-header {
   margin-bottom: 16px;
+}
+
+/* Sidebar refinement: subtle right border, sleek collapse trigger, active pill */
+.ant-layout-sider {
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+.ant-layout-sider-trigger {
+  background: #111318 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  color: #94a3b8 !important;
+  transition: color 0.15s, background-color 0.15s;
+}
+.ant-layout-sider-trigger:hover {
+  color: #f8fafc !important;
+  background: rgba(255, 255, 255, 0.04) !important;
+}
+.ant-menu-dark .ant-menu-item-selected {
+  font-weight: 500;
+  box-shadow: inset 0 0 0 1px rgba(129, 140, 248, 0.28);
 }
 
 /* Form labels */
@@ -245,12 +343,14 @@ html, body, #root {
 .rp-stat-card .ant-statistic-content {
   font-size: 28px;
   font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Mono fields in tables */
 .rp-mono {
   font-family: var(--rp-font-mono);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Transfer values are a single measurement. Breaking between a number and its
@@ -260,25 +360,25 @@ html, body, #root {
   white-space: nowrap;
 }
 
-/* v0.4.17: country-flag pill wrapper. Outer layer sizes & rounds the slot;
- *  the inner .fi (from flag-icons) is pinned to a fixed flag size so the
- *  library's own .fi rules never disturb the surrounding table layout. */
+/* v0.4.17: country-flag pill wrapper. Neutral crisp pill instead of purple. */
 .country-flag-pill {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 40px;
-  height: 28px;
+  min-width: 38px;
+  height: 24px;
   padding: 0 6px;
-  border-radius: 8px;
-  background: #eee7ff;
-  font-size: 12px;
+  border-radius: 6px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  font-size: 11px;
+  font-weight: 500;
   color: var(--rp-text-secondary);
   vertical-align: middle;
 }
 .country-flag-pill .fi {
-  width: 20px;
-  height: 14px;
+  width: 18px;
+  height: 13px;
   border-radius: 2px;
   background-size: cover;
 }
@@ -623,4 +723,208 @@ html, body, #root {
   .rp-lat-card-tools {
     justify-content: flex-start;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---- Modern UI Surface Components (Linear / Stripe refresh) ---- */
+
+.rp-main-inner {
+  max-width: var(--rp-content-max-width);
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* Auth pages: subtle ambient indigo glow + architectural dot grid */
+.rp-auth-shell {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  padding: 56px 16px;
+  box-sizing: border-box;
+  background-color: var(--rp-bg);
+  background-image:
+    radial-gradient(ellipse 70% 50% at 50% -10%, rgba(79, 70, 229, 0.13), transparent 70%),
+    radial-gradient(ellipse 50% 40% at 85% 95%, rgba(124, 58, 237, 0.07), transparent 70%),
+    radial-gradient(#cbd5e1 0.85px, transparent 0.85px);
+  background-size: 100% 100%, 100% 100%, 24px 24px;
+}
+.rp-auth-card.ant-card {
+  width: 100%;
+  max-width: 408px;
+  border-radius: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: var(--rp-shadow-lg);
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(12px);
+}
+.rp-auth-card > .ant-card-body {
+  padding: 34px 32px 28px;
+}
+
+/* Header user profile pill */
+.rp-user-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 3px 10px 3px 4px;
+  border-radius: 999px;
+  border: 1px solid var(--rp-border);
+  background: #f8fafc;
+  color: var(--rp-text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+.rp-user-pill:hover {
+  background: #eef2ff;
+  border-color: var(--rp-primary-border);
+}
+.rp-user-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* Bento & KPI stat cards */
+.rp-kpi-card.ant-card {
+  height: 100%;
+  border-radius: var(--rp-radius);
+  border: 1px solid var(--rp-border);
+  box-shadow: var(--rp-shadow-sm);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.rp-kpi-card.ant-card:hover {
+  border-color: #d0d6e2;
+  box-shadow: var(--rp-shadow);
+}
+.rp-icon-tile {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+/* Status indicator dot */
+.rp-status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-inline-end: 6px;
+  vertical-align: 0.05em;
+}
+.rp-status-dot.is-online {
+  background: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
+}
+.rp-status-dot.is-partial {
+  background: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18);
+}
+.rp-status-dot.is-offline {
+  background: #94a3b8;
+}
+
+/* Node group Collapse: clean single-card shell without nested grey box clutter */
+.rp-node-collapse.ant-collapse {
+  background: var(--rp-card-bg);
+  border: 1px solid var(--rp-border);
+  border-radius: var(--rp-radius);
+  box-shadow: var(--rp-shadow-sm);
+  overflow: hidden;
+}
+.rp-node-collapse > .ant-collapse-item {
+  border-bottom: 0 !important;
+}
+.rp-node-collapse > .ant-collapse-item > .ant-collapse-header {
+  background: #ffffff;
+  padding: 12px 16px !important;
+  align-items: center !important;
+}
+.rp-node-collapse > .ant-collapse-item-active > .ant-collapse-header {
+  border-bottom: 1px solid var(--rp-border);
+}
+.rp-node-collapse .ant-collapse-content {
+  border-top: 0 !important;
+}
+.rp-node-collapse .ant-collapse-content > .ant-collapse-content-box {
+  padding: 0 !important;
+}
+.rp-node-collapse .ant-table-wrapper .ant-table {
+  border-radius: 0;
+}
+
+/* Pricing cards in Shop */
+.rp-plan-card.ant-card {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--rp-radius-lg);
+  border: 1px solid var(--rp-border);
+  box-shadow: var(--rp-shadow-sm);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+.rp-plan-card.ant-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--rp-shadow);
+  border-color: #cbd5e1;
+}
+.rp-plan-card.is-featured.ant-card {
+  border-color: var(--rp-primary-border);
+  box-shadow: 0 4px 20px rgba(79, 70, 229, 0.08), inset 0 2px 0 var(--rp-primary);
+}
+.rp-plan-card > .ant-card-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 22px 22px 20px;
+}
+.rp-plan-feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--rp-text-secondary);
+  line-height: 1.65;
+}
+.rp-plan-feature + .rp-plan-feature {
+  margin-top: 6px;
+}
+
+/* Contextual batch-selection bar for Rules */
+.rp-selection-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-radius: 10px;
+  background: var(--rp-primary-bg);
+  border: 1px solid var(--rp-primary-border);
 }

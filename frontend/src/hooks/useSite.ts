@@ -27,10 +27,17 @@ function fetchSite(): Promise<PublicSite> {
   if (!cached) {
     cached = api
       .get<unknown, ApiEnvelope<PublicSite>>('/site')
-      .then((res) => (res.code === 0 && res.data ? res.data : EMPTY))
+      .then((res) => {
+        if (res.code === 0 && res.data) return res.data;
+        cached = null;
+        return EMPTY;
+      })
       // A failed brand lookup must never block the login page — fall back to
-      // empty and let the caller use its translated default.
-      .catch(() => EMPTY);
+      // empty and clear the cache so the next navigation retries.
+      .catch(() => {
+        cached = null;
+        return EMPTY;
+      });
   }
   return cached;
 }

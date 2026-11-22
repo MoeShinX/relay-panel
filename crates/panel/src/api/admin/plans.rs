@@ -188,6 +188,16 @@ pub async fn create_plan(
         }
     };
 
+    crate::service::audit::record(
+        &state,
+        Some(_admin.user_id),
+        "create_plan",
+        "plan",
+        id,
+        &format!("{} ({canonical_price})", req.name.trim()),
+    )
+    .await;
+
     Json(ApiResponse::success(id))
 }
 
@@ -336,6 +346,15 @@ pub async fn update_plan(
     // what nodes forward (gating is per-user, not per-plan). No broadcast.
     // Existing users' authorizations are NOT retroactively changed by editing a
     // plan's grant set — grants apply at purchase time only.
+    crate::service::audit::record(
+        &state,
+        Some(_admin.user_id),
+        "update_plan",
+        "plan",
+        id,
+        req.name.as_deref().unwrap_or(""),
+    )
+    .await;
     Json(ApiResponse::success(()))
 }
 
@@ -360,9 +379,47 @@ pub async fn delete_plan(
         ));
     }
 
+    match crate::service::settings::get_registration_settings(state.db.as_ref()).await {
+        Ok(reg) => {
+            if reg.default_registration_plan_id == id || reg.allowed_plan_ids.contains(&id) {
+                return Json(err(
+                    409,
+                    "该套餐正在被公开注册设置引用，请先在系统设置中更改注册默认/允许套餐。",
+                ));
+            }
+        }
+        Err(e) => {
+            tracing::error!(
+                "delete_plan {}: registration settings check failed: {}",
+                id,
+                e
+            );
+            return Json(err(500, "数据库错误"));
+        }
+    }
+
+    let plan_name = state
+        .db
+        .find_plan_name_by_id(id)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
     match state.db.delete_plan(id).await {
         Ok(0) => Json(err(404, "套餐不存在")),
-        Ok(_) => Json(ApiResponse::success(())),
+        Ok(_) => {
+            crate::service::audit::record(
+                &state,
+                Some(_admin.user_id),
+                "delete_plan",
+                "plan",
+                id,
+                &plan_name,
+            )
+            .await;
+            Json(ApiResponse::success(()))
+        }
         Err(e) => {
             tracing::error!("delete_plan {}: db error: {}", id, e);
             Json(err(500, "数据库错误"))

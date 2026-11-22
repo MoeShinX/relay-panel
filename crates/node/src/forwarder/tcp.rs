@@ -41,6 +41,7 @@ pub async fn serve_tcp_listener(
     source_ipv4: Option<Ipv4Addr>,
     gate: RuleGate,
     proxy_protocol: Arc<ProxyProtocolConfig>,
+    block_local_targets: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listen_addr = listener
         .local_addr()
@@ -140,6 +141,7 @@ pub async fn serve_tcp_listener(
                             rule_id,
                             source_ipv4,
                             &proxy_protocol,
+                            block_local_targets,
                         ) => {
                             if let Err(e) = r {
                                 tracing::debug!("TCP connection error: {}", e);
@@ -199,6 +201,7 @@ async fn handle_tcp_connection(
     rule_id: i64,
     source_ipv4: Option<Ipv4Addr>,
     proxy_protocol: &ProxyProtocolConfig,
+    block_local_targets: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // node-v1.2.9: who the connection is really from, and where it was really
     // headed. Normally the socket's own peer and local addresses; behind
@@ -262,7 +265,7 @@ async fn handle_tcp_connection(
         };
         match tokio::time::timeout(
             Duration::from_secs(5),
-            super::outbound::tcp_connect(target, source_ipv4, 5),
+            super::outbound::tcp_connect(target, source_ipv4, 5, block_local_targets),
         )
         .await
         {
@@ -461,6 +464,7 @@ mod tests {
             None,
             runtime.gate(None),
             Arc::new(ProxyProtocolConfig::default()),
+            false,
         ));
         // Keep the runtime alive for the duration of the test: dropping it would
         // cancel the connection we are about to make.
@@ -531,6 +535,7 @@ mod tests {
             None,
             runtime.gate(None),
             Arc::new(pp),
+            false,
         ));
         addr
     }
@@ -693,6 +698,7 @@ mod tests {
             None,
             runtime.gate(None),
             Arc::new(ProxyProtocolConfig::default()),
+            false,
         ));
         let _runtime = runtime;
 
@@ -771,6 +777,7 @@ mod tests {
             None,
             runtime.gate(Some(2)),
             Arc::new(ProxyProtocolConfig::default()),
+            false,
         ));
         let _runtime = runtime;
 

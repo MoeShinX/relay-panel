@@ -52,17 +52,18 @@ export default function ForcePasswordChange() {
   };
 
   return (
-    <div style={{
-      display: 'flex', justifyContent: 'center', alignItems: 'center',
-      minHeight: '100vh', background: 'var(--rp-bg)',
-      // A gutter on phones, inside the 100vh so a desktop keeps the card
-      // centred with no scrollbar.
-      padding: '24px 16px',
-      boxSizing: 'border-box',
-    }}>
-      <Card style={{ width: '100%', maxWidth: 400, boxShadow: 'var(--rp-shadow)' }}>
+    <div className="rp-auth-shell">
+      <Card className="rp-auth-card">
         <div style={{ textAlign: 'center', marginBottom: 20 }}>
-          <Title level={4} style={{ margin: 0 }}>{t('forcePasswordChange')}</Title>
+          <div style={{
+            width: 44, height: 44, margin: '0 auto 14px', borderRadius: 12,
+            background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+            boxShadow: '0 6px 18px rgba(217, 119, 6, 0.22)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 20,
+          }}>
+            <LockOutlined />
+          </div>
+          <Title level={4} style={{ margin: 0, fontWeight: 600 }}>{t('forcePasswordChange')}</Title>
         </div>
         <Alert
           type="warning"

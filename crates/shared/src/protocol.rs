@@ -305,6 +305,8 @@ pub struct ListenerConfig {
     /// on for a group that has such a node.
     #[serde(default, skip_serializing_if = "ProxyProtocolConfig::is_off")]
     pub proxy_protocol: ProxyProtocolConfig,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub block_local_targets: bool,
     // v0.4.7: the placeholder `speed_limit` / `ip_limit` wire fields were
     // removed. They were always None and no node ever read them. The DB columns
     // on users/plans are kept (deprecated) to avoid a pointless migration, but
@@ -414,9 +416,34 @@ pub fn expand_protocols(protocol: &str) -> Vec<Protocol> {
 ///
 /// `targets` is resolved by the caller because it needs a DB lookup (outbound
 /// group's connect_host) — that async step can't live in this pure function.
+pub fn is_local_ipv4(ip: std::net::Ipv4Addr) -> bool {
+    let o = ip.octets();
+    o[0] == 127 || o[0] == 0 || (o[0] == 169 && o[1] == 254) || ip.is_broadcast()
+}
+
+pub fn is_local_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => is_local_ipv4(v4),
+        std::net::IpAddr::V6(v6) => {
+            if v6.is_loopback() || v6.is_unspecified() || (v6.segments()[0] & 0xffc0) == 0xfe80 {
+                return true;
+            }
+            v6.to_ipv4().is_some_and(is_local_ipv4)
+        }
+    }
+}
+
 pub fn build_listeners_for_rule(
     rule: &crate::models::ForwardRule,
     targets: Vec<String>,
+) -> Vec<ListenerConfig> {
+    build_listeners_for_rule_scoped(rule, targets, false)
+}
+
+pub fn build_listeners_for_rule_scoped(
+    rule: &crate::models::ForwardRule,
+    targets: Vec<String>,
+    block_local_targets: bool,
 ) -> Vec<ListenerConfig> {
     // v0.4.0: the node transport is read DIRECTLY from the rule's stored
     // `node_transport` column. The panel derives this from `public_transport`
@@ -463,6 +490,7 @@ pub fn build_listeners_for_rule(
             } else {
                 ProxyProtocolConfig::default()
             },
+            block_local_targets,
         })
         .collect()
 }
@@ -1285,6 +1313,10 @@ pub struct CreateRuleRequest {
     /// config). None/omitted = legacy behavior (use public_transport/ws_path).
     #[serde(default)]
     pub tunnel_profile_id: Option<i64>,
+    #[serde(default)]
+    pub max_connections: Option<i32>,
+    #[serde(default)]
+    pub auto_restart_minutes: Option<i32>,
     /// v1.2.15: PROXY protocol header sent to the target (TCP only). Off when
     /// omitted.
     #[serde(default)]

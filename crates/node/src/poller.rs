@@ -1,6 +1,17 @@
 use crate::config::NodeConfig;
 use relay_shared::protocol::{NodeConfigResponse, CONFIG_PROTOCOL_VERSION};
 use std::path::PathBuf;
+use std::sync::OnceLock;
+
+pub(crate) fn http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
 
 /// Path for the config cache file. Used when the panel is unreachable.
 const CACHE_FILE: &str = "config-cache.json";
@@ -22,6 +33,10 @@ pub enum FetchResult {
     /// keeps its cached config; the caller should back off (the only fix is an
     /// upgrade, so polling fast is pointless).
     ProtocolMismatch,
+    /// Authentication rejected (401/403 — e.g. rotated token). Keep cached
+    /// config so live forwarding does not drop while the operator updates the
+    /// token, and back off like ProtocolMismatch.
+    AuthRejected,
     /// Transient failure (network error, 5xx, non-JSON body). The caller keeps
     /// the cached config and retries on the normal interval.
     Transient,
@@ -29,7 +44,7 @@ pub enum FetchResult {
 
 pub async fn fetch_config(config: &NodeConfig) -> FetchResult {
     let url = format!("{}/api/v1/node/config", config.panel_url);
-    let client = reqwest::Client::new();
+    let client = http_client();
 
     let resp = match client
         .get(&url)
@@ -63,6 +78,13 @@ pub async fn fetch_config(config: &NodeConfig) -> FetchResult {
             CONFIG_PROTOCOL_VERSION
         );
         return FetchResult::ProtocolMismatch;
+    }
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        tracing::warn!(
+            status = %status,
+            "fetch_config: authentication rejected (invalid or rotated token); keeping cached config"
+        );
+        return FetchResult::AuthRejected;
     }
     if !status.is_success() {
         tracing::warn!(status = %status, "fetch_config: non-2xx response; keeping cached config");

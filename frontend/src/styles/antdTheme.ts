@@ -1,62 +1,89 @@
 import type { ThemeConfig } from 'antd';
 
-// RelayPanel — "石墨靛蓝 / Graphite + Indigo" theme.
-// Token-driven: every antd component (buttons, tables, tags, inputs, menu…)
-// picks this up via ConfigProvider, so we don't touch individual components.
-// Layout chrome (sidebar bg, radii, custom tags) lives in styles/theme.css.
+// RelayPanel — "石墨靛蓝 / Modern Minimal Light (Linear · Stripe direction)".
+// Cool architectural slate canvas (#f4f5f8), crisp pure-white elevated cards,
+// obsidian-graphite sidebar (#111318), refined indigo accent (#4f46e5), and
+// desaturated semantic tokens.
 export const rpTheme: ThemeConfig = {
   token: {
-    colorPrimary: '#6366f1',
-    colorInfo: '#6366f1',
+    colorPrimary: '#4f46e5',
+    colorInfo: '#4f46e5',
     colorSuccess: '#059669',
     colorWarning: '#d97706',
-    colorError: '#ef4444',
-    colorLink: '#6366f1',
+    colorError: '#e11d48',
+    colorLink: '#4f46e5',
+    colorLinkHover: '#4338ca',
     borderRadius: 8,
-    colorBgLayout: '#fafafa',
-    // v1.2.5: antd's own text tokens were never set, so table bodies and
-    // <Text type="secondary"> fell back to rgba(0,0,0,0.45) — 2.85:1 on white,
-    // below WCAG AA. Overriding here rather than per component keeps one source
-    // of truth; these mirror the --rp-text* variables in theme.css.
-    colorText: '#18181b',
-    colorTextSecondary: '#4b5563',
-    colorTextTertiary: '#6b7280',
-    colorTextDescription: '#4b5563',
-    colorBorderSecondary: '#ececef',
-    fontWeightStrong: 500,
+    borderRadiusSM: 6,
+    borderRadiusLG: 12,
+    colorBgLayout: '#f4f5f8',
+    colorBgContainer: '#ffffff',
+    colorText: '#0f172a',
+    colorTextSecondary: '#475569',
+    colorTextTertiary: '#64748b',
+    colorTextDescription: '#475569',
+    colorBorder: '#e2e8f0',
+    colorBorderSecondary: '#eaecf0',
+    fontWeightStrong: 600,
     fontFamily:
       '"Noto Sans SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", ' +
       '"PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif',
   },
   components: {
-    // Dark graphite sidebar: transparent items so the Sider's #18181b shows
-    // through, indigo-tinted selection instead of antd's solid blue bar.
     Menu: {
       darkItemBg: 'transparent',
       darkSubMenuItemBg: 'transparent',
-      darkItemColor: '#a1a1aa',
-      darkItemHoverColor: '#fafafa',
-      darkItemHoverBg: 'rgba(255,255,255,0.05)',
-      darkItemSelectedBg: 'rgba(99,102,241,0.18)',
-      darkItemSelectedColor: '#c7d2fe',
+      darkItemColor: '#94a3b8',
+      darkItemHoverColor: '#f8fafc',
+      darkItemHoverBg: 'rgba(255, 255, 255, 0.06)',
+      darkItemSelectedBg: 'rgba(99, 102, 241, 0.18)',
+      darkItemSelectedColor: '#ffffff',
+      itemBorderRadius: 8,
+      itemMarginInline: 10,
+      itemMarginBlock: 3,
+      itemHeight: 38,
     },
-    // Flat buttons — drop antd's default control shadow for a cleaner look.
     Button: {
       primaryShadow: 'none',
       defaultShadow: 'none',
       dangerShadow: 'none',
+      fontWeight: 500,
+      controlHeight: 34,
+      controlHeightLG: 42,
+      controlHeightSM: 28,
+    },
+    Input: {
+      controlHeight: 34,
+      controlHeightLG: 42,
+      activeShadow: '0 0 0 3px rgba(79, 70, 229, 0.12)',
+    },
+    InputNumber: {
+      controlHeight: 34,
+      activeShadow: '0 0 0 3px rgba(79, 70, 229, 0.12)',
+    },
+    Select: {
+      controlHeight: 34,
+      controlHeightLG: 42,
     },
     Card: {
       borderRadiusLG: 12,
+      headerFontSize: 15,
     },
     Table: {
-      headerBg: '#fafafa',
-      rowHoverBg: '#f5f5ff',
-      borderColor: '#ececef',
+      headerBg: '#f8fafc',
+      headerColor: '#475569',
+      rowHoverBg: '#f5f7ff',
+      borderColor: '#eef0f4',
+    },
+    Modal: {
+      borderRadiusLG: 14,
     },
     Layout: {
-      bodyBg: '#fafafa',
-      headerBg: '#ffffff',
+      bodyBg: '#f4f5f8',
+      headerBg: 'rgba(255, 255, 255, 0.86)',
+      siderBg: '#111318',
+      triggerBg: '#111318',
+      triggerColor: '#94a3b8',
     },
   },
 };

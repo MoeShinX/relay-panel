@@ -44,6 +44,8 @@ export default function NotifySettings() {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState<string | null>(null);
   const [cfg, setCfg] = useState<NotifyConfigPublic | null>(null);
+  const [clearTgToken, setClearTgToken] = useState(false);
+  const [clearSmtpPwd, setClearSmtpPwd] = useState(false);
   const [history, setHistory] = useState<NotifyHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
 
@@ -76,6 +78,8 @@ export default function NotifySettings() {
         return;
       }
       setCfg(res.data);
+      setClearTgToken(false);
+      setClearSmtpPwd(false);
       form.setFieldsValue({ ...res.data, telegram_bot_token: '', smtp_password: '' });
     } catch {
       message.error(t('settingsLoadFailed'));
@@ -98,10 +102,14 @@ export default function NotifySettings() {
       const res = await api.put<unknown, ApiEnvelope<NotifyConfigPublic>>('/admin/settings/notify', {
         ...values,
         telegram_bot_token: values.telegram_bot_token || '',
+        clear_telegram_bot_token: clearTgToken && !values.telegram_bot_token,
         smtp_password: values.smtp_password || '',
+        clear_smtp_password: clearSmtpPwd && !values.smtp_password,
       });
       if (res.code !== 0) { message.error(res.message); return false; }
       setCfg(res.data ?? null);
+      setClearTgToken(false);
+      setClearSmtpPwd(false);
       form.setFieldsValue({ telegram_bot_token: '', smtp_password: '' });
       if (!silent) message.success(t('settingsSaved'));
       return true;
@@ -175,8 +183,21 @@ export default function NotifySettings() {
               <Col xs={24} lg={12}>
                 <Card size="small" title={<Space>Telegram <ChannelStatus enabled={telegramEnabled} configured={telegramConfigured} t={t} /></Space>} style={{ height: '100%' }}>
                   <SwitchRow name="telegram_enabled" label={t('channelEnableLabel')} />
-                  <Form.Item name="telegram_bot_token" label="Bot Token" extra={t('credentialKeepHint')}>
-                    <Input.Password autoComplete="off" placeholder={cfg?.telegram_bot_token_set ? t('credentialConfigured') : t('credentialEmpty')} />
+                  <Form.Item
+                    name="telegram_bot_token"
+                    label="Bot Token"
+                    extra={
+                      cfg?.telegram_bot_token_set ? (
+                        <Space size={8} wrap>
+                          <span>{clearTgToken ? t('credentialWillBeCleared') : t('credentialKeepHint')}</span>
+                          <Button type="link" size="small" danger={!clearTgToken} style={{ padding: 0 }} onClick={() => setClearTgToken((v) => !v)}>
+                            {clearTgToken ? t('cancel') : t('clearSavedCredential')}
+                          </Button>
+                        </Space>
+                      ) : t('credentialKeepHint')
+                    }
+                  >
+                    <Input.Password autoComplete="off" onChange={() => setClearTgToken(false)} placeholder={cfg?.telegram_bot_token_set ? t('credentialConfigured') : t('credentialEmpty')} />
                   </Form.Item>
                   <Form.Item name="telegram_chat_id" label="Chat ID" extra={t('telegramChatIdHint')}>
                     <Input autoComplete="off" placeholder="-1001234567890" />
@@ -192,7 +213,24 @@ export default function NotifySettings() {
                     <Col xs={12} md={6}><Form.Item name="smtp_port" label={t('smtpPort')} extra={t('smtpPortHint')}><InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="465" /></Form.Item></Col>
                     <Col xs={12} md={6}><Form.Item name="smtp_tls" label={t('smtpTls')} extra={t('smtpTlsHint')} valuePropName="checked"><Switch aria-label={t('smtpTls')} /></Form.Item></Col>
                     <Col xs={24} md={12}><Form.Item name="smtp_username" label={t('smtpUsername')}><Input autoComplete="off" placeholder="ops@example.com" /></Form.Item></Col>
-                    <Col xs={24} md={12}><Form.Item name="smtp_password" label={t('smtpPassword')} extra={t('credentialKeepHint')}><Input.Password autoComplete="new-password" placeholder={cfg?.smtp_password_set ? t('credentialConfigured') : t('credentialEmpty')} /></Form.Item></Col>
+                    <Col xs={24} md={12}>
+                      <Form.Item
+                        name="smtp_password"
+                        label={t('smtpPassword')}
+                        extra={
+                          cfg?.smtp_password_set ? (
+                            <Space size={8} wrap>
+                              <span>{clearSmtpPwd ? t('credentialWillBeCleared') : t('credentialKeepHint')}</span>
+                              <Button type="link" size="small" danger={!clearSmtpPwd} style={{ padding: 0 }} onClick={() => setClearSmtpPwd((v) => !v)}>
+                                {clearSmtpPwd ? t('cancel') : t('clearSavedCredential')}
+                              </Button>
+                            </Space>
+                          ) : t('credentialKeepHint')
+                        }
+                      >
+                        <Input.Password autoComplete="new-password" onChange={() => setClearSmtpPwd(false)} placeholder={cfg?.smtp_password_set ? t('credentialConfigured') : t('credentialEmpty')} />
+                      </Form.Item>
+                    </Col>
                     <Col xs={24} md={12}><Form.Item name="smtp_from" label={t('smtpFrom')} extra={t('smtpFromHint')}><Input autoComplete="off" placeholder="ops@example.com" /></Form.Item></Col>
                     <Col xs={24}><Form.Item name="smtp_to" label={t('smtpTo')} extra={t('smtpToHint')}><Input autoComplete="off" placeholder="admin@example.com" /></Form.Item></Col>
                   </Row>

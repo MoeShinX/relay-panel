@@ -325,7 +325,7 @@ pub struct SharedNodeSummary {
 /// v0.3.0: reusable tunnel profile describing the transport between an inbound
 /// node and an outbound node (NOT the user-facing entry protocol). The six
 /// builtin rows are seeded by Migration 6 and owned by the admin (uid=1).
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct TunnelProfile {
     pub id: i64,
     pub name: String,

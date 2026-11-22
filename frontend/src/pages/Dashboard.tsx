@@ -1,4 +1,4 @@
-import { Card, Col, Row, Statistic, Table, Tag, Typography, Alert, Modal, Button, Space, Tooltip } from 'antd';
+import { Card, Col, Row, Table, Tag, Typography, Alert, Modal, Button, Space, Tooltip } from 'antd';
 import {
   ClusterOutlined, ApiOutlined, UserOutlined, DashboardOutlined, ReloadOutlined,
   ArrowUpOutlined, ArrowDownOutlined,
@@ -129,11 +129,29 @@ export default function Dashboard() {
   useEffect(() => {
     load();
     checkVersion();
-    const ti = setInterval(load, 10000);
-    const tv = setInterval(checkVersion, 1800000); // 30 min
-    return () => { clearInterval(ti); clearInterval(tv); };
+    const ti = setInterval(() => {
+      if (!document.hidden) void load();
+    }, 10000);
+    const tv = setInterval(() => {
+      if (!document.hidden) void checkVersion();
+    }, 1800000); // 30 min
+    const onVis = () => {
+      if (!document.hidden) void load();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearInterval(ti);
+      clearInterval(tv);
+      document.removeEventListener('visibilitychange', onVis);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const chartRules = useMemo(
+    () => ruleList.map((r) => ({ id: r.id, name: r.name })),
+    [ruleList],
+  );
+  const fmtVer = (v?: string) => (!v ? '' : v.startsWith('v') ? v : `v${v}`);
 
   // v0.4.17: collapse raw /nodes rows into one summary per group. The whole
   //  row is clickable → /nodes for per-node detail (kept there to avoid
@@ -172,9 +190,12 @@ export default function Dashboard() {
       ),
     },
     {
-      title: t('status'), key: 'status', width: 100,
+      title: t('status'), key: 'status', width: 110,
       render: (_: unknown, r: ReturnType<typeof aggregateNodesByGroup>[number]) => (
-        <Tag color={statusColor(r.status)}>{statusLabel(r.status)}</Tag>
+        <Tag color={statusColor(r.status)}>
+          <span className={`rp-status-dot is-${r.status === 'online' ? 'online' : r.status === 'partial' ? 'partial' : 'offline'}`} />
+          {statusLabel(r.status)}
+        </Tag>
       ),
     },
     {
@@ -283,27 +304,24 @@ export default function Dashboard() {
           }
         />
       )}
-      {!versionInfo?.check_failed && !showUpdateBanner && versionInfo && (
-        <Alert
-          type="success"
-          showIcon
-          style={{ marginBottom: 16 }}
-          title={`${t('currentVersion')}: v${versionInfo.current_version} · ${t('upToDate')}`}
-        />
-      )}
-
       <div className="rp-page-header">
         <h2 className="rp-page-title">
           <DashboardOutlined /> {t('dashboard')}
           {versionInfo && (
-            <Space size="middle" style={{ marginLeft: 16, fontSize: 13, fontWeight: 'normal' }}>
-              <Text type="secondary">
-                {t('currentVersion')}: <span className="rp-mono">v{versionInfo.current_version}</span>
-              </Text>
+            <Space size={8} wrap style={{ fontSize: 13, fontWeight: 'normal' }}>
+              <Tag style={{ marginInlineEnd: 0 }}>
+                <span className="rp-mono">{fmtVer(versionInfo.current_version)}</span>
+              </Tag>
+              {!versionInfo.check_failed && !showUpdateBanner && !versionInfo.has_update && (
+                <Tag color="green" style={{ marginInlineEnd: 0 }}>
+                  <span className="rp-status-dot is-online" />
+                  {t('upToDate')}
+                </Tag>
+              )}
               {versionInfo.has_update && (
-                <Text type="warning">
-                  {t('latestVersion')}: <span className="rp-mono">{versionInfo.latest_version}</span>
-                </Text>
+                <Tag color="gold" style={{ marginInlineEnd: 0 }}>
+                  {t('latestVersion')}: <span className="rp-mono">{fmtVer(versionInfo.latest_version)}</span>
+                </Tag>
               )}
             </Space>
           )}
@@ -318,20 +336,50 @@ export default function Dashboard() {
           </Button>
         </Tooltip>
       </div>
-      <Row gutter={isMobile ? 8 : 16} style={{ marginBottom: 20 }}>
-        <Col span={8}>
-          <Card className="rp-stat-card"><Statistic title={t('users')} value={stats.users} prefix={<UserOutlined style={{ color: 'var(--rp-primary)' }} />} /></Card>
+      <Row gutter={isMobile ? [8, 8] : [16, 16]} style={{ marginBottom: 20 }}>
+        <Col xs={24} sm={8}>
+          <Card className="rp-kpi-card" styles={{ body: { padding: '20px 22px' } }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 13, color: 'var(--rp-text-secondary)', marginBottom: 6 }}>{t('users')}</div>
+                <div className="rp-mono" style={{ fontSize: 30, fontWeight: 600, color: 'var(--rp-text)', lineHeight: 1.15 }}>{stats.users}</div>
+              </div>
+              <span className="rp-icon-tile" style={{ background: '#eef2ff', color: '#4f46e5' }}>
+                <UserOutlined />
+              </span>
+            </div>
+          </Card>
         </Col>
-        <Col span={8}>
-          <Card className="rp-stat-card"><Statistic title={t('forwardRules')} value={stats.rules} prefix={<ApiOutlined style={{ color: 'var(--rp-primary)' }} />} /></Card>
+        <Col xs={24} sm={8}>
+          <Card className="rp-kpi-card" styles={{ body: { padding: '20px 22px' } }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 13, color: 'var(--rp-text-secondary)', marginBottom: 6 }}>{t('forwardRules')}</div>
+                <div className="rp-mono" style={{ fontSize: 30, fontWeight: 600, color: 'var(--rp-text)', lineHeight: 1.15 }}>{stats.rules}</div>
+              </div>
+              <span className="rp-icon-tile" style={{ background: '#f5f3ff', color: '#7c3aed' }}>
+                <ApiOutlined />
+              </span>
+            </div>
+          </Card>
         </Col>
-        <Col span={8}>
-          <Card className="rp-stat-card"><Statistic title={t('deviceGroups')} value={stats.groups} prefix={<ClusterOutlined style={{ color: 'var(--rp-primary)' }} />} /></Card>
+        <Col xs={24} sm={8}>
+          <Card className="rp-kpi-card" styles={{ body: { padding: '20px 22px' } }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 13, color: 'var(--rp-text-secondary)', marginBottom: 6 }}>{t('deviceGroups')}</div>
+                <div className="rp-mono" style={{ fontSize: 30, fontWeight: 600, color: 'var(--rp-text)', lineHeight: 1.15 }}>{stats.groups}</div>
+              </div>
+              <span className="rp-icon-tile" style={{ background: '#ecfdf5', color: '#059669' }}>
+                <ClusterOutlined />
+              </span>
+            </div>
+          </Card>
         </Col>
       </Row>
 
       {/* v1.2.0: fleet-wide traffic trend, with per-rule drill-down. */}
-      <TrafficChart rules={ruleList.map(r => ({ id: r.id, name: r.name }))} />
+      <TrafficChart rules={chartRules} />
 
       {/* v1.2.4: node CPU / memory / connections, directly below the traffic
           chart — the two answer "how much" and "was the box coping", which is
@@ -359,12 +407,12 @@ export default function Dashboard() {
         open={showChangelog}
         onCancel={() => setShowChangelog(false)}
         footer={[
-          <Button key="github" href={versionInfo?.release_url} target="_blank">{t('openReleasePage')}</Button>,
+          <Button key="github" href={versionInfo?.release_url} target="_blank" rel="noopener noreferrer">{t('openReleasePage')}</Button>,
           <Button key="close" type="primary" onClick={() => setShowChangelog(false)}>{t('cancel')}</Button>,
         ]}
       >
         <Text type="secondary" style={{ fontSize: 12 }}>
-          {t('currentVersion')}: {versionInfo?.current_version} · {versionInfo?.published_at}
+          {t('currentVersion')}: {fmtVer(versionInfo?.current_version)} · {versionInfo?.published_at}
         </Text>
         <pre style={{ whiteSpace: 'pre-wrap', fontSize: 13, marginTop: 12 }}>
           {versionInfo?.release_notes || 'No release notes.'}
