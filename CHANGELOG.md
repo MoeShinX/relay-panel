@@ -10,6 +10,12 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-22
+
+A major front-end overhaul: the look is redesigned throughout and the latency
+pages gain much richer interaction. Panel only: nodes stay on node-v1.2.14, and
+the config protocol and the database are unchanged.
+
 ### Added
 
 - Group latency page: an overview row (probe health, carrier averages, the most
