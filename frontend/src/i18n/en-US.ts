@@ -60,6 +60,11 @@ export const enUS: Dict = {
   // v0.4.11 PR2: regular user nav labels
   myRules: 'My Rules',
   availableNodes: 'Node Status',
+  networkMonitor: 'Network Monitor',
+  networkMonitorEmpty: 'No device groups have latency monitoring enabled yet',
+  networkMonitorGoGroups: 'Configure in Device Groups',
+  networkMonitorSelectGroup: 'Select group',
+  networkMonitorLoadFailed: 'Failed to load monitored groups',
 
   // Common actions
   add: 'Add',

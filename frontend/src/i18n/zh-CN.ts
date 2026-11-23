@@ -59,6 +59,11 @@ export const zhCN = {
   // v0.4.11 PR2: regular user nav labels
   myRules: '我的规则',
   availableNodes: '节点状态',
+  networkMonitor: '网络监控',
+  networkMonitorEmpty: '还没有分组开启延迟监控',
+  networkMonitorGoGroups: '去设备分组设置',
+  networkMonitorSelectGroup: '选择分组',
+  networkMonitorLoadFailed: '加载监控分组失败',
 
   // Common actions
   add: '新增',

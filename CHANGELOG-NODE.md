@@ -13,6 +13,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- Optional `TCP_USER_TIMEOUT_MS` environment variable (Linux only, default `0` = disabled, clamped to `10000..=600000` when non-zero) to reap half-open forwarded TCP connections whose transmitted data goes unacknowledged.
+
+### Changed
+
+- Outbound TCP dialing with `OUTBOUND_BIND_IPV4` now tries every resolved IPv4 address in order before falling back to IPv6 addresses, instead of only trying the first resolved address.
+- Per-address TCP dial attempts now share the single-target 5-second budget so a stalled first address cannot starve later addresses, and multi-target failover enforces a 12-second total dial budget per connection.
+- UDP forwarding now holds a lock-free per-listener traffic counter handle instead of acquiring the global counter lock on every datagram, reducing lock contention under high packet rates while preserving exact traffic accounting across reporting cycles and rule deletion.
+
 ## [1.2.14] - 2026-11-22
 
 Runs against any current panel (still protocol version 4). The loopback guard

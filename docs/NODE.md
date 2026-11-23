@@ -165,8 +165,9 @@ export them before launching.
 | `NETWORK_INTERFACE` | NIC counted for whole-machine traffic stats; `auto` reads the default route | `auto` |
 | `LISTEN_IPV4` | IPv4 inbound listen address for TCP/UDP rules; empty disables IPv4 | `0.0.0.0` |
 | `LISTEN_IPV6` | IPv6 inbound listen address for TCP/UDP rules; empty disables IPv6 | `::` |
-| `OUTBOUND_INTERFACE` | NIC for outbound IPv4 egress; `auto` = system routing (no source bind) | `auto` |
-| `OUTBOUND_BIND_IPV4` | Exact IPv4 source for outbound TCP/UDP; overrides `OUTBOUND_INTERFACE` | (unset) |
+| `OUTBOUND_INTERFACE` | NIC for outbound IPv4 egress; `auto` = system routing (applies to IPv4 only; falls back to IPv6 if all IPv4 addresses fail) | `auto` |
+| `OUTBOUND_BIND_IPV4` | Exact IPv4 source for outbound TCP/UDP; overrides `OUTBOUND_INTERFACE`. Applies to IPv4 only — all IPv4 addresses are tried first with source binding, and if all fail, IPv6 addresses are tried without binding | (unset) |
+| `TCP_USER_TIMEOUT_MS` | Linux `TCP_USER_TIMEOUT` in milliseconds for forwarded TCP sockets; `0` disables it (default). Non-zero values are clamped to `10000..=600000` and close connections whose sent data goes unacknowledged for too long — note this also affects healthy peers stuck in a long zero-window (paused reader) state; recommended starting value `120000` for canary rollout | `0` |
 | `UDP_MAX_SESSIONS` | Most concurrent UDP sessions (client addresses) across all rules; new ones beyond it are refused, so forged sources cannot exhaust file descriptors | half the fd limit (32768 under the installer's `LimitNOFILE=65536`) |
 | `UDP_MAX_SESSIONS_PER_IP` | Most concurrent UDP sessions one source address may hold across all rules (an IPv6 source counts per /64, an IPv4-mapped IPv6 address as its IPv4 address); new ones beyond it are refused, so one machine cannot fill `UDP_MAX_SESSIONS` or exhaust memory. Raise it if many real clients share one address (NAT) | `1024` |
 | `RUST_LOG` | Log level: `error` / `warn` / `info` / `debug` | `info` |

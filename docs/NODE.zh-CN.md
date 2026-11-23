@@ -159,6 +159,9 @@ systemctl status relay-node   # 应显示 active (running)
 | `NETWORK_INTERFACE` | 统计整机流量的网卡，`auto` 读默认路由 | `auto` |
 | `UDP_MAX_SESSIONS` | 所有规则合计最多同时存在的 UDP 会话数（按来源地址计）；超出后新会话被拒绝，伪造来源无法耗尽文件描述符 | fd 上限的一半（安装脚本的 `LimitNOFILE=65536` 下为 32768） |
 | `UDP_MAX_SESSIONS_PER_IP` | 同一个来源地址在所有规则上合计最多同时占用的 UDP 会话数（IPv6 来源按 /64 前缀合并计数，IPv4 映射的 IPv6 地址按其 IPv4 地址计）；超出后该地址的新会话被拒绝，避免一台机器占满 `UDP_MAX_SESSIONS` 或耗尽内存。如果有大量真实用户共用一个出口地址（NAT），可适当调大 | `1024` |
+| `OUTBOUND_INTERFACE` | 出站 IPv4 绑定网卡名；`auto` 表示跟随系统路由（仅作用于 IPv4，IPv4 地址全部连接失败时会改走 IPv6） | `auto` |
+| `OUTBOUND_BIND_IPV4` | 出站 IPv4 源地址，优先级高于 `OUTBOUND_INTERFACE`；仅作用于 IPv4，所有 IPv4 地址均失败时会回退尝试解析出的 IPv6 地址（不经过此绑定） | 未设置 |
+| `TCP_USER_TIMEOUT_MS` | Linux 转发连接 `TCP_USER_TIMEOUT`（毫秒），默认 `0` 不设置；非 0 时生效（范围 `10000..=600000`），用于在「已发出数据长时间得不到 ACK」时断开半开连接。注意：对端长时间零窗口（接收方暂停读取）的正常连接也会触发断开；建议值 `120000`，建议先在部分节点灰度验证 | `0` |
 | `RUST_LOG` | 日志级别：`error` / `warn` / `info` / `debug` | `info` |
 
 说明：

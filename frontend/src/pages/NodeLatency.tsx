@@ -291,7 +291,7 @@ export default function NodeLatency() {
               color="blue"
               data-testid="latency-group-link"
               style={{ cursor: 'pointer', marginInlineEnd: 0 }}
-              onClick={() => navigate(`/groups/${data.group_id}/latency`)}
+              onClick={() => navigate(`/latency?group=${data.group_id}`)}
             >
               {data.group_name}
             </Tag>
