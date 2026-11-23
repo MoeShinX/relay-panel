@@ -593,6 +593,7 @@ impl ForwarderManager {
                                     gate4,
                                     pp4,
                                     block_local,
+                                    super::fd_budget::global(),
                                 )
                                 .await
                             } else {
@@ -613,6 +614,7 @@ impl ForwarderManager {
                                     gate6,
                                     pp,
                                     block_local,
+                                    super::fd_budget::global(),
                                 )
                                 .await
                             } else {
@@ -713,6 +715,7 @@ impl ForwarderManager {
                                     rid,
                                     ipv4_src,
                                     block_local,
+                                    super::fd_budget::global(),
                                 )
                                 .await
                             } else {
@@ -731,6 +734,7 @@ impl ForwarderManager {
                                     rid,
                                     ipv4_src,
                                     block_local,
+                                    super::fd_budget::global(),
                                 )
                                 .await
                             } else {

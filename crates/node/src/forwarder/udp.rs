@@ -20,13 +20,14 @@ use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::oneshot;
 use tokio::time;
 
+use super::fd_budget::{FdBudget, UdpFdGuard};
 use super::limiter::RateLimit;
 use super::outbound::OutboundError;
 use super::selector::TargetSelector;
@@ -39,80 +40,6 @@ const UDP_BUF_SIZE: usize = 65535;
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(15);
 
 type Sessions = DashMap<SocketAddr, UdpSession>;
-
-/// v1.2.12: live UDP sessions across ALL rules on this node. Each one holds a
-/// real socket (an fd) plus a reader task until it has been idle for
-/// UDP_SESSION_TIMEOUT, and a new session is opened for every new source
-/// address — including spoofed ones. Unbounded, a flood of forged sources
-/// used up the process's file descriptors, and then every rule stopped (TCP
-/// included) while the node still looked online. New sessions beyond
-/// `udp_session_cap()` are refused; existing ones carry on.
-static UDP_SESSIONS: AtomicUsize = AtomicUsize::new(0);
-
-/// The node-wide session cap: `UDP_MAX_SESSIONS` if set, otherwise half the
-/// file-descriptor limit (so the other half stays for TCP and the node
-/// itself) — 32768 under the installer's LimitNOFILE=65536. Read on first use,
-/// after main() has raised the soft limit.
-fn udp_session_cap() -> usize {
-    static CAP: OnceLock<usize> = OnceLock::new();
-    *CAP.get_or_init(|| {
-        let cap = session_cap_from(std::env::var("UDP_MAX_SESSIONS").ok(), nofile_limit());
-        tracing::info!("UDP: at most {} concurrent sessions node-wide", cap);
-        cap
-    })
-}
-
-fn session_cap_from(env: Option<String>, nofile: Option<u64>) -> usize {
-    if let Some(n) = env
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .filter(|n| *n > 0)
-    {
-        return n;
-    }
-    match nofile {
-        Some(n) => (n / 2).clamp(256, 524_288) as usize,
-        None => 4096,
-    }
-}
-
-#[cfg(unix)]
-// rlim_t is u64 on the targets we ship (Linux x86_64/aarch64), which makes the
-// cast a no-op there, but it is not u64 on every unix.
-#[allow(clippy::unnecessary_cast)]
-fn nofile_limit() -> Option<u64> {
-    let mut lim = libc::rlimit {
-        rlim_cur: 0,
-        rlim_max: 0,
-    };
-    // SAFETY: getrlimit writes into a local rlimit we own.
-    (unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) } == 0).then_some(lim.rlim_cur as u64)
-}
-
-#[cfg(not(unix))]
-fn nofile_limit() -> Option<u64> {
-    None
-}
-
-/// One counted place in `counter`, given back on drop. Held by the session's
-/// socket (`SessionSocket`), so it counts sockets that are really open.
-struct SessionSlot(&'static AtomicUsize);
-
-impl SessionSlot {
-    fn acquire(counter: &'static AtomicUsize, cap: usize) -> Option<Self> {
-        counter
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                (n < cap).then_some(n + 1)
-            })
-            .ok()
-            .map(|_| SessionSlot(counter))
-    }
-}
-
-impl Drop for SessionSlot {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::AcqRel);
-    }
-}
 
 /// Default for how many sessions one source address may hold at once.
 const DEFAULT_SESSIONS_PER_IP: usize = 1024;
@@ -241,12 +168,11 @@ fn acquire_session_slots(
     ip: IpAddr,
     sources: &'static SourceTable,
     per_ip_cap: usize,
-    node: &'static AtomicUsize,
-    node_cap: usize,
-) -> Result<(SessionSlot, SourceSlot), Refusal> {
+    budget: &'static FdBudget,
+) -> Result<(UdpFdGuard, SourceSlot), Refusal> {
     let source =
         SourceSlot::acquire(sources, SourceKey::of(ip), per_ip_cap).ok_or(Refusal::PerSource)?;
-    let slot = SessionSlot::acquire(node, node_cap).ok_or(Refusal::NodeWide)?;
+    let slot = budget.acquire_udp().ok_or(Refusal::NodeWide)?;
     Ok((slot, source))
 }
 
@@ -298,7 +224,7 @@ fn note_source_refused(ip: IpAddr, port: u16) {
 /// just the map entries.
 struct SessionSocket {
     sock: UdpSocket,
-    _slot: SessionSlot,
+    _slot: UdpFdGuard,
     _source: SourceSlot,
 }
 
@@ -316,7 +242,7 @@ static LAST_CAP_WARNING: AtomicU64 = AtomicU64::new(0);
 
 /// Count a refused session; warn at most once a minute so a flood cannot
 /// flood the log too.
-fn note_session_refused(port: u16) {
+fn note_session_refused(budget: &FdBudget, port: u16) {
     REFUSED_SESSIONS.fetch_add(1, Ordering::Relaxed);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -328,10 +254,11 @@ fn note_session_refused(port: u16) {
             .is_ok()
     {
         tracing::warn!(
-            "UDP session limit reached ({} sessions node-wide); refused {} new session(s) \
-             since the last warning (latest on port {}). Existing sessions are unaffected. \
-             If this is real traffic, raise UDP_MAX_SESSIONS (and LimitNOFILE).",
-            udp_session_cap(),
+            "UDP node fd budget reached (udp_max_sessions={}, shared budget={} fds); refused {} new \
+             session(s) since the last warning (latest on port {}). Existing sessions are unaffected. \
+             If this is real traffic, raise LimitNOFILE.",
+            budget.config().udp_fd_cap,
+            budget.config().budget,
             REFUSED_SESSIONS.swap(0, Ordering::Relaxed),
             port
         );
@@ -391,6 +318,7 @@ pub async fn serve_udp_listener(
     rule_id: i64,
     source_ipv4: Option<Ipv4Addr>,
     block_local_targets: bool,
+    fd_budget: &'static FdBudget,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listen_addr = inbound
         .local_addr()
@@ -488,8 +416,7 @@ pub async fn serve_udp_listener(
                 src.ip(),
                 &UDP_SOURCES,
                 udp_sessions_per_ip_cap(),
-                &UDP_SESSIONS,
-                udp_session_cap(),
+                fd_budget,
             ) {
                 Ok(slots) => slots,
                 Err(Refusal::PerSource) => {
@@ -497,7 +424,7 @@ pub async fn serve_udp_listener(
                     continue;
                 }
                 Err(Refusal::NodeWide) => {
-                    note_session_refused(port);
+                    note_session_refused(fd_budget, port);
                     continue;
                 }
             };
@@ -993,15 +920,30 @@ mod tests {
         sock.send(b"ping").await.unwrap();
     }
 
-    /// Slots for sessions built by these tests, apart from the node-wide count.
-    static TEST_SLOTS: AtomicUsize = AtomicUsize::new(0);
+    /// Dedicated test budget and source table, isolated from node-wide globals.
+    fn test_budget(udp_cap: usize) -> &'static FdBudget {
+        Box::leak(Box::new(FdBudget::new(
+            super::super::fd_budget::BudgetConfig {
+                nofile: (udp_cap.saturating_mul(4)).max(64) as u64,
+                nofile_detected: true,
+                reserve: 16,
+                budget: udp_cap.max(1),
+                tcp_conn_cap: udp_cap.max(1),
+                udp_fd_cap: udp_cap,
+                warnings: Vec::new(),
+            },
+        )))
+    }
+
+    static TEST_BUDGET: OnceLock<&'static FdBudget> = OnceLock::new();
     static TEST_SOURCES: SourceTable = SourceTable::new();
 
-    /// A session socket counted under TEST_SLOTS and TEST_SOURCES.
+    /// A session socket counted under TEST_BUDGET and TEST_SOURCES.
     fn tracked(sock: UdpSocket) -> Arc<SessionSocket> {
+        let budget = *TEST_BUDGET.get_or_init(|| test_budget(1024));
         Arc::new(SessionSocket {
             sock,
-            _slot: SessionSlot::acquire(&TEST_SLOTS, usize::MAX).unwrap(),
+            _slot: budget.acquire_udp().unwrap(),
             _source: SourceSlot::acquire(
                 &TEST_SOURCES,
                 SourceKey::of(IpAddr::V4(Ipv4Addr::LOCALHOST)),
@@ -1040,34 +982,16 @@ mod tests {
         (s, rx)
     }
 
-    /// v1.2.12: the node-wide UDP session cap — explicit setting first, else
-    /// half the fd limit (bounded), else a fixed fallback.
-    #[test]
-    fn session_cap_follows_setting_then_fd_limit() {
-        assert_eq!(session_cap_from(Some("5000".into()), Some(65_536)), 5000);
-        assert_eq!(session_cap_from(None, Some(65_536)), 32_768);
-        // A bad or zero setting falls back to the fd-based cap.
-        assert_eq!(session_cap_from(Some("lots".into()), Some(65_536)), 32_768);
-        assert_eq!(session_cap_from(Some("0".into()), Some(65_536)), 32_768);
-        // A tiny fd limit still leaves some sessions; a huge one is bounded.
-        assert_eq!(session_cap_from(None, Some(100)), 256);
-        assert_eq!(session_cap_from(None, Some(u64::MAX)), 524_288);
-        assert_eq!(session_cap_from(None, None), 4096);
-    }
-
-    /// v1.2.12: past the cap a new session gets no slot, and a slot comes back
-    /// when its holder is dropped.
+    /// Shared fd budget: past the UDP cap a new session gets no slot, and a
+    /// slot comes back when its guard is dropped.
     #[test]
     fn session_slots_stop_at_the_cap_and_come_back() {
-        static SLOTS: AtomicUsize = AtomicUsize::new(0);
-        let a = SessionSlot::acquire(&SLOTS, 2).expect("first");
-        let _b = SessionSlot::acquire(&SLOTS, 2).expect("second");
-        assert!(SessionSlot::acquire(&SLOTS, 2).is_none(), "cap reached");
+        let budget = test_budget(2);
+        let a = budget.acquire_udp().expect("first");
+        let _b = budget.acquire_udp().expect("second");
+        assert!(budget.acquire_udp().is_none(), "cap reached");
         drop(a);
-        assert!(
-            SessionSlot::acquire(&SLOTS, 2).is_some(),
-            "a freed slot is reusable"
-        );
+        assert!(budget.acquire_udp().is_some(), "a freed slot is reusable");
     }
 
     /// v1.2.12: a session's place comes back when its socket closes — when
@@ -1076,12 +1000,12 @@ mod tests {
     /// more sockets stay open than the cap allows.
     #[tokio::test]
     async fn a_slot_is_held_until_the_socket_closes() {
-        static SLOTS: AtomicUsize = AtomicUsize::new(0);
+        let budget = test_budget(1);
         static SOURCES: SourceTable = SourceTable::new();
         let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
         let outbound = Arc::new(SessionSocket {
             sock: loopback_udp().await,
-            _slot: SessionSlot::acquire(&SLOTS, 1).unwrap(),
+            _slot: budget.acquire_udp().unwrap(),
             _source: SourceSlot::acquire(&SOURCES, SourceKey::of(ip), 1).unwrap(),
         });
         let reader_copy = outbound.clone(); // what a still-running reader holds
@@ -1096,10 +1020,10 @@ mod tests {
                 _stop: tx,
             },
         );
-        assert!(SessionSlot::acquire(&SLOTS, 1).is_none());
+        assert!(budget.acquire_udp().is_none());
         sessions.remove(&src);
         assert!(
-            SessionSlot::acquire(&SLOTS, 1).is_none(),
+            budget.acquire_udp().is_none(),
             "the socket is still open, so its place is still taken"
         );
         assert!(
@@ -1107,7 +1031,7 @@ mod tests {
             "and so is its place under its source's limit"
         );
         drop(reader_copy);
-        assert!(SessionSlot::acquire(&SLOTS, 1).is_some());
+        assert!(budget.acquire_udp().is_some());
         assert!(SourceSlot::acquire(&SOURCES, SourceKey::of(ip), 1).is_some());
     }
 
@@ -1192,26 +1116,26 @@ mod tests {
     #[tokio::test]
     async fn refusals_hold_no_places() {
         static SOURCES: SourceTable = SourceTable::new();
-        static NODE: AtomicUsize = AtomicUsize::new(0);
+        let budget = test_budget(2);
         let a: IpAddr = "192.0.2.1".parse().unwrap();
         let b: IpAddr = "192.0.2.2".parse().unwrap();
 
-        let first = acquire_session_slots(a, &SOURCES, 1, &NODE, 2).unwrap();
+        let first = acquire_session_slots(a, &SOURCES, 1, budget).unwrap();
         assert!(matches!(
-            acquire_session_slots(a, &SOURCES, 1, &NODE, 2),
+            acquire_session_slots(a, &SOURCES, 1, budget),
             Err(Refusal::PerSource)
         ));
-        assert_eq!(NODE.load(Ordering::Acquire), 1);
-        let second = acquire_session_slots(b, &SOURCES, 1, &NODE, 2).unwrap();
+        assert_eq!(budget.snapshot_usage().3, 1);
+        let second = acquire_session_slots(b, &SOURCES, 1, budget).unwrap();
         // The node is full: c is refused for that, and keeps no place of its own.
         let c: IpAddr = "192.0.2.3".parse().unwrap();
         assert!(matches!(
-            acquire_session_slots(c, &SOURCES, 1, &NODE, 2),
+            acquire_session_slots(c, &SOURCES, 1, budget),
             Err(Refusal::NodeWide)
         ));
         assert!(SOURCES.map().get(&SourceKey::of(c)).is_none());
         drop((first, second));
-        assert_eq!(NODE.load(Ordering::Acquire), 0);
+        assert_eq!(budget.snapshot_usage(), (0, 0, 0, 0));
         assert!(SOURCES.map().is_empty());
     }
 
@@ -1220,9 +1144,9 @@ mod tests {
         ip: IpAddr,
         sources: &'static SourceTable,
         per_ip_cap: usize,
-        node: &'static AtomicUsize,
+        budget: &'static FdBudget,
     ) -> Result<Arc<SessionSocket>, Refusal> {
-        let (slot, source) = acquire_session_slots(ip, sources, per_ip_cap, node, usize::MAX)?;
+        let (slot, source) = acquire_session_slots(ip, sources, per_ip_cap, budget)?;
         Ok(Arc::new(SessionSocket {
             sock: loopback_udp().await,
             _slot: slot,
@@ -1237,7 +1161,7 @@ mod tests {
     #[tokio::test]
     async fn source_counts_return_to_zero_however_a_session_ends() {
         static SOURCES: SourceTable = SourceTable::new();
-        static NODE: AtomicUsize = AtomicUsize::new(0);
+        let budget = test_budget(1024);
         const CAP: usize = 3;
         let a: IpAddr = "192.0.2.1".parse().unwrap();
         let b: IpAddr = "2001:db8::1".parse().unwrap();
@@ -1247,23 +1171,23 @@ mod tests {
         let inbound = Arc::new(loopback_udp().await);
         let at = |port: u16| SocketAddr::from(([127, 0, 0, 1], port));
 
-        let evictable = open_session(a, &SOURCES, CAP, &NODE).await.unwrap();
-        let failing = open_session(a, &SOURCES, CAP, &NODE).await.unwrap();
-        let torn_down_a = open_session(a, &SOURCES, CAP, &NODE).await.unwrap();
-        let torn_down_b = open_session(b, &SOURCES, CAP, &NODE).await.unwrap();
+        let evictable = open_session(a, &SOURCES, CAP, budget).await.unwrap();
+        let failing = open_session(a, &SOURCES, CAP, budget).await.unwrap();
+        let torn_down_a = open_session(a, &SOURCES, CAP, budget).await.unwrap();
+        let torn_down_b = open_session(b, &SOURCES, CAP, budget).await.unwrap();
         assert!(
             matches!(
-                open_session(a, &SOURCES, CAP, &NODE).await,
+                open_session(a, &SOURCES, CAP, budget).await,
                 Err(Refusal::PerSource)
             ),
             "a fourth session from one source is refused"
         );
         assert_eq!((count(a), count(b)), (3, 1));
-        assert_eq!(NODE.load(Ordering::Acquire), 4);
+        assert_eq!(budget.snapshot_usage().3, 4);
         // A full source blocks nobody else, and another address in b's /64
         // is counted as b.
         let b_neighbour: IpAddr = "2001:db8::2".parse().unwrap();
-        let b_second = open_session(b_neighbour, &SOURCES, CAP, &NODE)
+        let b_second = open_session(b_neighbour, &SOURCES, CAP, budget)
             .await
             .unwrap();
         assert_eq!(count(b), 2);
@@ -1318,9 +1242,9 @@ mod tests {
 
         assert_eq!((count(a), count(b)), (0, 0));
         assert!(SOURCES.map().is_empty(), "no entry is left behind");
-        assert_eq!(NODE.load(Ordering::Acquire), 0);
+        assert_eq!(budget.snapshot_usage(), (0, 0, 0, 0));
         // The freed places are usable again.
-        assert!(open_session(a, &SOURCES, CAP, &NODE).await.is_ok());
+        assert!(open_session(a, &SOURCES, CAP, budget).await.is_ok());
     }
 
     /// v1.2.12: a reader waiting on the rate limit stops as soon as its
@@ -1506,6 +1430,7 @@ mod tests {
             rule_id,
             None,
             false,
+            test_budget(64),
         ));
 
         let client = loopback_udp().await;

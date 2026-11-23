@@ -157,7 +157,8 @@ systemctl status relay-node   # 应显示 active (running)
 | `POLL_INTERVAL` | HTTP 轮询 / 状态上报间隔（秒） | `10` |
 | `PUBLIC_IP_CHECK_URL` | 检测节点公网出口 IP 用的地址 | `https://api.ipify.org` |
 | `NETWORK_INTERFACE` | 统计整机流量的网卡，`auto` 读默认路由 | `auto` |
-| `UDP_MAX_SESSIONS` | 所有规则合计最多同时存在的 UDP 会话数（按来源地址计）；超出后新会话被拒绝，伪造来源无法耗尽文件描述符 | fd 上限的一半（安装脚本的 `LimitNOFILE=65536` 下为 32768） |
+| `TCP_MAX_CONNECTIONS` | 节点级 TCP 最大并发连接数（与 UDP 共用文件描述符预算；TCP 不设固定比例上限，最多可用满全部共享预算；`LimitNOFILE=65536` 下默认可用 61440 个 fd，约 10240 条 Linux splice 不限速连接或 30720 条限速连接）；此变量**只能往小调**，超过安全上限时会自动夹到安全上限并打一次警告。与单条规则的 `max_connections` 并存 | 共享 fd 预算上限 |
+| `UDP_MAX_SESSIONS` | 节点级最大并发 UDP 会话数（与 TCP 共用文件描述符预算，默认最多占预算的 1/2）；此变量**只能往小调**，超过安全上限时会自动夹到安全上限并打一次警告 | 共享 fd 预算的一半（`LimitNOFILE=65536` 下为 30720） |
 | `UDP_MAX_SESSIONS_PER_IP` | 同一个来源地址在所有规则上合计最多同时占用的 UDP 会话数（IPv6 来源按 /64 前缀合并计数，IPv4 映射的 IPv6 地址按其 IPv4 地址计）；超出后该地址的新会话被拒绝，避免一台机器占满 `UDP_MAX_SESSIONS` 或耗尽内存。如果有大量真实用户共用一个出口地址（NAT），可适当调大 | `1024` |
 | `OUTBOUND_INTERFACE` | 出站 IPv4 绑定网卡名；`auto` 表示跟随系统路由（仅作用于 IPv4，IPv4 地址全部连接失败时会改走 IPv6） | `auto` |
 | `OUTBOUND_BIND_IPV4` | 出站 IPv4 源地址，优先级高于 `OUTBOUND_INTERFACE`；仅作用于 IPv4，所有 IPv4 地址均失败时会回退尝试解析出的 IPv6 地址（不经过此绑定） | 未设置 |
