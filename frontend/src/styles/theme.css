@@ -1179,6 +1179,54 @@ html, body, #root {
   color: var(--ant-color-text-tertiary, #6b7280);
 }
 
+/* Network Monitor top group switcher: framed theme rail + deep lavender active pill */
+.rp-monitor-switcher {
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.rp-monitor-segmented.ant-segmented {
+  background: #ffffff;
+  border: 1px solid #d9d6f4;
+  border-radius: 10px;
+  padding: 4px;
+  box-shadow: 0 1px 2px rgba(91, 76, 196, 0.06);
+}
+.rp-monitor-segmented.ant-segmented .ant-segmented-item {
+  border-radius: 7px;
+  color: #52525b;
+  font-weight: 500;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+.rp-monitor-segmented.ant-segmented .ant-segmented-item:hover:not(.ant-segmented-item-selected) {
+  color: #4c3db8;
+  background: #f6f5fd;
+}
+.rp-monitor-segmented.ant-segmented .ant-segmented-item-selected,
+.rp-monitor-segmented.ant-segmented .ant-segmented-thumb {
+  background: #6554d4;
+  border-radius: 7px;
+  box-shadow: 0 1px 3px rgba(101, 84, 212, 0.28);
+}
+.rp-monitor-segmented.ant-segmented .ant-segmented-item-selected {
+  color: #ffffff;
+  font-weight: 600;
+}
+.rp-monitor-segmented.ant-segmented .ant-segmented-item-selected:hover {
+  color: #ffffff;
+}
+.rp-monitor-select-wrap {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px;
+  background: #ffffff;
+  border: 1px solid #d9d6f4;
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(91, 76, 196, 0.06);
+}
+
 @media (max-width: 767px) {
   .rp-lat-card .ant-card-head-wrapper {
     flex-wrap: wrap;

@@ -204,18 +204,10 @@ export default function NetworkMonitor() {
 
   const switcher =
     groups.length > 1 ? (
-      <div
-        data-testid="monitor-group-switcher"
-        style={{
-          marginBottom: 14,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          flexWrap: 'wrap',
-        }}
-      >
+      <div data-testid="monitor-group-switcher" className="rp-monitor-switcher">
         {groups.length <= SEGMENTED_MAX_GROUPS ? (
           <Segmented
+            className="rp-monitor-segmented"
             data-testid="monitor-group-segmented"
             value={activeGroupId}
             onChange={(v) => onSelectGroup(Number(v))}
@@ -225,20 +217,23 @@ export default function NetworkMonitor() {
             }))}
           />
         ) : (
-          <Select
-            data-testid="monitor-group-select"
-            aria-label={t('networkMonitorSelectGroup')}
-            placeholder={t('networkMonitorSelectGroup')}
-            showSearch
-            optionFilterProp="label"
-            style={{ minWidth: 260 }}
-            value={activeGroupId}
-            onChange={(v) => onSelectGroup(Number(v))}
-            options={groups.map((g) => ({
-              value: g.id,
-              label: g.name,
-            }))}
-          />
+          <div className="rp-monitor-select-wrap">
+            <Select
+              data-testid="monitor-group-select"
+              aria-label={t('networkMonitorSelectGroup')}
+              placeholder={t('networkMonitorSelectGroup')}
+              showSearch
+              optionFilterProp="label"
+              variant="borderless"
+              style={{ minWidth: 240 }}
+              value={activeGroupId}
+              onChange={(v) => onSelectGroup(Number(v))}
+              options={groups.map((g) => ({
+                value: g.id,
+                label: g.name,
+              }))}
+            />
+          </div>
         )}
       </div>
     ) : null;
