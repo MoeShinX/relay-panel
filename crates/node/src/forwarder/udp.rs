@@ -30,7 +30,7 @@ use tokio::time;
 use super::limiter::RateLimit;
 use super::outbound::OutboundError;
 use super::selector::TargetSelector;
-use crate::reporter::{ConnectionTracker, TrafficCounter, UDP_SESSION_TIMEOUT};
+use crate::reporter::{ConnectionTracker, RuleCounterHandle, TrafficCounter, UDP_SESSION_TIMEOUT};
 
 const UDP_BUF_SIZE: usize = 65535;
 /// How often the periodic sweeper runs. Sessions themselves expire on the
@@ -401,6 +401,13 @@ pub async fn serve_udp_listener(
     tracing::info!("UDP listening on {} (rule {})", listen_addr, rule_id);
 
     let port = listen_addr.port();
+    // Acquire one per-listener counter handle up front so every datagram on
+    // both upload and download paths updates atomics directly without taking
+    // TrafficCounter's RwLock per packet. Holding the handle keeps strong_count
+    // > 1 while the listener is alive, so commit_read never removes an active
+    // rule's entry after a report; prune_rule drops the map entry so any late
+    // write on a dying handle goes to an orphaned Arc and never resurrects it.
+    let bytes = counter.handle(rule_id).await;
 
     // v1.2.x: targets are resolved LAZILY per new session (see
     // select_udp_target) rather than once here at listener start. The old
@@ -577,7 +584,7 @@ pub async fn serve_udp_listener(
                     inbound: inbound.clone(),
                     sessions: sessions.clone(),
                     connections: connections.clone(),
-                    counter: counter.clone(),
+                    bytes: bytes.clone(),
                     rate_limit: rate_limit.clone(),
                     src,
                     rule_id,
@@ -603,7 +610,7 @@ pub async fn serve_udp_listener(
         if let Err(e) = outbound_sock.send(&buf[..n]).await {
             tracing::debug!("UDP port {}: send to target failed: {}", port, e);
         } else {
-            counter.add(rule_id, n as u64, 0).await;
+            bytes.add_upload(n as u64);
         }
     }
 }
@@ -615,7 +622,7 @@ struct ReplyRelay {
     inbound: Arc<UdpSocket>,
     sessions: Arc<Sessions>,
     connections: Arc<ConnectionTracker>,
-    counter: Arc<TrafficCounter>,
+    bytes: RuleCounterHandle,
     rate_limit: RateLimit,
     src: SocketAddr,
     rule_id: i64,
@@ -654,7 +661,7 @@ impl ReplyRelay {
                 _ = &mut stop => return,
                 _ = self.rate_limit.acquire_download(m as u64) => {}
             }
-            self.counter.add(self.rule_id, 0, m as u64).await;
+            self.bytes.add_download(m as u64);
             // A reply is activity too: refresh the tracker (cheap, sharded) and
             // the session's last_active so a long request/response flow isn't
             // expired.
@@ -1004,17 +1011,18 @@ mod tests {
         })
     }
 
-    fn relay(
+    async fn relay(
         outbound: Arc<SessionSocket>,
         inbound: Arc<UdpSocket>,
         sessions: Arc<Sessions>,
     ) -> ReplyRelay {
+        let counter = TrafficCounter::new();
         ReplyRelay {
             outbound,
             inbound,
             sessions,
             connections: Arc::new(ConnectionTracker::new()),
-            counter: Arc::new(TrafficCounter::new()),
+            bytes: counter.handle(1).await,
             rate_limit: RateLimit::new(None, None),
             src: "127.0.0.1:40000".parse().unwrap(),
             rule_id: 1,
@@ -1275,7 +1283,7 @@ mod tests {
 
         // 2. A reader whose socket fails removes its own session.
         point_at_dead_port(&failing).await;
-        let mut r = relay(failing.clone(), inbound.clone(), sessions.clone());
+        let mut r = relay(failing.clone(), inbound.clone(), sessions.clone()).await;
         r.src = at(40002);
         let (s, stop) = session(&failing);
         sessions.insert(r.src, s);
@@ -1290,7 +1298,7 @@ mod tests {
         // session; their readers stop and the sockets close.
         let mut readers = Vec::new();
         for (port, outbound) in [(40003, torn_down_a), (40004, torn_down_b)] {
-            let mut r = relay(outbound.clone(), inbound.clone(), sessions.clone());
+            let mut r = relay(outbound.clone(), inbound.clone(), sessions.clone()).await;
             r.src = at(port);
             let (s, stop) = session(&outbound);
             sessions.insert(r.src, s);
@@ -1332,7 +1340,8 @@ mod tests {
             outbound.clone(),
             Arc::new(loopback_udp().await),
             sessions.clone(),
-        );
+        )
+        .await;
         // 1000 B/s with a 1 s burst: a 5000-byte reply owes ~4 s of waiting.
         r.rate_limit = RateLimit::new(None, Some(1000));
         r.src = client.local_addr().unwrap();
@@ -1381,7 +1390,7 @@ mod tests {
         let inbound = Arc::new(loopback_udp().await);
         let sessions: Arc<Sessions> = Arc::new(DashMap::new());
 
-        let r = relay(outbound.clone(), inbound, sessions.clone());
+        let r = relay(outbound.clone(), inbound, sessions.clone()).await;
         let src = r.src;
         let (s, stop) = session(&outbound);
         sessions.insert(src, s);
@@ -1404,7 +1413,7 @@ mod tests {
         let inbound = Arc::new(loopback_udp().await);
         let sessions: Arc<Sessions> = Arc::new(DashMap::new());
 
-        let r = relay(stale.clone(), inbound, sessions.clone());
+        let r = relay(stale.clone(), inbound, sessions.clone()).await;
         let src = r.src;
         // Keep the stale reader's stop sender alive so only the socket error
         // can end it; the map holds the current session for the same client.
@@ -1426,7 +1435,7 @@ mod tests {
         let inbound = Arc::new(loopback_udp().await);
         let sessions: Arc<Sessions> = Arc::new(DashMap::new());
 
-        let r = relay(outbound.clone(), inbound, sessions.clone());
+        let r = relay(outbound.clone(), inbound, sessions.clone()).await;
         let src = r.src;
         let (s, stop) = session(&outbound);
         sessions.insert(src, s);
@@ -1446,5 +1455,127 @@ mod tests {
             addr_of(connect_udp_target(&targets, &selector, 5000, false, always_ok).await)
                 .is_none()
         );
+    }
+
+    /// Spawn a loopback UDP echo target that replies with every datagram it receives.
+    async fn spawn_udp_echo() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let sock = loopback_udp().await;
+        let addr = sock.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let mut buf = [0u8; 2048];
+            while let Ok((n, from)) = sock.recv_from(&mut buf).await {
+                if sock.send_to(&buf[..n], from).await.is_err() {
+                    break;
+                }
+            }
+        });
+        (addr, handle)
+    }
+
+    async fn read_rule_bytes(counter: &TrafficCounter, rule_id: i64) -> Option<(u64, u64)> {
+        let snap = counter.snapshot().await;
+        snap.entries
+            .iter()
+            .find(|e| e.rule_id == rule_id)
+            .map(|e| (e.upload, e.download))
+    }
+
+    /// Bidirectional UDP forwarding via `RuleCounterHandle`:
+    /// 1) upload and download bytes are counted accurately;
+    /// 2) after `snapshot() + commit()` clears the reported bytes to zero, the
+    ///    same live UDP session continues forwarding and its newer bytes are
+    ///    counted and visible in the next snapshot;
+    /// 3) after listener teardown + `prune_rule`, the rule_id is gone from the
+    ///    counter and is never resurrected.
+    #[tokio::test]
+    async fn udp_counter_handle_counts_across_commit_and_stays_gone_after_prune() {
+        let (target_addr, echo_handle) = spawn_udp_echo().await;
+        let inbound = Arc::new(loopback_udp().await);
+        let listen_addr = inbound.local_addr().unwrap();
+        let counter = Arc::new(TrafficCounter::new());
+        let connections = Arc::new(ConnectionTracker::new());
+        let rule_id = 77;
+
+        let listener_task = tokio::spawn(serve_udp_listener(
+            inbound,
+            vec![target_addr.to_string()],
+            Arc::new(TargetSelector::new(LoadBalanceStrategy::First, 1)),
+            RateLimit::Unlimited,
+            counter.clone(),
+            connections,
+            rule_id,
+            None,
+            false,
+        ));
+
+        let client = loopback_udp().await;
+        let first = b"first-udp-datagram";
+        client.send_to(first, listen_addr).await.unwrap();
+        let mut rbuf = [0u8; 256];
+        let (n, _) = tokio::time::timeout(Duration::from_secs(3), client.recv_from(&mut rbuf))
+            .await
+            .expect("first echo must arrive")
+            .unwrap();
+        assert_eq!(&rbuf[..n], first);
+
+        // Wait briefly for both upload and download increments to settle.
+        let mut got_first = None;
+        for _ in 0..50 {
+            if let Some((up, down)) = read_rule_bytes(&counter, rule_id).await {
+                if up >= first.len() as u64 && down >= first.len() as u64 {
+                    got_first = Some((up, down));
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(got_first, Some((first.len() as u64, first.len() as u64)));
+
+        // Simulate a panel-acknowledged traffic report: snapshot + commit.
+        let snap1 = counter.snapshot().await;
+        snap1.commit().await;
+        assert!(
+            counter.has_rule(rule_id).await,
+            "live UDP listener handle must keep the rule entry mapped across commit"
+        );
+        assert_eq!(read_rule_bytes(&counter, rule_id).await, Some((0, 0)));
+
+        // Same active client session sends a second datagram after commit.
+        let second = b"second-after-commit-payload";
+        client.send_to(second, listen_addr).await.unwrap();
+        let (n2, _) = tokio::time::timeout(Duration::from_secs(3), client.recv_from(&mut rbuf))
+            .await
+            .expect("second echo must arrive")
+            .unwrap();
+        assert_eq!(&rbuf[..n2], second);
+
+        let mut got_second = None;
+        for _ in 0..50 {
+            if let Some((up, down)) = read_rule_bytes(&counter, rule_id).await {
+                if up >= second.len() as u64 && down >= second.len() as u64 {
+                    got_second = Some((up, down));
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            got_second,
+            Some((second.len() as u64, second.len() as u64)),
+            "same live session must keep counting after commit"
+        );
+
+        // Stop listener (rule deleted) and prune_rule: rule_id must disappear and
+        // any orphaned handle must not resurrect it.
+        let orphan = counter.handle(rule_id).await;
+        listener_task.abort();
+        let _ = listener_task.await;
+        counter.prune_rule(rule_id).await;
+        orphan.add_upload(123);
+        orphan.add_download(456);
+        assert!(!counter.has_rule(rule_id).await);
+        assert_eq!(read_rule_bytes(&counter, rule_id).await, None);
+
+        echo_handle.abort();
     }
 }
