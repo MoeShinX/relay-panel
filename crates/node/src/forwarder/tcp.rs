@@ -22,6 +22,14 @@ const CAP_WARN_INTERVAL: Duration = Duration::from_secs(60);
 /// only ever runs out on a client that reached the port directly.
 const PROXY_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Maximum dial budget for a single target (DNS + connect across its addresses).
+const SINGLE_TARGET_DIAL_BUDGET: Duration = Duration::from_secs(5);
+
+/// Total dial budget across all targets of a rule for one inbound connection.
+/// Each target gets `min(SINGLE_TARGET_DIAL_BUDGET, total_remaining)` so many
+/// dead targets cannot stall a connection indefinitely.
+const TOTAL_DIAL_BUDGET: Duration = Duration::from_secs(12);
+
 /// v1.0.4: serve an ALREADY-BOUND TcpListener. Binding happens in the manager
 /// (synchronously, so errors surface immediately and per-family success is
 /// known). This function only runs the accept loop.
@@ -190,6 +198,53 @@ fn is_transient_accept_error(e: &std::io::Error) -> bool {
     })
 }
 
+/// Dial targets in `selector.order()` under a combined `total_budget` and
+/// `per_target_budget`. Each target receives `min(per_target_budget, remaining)`
+/// so `per_addr <= per_target_remaining <= total_remaining` always holds.
+async fn dial_targets_with_budget<'a, T, F, Fut>(
+    targets: &'a [String],
+    selector: &TargetSelector,
+    total_budget: Duration,
+    per_target_budget: Duration,
+    mut dial_target: F,
+) -> Result<T, Vec<String>>
+where
+    F: FnMut(&'a str, Duration) -> Fut,
+    Fut: std::future::Future<Output = Result<T, super::outbound::OutboundError>>,
+{
+    let total_deadline = tokio::time::Instant::now() + total_budget;
+    let mut failures: Vec<String> = Vec::new();
+    for idx in selector.order() {
+        let Some(target) = targets.get(idx) else {
+            continue;
+        };
+        let remaining = total_deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            failures.push(format!(
+                "total dial budget ({}s) exhausted",
+                total_budget.as_secs()
+            ));
+            break;
+        }
+        let budget = per_target_budget.min(remaining);
+        match tokio::time::timeout(budget, dial_target(target, budget)).await {
+            Ok(Ok(stream)) => {
+                selector.report(idx, true);
+                return Ok(stream);
+            }
+            Ok(Err(e)) => {
+                selector.report(idx, false);
+                failures.push(format!("{} -> {}", target, e));
+            }
+            Err(_) => {
+                selector.report(idx, false);
+                failures.push(format!("{} -> timed out after {:?}", target, budget));
+            }
+        }
+    }
+    Err(failures)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_tcp_connection(
     mut inbound: TcpStream,
@@ -257,41 +312,24 @@ async fn handle_tcp_connection(
     // source-bind) instead of collapsing everything into "no target available".
     // On a multi-NIC server a silent failure is impossible to diagnose, so we
     // accumulate per-target reasons and log them together when nothing connects.
-    let mut outbound = None;
-    let mut failures: Vec<String> = Vec::new();
-    for idx in selector.order() {
-        let Some(target) = targets.get(idx) else {
-            continue;
-        };
-        match tokio::time::timeout(
-            Duration::from_secs(5),
-            super::outbound::tcp_connect(target, source_ipv4, 5, block_local_targets),
-        )
-        .await
-        {
-            Ok(Ok(stream)) => {
-                selector.report(idx, true);
-                outbound = Some(stream);
-                break;
-            }
-            Ok(Err(e)) => {
-                // tcp_connect already classifies the cause (InvalidIp / Connect /
-                // Bind). Preserve it verbatim so DNS vs. refused vs. source-bind
-                // failures are distinguishable in the log.
-                selector.report(idx, false);
-                failures.push(format!("{} -> {}", target, e));
-            }
-            Err(_) => {
-                // Outer timeout fired: the connect didn't finish within 5s.
-                selector.report(idx, false);
-                failures.push(format!("{} -> timed out after 5s", target));
-            }
-        }
-    }
-
-    let outbound = match outbound {
-        Some(s) => s,
-        None => {
+    let outbound = match dial_targets_with_budget(
+        &targets,
+        &selector,
+        TOTAL_DIAL_BUDGET,
+        SINGLE_TARGET_DIAL_BUDGET,
+        |target, budget| {
+            super::outbound::tcp_connect_with_budget(
+                target,
+                source_ipv4,
+                budget,
+                block_local_targets,
+            )
+        },
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(failures) => {
             let detail = if failures.is_empty() {
                 "no reachable target (all targets in circuit-break or empty)".to_string()
             } else {
@@ -820,5 +858,41 @@ mod tests {
             }
         }
         panic!("a freed slot was never reused — the guard did not release the cap");
+    }
+
+    /// Multiple unresponsive targets must stop within the total dial budget
+    /// rather than summing per-target timeouts across every dead endpoint.
+    #[tokio::test]
+    async fn multi_target_dial_respects_total_budget() {
+        let targets: Vec<String> = (1..=6).map(|i| format!("192.0.2.{i}:443")).collect();
+        let selector = TargetSelector::new(LoadBalanceStrategy::First, targets.len());
+        let started = std::time::Instant::now();
+        // Use scaled budget (1.2s total, 500ms per target) to verify the exact
+        // budget enforcement mechanics quickly and deterministically without
+        // waiting 12 real seconds in every test run.
+        let res: Result<(), Vec<String>> = dial_targets_with_budget(
+            &targets,
+            &selector,
+            Duration::from_millis(1200),
+            Duration::from_millis(500),
+            |_target, _budget| async {
+                std::future::pending::<Result<(), super::super::outbound::OutboundError>>().await
+            },
+        )
+        .await;
+        let elapsed = started.elapsed();
+        let errs = res.expect_err("all hanging targets must fail");
+        assert!(
+            errs.len() <= 4,
+            "must stop once total budget expires instead of trying all 6 targets: {errs:?}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(2000),
+            "total dial time must stay bounded by total budget, took {:?}",
+            elapsed
+        );
+        // Verify production constants match spec: 5s per target, 12s total.
+        assert_eq!(SINGLE_TARGET_DIAL_BUDGET, Duration::from_secs(5));
+        assert_eq!(TOTAL_DIAL_BUDGET, Duration::from_secs(12));
     }
 }

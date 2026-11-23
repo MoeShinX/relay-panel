@@ -162,26 +162,84 @@ fn interface_ipv4(name: &str) -> Result<Ipv4Addr, OutboundError> {
 // ── TCP ──
 
 /// Create a TCP stream connected to `target`, optionally binding to
-/// `source_ipv4:0` first.
+/// Minimum per-address dial budget so a host with many DNS records still gives
+/// each attempt enough time to finish a handshake (never exceeding the
+/// remaining single-target budget).
+const MIN_PER_ADDR_BUDGET: Duration = Duration::from_secs(1);
+
+/// Valid range for `TCP_USER_TIMEOUT_MS` when enabled (non-zero).
+#[cfg(any(target_os = "linux", test))]
+const TCP_USER_TIMEOUT_MIN_MS: u64 = 10_000;
+#[cfg(any(target_os = "linux", test))]
+const TCP_USER_TIMEOUT_MAX_MS: u64 = 600_000;
+
+/// Compute the timeout for the next address attempt.
 ///
-/// v1.0.8: TCP_NODELAY is set on the outbound stream. This node is a relay —
-/// disabling Nagle's algorithm is essential. With Nagle ON, small writes are
-/// buffered until an ACK returns, and combined with the peer's delayed-ACK
-/// (~40ms) this adds up to ~40ms of variable latency PER HOP. On a long relay
-/// chain that compounds into severe jitter and makes interactive traffic
-/// (SSH/RDP/gaming/request-response) unusable. Every serious proxy sets
-/// TCP_NODELAY on both ends; the inbound (accept) side is set in tcp.rs.
+/// Invariant: `per_addr_budget <= single_target_remaining <= total_remaining`.
+/// Divides the remaining single-target budget across the remaining addresses,
+/// floored at 1s so a single stalling first record cannot starve later ones,
+/// and capped at `remaining` so it never exceeds the target (or total) budget.
+fn per_addr_budget(remaining: Duration, remaining_addrs: usize) -> Duration {
+    let count = remaining_addrs.max(1) as u32;
+    (remaining / count).max(MIN_PER_ADDR_BUDGET).min(remaining)
+}
+
+/// Order resolved addresses when `OUTBOUND_BIND_IPV4` is configured: try all
+/// IPv4 addresses first (each bound to `source_ipv4`), then fall back to IPv6
+/// addresses (plain connect without IPv4 source binding, preserving existing
+/// fallback semantics).
+fn order_addrs_for_bound(addrs: &[SocketAddr]) -> Vec<SocketAddr> {
+    let mut ordered = Vec::with_capacity(addrs.len());
+    ordered.extend(addrs.iter().copied().filter(SocketAddr::is_ipv4));
+    ordered.extend(addrs.iter().copied().filter(SocketAddr::is_ipv6));
+    ordered
+}
+
+/// Create a TCP stream connected to `target` within `timeout_secs`.
+#[cfg(test)]
 pub async fn tcp_connect(
     target: &str,
     source_ipv4: Option<Ipv4Addr>,
-    _timeout_secs: u64,
+    timeout_secs: u64,
     block_local_targets: bool,
 ) -> Result<TcpStream, OutboundError> {
+    tcp_connect_with_budget(
+        target,
+        source_ipv4,
+        Duration::from_secs(timeout_secs.max(1)),
+        block_local_targets,
+    )
+    .await
+}
+
+/// Create a TCP stream connected to `target` within `target_budget` (covering
+/// both DNS resolution and address dial attempts), optionally binding IPv4
+/// attempts to `source_ipv4:0`.
+///
+/// Binding applies to IPv4 only: when `source_ipv4` is set, all resolved IPv4
+/// addresses are tried first with source binding; if every IPv4 address fails,
+/// any resolved IPv6 addresses are tried next via plain system routing.
+///
+/// v1.0.8: TCP_NODELAY is set on both ends so small writes are not delayed by
+/// Nagle (~40ms per hop).
+pub async fn tcp_connect_with_budget(
+    target: &str,
+    source_ipv4: Option<Ipv4Addr>,
+    target_budget: Duration,
+    block_local_targets: bool,
+) -> Result<TcpStream, OutboundError> {
+    let deadline = tokio::time::Instant::now() + target_budget;
     // v1.0.9: resolve through the DNS cache instead of re-resolving on every
-    // connection. The caller (tcp.rs) still wraps this in a per-attempt timeout.
-    let addrs = resolve_cached(target)
-        .await
-        .map_err(OutboundError::Connect)?;
+    // connection, bounded by the single-target deadline.
+    let addrs = match tokio::time::timeout_at(deadline, resolve_cached(target)).await {
+        Ok(res) => res.map_err(OutboundError::Connect)?,
+        Err(_) => {
+            return Err(OutboundError::Connect(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("DNS resolution timed out for {}", target),
+            )));
+        }
+    };
     if addrs.is_empty() {
         return Err(OutboundError::Connect(std::io::Error::new(
             std::io::ErrorKind::AddrNotAvailable,
@@ -203,8 +261,8 @@ pub async fn tcp_connect(
         )));
     }
     let stream = match source_ipv4 {
-        None => connect_first(&allowed_addrs).await?,
-        Some(src) => tcp_connect_bound(&allowed_addrs, src).await?,
+        None => connect_first(&allowed_addrs, deadline).await?,
+        Some(src) => tcp_connect_bound(&allowed_addrs, src, deadline).await?,
     };
     // Non-fatal: a socket that just connected virtually never rejects this.
     if let Err(e) = stream.set_nodelay(true) {
@@ -214,22 +272,84 @@ pub async fn tcp_connect(
     Ok(stream)
 }
 
-/// Enable TCP keepalive on a forwarded socket — applied to BOTH the accepted
-/// client socket (see `tcp::serve_tcp_listener`) and the dialed target socket
-/// above, so a dead peer on either side is detected.
-///
-/// Why this matters: the bidirectional copy blocks on `read()` until the peer
-/// sends FIN/RST. A peer that vanishes SILENTLY (NAT rebind, mobile handoff,
-/// cable pull, a firewall that drops instead of resets) never sends one, so the
-/// copy task hangs forever holding two fds. Under connection churn these dead
-/// half-open connections pile up until the process hits `EMFILE` ("Too many
-/// open files", os error 24) — exhausting even a systemd node's
-/// `LimitNOFILE=65536`. Keepalive makes the kernel probe an idle peer and RST
-/// it when dead, so `read()` returns and the task releases its fds.
-///
-/// idle 60s, then a probe every 15s up to 4 times → a dead peer is reaped
-/// within ~120s. A live connection resets the idle timer on every byte, so busy
-/// links never emit a probe.
+/// Parse `TCP_USER_TIMEOUT_MS`. Returns `(effective_ms, warning)` where
+/// `None` means disabled (default 0, preserving previous behavior). Non-zero
+/// values are clamped to `10000..=600000`; invalid values fall back to 0.
+#[cfg(any(target_os = "linux", test))]
+fn parse_tcp_user_timeout_ms(raw: Option<&str>) -> (Option<u64>, Option<String>) {
+    let Some(s) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return (None, None);
+    };
+    match s.parse::<u64>() {
+        Ok(0) => (None, None),
+        Ok(v) if v < TCP_USER_TIMEOUT_MIN_MS => (
+            Some(TCP_USER_TIMEOUT_MIN_MS),
+            Some(format!(
+                "TCP_USER_TIMEOUT_MS={} is below minimum {}; clamping to {}ms",
+                v, TCP_USER_TIMEOUT_MIN_MS, TCP_USER_TIMEOUT_MIN_MS
+            )),
+        ),
+        Ok(v) if v > TCP_USER_TIMEOUT_MAX_MS => (
+            Some(TCP_USER_TIMEOUT_MAX_MS),
+            Some(format!(
+                "TCP_USER_TIMEOUT_MS={} exceeds maximum {}; clamping to {}ms",
+                v, TCP_USER_TIMEOUT_MAX_MS, TCP_USER_TIMEOUT_MAX_MS
+            )),
+        ),
+        Ok(v) => (Some(v), None),
+        Err(_) => (
+            None,
+            Some(format!(
+                "invalid TCP_USER_TIMEOUT_MS={:?}; falling back to 0 (disabled)",
+                s
+            )),
+        ),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn configured_tcp_user_timeout_ms() -> Option<u64> {
+    static VAL: OnceLock<Option<u64>> = OnceLock::new();
+    *VAL.get_or_init(|| {
+        let raw = std::env::var("TCP_USER_TIMEOUT_MS").ok();
+        let (ms, warn) = parse_tcp_user_timeout_ms(raw.as_deref());
+        if let Some(msg) = warn {
+            tracing::warn!("{}", msg);
+        } else if let Some(v) = ms {
+            tracing::info!("TCP_USER_TIMEOUT enabled: {}ms", v);
+        }
+        ms
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn apply_tcp_user_timeout(stream: &TcpStream, ms: u64, ctx: &str) {
+    use std::os::unix::io::AsRawFd;
+    let val = ms as libc::c_uint;
+    // SAFETY: `val` is a valid c_uint on the stack and `stream.as_raw_fd()` is
+    // an open TCP socket descriptor for the duration of the syscall.
+    let rc = unsafe {
+        libc::setsockopt(
+            stream.as_raw_fd(),
+            libc::IPPROTO_TCP,
+            libc::TCP_USER_TIMEOUT,
+            (&val as *const libc::c_uint).cast::<libc::c_void>(),
+            std::mem::size_of::<libc::c_uint>() as libc::socklen_t,
+        )
+    };
+    if rc != 0 {
+        tracing::debug!(
+            "{}: setsockopt(TCP_USER_TIMEOUT={}) failed: {}",
+            ctx,
+            ms,
+            std::io::Error::last_os_error()
+        );
+    }
+}
+
+/// Enable TCP keepalive (and optional Linux `TCP_USER_TIMEOUT`) on a forwarded
+/// socket — applied to BOTH the accepted client socket and the dialed target
+/// socket so a dead peer on either side is detected.
 pub(super) fn apply_keepalive(stream: &TcpStream, ctx: &str) {
     #[cfg(unix)]
     {
@@ -241,6 +361,12 @@ pub(super) fn apply_keepalive(stream: &TcpStream, ctx: &str) {
             tracing::debug!("{}: set_tcp_keepalive failed: {}", ctx, e);
         }
     }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(ms) = configured_tcp_user_timeout_ms() {
+            apply_tcp_user_timeout(stream, ms, ctx);
+        }
+    }
     #[cfg(not(unix))]
     {
         // Keepalive tuning is a unix concern; the node only runs on Linux.
@@ -248,48 +374,88 @@ pub(super) fn apply_keepalive(stream: &TcpStream, ctx: &str) {
     }
 }
 
-/// Try each resolved address in order until one connects — mirrors
-/// `TcpStream::connect(host:port)`'s multi-address behavior over our cached
-/// resolution.
-async fn connect_first(addrs: &[SocketAddr]) -> Result<TcpStream, OutboundError> {
-    let mut last_err = None;
-    for addr in addrs {
-        match TcpStream::connect(addr).await {
-            Ok(s) => return Ok(s),
-            Err(e) => last_err = Some(e),
+/// Try each address in `addrs` sequentially before `deadline`, dividing the
+/// remaining budget across remaining addresses (minimum 1s, never exceeding
+/// the remaining time). Returns the last error if all attempts fail.
+async fn connect_addrs_with_budget<T, F, Fut>(
+    addrs: &[SocketAddr],
+    deadline: tokio::time::Instant,
+    mut dial: F,
+) -> Result<T, OutboundError>
+where
+    F: FnMut(SocketAddr) -> Fut,
+    Fut: std::future::Future<Output = Result<T, OutboundError>>,
+{
+    let mut last_err: Option<OutboundError> = None;
+    for (i, &addr) in addrs.iter().enumerate() {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(last_err.unwrap_or_else(|| {
+                OutboundError::Connect(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "dial budget exhausted",
+                ))
+            }));
+        }
+        let addr_timeout = per_addr_budget(remaining, addrs.len() - i);
+        match tokio::time::timeout(addr_timeout, dial(addr)).await {
+            Ok(Ok(stream)) => return Ok(stream),
+            Ok(Err(e)) => last_err = Some(e),
+            Err(_) => {
+                last_err = Some(OutboundError::Connect(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("timed out connecting to {} after {:?}", addr, addr_timeout),
+                )));
+            }
         }
     }
-    Err(OutboundError::Connect(last_err.unwrap_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::AddrNotAvailable, "no address")
-    })))
+    Err(last_err.unwrap_or_else(|| {
+        OutboundError::Connect(std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            "no address",
+        ))
+    }))
 }
 
+/// Try each resolved address in order until one connects, respecting `deadline`
+/// with a per-address sub-budget so a black-holed first address cannot consume
+/// the whole target timeout.
+async fn connect_first(
+    addrs: &[SocketAddr],
+    deadline: tokio::time::Instant,
+) -> Result<TcpStream, OutboundError> {
+    connect_addrs_with_budget(addrs, deadline, |addr| async move {
+        TcpStream::connect(addr)
+            .await
+            .map_err(OutboundError::Connect)
+    })
+    .await
+}
+
+/// Try all IPv4 addresses first (each bound to `src`), then fall back to IPv6
+/// addresses via plain connect (source binding applies to IPv4 only).
 async fn tcp_connect_bound(
     addrs: &[SocketAddr],
     src: Ipv4Addr,
+    deadline: tokio::time::Instant,
 ) -> Result<TcpStream, OutboundError> {
-    // Use the first resolved address (matches the previous behavior). An IPv4
-    // target uses the source bind; an IPv6 target can't (the source is IPv4),
-    // so it falls back to a plain connect.
-    let Some(&addr) = addrs.first() else {
-        return Err(OutboundError::Connect(std::io::Error::new(
-            std::io::ErrorKind::AddrNotAvailable,
-            "could not resolve target",
-        )));
-    };
-    match addr {
-        SocketAddr::V4(v4) => {
-            let sock = TcpSocket::new_v4().map_err(OutboundError::Bind)?;
-            sock.bind(SocketAddrV4::new(src, 0).into())
-                .map_err(OutboundError::Bind)?;
-            sock.connect(SocketAddr::from(v4))
+    let ordered = order_addrs_for_bound(addrs);
+    connect_addrs_with_budget(&ordered, deadline, |addr| async move {
+        match addr {
+            SocketAddr::V4(v4) => {
+                let sock = TcpSocket::new_v4().map_err(OutboundError::Bind)?;
+                sock.bind(SocketAddrV4::new(src, 0).into())
+                    .map_err(OutboundError::Bind)?;
+                sock.connect(SocketAddr::from(v4))
+                    .await
+                    .map_err(OutboundError::Connect)
+            }
+            SocketAddr::V6(_) => TcpStream::connect(addr)
                 .await
-                .map_err(OutboundError::Connect)
+                .map_err(OutboundError::Connect),
         }
-        SocketAddr::V6(_) => TcpStream::connect(addr)
-            .await
-            .map_err(OutboundError::Connect),
-    }
+    })
+    .await
 }
 
 // ── DNS cache ──
@@ -777,5 +943,129 @@ mod tests {
             "missing interface must error, got {:?}",
             result
         );
+    }
+
+    #[test]
+    fn per_addr_budget_respects_floor_and_remaining_cap() {
+        assert_eq!(
+            per_addr_budget(Duration::from_secs(5), 2),
+            Duration::from_millis(2500)
+        );
+        assert_eq!(
+            per_addr_budget(Duration::from_secs(5), 10),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            per_addr_budget(Duration::from_millis(600), 2),
+            Duration::from_millis(600)
+        );
+    }
+
+    #[tokio::test]
+    async fn first_stalling_address_falls_back_to_second_within_single_target_budget() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let good = listener.local_addr().unwrap();
+        let accept = tokio::spawn(async move { listener.accept().await.map(|(s, _)| s) });
+
+        // First address simulates a non-responsive endpoint (never completes),
+        // second address is a live loopback listener. Single-target budget is 3s
+        // -> first address gets 1.5s, times out, second connects immediately.
+        let blackhole: SocketAddr = "192.0.2.1:443".parse().unwrap();
+        let started = Instant::now();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        let stream = connect_addrs_with_budget(&[blackhole, good], deadline, |addr| async move {
+            if addr == blackhole {
+                std::future::pending::<Result<TcpStream, OutboundError>>().await
+            } else {
+                TcpStream::connect(addr)
+                    .await
+                    .map_err(OutboundError::Connect)
+            }
+        })
+        .await
+        .expect("must fall back to second address within single-target budget");
+        assert_eq!(stream.peer_addr().unwrap(), good);
+        assert!(
+            started.elapsed() < Duration::from_millis(2600),
+            "fallback must finish well within 3s target budget, took {:?}",
+            started.elapsed()
+        );
+        assert!(accept.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn tcp_connect_bound_prefers_ipv4_over_leading_ipv6() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let v4_addr = listener.local_addr().unwrap();
+        let accept = tokio::spawn(async move { listener.accept().await.map(|(s, _)| s) });
+
+        // Leading IPv6 (unused doc address) followed by reachable IPv4 loopback.
+        // Source-bound dialing must try IPv4 first and connect immediately.
+        let v6_first: SocketAddr = "[2001:db8::1]:443".parse().unwrap();
+        let started = Instant::now();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let stream = tcp_connect_bound(&[v6_first, v4_addr], Ipv4Addr::LOCALHOST, deadline)
+            .await
+            .expect("must prefer IPv4 over leading IPv6");
+        assert_eq!(
+            stream.local_addr().unwrap().ip(),
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        );
+        assert_eq!(stream.peer_addr().unwrap(), v4_addr);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "must try IPv4 first without waiting on IPv6"
+        );
+        assert!(accept.await.unwrap().is_ok());
+    }
+
+    #[test]
+    fn tcp_user_timeout_ms_parsing_covers_default_valid_bounds_and_invalid() {
+        assert_eq!(parse_tcp_user_timeout_ms(None), (None, None));
+        assert_eq!(parse_tcp_user_timeout_ms(Some("")), (None, None));
+        assert_eq!(parse_tcp_user_timeout_ms(Some("0")), (None, None));
+        assert_eq!(
+            parse_tcp_user_timeout_ms(Some("120000")),
+            (Some(120_000), None)
+        );
+        let (clamped_lo, warn_lo) = parse_tcp_user_timeout_ms(Some("500"));
+        assert_eq!(clamped_lo, Some(TCP_USER_TIMEOUT_MIN_MS));
+        assert!(warn_lo.is_some());
+        let (clamped_hi, warn_hi) = parse_tcp_user_timeout_ms(Some("9999999"));
+        assert_eq!(clamped_hi, Some(TCP_USER_TIMEOUT_MAX_MS));
+        assert!(warn_hi.is_some());
+        let (bad, warn_bad) = parse_tcp_user_timeout_ms(Some("not-a-number"));
+        assert_eq!(bad, None);
+        assert!(warn_bad.is_some());
+        let (neg, warn_neg) = parse_tcp_user_timeout_ms(Some("-100"));
+        assert_eq!(neg, None);
+        assert!(warn_neg.is_some());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn linux_setsockopt_tcp_user_timeout_takes_effect() {
+        use std::os::unix::io::AsRawFd;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let accept = tokio::spawn(async move { listener.accept().await.unwrap().0 });
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let _server = accept.await.unwrap();
+
+        apply_tcp_user_timeout(&stream, 120_000, "test");
+
+        let mut got: libc::c_uint = 0;
+        let mut len = std::mem::size_of::<libc::c_uint>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::IPPROTO_TCP,
+                libc::TCP_USER_TIMEOUT,
+                (&mut got as *mut libc::c_uint).cast::<libc::c_void>(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 0, "getsockopt(TCP_USER_TIMEOUT) must succeed");
+        assert_eq!(got, 120_000);
     }
 }

@@ -154,8 +154,10 @@ fn print_help() {
     println!("  NODE_TOKEN        Node auth token (REQUIRED — a real inbound-group");
     println!("                    token from the panel UI. The node refuses to start");
     println!("                    if this is unset or still \"default-token\".)");
-    println!("  POLL_INTERVAL     HTTP poll interval in seconds (default: 10)");
-    println!("  RUST_LOG          Log level, e.g. info (default: warn)");
+    println!("  POLL_INTERVAL       HTTP poll interval in seconds (default: 10)");
+    println!("  TCP_USER_TIMEOUT_MS Linux TCP_USER_TIMEOUT in ms (default: 0 = disabled;");
+    println!("                      non-zero clamped to 10000..=600000; recommended: 120000)");
+    println!("  RUST_LOG            Log level, e.g. info (default: warn)");
 }
 
 /// The real service entry point. Only reached when no --version/--help flag
