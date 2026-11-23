@@ -16,12 +16,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 
 - Optional `TCP_USER_TIMEOUT_MS` environment variable (Linux only, default `0` = disabled, clamped to `10000..=600000` when non-zero) to reap half-open forwarded TCP connections whose transmitted data goes unacknowledged.
+- Startup `INFO` summary logging the resolved node-wide fd budget (`nofile`, `reserve`, `budget`, `tcp_max_connections`, `udp_max_sessions`), and a gentle `INFO` notice (printing only the host name, never credentials or full URL) suggesting HTTPS when `PANEL_URL` points to a non-loopback plaintext `http://` host.
 
 ### Changed
 
 - Outbound TCP dialing with `OUTBOUND_BIND_IPV4` now tries every resolved IPv4 address in order before falling back to IPv6 addresses, instead of only trying the first resolved address.
 - Per-address TCP dial attempts now share the single-target 5-second budget so a stalled first address cannot starve later addresses, and multi-target failover enforces a 12-second total dial budget per connection.
 - UDP forwarding now holds a lock-free per-listener traffic counter handle instead of acquiring the global counter lock on every datagram, reducing lock contention under high packet rates while preserving exact traffic accounting across reporting cycles and rule deletion.
+- **Shared node-wide file descriptor budget (new node-level TCP cap):** TCP and UDP now draw from one shared fd budget (`reserve = clamp(nofile/8, 256, 4096)` stays free for listeners, panel reporting, and DNS; `budget = nofile - reserve`). TCP has no fixed sub-share and may use the full `budget` (under the installer's default `LimitNOFILE=65536`, `budget = 61,440` fds = up to 10,240 concurrent Linux splice unlimited connections at 6 fds/conn, or 30,720 rate-limited connections at 2 fds/conn when UDP is idle; optional `TCP_MAX_CONNECTIONS` can tighten this further). UDP stays capped at half of `budget` (30,720 sessions under `LimitNOFILE=65536`).
+  - **Refusal logs:** When the budget is reached, new TCP connections are closed immediately with a rate-limited `WARN` log (`TCP node fd budget reached (budget=... fds, tcp_max_connections=...); refused ... connection(s) ... Raise LimitNOFILE if this is expected traffic.`), and new UDP sessions drop the datagram with `WARN` (`UDP node fd budget reached (udp_max_sessions=..., shared budget=... fds); refused ... new session(s) ... Raise LimitNOFILE.`).
+  - **How to raise the limit:** Increase `LimitNOFILE` for the `relay-node` service (for example, `systemctl edit relay-node` with `[Service]` / `LimitNOFILE=1048576`, followed by `systemctl daemon-reload && systemctl restart relay-node`). The node automatically raises its soft limit up to the hard limit (capped at 1,048,576) at startup.
+  - **`UDP_MAX_SESSIONS` tighten-only behavior:** Previously `UDP_MAX_SESSIONS` could be set higher than the default fd-derived cap; it can now only tighten below the safe `budget / 2` cap. Existing deployments configured with a larger `UDP_MAX_SESSIONS` value will be clamped back to `budget / 2` with a startup warning until `LimitNOFILE` is raised.
 
 ## [1.2.14] - 2026-11-22
 
