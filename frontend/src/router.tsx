@@ -25,7 +25,10 @@ const Groups = lazy(() => import('./pages/Groups'));
 const Users = lazy(() => import('./pages/Users'));
 const NodeStatus = lazy(() => import('./pages/NodeStatus'));
 const NodeLatency = lazy(() => import('./pages/NodeLatency'));
-const GroupLatency = lazy(() => import('./pages/GroupLatency'));
+const NetworkMonitor = lazy(() => import('./pages/NetworkMonitor'));
+const LegacyGroupLatencyRedirect = lazy(() =>
+  import('./pages/NetworkMonitor').then((m) => ({ default: m.LegacyGroupLatencyRedirect })),
+);
 const Account = lazy(() => import('./pages/Account'));
 const SystemSettings = lazy(() => import('./pages/SystemSettings'));
 const Plans = lazy(() => import('./pages/Plans'));
@@ -78,13 +81,13 @@ export const router = createBrowserRouter([
       { path: 'groups', element: <RequireAdmin><Groups /></RequireAdmin> },
       { path: 'nodes', element: <NodeStatus /> },
       { path: 'node-status', element: <NodeStatus /> },
+      // Admin top-level network monitor entry (group latency comparison + group switcher).
+      { path: 'latency', element: <RequireAdmin><NetworkMonitor /></RequireAdmin> },
       // v1.2.21: one node's latency to the admin's targets. Reached from the icon
-      // beside the node's IP; deliberately not a menu entry.
+      // beside the node's IP; highlights Network Monitor in the sidebar.
       { path: 'nodes/:nodeId/latency', element: <RequireAdmin><NodeLatency /></RequireAdmin> },
-      // v1.2.21: a device group's nodes side by side against its targets.
-      // Reached from the monitor button on the group's header on the node
-      // status page; not a menu entry either.
-      { path: 'groups/:groupId/latency', element: <RequireAdmin><GroupLatency /></RequireAdmin> },
+      // Legacy group latency URL kept working via redirect to /latency?group=<id>.
+      { path: 'groups/:groupId/latency', element: <RequireAdmin><LegacyGroupLatencyRedirect /></RequireAdmin> },
       // v1.0.8: self-service shop (plan purchase + order history).
       { path: 'shop', element: <Shop /> },
       // v1.0.8: admin plan management (CRUD).

@@ -68,6 +68,18 @@ const onActivate = (fn: () => void) => (e: KeyboardEvent) => {
   }
 };
 
+export interface GroupLatencyProps {
+  /** Override the `:groupId` route parameter when embedded inside NetworkMonitor. */
+  groupId?: string | number;
+  /** Hide the "back to node status" button when rendered inside NetworkMonitor. */
+  hideBack?: boolean;
+  /** Optional controlled range so switching groups preserves the chosen time window. */
+  range?: LatencyRange;
+  granularity?: LatencyGranularity;
+  onRangeChange?: (r: LatencyRange) => void;
+  onGranularityChange?: (g: LatencyGranularity) => void;
+}
+
 /**
  * v1.2.21: one device group's latency at a glance. The top is a table of every
  * node against every target of the group, each cell the mean round trip and
@@ -76,13 +88,25 @@ const onActivate = (fn: () => void) => (e: KeyboardEvent) => {
  * switches the chart's target, clicking a node opens that node's own page.
  * Admin-only (RequireAdmin on the route, AdminOnly on every call).
  */
-export default function GroupLatency() {
+export default function GroupLatency({
+  groupId: propGroupId,
+  hideBack = false,
+  range: controlledRange,
+  granularity: controlledGranularity,
+  onRangeChange,
+  onGranularityChange,
+}: GroupLatencyProps = {}) {
   const { t } = useI18n();
   const navigate = useNavigate();
-  const { groupId = '' } = useParams();
+  const { groupId: paramGroupId = '' } = useParams();
+  const groupId = propGroupId != null ? String(propGroupId) : paramGroupId;
 
-  const [range, setRange] = useState<LatencyRange>('24h');
-  const [granularity, setGranularity] = useState<LatencyGranularity>('1h');
+  const [internalRange, setInternalRange] = useState<LatencyRange>('24h');
+  const [internalGranularity, setInternalGranularity] = useState<LatencyGranularity>('1h');
+  const range = controlledRange ?? internalRange;
+  const granularity = controlledGranularity ?? internalGranularity;
+  const setRange = onRangeChange ?? setInternalRange;
+  const setGranularity = onGranularityChange ?? setInternalGranularity;
   const [carrierFilter, setCarrierFilter] = useState<'all' | LatencyTarget['carrier']>('all');
   const [sortMode, setSortMode] = useState<'default' | 'overall' | 'active'>('default');
   const [onlyAnomalies, setOnlyAnomalies] = useState(false);
@@ -345,9 +369,11 @@ export default function GroupLatency() {
   const header = (
     <div className="rp-page-header" style={{ flexWrap: 'wrap', gap: 8 }}>
       <Space wrap size={[12, 8]}>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/nodes')}>
-          {t('latencyBack')}
-        </Button>
+        {!hideBack && (
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/nodes')}>
+            {t('latencyBack')}
+          </Button>
+        )}
         <Title level={4} style={{ margin: 0 }} data-testid="group-latency-title">
           {t('latencyGroupTitle')}
           {data?.group_name ? ` · ${data.group_name}` : ''}

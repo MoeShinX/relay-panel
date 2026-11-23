@@ -336,7 +336,7 @@ export default function NodeStatus() {
           }
         : undefined,
       onOpenGroupLatency: isAdmin && latencyGroups.has(gid)
-        ? () => navigate(`/groups/${gid}/latency`)
+        ? () => navigate(`/latency?group=${gid}`)
         : undefined,
       onBatchUpgraded: isAdmin ? refresh : undefined,
     };

@@ -4,9 +4,12 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 vi.mock('../api/client', () => ({ default: { get: vi.fn(), put: vi.fn() } }));
-const { mockLogout } = vi.hoisted(() => ({ mockLogout: vi.fn() }));
+const { mockLogout, mockUseAuth } = vi.hoisted(() => ({
+  mockLogout: vi.fn(),
+  mockUseAuth: vi.fn(),
+}));
 vi.mock('../auth/useAuth', () => ({
-  useAuth: () => ({ isAdmin: true, user: { id: 1, username: 'admin' }, logout: mockLogout }),
+  useAuth: mockUseAuth,
 }));
 const { mockSite } = vi.hoisted(() => ({ mockSite: vi.fn(() => ({ site_name: 'RelayPanel', subtitle: '' })) }));
 vi.mock('../hooks/useSite', () => ({ useSite: mockSite }));
@@ -26,6 +29,12 @@ const renderAt = (path = '/') =>
         <Route path="/" element={<MainLayout />}>
           <Route index element={<div>home page</div>} />
           <Route path="rules" element={<div>rules page</div>} />
+          <Route path="nodes" element={<div>nodes page</div>} />
+          <Route path="nodes/:nodeId" element={<div>node detail</div>} />
+          <Route path="nodes/:nodeId/latency" element={<div>node latency</div>} />
+          <Route path="groups" element={<div>groups page</div>} />
+          <Route path="groups/:groupId/latency" element={<div>group latency</div>} />
+          <Route path="latency" element={<div>network monitor</div>} />
           <Route path="login" element={<div>login page</div>} />
         </Route>
       </Routes>
@@ -35,6 +44,7 @@ const renderAt = (path = '/') =>
 beforeEach(() => {
   mockIsMobile.mockReset();
   mockLogout.mockReset();
+  mockUseAuth.mockReturnValue({ isAdmin: true, user: { id: 1, username: 'admin' }, logout: mockLogout });
   mockSite.mockReturnValue({ site_name: 'RelayPanel', subtitle: '' });
 });
 
@@ -135,5 +145,52 @@ describe('MainLayout on a phone', () => {
     await user.click(screen.getByRole('button', { name: 'openMenu' }));
     const drawerBrand = await screen.findByTitle(long);
     expect(drawerBrand.closest('.ant-drawer')).not.toBeNull();
+  });
+});
+
+describe('Network Monitor menu entry', () => {
+  it('shows Network Monitor for admins right after Node Status and before Device Groups', () => {
+    mockIsMobile.mockReturnValue(false);
+    const { container } = renderAt('/latency');
+    const sider = container.querySelector('.ant-layout-sider') as HTMLElement;
+    const labels = Array.from(sider.querySelectorAll('.ant-menu-item, .ant-menu-submenu-title')).map(
+      (el) => el.textContent?.trim(),
+    );
+    const nodesIdx = labels.indexOf('availableNodes');
+    const monitorIdx = labels.indexOf('networkMonitor');
+    const groupsIdx = labels.indexOf('deviceGroups');
+    expect(nodesIdx).toBeGreaterThanOrEqual(0);
+    expect(monitorIdx).toBe(nodesIdx + 1);
+    expect(groupsIdx).toBe(monitorIdx + 1);
+  });
+
+  it('hides Network Monitor from regular users', () => {
+    mockIsMobile.mockReturnValue(false);
+    mockUseAuth.mockReturnValue({ isAdmin: false, user: { id: 2, username: 'alice' }, logout: mockLogout });
+    const { container } = renderAt('/nodes');
+    const sider = container.querySelector('.ant-layout-sider') as HTMLElement;
+    expect(within(sider).queryByText('networkMonitor')).toBeNull();
+  });
+
+  it.each(['/latency', '/groups/3/latency', '/nodes/n1/latency'])(
+    'highlights Network Monitor for %s',
+    (path) => {
+      mockIsMobile.mockReturnValue(false);
+      const { container } = renderAt(path);
+      const selected = container.querySelector('.ant-layout-sider .ant-menu-item-selected');
+      expect(selected?.textContent?.trim()).toBe('networkMonitor');
+      const header = container.querySelector('.ant-layout-header') as HTMLElement;
+      expect(within(header).getByText('networkMonitor')).toBeInTheDocument();
+    },
+  );
+
+  it('keeps /groups highlighting Device Groups and non-latency /nodes/:id highlighting Node Status', () => {
+    mockIsMobile.mockReturnValue(false);
+    const r1 = renderAt('/groups');
+    expect(r1.container.querySelector('.ant-layout-sider .ant-menu-item-selected')?.textContent?.trim()).toBe('deviceGroups');
+    r1.unmount();
+
+    const r2 = renderAt('/nodes/n1');
+    expect(r2.container.querySelector('.ant-layout-sider .ant-menu-item-selected')?.textContent?.trim()).toBe('availableNodes');
   });
 });

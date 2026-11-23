@@ -59,7 +59,8 @@ function response(over: Partial<NodeLatencyResponse> = {}): NodeLatencyResponse 
 }
 
 function Where() {
-  return <div data-testid="where">{useLocation().pathname}</div>;
+  const loc = useLocation();
+  return <div data-testid="where">{`${loc.pathname}${loc.search}`}</div>;
 }
 
 function renderPage() {
@@ -118,7 +119,7 @@ describe('NodeLatency empty and gated states', () => {
     expect(link).toHaveTextContent('edge-group');
     fireEvent.click(link);
     await flush();
-    expect(screen.getByTestId('where')).toHaveTextContent('/groups/7/latency');
+    expect(screen.getByTestId('where')).toHaveTextContent('/latency?group=7');
   });
 
   it('a node older than node-v1.2.12 is told to upgrade, not shown an empty chart', async () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useParams, useSearchParams } from 'react-router-dom';
 
 const { mockGet } = vi.hoisted(() => ({ mockGet: vi.fn() }));
 const { mockUseAuth } = vi.hoisted(() => ({ mockUseAuth: vi.fn() }));
@@ -28,9 +28,9 @@ function NodeLatencyStub() {
   const { nodeId } = useParams();
   return <div>latency page for {nodeId}</div>;
 }
-function GroupLatencyStub() {
-  const { groupId } = useParams();
-  return <div>group latency page for {groupId}</div>;
+function NetworkMonitorStub() {
+  const [params] = useSearchParams();
+  return <div>network monitor for {params.get('group')}</div>;
 }
 
 function renderPage() {
@@ -39,7 +39,7 @@ function renderPage() {
       <Routes>
         <Route path="/nodes" element={<NodeStatus />} />
         <Route path="/nodes/:nodeId/latency" element={<NodeLatencyStub />} />
-        <Route path="/groups/:groupId/latency" element={<GroupLatencyStub />} />
+        <Route path="/latency" element={<NetworkMonitorStub />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -134,7 +134,7 @@ describe('the monitor button in a group\'s header', () => {
     renderPage();
     const button = await screen.findByTestId('group-latency-11');
     await userEvent.click(button);
-    expect(await screen.findByText('group latency page for 11')).toBeInTheDocument();
+    expect(await screen.findByText('network monitor for 11')).toBeInTheDocument();
   });
 
   it('is only on the groups that have targets', async () => {
