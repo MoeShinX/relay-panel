@@ -50,6 +50,7 @@ pub async fn serve_tcp_listener(
     gate: RuleGate,
     proxy_protocol: Arc<ProxyProtocolConfig>,
     block_local_targets: bool,
+    fd_budget: &'static super::fd_budget::FdBudget,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listen_addr = listener
         .local_addr()
@@ -92,6 +93,16 @@ pub async fn serve_tcp_listener(
                     }
                     continue;
                 };
+                // Admit against the shared node-wide TCP+UDP fd budget BEFORE
+                // dialing outbound or spawning the copy task, reserving the
+                // connection's actual fd cost (6 on Linux splice, 2 otherwise).
+                let fd_cost = super::fd_budget::tcp_fd_cost(&rate_limit);
+                let Some(fd_guard) = fd_budget.acquire_tcp(fd_cost) else {
+                    drop(conn_guard);
+                    drop(inbound);
+                    super::fd_budget::note_tcp_refused(fd_budget, rule_id, client_addr);
+                    continue;
+                };
                 // v1.0.8: disable Nagle on the accepted (client-facing) socket.
                 // See the note in outbound::tcp_connect — a relay MUST set
                 // TCP_NODELAY on both ends or small packets get buffered ~40ms
@@ -125,6 +136,10 @@ pub async fn serve_tcp_listener(
                     // drops with the task however it ends, including when the
                     // select! below takes the cancellation branch.
                     let _conn_guard = conn_guard;
+                    // Holds this connection's place in the shared node-wide fd
+                    // budget; released automatically on any exit (dial failure,
+                    // early peer close, cancellation, or panic).
+                    let _fd_guard = fd_guard;
                     // v1.2.0: this task is DETACHED — aborting the accept loop
                     // does not stop it (verified: an established connection keeps
                     // forwarding after the listener task is aborted). So a rule
@@ -467,6 +482,12 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
+    fn test_fd_budget() -> &'static super::super::fd_budget::FdBudget {
+        Box::leak(Box::new(super::super::fd_budget::FdBudget::new(
+            super::super::fd_budget::BudgetConfig::compute(Some(1024), None, None),
+        )))
+    }
+
     /// v1.0.8: end-to-end raw TCP forwarding still works after the NODELAY /
     /// 64 KiB buffer changes, and the client-facing socket has Nagle disabled.
     /// Topology: client → [serve_tcp_listener] → echo target.
@@ -503,6 +524,7 @@ mod tests {
             runtime.gate(None),
             Arc::new(ProxyProtocolConfig::default()),
             false,
+            test_fd_budget(),
         ));
         // Keep the runtime alive for the duration of the test: dropping it would
         // cancel the connection we are about to make.
@@ -574,6 +596,7 @@ mod tests {
             runtime.gate(None),
             Arc::new(pp),
             false,
+            test_fd_budget(),
         ));
         addr
     }
@@ -737,6 +760,7 @@ mod tests {
             runtime.gate(None),
             Arc::new(ProxyProtocolConfig::default()),
             false,
+            test_fd_budget(),
         ));
         let _runtime = runtime;
 
@@ -816,6 +840,7 @@ mod tests {
             runtime.gate(Some(2)),
             Arc::new(ProxyProtocolConfig::default()),
             false,
+            test_fd_budget(),
         ));
         let _runtime = runtime;
 
@@ -894,5 +919,55 @@ mod tests {
         // Verify production constants match spec: 5s per target, 12s total.
         assert_eq!(SINGLE_TARGET_DIAL_BUDGET, Duration::from_secs(5));
         assert_eq!(TOTAL_DIAL_BUDGET, Duration::from_secs(12));
+    }
+
+    /// The shared TCP fd guard must be released cleanly when outbound dialing
+    /// fails or the peer disconnects immediately. Uses a dedicated per-test
+    /// budget so parallel tests never interfere with the zero-leak assertion.
+    #[tokio::test]
+    async fn tcp_fd_guard_releases_on_dial_failure_and_immediate_disconnect() {
+        let dead = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dead_addr = dead.local_addr().unwrap();
+        drop(dead);
+
+        let budget = test_fd_budget();
+        let listener = bind_tcp_listener(IpAddr::V4(Ipv4Addr::LOCALHOST), 0).unwrap();
+        let listen_addr = listener.local_addr().unwrap();
+        let runtime = crate::forwarder::gate::RuleRuntime::new();
+        let task = tokio::spawn(serve_tcp_listener(
+            listener,
+            vec![dead_addr.to_string()],
+            Arc::new(TargetSelector::new(LoadBalanceStrategy::First, 1)),
+            RateLimit::Unlimited,
+            Arc::new(TrafficCounter::new()),
+            Arc::new(ConnectionTracker::new()),
+            99,
+            None,
+            runtime.gate(None),
+            Arc::new(ProxyProtocolConfig::default()),
+            false,
+            budget,
+        ));
+        let _runtime = runtime;
+
+        // Open and immediately close several connections whose outbound dial fails.
+        for _ in 0..8 {
+            let c = TcpStream::connect(listen_addr).await.unwrap();
+            drop(c);
+        }
+
+        // Wait briefly for connection tasks to finish and drop their fd guards.
+        for _ in 0..100 {
+            if budget.snapshot_usage() == (0, 0, 0, 0) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            budget.snapshot_usage(),
+            (0, 0, 0, 0),
+            "every failed/aborted TCP connection must release its fd budget guard"
+        );
+        task.abort();
     }
 }

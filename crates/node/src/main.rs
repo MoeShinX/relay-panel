@@ -155,16 +155,55 @@ fn print_help() {
     println!("                    token from the panel UI. The node refuses to start");
     println!("                    if this is unset or still \"default-token\".)");
     println!("  POLL_INTERVAL       HTTP poll interval in seconds (default: 10)");
+    println!("  TCP_MAX_CONNECTIONS Node-wide TCP connection cap (optional; may only");
+    println!("                      tighten below the shared fd budget)");
+    println!("  UDP_MAX_SESSIONS    Node-wide UDP session cap (optional; may only");
+    println!("                      tighten below half of the shared fd budget)");
     println!("  TCP_USER_TIMEOUT_MS Linux TCP_USER_TIMEOUT in ms (default: 0 = disabled;");
     println!("                      non-zero clamped to 10000..=600000; recommended: 120000)");
     println!("  RUST_LOG            Log level, e.g. info (default: warn)");
+}
+
+/// If `panel_url` uses plaintext `http://` (case-insensitive) to a non-loopback
+/// host, returns only the host portion (stripping userinfo, port, path, query)
+/// so logs never leak credentials or full URLs.
+fn non_loopback_http_host(panel_url: &str) -> Option<String> {
+    let trimmed = panel_url.trim();
+    if trimmed.len() < 7
+        || !trimmed.is_char_boundary(7)
+        || !trimmed[..7].eq_ignore_ascii_case("http://")
+    {
+        return None;
+    }
+    let rest = &trimmed[7..];
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    let host = if let Some(after_bracket) = host_port.strip_prefix('[') {
+        after_bracket.split(']').next().unwrap_or("")
+    } else {
+        host_port.split(':').next().unwrap_or("")
+    };
+    if host.is_empty() || host.eq_ignore_ascii_case("localhost") {
+        return None;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(ip) if ip.is_loopback() => None,
+        _ => Some(host.to_string()),
+    }
 }
 
 /// The real service entry point. Only reached when no --version/--help flag
 /// was passed on the command line.
 async fn run() {
     tracing_subscriber::fmt::init();
+    forwarder::fd_budget::init_and_log();
     let config = NodeConfig::load();
+    if let Some(host) = non_loopback_http_host(&config.panel_url) {
+        tracing::info!(
+            "PANEL_URL uses plaintext HTTP for host {}; consider switching to HTTPS so the node token is encrypted in transit",
+            host
+        );
+    }
     let start_time = Instant::now();
 
     use reporter::{spawn_public_ip_refresher, NodeMetrics};
@@ -526,5 +565,34 @@ mod tests {
             other => panic!("expected binary echo over wss, got {:?}", other),
         }
         let _ = server.await;
+    }
+
+    #[test]
+    fn plaintext_http_detection_ignores_loopback_handles_mixed_case_and_strips_userinfo() {
+        assert_eq!(
+            super::non_loopback_http_host("https://panel.example.com"),
+            None
+        );
+        assert_eq!(
+            super::non_loopback_http_host("http://127.0.0.1:18888"),
+            None
+        );
+        assert_eq!(
+            super::non_loopback_http_host("Http://localhost:18888"),
+            None
+        );
+        assert_eq!(super::non_loopback_http_host("HTTP://[::1]:18888"), None);
+        assert_eq!(
+            super::non_loopback_http_host("http://203.0.113.10:18888"),
+            Some("203.0.113.10".to_string())
+        );
+        assert_eq!(
+            super::non_loopback_http_host("Http://user:secret@panel.example.com:8080/api?k=1"),
+            Some("panel.example.com".to_string())
+        );
+        assert_eq!(
+            super::non_loopback_http_host("HtTp://[2001:db8::1]:18888"),
+            Some("2001:db8::1".to_string())
+        );
     }
 }
