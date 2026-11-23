@@ -10,6 +10,10 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Added
+
+- Admin sidebar menu: added a top-level **Network Monitor** (`/latency`) entry right below Node Status so administrators can open group latency comparisons directly and switch between monitored device groups at the top of the page. Existing `/groups/:id/latency` links and monitor buttons now redirect to `/latency?group=<id>`.
+
 ## [1.3.1] - 2026-11-22
 
 A major front-end overhaul: the look is redesigned throughout and the latency
