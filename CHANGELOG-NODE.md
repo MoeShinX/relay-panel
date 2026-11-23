@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+
+- UDP forwarding now holds a lock-free per-listener traffic counter handle instead of acquiring the global counter lock on every datagram, reducing lock contention under high packet rates while preserving exact traffic accounting across reporting cycles and rule deletion.
+
 ## [1.2.14] - 2026-11-22
 
 Runs against any current panel (still protocol version 4). The loopback guard
