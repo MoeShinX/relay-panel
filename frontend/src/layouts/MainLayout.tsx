@@ -9,6 +9,7 @@ import {
   DashboardOutlined,
   ApiOutlined,
   CloudServerOutlined,
+  RadarChartOutlined,
   ClusterOutlined,
   UserOutlined,
   LogoutOutlined,
@@ -83,6 +84,7 @@ export default function MainLayout() {
     { key: '/audit-log', label: t('auditLog') },
   ];
   const adminOnlyItems = [
+    { key: '/latency', icon: <RadarChartOutlined />, label: t('networkMonitor') },
     { key: '/groups', icon: <ClusterOutlined />, label: t('deviceGroups') },
     {
       key: 'grp-billing',
@@ -115,8 +117,14 @@ export default function MainLayout() {
     }
   }, [routeGroupKey]);
 
-  const selectedMenuKey =
-    location.pathname === '/node-status' || location.pathname.startsWith('/nodes/')
+  const isLatencyRoute =
+    location.pathname === '/latency'
+    || /^\/groups\/[^/]+\/latency$/.test(location.pathname)
+    || /^\/nodes\/[^/]+\/latency$/.test(location.pathname);
+
+  const selectedMenuKey = isLatencyRoute
+    ? '/latency'
+    : location.pathname === '/node-status' || location.pathname.startsWith('/nodes/')
       ? '/nodes'
       : location.pathname.startsWith('/groups/')
         ? '/groups'
@@ -257,6 +265,7 @@ export default function MainLayout() {
     '/shop': t('shop'),
     '/rules': t('myRules'),
     '/nodes': t('availableNodes'),
+    '/latency': t('networkMonitor'),
     '/groups': t('deviceGroups'),
     '/users': t('users'),
     '/plans': t('planManagement'),
