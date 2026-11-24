@@ -13,6 +13,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-24
+
+Runs against any current panel (still protocol version 4). The version jumps
+from 1.2.14 to 1.3.1 to line up with the panel's 1.3 series; no release was
+skipped. Check the `UDP_MAX_SESSIONS` note below if you set it.
+
 ### Added
 
 - Optional `TCP_USER_TIMEOUT_MS` environment variable (Linux only, default `0` = disabled, clamped to `10000..=600000` when non-zero) to reap half-open forwarded TCP connections whose transmitted data goes unacknowledged.
@@ -27,6 +33,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   - **Refusal logs:** When the budget is reached, new TCP connections are closed immediately with a rate-limited `WARN` log (`TCP node fd budget reached (budget=... fds, tcp_max_connections=...); refused ... connection(s) ... Raise LimitNOFILE if this is expected traffic.`), and new UDP sessions drop the datagram with `WARN` (`UDP node fd budget reached (udp_max_sessions=..., shared budget=... fds); refused ... new session(s) ... Raise LimitNOFILE.`).
   - **How to raise the limit:** Increase `LimitNOFILE` for the `relay-node` service (for example, `systemctl edit relay-node` with `[Service]` / `LimitNOFILE=1048576`, followed by `systemctl daemon-reload && systemctl restart relay-node`). The node automatically raises its soft limit up to the hard limit (capped at 1,048,576) at startup.
   - **`UDP_MAX_SESSIONS` tighten-only behavior:** Previously `UDP_MAX_SESSIONS` could be set higher than the default fd-derived cap; it can now only tighten below the safe `budget / 2` cap. Existing deployments configured with a larger `UDP_MAX_SESSIONS` value will be clamped back to `budget / 2` with a startup warning until `LimitNOFILE` is raised.
+
+### Fixed
+
+- After a rule was deleted, a UDP reply still in flight could put the deleted
+  rule back into the next traffic report, and the panel then rejected that whole
+  report. Late bytes of a deleted rule are now dropped.
 
 ## [1.2.14] - 2026-11-22
 
