@@ -10,6 +10,12 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-11-24
+
+Released together with node 1.3.1, but the two do not depend on each other:
+this panel works with older nodes, and node 1.3.1 works with older panels
+(the config protocol is still version 4). No database change.
+
 ### Added
 
 - Admin sidebar menu: added a top-level **Network Monitor** (`/latency`) entry right below Node Status so administrators can open group latency comparisons directly and switch between monitored device groups at the top of the page. Existing `/groups/:id/latency` links and monitor buttons now redirect to `/latency?group=<id>`.
