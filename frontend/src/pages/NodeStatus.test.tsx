@@ -394,7 +394,13 @@ describe('NodeStatus rendered group order is stable across refreshes', () => {
 });
 
 describe('NodeStatus live rate', () => {
-  const throughput = (up: number, down: number) => `${formatBps(up)} / ${formatBps(down)}`;
+  // v1.3.3: upload and download are two separate right-aligned lines (the
+  // figures used to be one "up / down" string), so each value is asserted on
+  // its own. The precedence rule is unchanged.
+  const showsRate = (up: number, down: number) =>
+    screen.getAllByText(formatBps(up)).length > 0 && screen.getAllByText(formatBps(down)).length > 0;
+  const showsNoRate = (up: number, down: number) =>
+    screen.queryByText(formatBps(up)) === null && screen.queryByText(formatBps(down)) === null;
   // The report says one thing; the pushed feed says another. Which one the page
   // shows is the whole behaviour under test.
   const reported = { ...adminNode, upload_bps: 1_000, download_bps: 2_000 };
@@ -415,19 +421,19 @@ describe('NodeStatus live rate', () => {
 
     render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
-    expect(screen.getByText(throughput(3_650_000, 128_930))).toBeInTheDocument();
-    expect(screen.queryByText(throughput(1_000, 2_000))).not.toBeInTheDocument();
+    expect(showsRate(3_650_000, 128_930)).toBe(true);
+    expect(showsNoRate(1_000, 2_000)).toBe(true);
 
     live = [{ group_id: 1, node_id: 'n1', upload_bps: 42_000, download_bps: 7_000 }];
     await flush(2000);
-    expect(screen.getByText(throughput(42_000, 7_000))).toBeInTheDocument();
+    expect(showsRate(42_000, 7_000)).toBe(true);
   });
 
   it('falls back to the report when the node has no fresh pushed rate', async () => {
     serve(() => []);
     render(<MemoryRouter><NodeStatus /></MemoryRouter>);
     await flush();
-    expect(screen.getByText(throughput(1_000, 2_000))).toBeInTheDocument();
+    expect(showsRate(1_000, 2_000)).toBe(true);
   });
 
   it('does not poll while the tab is hidden', async () => {
@@ -686,5 +692,60 @@ describe('NodeStatus one-click upgrade', () => {
     expect(screen.getByText('admin-grp')).toBeInTheDocument();
     expect(screen.queryByTestId('upgrade-all')).not.toBeInTheDocument();
     expect(screen.queryByTestId('upgrade-group-1')).not.toBeInTheDocument();
+  });
+});
+
+// ── v1.3.3: the dashboard's "离线 N" link lands on /nodes?status=offline.
+describe('NodeStatus offline-only filter', () => {
+  const serve = (rows: unknown[]) => {
+    mockUseAuth.mockReturnValue({ isAdmin: true });
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/nodes') return Promise.resolve(ok(rows));
+      if (url === '/system/version') return Promise.resolve(version);
+      if (url === '/admin/latency/groups') return Promise.resolve(ok([]));
+      return Promise.resolve(ok([]));
+    });
+  };
+  const renderAt = (path: string) =>
+    render(<MemoryRouter initialEntries={[path]}><NodeStatus /></MemoryRouter>);
+
+  it('shows only the offline machines and says the filter is on', async () => {
+    serve([
+      { ...adminNode, group_id: 1, node_id: 'up', online: true, group_name: 'grp-up' },
+      { ...adminNode, group_id: 2, node_id: 'down', online: false, group_name: 'grp-down' },
+    ]);
+    renderAt('/nodes?status=offline');
+    await flush();
+
+    expect(screen.getByTestId('offline-filter-banner')).toBeInTheDocument();
+    expect(screen.getByText('grp-down')).toBeInTheDocument();
+    expect(screen.queryByText('grp-up')).toBeNull();
+  });
+
+  it('clears the filter and brings the online machines back', async () => {
+    serve([
+      { ...adminNode, group_id: 1, node_id: 'up', online: true, group_name: 'grp-up' },
+      { ...adminNode, group_id: 2, node_id: 'down', online: false, group_name: 'grp-down' },
+    ]);
+    renderAt('/nodes?status=offline');
+    await flush();
+    expect(screen.queryByText('grp-up')).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /clearOfflineFilter/ }));
+    });
+    await flush();
+    expect(screen.getByText('grp-up')).toBeInTheDocument();
+    expect(screen.queryByTestId('offline-filter-banner')).toBeNull();
+  });
+
+  it('says there are no offline nodes (instead of "no nodes") when none are down', async () => {
+    serve([{ ...adminNode, node_id: 'up', online: true }]);
+    renderAt('/nodes?status=offline');
+    await flush();
+    expect(screen.getByText('nodeStatusFilteredEmpty')).toBeInTheDocument();
+    expect(screen.queryByText('noNodesHint')).toBeNull();
+    // The escape hatch is right there.
+    expect(screen.getByRole('button', { name: /clearOfflineFilter/ })).toBeInTheDocument();
   });
 });

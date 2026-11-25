@@ -138,3 +138,72 @@ describe('Dashboard group aggregation', () => {
     expect(screen.getByText('noNodesReporting')).toBeInTheDocument();
   });
 });
+
+// ── v1.3.3: one line above the KPI cards says how many machines are up and how
+// old the reading is; "离线 N" links into the node board, filtered.
+describe('Dashboard fleet summary', () => {
+  it('counts real nodes, ignoring a group placeholder with no node_id', async () => {
+    mockAll([
+      ns(1, { node_id: 'a', online: true }),
+      ns(1, { node_id: 'b', online: false }),
+      ns(2, { node_id: null, online: false }),
+    ]);
+    renderDashboard();
+    await flush();
+    const summary = screen.getByTestId('fleet-summary');
+    expect(summary).toHaveTextContent('onlineNodesOfTotal');
+    expect(summary).toHaveTextContent('nodeStatusSummaryOffline');
+    expect(screen.getByTestId('fleet-offline')).toHaveTextContent('nodeStatusSummaryOffline');
+  });
+
+  it('links the offline count to the filtered node board', async () => {
+    mockAll([ns(1, { node_id: 'a', online: true }), ns(1, { node_id: 'b', online: false })]);
+    renderDashboard();
+    await flush();
+    await act(async () => {
+      screen.getByTestId('fleet-offline').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(mockNavigate).toHaveBeenCalledWith('/nodes?status=offline');
+  });
+
+  it('hides the offline part when every machine is up', async () => {
+    mockAll([ns(1, { node_id: 'a', online: true }), ns(1, { node_id: 'b', online: true })]);
+    renderDashboard();
+    await flush();
+    expect(screen.getByTestId('fleet-summary')).toBeInTheDocument();
+    expect(screen.queryByTestId('fleet-offline')).toBeNull();
+  });
+
+  it('keeps the previous figures and their time when a later read fails', async () => {
+    let fail = false;
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/admin/users') return Promise.resolve(ok([{}]));
+      if (url === '/rules') return Promise.resolve(ok([{}]));
+      if (url === '/groups') return Promise.resolve(ok([{}]));
+      if (url === '/nodes') {
+        if (fail) return Promise.reject(new Error('boom'));
+        return Promise.resolve(ok([ns(1, { node_id: 'a', online: true }), ns(1, { node_id: 'b', online: false })]));
+      }
+      if (url === '/system/version') {
+        return Promise.resolve({ current_version: '1.3.3', latest_version: '', has_update: false, is_outdated: false, release_url: '', release_notes: '', published_at: '', check_failed: false, error_message: '' });
+      }
+      return Promise.reject(new Error(`unexpected ${url}`));
+    });
+    renderDashboard();
+    await flush();
+    const before = screen.getByTestId('fleet-updated').textContent;
+    expect(screen.getByTestId('fleet-summary')).not.toHaveAttribute('data-stale');
+
+    fail = true;
+    await flush(10_000);
+
+    // Same counts (not zeroed) and the SAME timestamp — a failed refresh must
+    // not look like a fresh one.
+    expect(screen.getByTestId('fleet-summary')).toHaveTextContent('onlineNodesOfTotal');
+    expect(screen.getByTestId('fleet-updated')).toHaveTextContent('nodeStatusSummaryStale');
+    expect(screen.getByTestId('fleet-updated').textContent).toContain(
+      (before ?? '').replace('nodeStatusSummaryUpdated', ''),
+    );
+    expect(screen.getByTestId('fleet-summary')).toHaveAttribute('data-stale', '1');
+  });
+});

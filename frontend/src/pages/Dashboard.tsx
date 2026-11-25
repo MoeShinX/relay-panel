@@ -48,6 +48,11 @@ export default function Dashboard() {
   // v1.2.0: kept whole (not just the count) for the traffic chart's drill-down.
   const [ruleList, setRuleList] = useState<ForwardRule[]>([]);
   const [nodes, setNodes] = useState<NodeStatus[]>([]);
+  // v1.3.3: when the last successful /nodes read happened, and whether the most
+  // recent one failed. The summary line must keep showing the older figures and
+  // THEIR time — never stamp old data with a fresh "just updated".
+  const [nodesUpdatedAt, setNodesUpdatedAt] = useState<Date | null>(null);
+  const [nodesStale, setNodesStale] = useState(false);
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [showChangelog, setShowChangelog] = useState(false);
   const [versionRefreshing, setVersionRefreshing] = useState(false);
@@ -83,8 +88,19 @@ export default function Dashboard() {
 
     try {
       const nodeStatus = await api.get<unknown, ApiEnvelope<NodeStatus[]>>('/nodes');
-      setNodes(nodeStatus.data || []);
-    } catch { /* ignore */ }
+      // v1.3.3: a failed read must not look like a fresh one. `code !== 0` is
+      // the backend's way of reporting a DB failure inside a 200, so it counts
+      // as a failure too: keep the previous rows and their timestamp.
+      if (nodeStatus.code !== 0 || !Array.isArray(nodeStatus.data)) {
+        setNodesStale(true);
+        return;
+      }
+      setNodes(nodeStatus.data);
+      setNodesUpdatedAt(new Date());
+      setNodesStale(false);
+    } catch {
+      setNodesStale(true);
+    }
   };
 
   const checkVersion = async (forceRefresh = false) => {
@@ -157,6 +173,21 @@ export default function Dashboard() {
   //  row is clickable → /nodes for per-node detail (kept there to avoid
   //  duplicating the node-status page on the dashboard).
   const groups = useMemo(() => aggregateNodesByGroup(nodes), [nodes]);
+  // v1.3.3: the fleet's online/offline count for the summary above the KPI
+  // cards. Placeholder rows (a group with no node reporting) carry no node_id
+  // and are not machines; counting them would say "1 offline" forever on a
+  // freshly created group.
+  const fleet = useMemo(() => {
+    const real = nodes.filter((n) => n.node_id);
+    const online = real.filter((n) => n.online).length;
+    return { online, total: real.length, offline: real.length - online };
+  }, [nodes]);
+  // The summary's clock: HH:MM in the operator's own timezone, because the page
+  // is read next to a wall clock, not to a UTC log.
+  const updatedLabel = useMemo(() => {
+    if (!nodesUpdatedAt) return '';
+    return `${String(nodesUpdatedAt.getHours()).padStart(2, '0')}:${String(nodesUpdatedAt.getMinutes()).padStart(2, '0')}`;
+  }, [nodesUpdatedAt]);
   // v1.2.12: enabled / total rules per inbound group. Every node of a group
   // runs that group's rules, so this is also each machine's count when a
   // machine has its own group — and how a new machine is checked against the
@@ -330,6 +361,37 @@ export default function Dashboard() {
           </Button>
         </Tooltip>
       </div>
+      {/* v1.3.3: a one-line fleet summary above the KPI cards — how many
+          machines are up, how many are not, and how old the reading is. An
+          admin who lands here after a notification should not have to open the
+          node board to find out. */}
+      {fleet.total > 0 && updatedLabel && (
+        <div className="rp-fleet-summary" data-testid="fleet-summary" data-stale={nodesStale ? '1' : undefined}>
+          <span className="rp-fleet-summary-online" data-testid="fleet-online">
+            {t('onlineNodesOfTotal').replace('{online}', String(fleet.online)).replace('{total}', String(fleet.total))}
+          </span>
+          {fleet.offline > 0 && (
+            <>
+              <span className="rp-fleet-summary-sep" aria-hidden="true">·</span>
+              <button
+                type="button"
+                className="rp-fleet-summary-offline"
+                data-testid="fleet-offline"
+                onClick={() => navigate('/nodes?status=offline')}
+              >
+                {t('nodeStatusSummaryOffline').replace('{n}', String(fleet.offline))}
+              </button>
+            </>
+          )}
+          <span className="rp-fleet-summary-sep" aria-hidden="true">·</span>
+          <span className="rp-fleet-summary-time" data-testid="fleet-updated" title={nodesStale ? t('loadFailed') : undefined}>
+            {(nodesStale
+              ? t('nodeStatusSummaryStale')
+              : t('nodeStatusSummaryUpdated')
+            ).replace('{time}', updatedLabel)}
+          </span>
+        </div>
+      )}
       <Row gutter={isMobile ? [8, 8] : [16, 16]} style={{ marginBottom: 20 }}>
         <Col xs={24} sm={8}>
           <Card className="rp-kpi-card" styles={{ body: { padding: '20px 22px' } }}>

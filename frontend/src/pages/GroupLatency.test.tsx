@@ -1278,3 +1278,49 @@ describe('GroupLatency snapshot edge cases', () => {
     expect(worst).toHaveTextContent('90.0%');
   });
 });
+
+// ── v1.3.3: the snapshot cards used to show bare percentages; they now name
+// the figure so a reader does not have to guess what it counts.
+describe('the snapshot cards label their percentages', () => {
+  it('names the best node card figure with the same wording as the overall column', async () => {
+    serve();
+    renderPage();
+    await flush();
+    const best = screen.getByTestId('latency-snap-best');
+    expect(best).toHaveTextContent('latencyStatsFailLoss');
+  });
+
+  it('says "failed probes" for a TCP weakest link', async () => {
+    serve(() =>
+      ok(
+        response({
+          targets: [target(1, 'Beijing Telecom')],
+          nodes: [node('n1', { label: 'HK-1' })],
+          matrix: [cell('n1', 1, 260, 90)],
+        }),
+      ),
+    );
+    renderPage();
+    await flush();
+    const worst = screen.getByTestId('latency-snap-worst');
+    expect(worst).toHaveTextContent('latencyCardFailed');
+    expect(worst).not.toHaveTextContent('latencyCardLoss ');
+  });
+
+  it('says "packet loss" for an ICMP weakest link', async () => {
+    serve(() =>
+      ok(
+        response({
+          targets: [target(1, 'Beijing ICMP', { kind: 'icmp', port: null })],
+          nodes: [node('n1', { label: 'HK-1' })],
+          matrix: [cell('n1', 1, 260, 90)],
+        }),
+      ),
+    );
+    renderPage();
+    await flush();
+    const worst = screen.getByTestId('latency-snap-worst');
+    expect(worst).toHaveTextContent('latencyCardLoss');
+    expect(worst).not.toHaveTextContent('latencyCardFailed');
+  });
+});

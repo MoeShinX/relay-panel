@@ -805,7 +805,7 @@ export default function GroupLatency({
             <LevelDot level={snapshot.bestNode.level} />
             <span>{names.get(snapshot.bestNode.nodeId) ?? snapshot.bestNode.nodeId}</span>
             <span className="rp-mono" style={{ fontSize: 13, fontWeight: 500, color: 'var(--rp-text-secondary)' }}>
-              {formatMs(snapshot.bestNode.avgMs)} · {formatLoss(snapshot.bestNode.avgLoss)}
+              {formatMs(snapshot.bestNode.avgMs)} · {t('latencyStatsFailLoss')} {formatLoss(snapshot.bestNode.avgLoss)}
             </span>
           </div>
         ) : (
@@ -847,6 +847,11 @@ export default function GroupLatency({
             <span className={`rp-lat-chip is-${snapshot.worstPair.level === 'bad' ? 'bad' : 'warn'}`}>
               {snapshot.worstPair.avg == null ? t('latencyAllLost') : formatMs(snapshot.worstPair.avg)}
               {' · '}
+              {/* v1.3.3: a bare percentage left the reader guessing whether it
+                  was failed probes or packet loss. Name the figure by the
+                  target's own kind, exactly as the matrix cells do (a TCP
+                  target fails probes; an ICMP target loses packets). */}
+              {t(worstTarget?.kind === 'icmp' ? 'latencyCardLoss' : 'latencyCardFailed')}{' '}
               {formatLoss(snapshot.worstPair.loss)}
               {snapshot.worstPair.slow != null && snapshot.worstPair.slow > 0
                 ? ` · ${t('latencyCardSlow')} ${formatLoss(snapshot.worstPair.slow)}`
