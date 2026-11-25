@@ -1128,109 +1128,141 @@ const IMPORT_DEFAULTS = {
     );
   };
 
-  /** v1.2.0: connection cap + scheduled restart. Shared by the create and edit
-   *  forms so the two can't drift (the rate-limit block above predates this and
-   *  is still duplicated).
-   *
-   *  Both fields are 0 = off. The cap's `extra` says the count is PER NODE,
-   *  because that isn't guessable: a rule on 3 nodes admits 3x the number typed
-   *  here.
-   *
-   *  The cap is disabled for a UDP-ONLY rule. It is enforced at accept(), which
-   *  UDP doesn't have — the panel would happily store the number and ship it to
-   *  the node, where nothing would ever read it. Showing an editable field that
-   *  silently does nothing is worse than showing a disabled one that says why.
-   *  A tcp_udp rule keeps it: the cap governs its TCP half. */
+  /** v1.2.0 → v1.3.3: connection cap + scheduled restart, paired side by side.
+   *  Standing multi-line prose lives behind the label "?" tooltip so the whole
+   *  forwarding tab fits on one screen without scrolling; only the UDP-only
+   *  disabled notice stays inline so a disabled box explains itself. */
   const renderConnectionControls = (proto?: string) => {
     const udpOnly = proto === 'udp';
     return (
-    <>
-      <Form.Item
-        name="max_connections"
-        label={t('maxConnections')}
-        extra={udpOnly ? t('maxConnectionsUdpUnsupported') : t('maxConnectionsHint')}
-        initialValue={0}
-      >
-        <InputNumber min={0} style={{ width: '100%', maxWidth: 252 }} placeholder="0" disabled={udpOnly} />
-      </Form.Item>
-      <Form.Item
-        name="auto_restart_minutes"
-        label={t('autoRestart')}
-        extra={t('autoRestartHint').replace('{min}', String(MIN_AUTO_RESTART_MINUTES))}
-        initialValue={0}
-        rules={[{
-          // Mirrors the API's floor. 0 = off is always allowed; anything between
-          // 1 and the floor would drop connections faster than clients reconnect.
-          validator: (_, value) => {
-            const v = Number(value ?? 0);
-            if (v === 0 || v >= MIN_AUTO_RESTART_MINUTES) return Promise.resolve();
-            return Promise.reject(new Error(
-              t('autoRestartTooSmall').replace('{min}', String(MIN_AUTO_RESTART_MINUTES))
-            ));
-          },
-        }]}
-      >
-        <InputNumber min={0} style={{ width: '100%' }} addonAfter={t('minutes')} placeholder="0" />
-      </Form.Item>
-    </>
+      <div className="rp-form-grid-2">
+        <Form.Item
+          name="max_connections"
+          label={<LabelWithTip text={t('maxConnections')} tip={t('maxConnectionsHint')} />}
+          extra={udpOnly ? t('maxConnectionsUdpUnsupported') : undefined}
+          initialValue={0}
+        >
+          <InputNumber min={0} style={{ width: '100%' }} placeholder="0" disabled={udpOnly} />
+        </Form.Item>
+        <Form.Item
+          name="auto_restart_minutes"
+          label={
+            <LabelWithTip
+              text={t('autoRestart')}
+              tip={t('autoRestartHint').replace('{min}', String(MIN_AUTO_RESTART_MINUTES))}
+            />
+          }
+          initialValue={0}
+          rules={[{
+            // Mirrors the API's floor. 0 = off is always allowed; anything between
+            // 1 and the floor would drop connections faster than clients reconnect.
+            validator: (_, value) => {
+              const v = Number(value ?? 0);
+              if (v === 0 || v >= MIN_AUTO_RESTART_MINUTES) return Promise.resolve();
+              return Promise.reject(new Error(
+                t('autoRestartTooSmall').replace('{min}', String(MIN_AUTO_RESTART_MINUTES))
+              ));
+            },
+          }]}
+        >
+          <InputNumber min={0} style={{ width: '100%' }} addonAfter={t('minutes')} placeholder="0" />
+        </Form.Item>
+      </div>
     );
   };
 
-  // Load-balance strategy field. The per-strategy explanation used to sit in an
-  // always-open Alert below the select, which is a lot of standing text for
-  // something you read once. It now hangs off a "?" on the label — hover to
-  // read, out of the way otherwise. Same pattern as the rate-limits label.
+  // Load-balance strategy field. The per-strategy explanation hangs off a "?"
+  // on the label — hover to read, out of the way otherwise.
   const renderStrategyField = () => (
     <Form.Item
       name="load_balance_strategy"
       initialValue="first"
       label={
-        <span>
-          {t('loadBalanceStrategy')}{' '}
-          <Tooltip
-            overlayStyle={{ maxWidth: 360 }}
-            title={
-              <div style={{ fontSize: 12 }}>
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>{t('lbStrategyBlockTitle')}</div>
-                <div>• {t('lbFirstDesc')}</div>
-                <div>• {t('lbRoundRobinDesc')}</div>
-                <div>• {t('lbFailoverDesc')}</div>
-                <div style={{ marginTop: 8, opacity: 0.75 }}>{t('lbStrategyBlockFooter')}</div>
-              </div>
-            }
-          >
-            <QuestionCircleOutlined style={{ color: '#999' }} />
-          </Tooltip>
+        <LabelWithTip
+          text={t('loadBalanceStrategy')}
+          maxWidth={360}
+          tip={
+            <div style={{ fontSize: 12 }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>{t('lbStrategyBlockTitle')}</div>
+              <div>• {t('lbFirstDesc')}</div>
+              <div>• {t('lbRoundRobinDesc')}</div>
+              <div>• {t('lbFailoverDesc')}</div>
+              <div style={{ marginTop: 8, opacity: 0.75 }}>{t('lbStrategyBlockFooter')}</div>
+            </div>
+          }
+        />
+      }
+    >
+      <Select options={strategyOptions} style={{ width: '100%' }} />
+    </Form.Item>
+  );
+
+  /** v1.3.3: upload and download caps paired in one two-column row. */
+  const renderRateLimitsField = () => (
+    <Form.Item
+      label={
+        <span className="rp-label-with-tip">
+          <LabelWithTip
+            text={t('rateLimits')}
+            tip={<span style={{ whiteSpace: 'pre-line' }}>{t('rateLimitsTooltip')}</span>}
+          />
+          <span className="rp-label-inline-hint">({t('rateLimitsShortHint')})</span>
         </span>
       }
     >
-      <Select options={strategyOptions} style={{ maxWidth: 252 }} />
+      <div className="rp-form-grid-2">
+        <Form.Item name="upload_limit_mbps" noStyle initialValue={0}>
+          <InputNumber min={0} addonBefore={t('uploadLimit')} addonAfter="Mbps" style={{ width: '100%' }} placeholder="0" />
+        </Form.Item>
+        <Form.Item name="download_limit_mbps" noStyle initialValue={0}>
+          <InputNumber min={0} addonBefore={t('downloadLimit')} addonAfter="Mbps" style={{ width: '100%' }} placeholder="0" />
+        </Form.Item>
+      </div>
     </Form.Item>
+  );
+
+  /** Shared forwarding tab body for both create and edit modals. */
+  const renderForwardTab = (proto?: string) => (
+    <>
+      {renderTargetsEditor()}
+      <div className="rp-form-grid-2">
+        {renderStrategyField()}
+      </div>
+      {renderRateLimitsField()}
+      <div className="rp-rule-form-divider" />
+      {renderConnectionControls(proto)}
+      <ProxyProtocolFields proto={proto} t={t} />
+    </>
   );
 
   const renderTargetsEditor = () => (
     <Form.List name="targets" initialValue={[{ host: '', port: undefined as unknown as number, enabled: true }]}>
       {(fields, { add, remove, move }) => (
-        <Space orientation="vertical" style={{ width: '100%' }}>
-          <Text strong>{t('targets')}</Text>
-          {fields.map((field, index) => (
-            <Space key={field.key} align="baseline" wrap>
+        <div className="rp-targets-block">
+          <div className="rp-targets-header">
+            <Text strong>{t('targets')}</Text>
+            <Space size={6} wrap>
+              <Button size="small" icon={<PlusOutlined />} onClick={() => add({ host: '', port: undefined as unknown as number, enabled: true })}>{t('addTarget')}</Button>
+              <BulkTargetsButton t={t} />
+            </Space>
+          </div>
+          <div className="rp-targets-cols" aria-hidden="true">
+            <span className="is-required">{t('address')}</span>
+            <span className="is-required">{t('port')}</span>
+            <span />
+          </div>
+          {fields.map(({ key, name, ...restField }, index) => (
+            <div key={key} className="rp-target-row">
               <Form.Item
-                {...field}
-                name={[field.name, 'host']}
-                label={t('address')}
+                {...restField}
+                name={[name, 'host']}
                 rules={[{ required: true }]}
-                style={{ marginBottom: 8 }}
               >
-                {/* Wide enough for a full IPv6 literal (up to 39 chars) — 180px
-                    truncated them mid-address. On a phone the dialog is
-                    narrower than that, so it gives way to the screen. */}
-                <TargetHostInput fieldName={field.name} placeholder={t('targetAddressOrDest')} />
+                <TargetHostInput fieldName={name} placeholder={t('targetAddressOrDest')} ariaLabel={t('address')} />
               </Form.Item>
               <Form.Item
-                {...field}
-                name={[field.name, 'port']}
-                label={t('port')}
+                {...restField}
+                name={[name, 'port']}
                 rules={[
                   { required: true, message: t('targetPortInvalid') },
                   {
@@ -1242,29 +1274,26 @@ const IMPORT_DEFAULTS = {
                     },
                   },
                 ]}
-                style={{ marginBottom: 8 }}
               >
-                <InputNumber min={1} max={65535} placeholder={t('targetPort')} style={{ width: 110 }} />
+                <InputNumber min={1} max={65535} placeholder={t('targetPort')} aria-label={t('port')} style={{ width: '100%' }} />
               </Form.Item>
-              <Form.Item
-                {...field}
-                name={[field.name, 'enabled']}
-                valuePropName="checked"
-                initialValue={true}
-                style={{ marginBottom: 8 }}
-              >
-                <Switch size="small" />
-              </Form.Item>
-              <Button size="small" icon={<ArrowUpOutlined />} aria-label={t('moveTargetUp')} disabled={index === 0} onClick={() => move(index, index - 1)} />
-              <Button size="small" icon={<ArrowDownOutlined />} aria-label={t('moveTargetDown')} disabled={index === fields.length - 1} onClick={() => move(index, index + 1)} />
-              <Button size="small" danger icon={<DeleteOutlined />} aria-label={t('deleteTarget')} disabled={fields.length <= 1} onClick={() => remove(field.name)} />
-            </Space>
+              <div className="rp-target-row-actions">
+                <Form.Item
+                  {...restField}
+                  name={[name, 'enabled']}
+                  valuePropName="checked"
+                  initialValue={true}
+                  noStyle
+                >
+                  <Switch size="small" />
+                </Form.Item>
+                <Button size="small" icon={<ArrowUpOutlined />} aria-label={t('moveTargetUp')} disabled={index === 0} onClick={() => move(index, index - 1)} />
+                <Button size="small" icon={<ArrowDownOutlined />} aria-label={t('moveTargetDown')} disabled={index === fields.length - 1} onClick={() => move(index, index + 1)} />
+                <Button size="small" danger icon={<DeleteOutlined />} aria-label={t('deleteTarget')} disabled={fields.length <= 1} onClick={() => remove(name)} />
+              </div>
+            </div>
           ))}
-          <Space wrap>
-            <Button size="small" icon={<PlusOutlined />} onClick={() => add({ host: '', port: undefined as unknown as number, enabled: true })}>{t('addTarget')}</Button>
-            <BulkTargetsButton t={t} />
-          </Space>
-        </Space>
+        </div>
       )}
     </Form.List>
   );
@@ -1428,7 +1457,7 @@ const IMPORT_DEFAULTS = {
         scroll={isMobile ? undefined : DESKTOP_RULES_SCROLL}
       />
 
-      <Modal title={t('addRule')} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={() => createForm.submit()} okText={t('create')} cancelText={t('cancel')} width={620}>
+      <Modal title={t('addRule')} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={() => createForm.submit()} okText={t('create')} cancelText={t('cancel')} width={540}>
         <Form form={createForm} onFinish={handleCreate} onFinishFailed={onSaveFailed(setCreateTab)} layout="vertical" className="rp-rule-form">
           <Tabs activeKey={createTab} onChange={(k) => setCreateTab(k as RuleTab)} items={[
             {
@@ -1465,27 +1494,13 @@ const IMPORT_DEFAULTS = {
               key: 'forward',
               forceRender: true,
               label: t('tabForward'),
-              children: (<>
-                {renderTargetsEditor()}
-                {renderStrategyField()}
-                <Form.Item
-                  label={<span>{t('rateLimits')} <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{t('rateLimitsTooltip')}</span>} overlayStyle={{ maxWidth: 340 }}><QuestionCircleOutlined style={{ color: '#999' }} /></Tooltip></span>}
-                  extra={t('rateLimitsHint')}
-                >
-                  <Space orientation="vertical" style={{ width: '100%' }}>
-                    <Form.Item name="upload_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('uploadLimit')} addonAfter="Mbps" style={{ width: '100%' }} placeholder="0" /></Form.Item>
-                    <Form.Item name="download_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('downloadLimit')} addonAfter="Mbps" style={{ width: '100%' }} placeholder="0" /></Form.Item>
-                  </Space>
-                </Form.Item>
-                <ProxyProtocolFields proto={createProto} t={t} />
-                {renderConnectionControls(createProto)}
-              </>),
+              children: renderForwardTab(createProto),
             },
           ]} />
         </Form>
       </Modal>
 
-      <Modal title={t('editRule')} open={editOpen} onCancel={() => setEditOpen(false)} onOk={() => editForm.submit()} okText={t('save')} cancelText={t('cancel')} width={620}>
+      <Modal title={t('editRule')} open={editOpen} onCancel={() => setEditOpen(false)} onOk={() => editForm.submit()} okText={t('save')} cancelText={t('cancel')} width={540}>
         <Form form={editForm} onFinish={handleUpdate} onFinishFailed={onSaveFailed(setEditTab)} layout="vertical" className="rp-rule-form">
           <Tabs activeKey={editTab} onChange={(k) => setEditTab(k as RuleTab)} items={[
             {
@@ -1517,21 +1532,7 @@ const IMPORT_DEFAULTS = {
               // "targets cleared" and rejected with "add at least one target".
               forceRender: true,
               label: t('tabForward'),
-              children: (<>
-                {renderTargetsEditor()}
-                {renderStrategyField()}
-                <Form.Item
-                  label={<span>{t('rateLimits')} <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{t('rateLimitsTooltip')}</span>} overlayStyle={{ maxWidth: 340 }}><QuestionCircleOutlined style={{ color: '#999' }} /></Tooltip></span>}
-                  extra={t('rateLimitsHint')}
-                >
-                  <Space orientation="vertical" style={{ width: '100%' }}>
-                    <Form.Item name="upload_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('uploadLimit')} addonAfter="Mbps" style={{ width: '100%' }} placeholder="0" /></Form.Item>
-                    <Form.Item name="download_limit_mbps" noStyle initialValue={0}><InputNumber min={0} addonBefore={t('downloadLimit')} addonAfter="Mbps" style={{ width: '100%' }} placeholder="0" /></Form.Item>
-                  </Space>
-                </Form.Item>
-                <ProxyProtocolFields proto={editProto} t={t} />
-                {renderConnectionControls(editProto)}
-              </>),
+              children: renderForwardTab(editProto),
             },
           ]} />
         </Form>
@@ -1715,15 +1716,27 @@ function ProbeOutcomeTag({ o, t }: { o: DiagnoseTargetResult['outcome']; t: (k: 
   return <Tag>?</Tag>;
 }
 
+function LabelWithTip({ text, tip, maxWidth = 340 }: { text: string; tip: React.ReactNode; maxWidth?: number }) {
+  return (
+    <span className="rp-label-with-tip">
+      <span>{text}</span>
+      <Tooltip title={tip} styles={{ root: { maxWidth } }}>
+        <QuestionCircleOutlined aria-hidden="true" className="rp-label-tip-icon" />
+      </Tooltip>
+    </span>
+  );
+}
+
 /** v1.2.15: the target host box also takes `host:port`. "1.2.3.4:443",
  *  "example.com:8443" or "[2001:db8::1]:443" splits on blur into the host and
  *  port boxes of the same row. A bare IPv6 address is left alone — the dest
  *  grammar needs brackets around one before a port. */
-function TargetHostInput({ fieldName, value, onChange, placeholder }: {
+function TargetHostInput({ fieldName, value, onChange, placeholder, ariaLabel }: {
   fieldName: number;
   value?: string;
   onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
   placeholder?: string;
+  ariaLabel?: string;
 }) {
   const form = Form.useFormInstance();
   const split = () => {
@@ -1735,7 +1748,7 @@ function TargetHostInput({ fieldName, value, onChange, placeholder }: {
   };
   return (
     <Input value={value} onChange={onChange} onBlur={split} placeholder={placeholder}
-      style={{ width: 'min(320px, 100vw - 100px)' }} />
+      aria-label={ariaLabel} style={{ width: '100%' }} />
   );
 }
 
@@ -1769,42 +1782,48 @@ function BulkTargetsButton({ t }: { t: (k: string) => string }) {
   );
 }
 
-/** v1.2.15: a rule's PROXY protocol settings, in the create and edit forms.
- *  TCP only: on a UDP rule the controls are disabled and say why. The trusted
- *  sources only matter when accepting, so that box appears with the switch. */
+/** v1.2.15 → v1.3.3: a rule's PROXY protocol settings, paired side by side.
+ *  TCP only: on a UDP rule the controls are disabled and say why. Long prose
+ *  lives in the label "?" tooltip so the modal stays compact; trusted sources
+ *  appear below only once accepting is turned on. */
 function ProxyProtocolFields({ proto, t }: { proto?: string; t: (k: string) => string }) {
   const form = Form.useFormInstance();
   const accept = Form.useWatch('proxy_protocol_accept', form);
   const udpOnly = proto === 'udp';
   return (
     <>
-      <Form.Item
-        name="proxy_protocol_send"
-        label={t('ppSend')}
-        extra={udpOnly ? t('ppUdpUnsupported') : t('ppSendHint')}
-        initialValue="off"
-      >
-        <Select
-          disabled={udpOnly}
-          style={{ maxWidth: 252 }}
-          options={[
-            { value: 'off', label: t('ppOff') },
-            { value: 'v1', label: t('ppV1') },
-            { value: 'v2', label: t('ppV2') },
-          ]}
-        />
-      </Form.Item>
-      <Form.Item
-        name="proxy_protocol_accept"
-        label={t('ppAccept')}
-        extra={t('ppAcceptHint')}
-        valuePropName="checked"
-        initialValue={false}
-      >
-        <Switch disabled={udpOnly} />
-      </Form.Item>
+      <div className="rp-form-grid-2">
+        <Form.Item
+          name="proxy_protocol_send"
+          label={<LabelWithTip text={t('ppSend')} tip={t('ppSendHint')} />}
+          extra={udpOnly ? t('ppUdpUnsupported') : undefined}
+          initialValue="off"
+        >
+          <Select
+            disabled={udpOnly}
+            style={{ width: '100%' }}
+            options={[
+              { value: 'off', label: t('ppOff') },
+              { value: 'v1', label: t('ppV1') },
+              { value: 'v2', label: t('ppV2') },
+            ]}
+          />
+        </Form.Item>
+        <Form.Item
+          name="proxy_protocol_accept"
+          label={<LabelWithTip text={t('ppAccept')} tip={t('ppAcceptHint')} />}
+          valuePropName="checked"
+          initialValue={false}
+        >
+          <Switch disabled={udpOnly} />
+        </Form.Item>
+      </div>
       {accept && !udpOnly && (
-        <Form.Item name="proxy_protocol_trusted" label={t('ppTrusted')} extra={t('ppTrustedHint')} initialValue="">
+        <Form.Item
+          name="proxy_protocol_trusted"
+          label={<LabelWithTip text={t('ppTrusted')} tip={t('ppTrustedHint')} />}
+          initialValue=""
+        >
           <Input placeholder="203.0.113.7, 10.0.0.0/8" />
         </Form.Item>
       )}

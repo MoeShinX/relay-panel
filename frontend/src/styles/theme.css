@@ -468,26 +468,101 @@ html, body, #root {
   background-size: cover;
 }
 
-/* v1.2.3: give the forwarding tab one field width.
-
-   The four controls there used to disagree. 负载策略 and 最大连接数 are a
-   plain Select / InputNumber, so width:100% made them span the form (572px
-   in the 620px dialog). 限速 and 自动重启间隔 carry addons (上行/下行, Mbps,
-   分钟) and antd wraps those in a Space.Compact group — width:100% then
-   applies to the number box INSIDE the group, leaving the group sized to its
-   content (~252px). Two long rows and two short ones in the same column.
-
-   All four are now 252: the addon groups keep their natural size and the two
-   plain controls are capped to match (their cap is inline, on the component).
-   A rule name or a strategy dropdown does not need half the dialog anyway.
-
-   Scoped to the rule dialogs and to addon groups only, so nothing else moves:
-   the basic tab stays full-width, and the targets row keeps its explicit
-   widths (address 320, port 110) — which is what keeps that row on one line. */
-.rp-rule-form .ant-form-item-control-input-content .ant-space-compact,
-.rp-rule-form .ant-form-item-control-input-content .ant-input-number-group-wrapper {
+/* v1.3.3: compact forwarding-tab layout in the create/edit rule modal.
+   Targets sit on a single aligned grid row; rate limits and advanced controls
+   pair into two columns so the dialog fits without vertical scrolling while
+   keeping every control flush with its column. */
+.rp-rule-form .ant-form-item {
+  margin-bottom: 14px;
+}
+.rp-rule-form .rp-form-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+}
+.rp-rule-form .rp-form-grid-2 .ant-form-item-control-input-content .ant-space-compact,
+.rp-rule-form .rp-form-grid-2 .ant-form-item-control-input-content .ant-input-number-group-wrapper {
   width: 100%;
-  max-width: 252px;
+  max-width: none;
+}
+.rp-targets-block {
+  margin-bottom: 14px;
+}
+.rp-targets-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.rp-targets-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 78px 118px;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--rp-text-secondary);
+}
+.rp-targets-cols .is-required::before {
+  content: '* ';
+  color: var(--rp-danger);
+}
+.rp-target-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 78px 118px;
+  gap: 6px;
+  align-items: start;
+}
+.rp-target-row .ant-form-item {
+  margin-bottom: 8px;
+}
+.rp-target-row .ant-input,
+.rp-target-row .ant-input-number-input {
+  font-size: 13px;
+  padding-inline: 8px;
+}
+.rp-target-row-actions {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
+.rp-label-with-tip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.rp-label-tip-icon {
+  color: var(--rp-text-tertiary);
+  font-size: 13px;
+}
+.rp-label-inline-hint {
+  margin-left: 4px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--rp-text-tertiary);
+}
+.rp-rule-form-divider {
+  border-top: 1px solid var(--rp-border);
+  margin: 4px 0 14px;
+}
+@media (max-width: 575px) {
+  .rp-rule-form .rp-form-grid-2 {
+    grid-template-columns: 1fr;
+  }
+  .rp-targets-cols {
+    display: none;
+  }
+  .rp-target-row {
+    grid-template-columns: minmax(0, 1fr) 92px;
+  }
+  .rp-target-row-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    margin-top: -4px;
+    margin-bottom: 6px;
+  }
 }
 
 /* ---- Phones (below 768px, where MainLayout swaps the sider for a drawer) ---- */
