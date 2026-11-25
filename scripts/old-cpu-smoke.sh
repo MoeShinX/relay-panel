@@ -30,6 +30,13 @@ fail() {
     echo "::error::old-cpu-smoke ($KIND on $CPU): $1" >&2
     echo "--- last output ---" >&2
     tail -n 40 "$LOG" >&2 || true
+    # qemu-user writes the guest's core file into the working directory; with
+    # gdb at hand, name the function and instruction that trapped.
+    core=$(find "$WORK" -maxdepth 1 -name 'qemu_*.core' 2>/dev/null | head -n 1)
+    if [ -n "$core" ] && command -v gdb >/dev/null; then
+        echo "--- faulting instruction ---" >&2
+        gdb -q -batch -ex 'info symbol $pc' -ex 'x/3i $pc' -ex 'bt 8' "$BIN" "$core" >&2 2>&1 || true
+    fi
     exit 1
 }
 
@@ -40,6 +47,7 @@ panel)
     # the listener comes up, so an HTTP answer means SQLite ran on this CPU.
     (
         cd "$WORK"
+        ulimit -c unlimited 2>/dev/null || true
         DATABASE_URL="sqlite:$WORK/data.db?mode=rwc" \
         LISTEN="127.0.0.1:$PORT" \
         PUBLIC_DIR="$WORK" \
@@ -73,6 +81,7 @@ node)
     set +e
     (
         cd "$WORK"
+        ulimit -c unlimited 2>/dev/null || true
         PANEL_URL="https://example.com" NODE_TOKEN="old-cpu-smoke-token" \
         exec timeout 45 "$QEMU" -cpu "$CPU" "$BIN"
     ) >"$LOG" 2>&1
