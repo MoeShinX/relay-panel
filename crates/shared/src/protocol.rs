@@ -3,8 +3,7 @@ use serde::{Deserialize, Serialize};
 
 /// The config-protocol version this panel/node build speaks.
 ///
-/// v0.4.0 introduces a deliberate compatibility gate (see ROADMAP-v0.4.md
-/// "Compatibility strategy"): the node sends this in an
+/// v0.4.0 introduces a deliberate compatibility gate: the node sends this in an
 /// `X-Config-Protocol-Version` header on `get_config` and WS upgrade; the panel
 /// refuses to build/send config on mismatch (the node keeps its cached config).
 ///
