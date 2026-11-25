@@ -55,7 +55,7 @@ describe('the latency icon beside a node\'s IP', () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
     mockGet.mockImplementation(adminApi([node()], groupsWith(11)));
     renderPage();
-    await screen.findByText('192.0.2.20');
+    await screen.findAllByText('192.0.2.20');
     const link = await screen.findByTestId('latency-link');
     await userEvent.click(link);
     expect(await screen.findByText('latency page for abc123')).toBeInTheDocument();
@@ -66,7 +66,7 @@ describe('the latency icon beside a node\'s IP', () => {
     mockGet.mockImplementation((url: string) =>
       Promise.resolve(url === '/nodes/shared' ? ok([{ ...node(), node_id: 'abc123' }]) : ok([])));
     renderPage();
-    await screen.findByText('192.0.2.20');
+    await screen.findAllByText('192.0.2.20');
     expect(screen.queryByTestId('latency-link')).toBeNull();
     expect(screen.queryByTestId('group-latency-11')).toBeNull();
     expect(mockGet).not.toHaveBeenCalledWith('/admin/latency/groups');
@@ -83,8 +83,8 @@ describe('the latency icon beside a node\'s IP', () => {
       groupsWith(11),
     ));
     renderPage();
-    await screen.findByText('192.0.2.20');
-    await screen.findByText('192.0.2.22');
+    await screen.findAllByText('192.0.2.20');
+    await screen.findAllByText('192.0.2.22');
     const links = await screen.findAllByTestId('latency-link');
     expect(links).toHaveLength(2);
     await userEvent.click(links[0]);
@@ -109,8 +109,8 @@ describe('the latency icon beside a node\'s IP', () => {
       groupsWith(12),
     ));
     renderPage();
-    await screen.findByText('192.0.2.20');
-    await screen.findByText('192.0.2.21');
+    await screen.findAllByText('192.0.2.20');
+    await screen.findAllByText('192.0.2.21');
     expect(mockGet).toHaveBeenCalledWith('/admin/latency/groups');
     const links = await screen.findAllByTestId('latency-link');
     expect(links).toHaveLength(1);
@@ -122,7 +122,7 @@ describe('the latency icon beside a node\'s IP', () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
     mockGet.mockImplementation(adminApi([node()], groupsWith()));
     renderPage();
-    await screen.findByText('192.0.2.20');
+    await screen.findAllByText('192.0.2.20');
     expect(screen.queryByTestId('latency-link')).toBeNull();
   });
 });
@@ -152,7 +152,7 @@ describe('the monitor button in a group\'s header', () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
     mockGet.mockImplementation(adminApi([node()], groupsWith()));
     const { unmount } = renderPage();
-    await screen.findByText('192.0.2.20');
+    await screen.findAllByText('192.0.2.20');
     expect(screen.queryByTestId('group-latency-11')).toBeNull();
     unmount();
 
@@ -160,7 +160,7 @@ describe('the monitor button in a group\'s header', () => {
     mockGet.mockImplementation((url: string) =>
       Promise.resolve(url === '/nodes/shared' ? ok([{ ...node(), node_id: 'abc123' }]) : ok([])));
     renderPage();
-    await screen.findByText('192.0.2.20');
+    await screen.findAllByText('192.0.2.20');
     expect(screen.queryByTestId('group-latency-11')).toBeNull();
   });
 });

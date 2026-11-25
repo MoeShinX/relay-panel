@@ -13,6 +13,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The amd64 node runs again on CPUs without AVX2** (for example Intel Ivy
+  Bridge and older). node-v1.2.13 to node-v1.3.1 were compiled on a build
+  machine whose compiler targets newer CPUs and stop with "invalid opcode" on
+  such hosts; node-v1.2.12 and older are not affected. Release builds now pin
+  the build machine and the CPU baseline, and the binary is started on an
+  emulated CPU without AVX before it can ship.
+
 ## [1.3.1] - 2026-11-24
 
 Runs against any current panel (still protocol version 4). The version jumps

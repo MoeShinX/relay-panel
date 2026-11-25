@@ -10,6 +10,60 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The panel image starts again on CPUs without AVX2** (for example Intel
+  Ivy Bridge and older, or older AMD). Images 1.2.23 to 1.3.2 for amd64 exited
+  right after "database backend: SQLite" and restarted in a loop with exit code
+  132; the kernel log showed "invalid opcode" in a `sqlx-sqlite-worker` thread.
+  The build machine had switched to a newer compiler that built the bundled
+  SQLite for newer CPUs. Release builds now pin the build machine and the CPU
+  baseline, and every build is started on an emulated CPU without AVX before
+  it can ship. Upgrading from 1.2.22 or older is safe again; no data change.
+
+### Changed
+
+- **Rules table**: the rule name is now the primary column (220px wide, pinned
+  on the left alongside the selection checkbox so it stays visible while
+  scrolling horizontally or opening row actions, clamped to two lines with the
+  full name on hover) and the rule's ID moved underneath it as secondary text
+  instead of occupying a column of its own. Each row keeps one visible action —
+  **Edit** — and folds pause/resume, copy, diagnose, restart and delete into a
+  **More** menu; delete sits after a separator in red. Restart and delete ask
+  for confirmation in a dialog that names the rule. On phones (< 768px) the
+  table becomes four columns that fit without sideways scrolling (name, status,
+  listen port and the action menu), and tapping a row expands its targets,
+  group, listen IP, owner (for admins) and traffic in place.
+- **Rule create/edit modal**: tightened the modal width from 620px to 540px and
+  compacted the Forwarding tab so it fits on one screen without scrolling. Each
+  target row (address wide enough for a full 39-character IPv6 literal, port,
+  enable switch and reorder/delete buttons) stays aligned on a single line;
+  upload/download rate limits, max connections/auto-restart and PROXY protocol
+  send/accept are paired into two columns; and standing multi-line field
+  descriptions move into `?` tooltips beside each label.
+- **Node status table**: the columns are reordered so the live upload/download
+  rate sits right after the node's identity (name + a one-line address) and is
+  read before CPU/memory/network, and the two right-fixed columns (detail and
+  remove) are now one: the detail link carries the delete icon on offline rows.
+  "System Uptime" is no longer covered by the fixed columns at 1440px. The rate
+  shows upload and download on separate right-aligned lines with tabular
+  digits, and the phone card leads with the name, state and live rate, with
+  44×44px tap targets for the detail entry.
+- **Dashboard**: a one-line fleet summary above the KPI cards says how many
+  machines are online, how many are offline (a link to the node board filtered
+  to offline nodes) and when the figures were last read. A failed refresh keeps
+  the previous figures and shows their time, instead of passing stale data off
+  as fresh.
+- **Node status page**: `?status=offline` shows only offline nodes, with a
+  visible banner and a one-click "show all".
+- **Group latency overview**: the "Most stable node" card labels its percentage
+  as **Failed / loss**, matching the Overall column, and the "Weakest link"
+  card names the figure by the target's type — **Failed** for a TCP target,
+  **Loss** for ICMP.
+- **Accessibility**: row checkboxes in the rules table are announced with the
+  rule's name, sortable column headers show a focus ring, and the rules page's
+  group-filter placeholder now meets WCAG AA contrast.
+
 ## [1.3.2] - 2026-11-24
 
 Released together with node 1.3.1, but the two do not depend on each other:

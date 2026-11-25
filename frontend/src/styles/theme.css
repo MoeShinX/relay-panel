@@ -468,26 +468,101 @@ html, body, #root {
   background-size: cover;
 }
 
-/* v1.2.3: give the forwarding tab one field width.
-
-   The four controls there used to disagree. 负载策略 and 最大连接数 are a
-   plain Select / InputNumber, so width:100% made them span the form (572px
-   in the 620px dialog). 限速 and 自动重启间隔 carry addons (上行/下行, Mbps,
-   分钟) and antd wraps those in a Space.Compact group — width:100% then
-   applies to the number box INSIDE the group, leaving the group sized to its
-   content (~252px). Two long rows and two short ones in the same column.
-
-   All four are now 252: the addon groups keep their natural size and the two
-   plain controls are capped to match (their cap is inline, on the component).
-   A rule name or a strategy dropdown does not need half the dialog anyway.
-
-   Scoped to the rule dialogs and to addon groups only, so nothing else moves:
-   the basic tab stays full-width, and the targets row keeps its explicit
-   widths (address 320, port 110) — which is what keeps that row on one line. */
-.rp-rule-form .ant-form-item-control-input-content .ant-space-compact,
-.rp-rule-form .ant-form-item-control-input-content .ant-input-number-group-wrapper {
+/* v1.3.3: compact forwarding-tab layout in the create/edit rule modal.
+   Targets sit on a single aligned grid row; rate limits and advanced controls
+   pair into two columns so the dialog fits without vertical scrolling while
+   keeping every control flush with its column. */
+.rp-rule-form .ant-form-item {
+  margin-bottom: 14px;
+}
+.rp-rule-form .rp-form-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+}
+.rp-rule-form .rp-form-grid-2 .ant-form-item-control-input-content .ant-space-compact,
+.rp-rule-form .rp-form-grid-2 .ant-form-item-control-input-content .ant-input-number-group-wrapper {
   width: 100%;
-  max-width: 252px;
+  max-width: none;
+}
+.rp-targets-block {
+  margin-bottom: 14px;
+}
+.rp-targets-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.rp-targets-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 78px 118px;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--rp-text-secondary);
+}
+.rp-targets-cols .is-required::before {
+  content: '* ';
+  color: var(--rp-danger);
+}
+.rp-target-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 78px 118px;
+  gap: 6px;
+  align-items: start;
+}
+.rp-target-row .ant-form-item {
+  margin-bottom: 8px;
+}
+.rp-target-row .ant-input,
+.rp-target-row .ant-input-number-input {
+  font-size: 13px;
+  padding-inline: 8px;
+}
+.rp-target-row-actions {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
+.rp-label-with-tip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.rp-label-tip-icon {
+  color: var(--rp-text-tertiary);
+  font-size: 13px;
+}
+.rp-label-inline-hint {
+  margin-left: 4px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--rp-text-tertiary);
+}
+.rp-rule-form-divider {
+  border-top: 1px solid var(--rp-border);
+  margin: 4px 0 14px;
+}
+@media (max-width: 575px) {
+  .rp-rule-form .rp-form-grid-2 {
+    grid-template-columns: 1fr;
+  }
+  .rp-targets-cols {
+    display: none;
+  }
+  .rp-target-row {
+    grid-template-columns: minmax(0, 1fr) 92px;
+  }
+  .rp-target-row-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    margin-top: -4px;
+    margin-bottom: 6px;
+  }
 }
 
 /* ---- Phones (below 768px, where MainLayout swaps the sider for a drawer) ---- */
@@ -548,6 +623,25 @@ html, body, #root {
 .rp-node-label .ant-typography-edit:hover,
 .rp-node-label .ant-typography-edit:focus-visible {
   color: var(--rp-text-tertiary);
+}
+
+/* v1.3.3: a sortable column header is a control, and antd does not draw a focus
+   ring for it. Tabbing the rules table landed on "流量" with nothing visible.
+   A 2px ring in the primary colour, offset so it does not clip on the cell. */
+.ant-table-thead th.ant-table-column-has-sorters:focus-visible,
+.ant-table-thead th[tabindex]:focus-visible {
+  outline: 2px solid var(--ant-color-primary, #7c6ee6);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
+/* v1.3.3: the filter dropdowns' placeholder was antd's default
+   rgba(0,0,0,0.25) — about 2.4:1 on white, under WCAG AA. This is the theme's
+   secondary text colour (7.1:1), used only for the placeholder so a chosen
+   value still reads as a value. */
+.rp-page-header .ant-select-selection-placeholder {
+  color: var(--rp-text-secondary);
+  opacity: 1;
 }
 
 /* The box a label turns into while it is edited. antd slides it 12px left so the
@@ -1473,6 +1567,259 @@ html, body, #root {
   font-size: 12px;
   font-weight: 500;
   line-height: 18px;
+}
+
+/* v1.3.3: the rules table's primary column — the name, with the rule's id
+   underneath as secondary text. The name gets at most two lines; past that it
+   ellipsises, and the whole name stays available as the cell's title. Before
+   this the name column had no width at all and a long Chinese name wrapped to
+   one character per line on a 1440px window. */
+.rp-rule-name-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+@media (min-width: 768px) {
+  /* Desktop rules table uses `scroll={{ x: 'max-content' }}` so columns keep
+     their widths at 1280px/1440px instead of being squeezed. Bound the cell so
+     long rule names still wrap to at most two lines without stretching the
+     column across the whole table, while guaranteeing >= 198px of text width
+     (~220px column with 11px side padding). */
+  .rp-rule-name-cell {
+    min-width: 198px;
+    max-width: 240px;
+  }
+}
+.rp-rule-name {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--rp-text);
+}
+.rp-rule-id {
+  font-family: var(--rp-font-mono);
+  font-size: 11.5px;
+  line-height: 1.2;
+  color: var(--rp-text-tertiary);
+}
+/* Mobile rules table: tighter horizontal cell padding so all columns fit
+   inside 390px without sideways scrolling, plus tap-to-expand detail panel. */
+.rp-rules-mobile-table .ant-table-thead > tr > th.ant-table-cell,
+.rp-rules-mobile-table .ant-table-tbody > tr > td.ant-table-cell {
+  padding-inline: 6px;
+}
+.rp-rule-mobile-row {
+  cursor: pointer;
+}
+.rp-rule-name-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  min-width: 0;
+}
+.rp-rule-name-toggle:focus-visible {
+  outline: 2px solid var(--ant-color-primary, #6c5dd8);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.rp-rule-id-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.rp-rule-expand-chevron {
+  font-size: 10px;
+  color: var(--rp-text-tertiary);
+  transition: transform 0.15s ease;
+}
+.rp-rules-mobile-table .ant-table-expanded-row > td.ant-table-cell {
+  background: var(--rp-table-header-bg);
+  padding: 10px 12px !important;
+}
+.rp-rule-mobile-detail {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  font-size: 12.5px;
+}
+.rp-rule-mobile-detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.rp-rule-mobile-detail-item.is-full {
+  grid-column: 1 / -1;
+}
+.rp-rule-mobile-detail-label {
+  font-size: 11.5px;
+  color: var(--rp-text-tertiary);
+}
+.rp-rule-mobile-detail-value {
+  color: var(--rp-text);
+  overflow-wrap: anywhere;
+}
+
+/* ---- v1.3.3: the node table's identity, rate and detail columns ---- */
+
+/* The node column: the admin's name over the one-line address. */
+.rp-node-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.rp-node-identity-addr {
+  font-size: 11.5px;
+  line-height: 1.25;
+  color: var(--rp-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Live upload / download: one line each, right-aligned, tabular digits so the
+   two figures line up digit for digit. The value and its unit never split. */
+.rp-node-rates {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+.rp-node-rate-line {
+  display: inline-block;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: #18181b;
+  font-weight: 500;
+  line-height: 1.3;
+}
+.rp-node-rate-line[data-direction='down'] {
+  color: #52525b;
+}
+
+/* One right-fixed column: the detail link, plus the delete icon on offline rows. */
+.rp-node-detail-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+
+/* The phone card's live rate: the headline figure, so it is larger than the
+   table's and reads as two labelled lines rather than a single run-on value. */
+.rp-node-mobile-rate {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 14px;
+  margin: 2px 0 6px;
+}
+.rp-node-mobile-rate .rp-node-rate-line {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* v1.3.3: the dashboard's fleet summary line, above the KPI cards. */
+.rp-fleet-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  color: var(--rp-text-secondary);
+}
+.rp-fleet-summary-online {
+  color: var(--rp-text);
+  font-weight: 500;
+}
+.rp-fleet-summary-sep {
+  color: var(--rp-text-tertiary);
+}
+/* The offline count is the one tappable part: it is a link into the filtered
+   node board, styled as one but with a plain button's semantics. */
+.rp-fleet-summary-offline {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: #be123c;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.rp-fleet-summary-offline:focus-visible {
+  outline: 2px solid var(--ant-color-primary, #7c6ee6);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+.rp-fleet-summary-time {
+  color: var(--rp-text-tertiary);
+}
+/* A failed refresh keeps the previous figures and says so; the time shown is
+   the time of the data, not the time of the failed attempt. */
+.rp-fleet-summary[data-stale='1'] .rp-fleet-summary-time {
+  color: #b45309;
+}
+
+/* v1.3.3: the node board's "offline only" banner and its clear chip. */
+.rp-filter-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border: 1px solid #fecdd3;
+  border-radius: 10px;
+  background: #fff1f2;
+  font-size: 13px;
+  color: #9f1239;
+}
+.rp-filter-banner-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+.rp-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 2px 10px;
+  border: 1px solid #fda4af;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #9f1239;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.rp-filter-chip:hover {
+  background: #ffe4e6;
+}
+.rp-filter-chip:focus-visible {
+  outline: 2px solid var(--ant-color-primary, #7c6ee6);
+  outline-offset: 2px;
 }
 .rp-amount {
   font-family: var(--rp-font-mono);

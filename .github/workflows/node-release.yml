@@ -32,7 +32,9 @@ env:
 
 jobs:
   build-and-upload:
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: 26.04's GCC targets a newer x86-64 level
+    # (see docker-release.yml); CFLAGS below pin the baseline as well.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -73,8 +75,17 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
           CC_aarch64_unknown_linux_musl: aarch64-linux-gnu-gcc
           CXX_aarch64_unknown_linux_musl: aarch64-linux-gnu-g++
+          # C code (ring) targets baseline x86-64 whatever musl-gcc defaults to.
+          CFLAGS_x86_64_unknown_linux_musl: -march=x86-64 -mtune=generic
+          CXXFLAGS_x86_64_unknown_linux_musl: -march=x86-64 -mtune=generic
         run: |
           cargo build --release --target ${{ matrix.rust_target }} -p relay-node
+
+      - name: Old-CPU smoke (emulated Nehalem, no AVX)
+        if: matrix.rust_target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends gdb
+          bash scripts/old-cpu-smoke.sh node target/${{ matrix.rust_target }}/release/relay-node
 
       - name: Rename binary
         run: |

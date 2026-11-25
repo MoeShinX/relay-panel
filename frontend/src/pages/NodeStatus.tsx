@@ -14,8 +14,8 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
-import { LineChartOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { LineChartOutlined, ArrowUpOutlined, ArrowDownOutlined, CloseOutlined } from '@ant-design/icons';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../api/client';
 import type { ApiEnvelope, LatencyGroupCount, NodeStatus, SharedNodeSummary, NodeDisplayRow, NodeLiveRate } from '../api/types';
 import { useI18n } from '../i18n/context';
@@ -69,6 +69,18 @@ export default function NodeStatus() {
   const { isAdmin } = useAuth();
   const isMobile = useIsMobile();
   const navigate = useNavigate();
+  // v1.3.3: the dashboard's "离线 N" link lands here with ?status=offline. The
+  // filter is URL state like the rules page's filters, so a link can be shared
+  // and a refresh keeps the view.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const offlineOnly = searchParams.get('status') === 'offline';
+  const clearOfflineFilter = () => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('status');
+      return next;
+    }, { replace: true });
+  };
 
   const [adminRows, setAdminRows] = useState<NodeStatus[] | null>(null);
   // v1.2.21: the device groups that have latency targets configured.
@@ -225,7 +237,14 @@ export default function NodeStatus() {
       return live ? { ...r, upload_bps: live.upload_bps, download_bps: live.download_bps } : r;
     });
   }, [baseRows, liveRates]);
-  const groups = useMemo(() => (rows ? stableGroupedRows(rows) : null), [rows]);
+  const groups = useMemo(() => {
+    if (!rows) return null;
+    // v1.3.3: ?status=offline shows only the machines that are down — the
+    // dashboard's "离线 N" link lands here. Placeholder rows (a group with no
+    // node reporting yet) carry no node_id and are not offline machines.
+    const shown = offlineOnly ? rows.filter((r) => r.node_id && r.online !== true) : rows;
+    return stableGroupedRows(shown);
+  }, [rows, offlineOnly]);
   // v1.2.16: "upgrade all" — every node the per-node button would accept, across
   // all groups (same eligibility ladder). Admin only.
   // Where the icon is lined up: it sits in the page header row, over the first
@@ -281,11 +300,26 @@ export default function NodeStatus() {
     return (
       <>
         <h2 className="rp-page-title"><LineChartOutlined /> {title}</h2>
-        <Result
-          status="info"
-          icon={<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />}
-          title={isAdmin ? t('noNodesHint') : t('adminNoLines')}
-        />
+        {offlineOnly ? (
+          // The filter is on but nothing is down — say that, and give it a way
+          // back instead of looking like the whole fleet vanished.
+          <Result
+            status="success"
+            title={t('nodeStatusFilteredEmpty')}
+            extra={(
+              <button type="button" className="rp-filter-chip" onClick={clearOfflineFilter}>
+                <CloseOutlined aria-hidden="true" />
+                {t('clearOfflineFilter')}
+              </button>
+            )}
+          />
+        ) : (
+          <Result
+            status="info"
+            icon={<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />}
+            title={isAdmin ? t('noNodesHint') : t('adminNoLines')}
+          />
+        )}
       </>
     );
   }
@@ -400,6 +434,20 @@ export default function NodeStatus() {
           )}
         </Space>
       </div>
+      {/* v1.3.3: while the offline filter is on, say so — otherwise a page with
+          two groups looks like the fleet shrank — and offer one click back. */}
+      {offlineOnly && (
+        <div className="rp-filter-banner" data-testid="offline-filter-banner">
+          <span className="rp-filter-banner-label">
+            <span className="rp-status-dot is-offline" aria-hidden="true" />
+            {t('offlineOnlyActive')}
+          </span>
+          <button type="button" className="rp-filter-chip" onClick={clearOfflineFilter}>
+            <CloseOutlined aria-hidden="true" />
+            {t('clearOfflineFilter')}
+          </button>
+        </div>
+      )}
       <div ref={groupsRef}>
         {canReorder ? (
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleGroupDragEnd}>

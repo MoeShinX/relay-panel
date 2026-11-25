@@ -111,6 +111,18 @@ export function NetworkCell({ row, t, onOpenLatency }: { row: NodeDisplayRow; t:
   );
 }
 
+/** v1.3.3: the one-line address identity of a node: the IPv4 when it has one,
+ *  else the IPv6, truncated for display (a full IPv6 is 39 characters). The
+ *  untruncated address is the cell's title and lives in the detail drawer. */
+export function addressSummary(r: NodeDisplayRow): { text: string; full: string; extra: number } {
+  const v4 = r.public_ipv4 ?? r.public_ip ?? '';
+  const v6 = r.public_ipv6 ?? '';
+  const all = [v4, v6].filter(Boolean);
+  const first = all[0] ?? '';
+  const text = first.length > 24 ? `${first.slice(0, 21)}…` : first;
+  return { text, full: all.join(' · '), extra: Math.max(0, all.length - 1) };
+}
+
 /** v1.2.12: an online node whose WS control channel is down. It forwards and
  *  reports fine over HTTP, so without this it looks healthy right up until an
  *  upgrade fails. Admin view only (`ws_connected` is absent elsewhere). */
