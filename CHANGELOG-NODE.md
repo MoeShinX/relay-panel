@@ -13,6 +13,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-11-26
+
+Runs against any current panel (still protocol version 4). Upgrade nodes that
+run on a CPU without AVX2.
+
 ### Fixed
 
 - **The amd64 node runs again on CPUs without AVX2** (for example Intel Ivy
