@@ -10,6 +10,12 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-11-26
+
+Released together with node 1.3.2. Servers with a CPU without AVX2 should
+upgrade both: panel 1.2.23 to 1.3.2 and node 1.2.13 to 1.3.1 do not start on
+them. The config protocol is still version 4; no database change.
+
 ### Fixed
 
 - **The panel image starts again on CPUs without AVX2** (for example Intel
