@@ -9,6 +9,12 @@
 #
 # Needs qemu-x86_64 (Debian/Ubuntu package: qemu-user). OLD_CPU picks the
 # emulated model; the default, Nehalem, has SSE4.2 but no AVX at all.
+#
+# qemu-user loads a dynamically linked binary's libraries from the host, and a
+# host's own glibc may itself need a newer CPU (Ubuntu 26.04's refuses to run
+# below x86-64-v3), which would fail every binary. OLD_CPU_SYSROOT points at
+# the root filesystem the binary really runs on — for the panel, the
+# debian:bookworm-slim image it ships in — and qemu takes libraries from there.
 set -euo pipefail
 
 KIND=${1:?usage: old-cpu-smoke.sh panel|node <binary>}
@@ -16,6 +22,10 @@ BIN=$(realpath "${2:?usage: old-cpu-smoke.sh panel|node <binary>}")
 CPU=${OLD_CPU:-Nehalem}
 QEMU=${QEMU:-qemu-x86_64}
 command -v "$QEMU" >/dev/null || { echo "old-cpu-smoke: $QEMU not found (install qemu-user)" >&2; exit 2; }
+QEMU_ARGS=(-cpu "$CPU")
+if [ -n "${OLD_CPU_SYSROOT:-}" ]; then
+    QEMU_ARGS+=(-L "$OLD_CPU_SYSROOT")
+fi
 
 WORK=$(mktemp -d)
 LOG="$WORK/out.log"
@@ -53,7 +63,7 @@ panel)
         PUBLIC_DIR="$WORK" \
         JWT_SECRET="old-cpu-smoke-0123456789abcdef0123456789abcdef" \
         GEOIP_ENABLED=false \
-        exec "$QEMU" -cpu "$CPU" "$BIN"
+        exec "$QEMU" "${QEMU_ARGS[@]}" "$BIN"
     ) >"$LOG" 2>&1 &
     PID=$!
     for _ in $(seq 1 300); do
@@ -83,7 +93,7 @@ node)
         cd "$WORK"
         ulimit -c unlimited 2>/dev/null || true
         PANEL_URL="https://example.com" NODE_TOKEN="old-cpu-smoke-token" \
-        exec timeout 45 "$QEMU" -cpu "$CPU" "$BIN"
+        exec timeout 45 "$QEMU" "${QEMU_ARGS[@]}" "$BIN"
     ) >"$LOG" 2>&1
     rc=$?
     set -e
