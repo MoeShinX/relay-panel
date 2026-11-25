@@ -214,6 +214,8 @@ export const zhCN = {
   ruleFormInvalid: '有内容没填对，请检查标红的字段',
   tabForward: '转发',
   rateLimitsShortHint: '0 = 不限',
+  ruleExpandDetails: '展开 {name} 的详情',
+  ruleCollapseDetails: '收起 {name} 的详情',
   inboundGroup: '出口分组',
   outboundGroup: '出口分组',
   createGroupFirst: '请先创建分组',

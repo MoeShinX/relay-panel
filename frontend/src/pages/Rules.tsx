@@ -1,6 +1,6 @@
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, message, Popconfirm, Tag, Alert, Typography, Dropdown, Switch, Tabs, Spin, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
-import { PlusOutlined, ReloadOutlined, EditOutlined, ApiOutlined, CopyOutlined, DownloadOutlined, UploadOutlined, PauseCircleOutlined, PlayCircleOutlined, DeleteOutlined, ArrowUpOutlined, ArrowDownOutlined, MedicineBoxOutlined, QuestionCircleOutlined, ThunderboltOutlined, SearchOutlined, MoreOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, EditOutlined, ApiOutlined, CopyOutlined, DownloadOutlined, UploadOutlined, PauseCircleOutlined, PlayCircleOutlined, DeleteOutlined, ArrowUpOutlined, ArrowDownOutlined, MedicineBoxOutlined, QuestionCircleOutlined, ThunderboltOutlined, SearchOutlined, MoreOutlined, RightOutlined, DownOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api/client';
@@ -180,6 +180,12 @@ export default function Rules() {
   }, [setSearchParams]);
 
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
+  // v1.3.3: mobile rows expand in place to reveal targets, group, listen IP,
+  // owner and traffic without opening the edit dialog.
+  const [mobileExpandedIds, setMobileExpandedIds] = useState<number[]>([]);
+  const toggleMobileExpand = (id: number) => {
+    setMobileExpandedIds(prev => (prev.includes(id) ? prev.filter(k => k !== id) : [...prev, id]));
+  };
   // Batch "move to another inbound group": dialog state, then the outcome.
   const [moveOpen, setMoveOpen] = useState(false);
   const [moveTarget, setMoveTarget] = useState<number | undefined>(undefined);
@@ -827,20 +833,101 @@ const IMPORT_DEFAULTS = {
     </>
   );
 
-  /** v1.3.3: the name is the primary column. It used to have no width at all
-   *  and was squeezed to ~48px on a 1440px window, wrapping a long Chinese name
-   *  one character per line. `minWidth` (not `width`) lets it grow on a wide
-   *  window but never collapse below a readable block; the CSS clamps it to two
-   *  lines, and the full name is the title attribute.
+  /** v1.3.3: the name is the primary column. On desktop it has an explicit
+   *  220px width and is pinned on the left so scrolling horizontally or opening
+   *  the right-fixed "More" menu never hides which rule is being acted on; the
+   *  CSS clamps it to two lines with the full name in the title attribute.
    *
-   *  The rule's id moved underneath as secondary text instead of occupying a
-   *  column of its own — still visible, still searchable. */
-  const renderName = (v: string, r: ForwardRule) => (
-    <div className="rp-rule-name-cell">
-      <span className="rp-rule-name" title={v}>{v}</span>
-      <span className="rp-rule-id" aria-label={t('ruleIdLabel').replace('{id}', String(r.id))}>#{r.id}</span>
-    </div>
-  );
+   *  The rule's id sits underneath as secondary text instead of occupying a
+   *  column of its own. On phones, tapping the name cell (or row) toggles the
+   *  in-place detail drawer below the row. */
+  const renderName = (v: string, r: ForwardRule, expandable = false) => {
+    if (!expandable) {
+      return (
+        <div className="rp-rule-name-cell">
+          <span className="rp-rule-name" title={v}>{v}</span>
+          <span className="rp-rule-id" aria-label={t('ruleIdLabel').replace('{id}', String(r.id))}>#{r.id}</span>
+        </div>
+      );
+    }
+    const expanded = mobileExpandedIds.includes(r.id);
+    const toggleLabel = (expanded ? t('ruleCollapseDetails') : t('ruleExpandDetails')).replace('{name}', v);
+    return (
+      <button
+        type="button"
+        className="rp-rule-name-toggle"
+        aria-expanded={expanded}
+        aria-label={toggleLabel}
+        onClick={(e) => { e.stopPropagation(); toggleMobileExpand(r.id); }}
+      >
+        <span className="rp-rule-name" title={v}>{v}</span>
+        <span className="rp-rule-id-row">
+          <span className="rp-rule-id" aria-label={t('ruleIdLabel').replace('{id}', String(r.id))}>#{r.id}</span>
+          {expanded
+            ? <DownOutlined className="rp-rule-expand-chevron" aria-hidden="true" />
+            : <RightOutlined className="rp-rule-expand-chevron" aria-hidden="true" />}
+        </span>
+      </button>
+    );
+  };
+
+  /** v1.3.3: expanded mobile row details — targets, group, listen IP, owner
+   *  (admin only) and cumulative traffic, all hidden from the 4-column phone
+   *  table so the row fits cleanly within 390px without sideways scrolling. */
+  const renderMobileDetail = (r: ForwardRule) => {
+    const enabledTargets = ruleTargets(r).filter(tgt => tgt.enabled);
+    const targets = enabledTargets.length > 0 ? enabledTargets : ruleTargets(r);
+    const g = groupInfo.get(r.device_group_in);
+    return (
+      <div className="rp-rule-mobile-detail" data-testid={`rule-mobile-detail-${r.id}`}>
+        <div className="rp-rule-mobile-detail-item is-full">
+          <span className="rp-rule-mobile-detail-label">{t('target')}</span>
+          <div className="rp-rule-mobile-detail-value">
+            <Space size={4} wrap>
+              {targets.length === 0 ? '-' : targets.map((tgt, i) => (
+                <span key={i} className="rp-mono">{formatTargetHostPort(tgt.host, tgt.port)}</span>
+              ))}
+              {r.load_balance_strategy && r.load_balance_strategy !== 'first' && (
+                <Tag color="cyan">{r.load_balance_strategy === 'round_robin' ? t('lbRoundRobin') : t('lbFailover')}</Tag>
+              )}
+            </Space>
+          </div>
+        </div>
+        <div className="rp-rule-mobile-detail-item">
+          <span className="rp-rule-mobile-detail-label">{t('groupName')}</span>
+          <div className="rp-rule-mobile-detail-value">
+            {g
+              ? <Tag color="cyan" style={{ marginInlineEnd: 0 }}>{g.name}</Tag>
+              : <Text type="secondary">{t('unknownGroup')} (#{r.device_group_in})</Text>}
+          </div>
+        </div>
+        <div className="rp-rule-mobile-detail-item">
+          <span className="rp-rule-mobile-detail-label">{t('listenIp')}</span>
+          <div className="rp-rule-mobile-detail-value">
+            <HostSummary
+              value={g?.connect_host}
+              empty={<Text type="secondary">{t('notConfigured')}</Text>}
+            />
+          </div>
+        </div>
+        {isAdmin && (
+          <div className="rp-rule-mobile-detail-item">
+            <span className="rp-rule-mobile-detail-label">{t('owner')}</span>
+            <span className="rp-rule-mobile-detail-value">{userMap.get(r.uid) ?? `#${r.uid}`}</span>
+          </div>
+        )}
+        <div className="rp-rule-mobile-detail-item">
+          <span className="rp-rule-mobile-detail-label">{t('traffic')}</span>
+          <span
+            className="rp-rule-mobile-detail-value rp-mono"
+            style={{ color: (r.traffic_used ?? 0) > 0 ? '#0f766e' : 'var(--rp-text-tertiary)' }}
+          >
+            {formatBytes(r.traffic_used ?? 0)}
+          </span>
+        </div>
+      </div>
+    );
+  };
 
   /** v1.3.3: one visible action ("编辑") plus a "更多" menu. The menu is built
    *  per row because every item acts on that rule; its items keep a
@@ -946,16 +1033,12 @@ const IMPORT_DEFAULTS = {
 
   const allColumns = [
     {
-      // v1.3.3: the name is the primary column. It used to have no width at all
-      // and was squeezed to ~48px on 1280px/1440px windows, wrapping a long
-      // Chinese name one character per line. Because the right-fixed action
-      // column puts antd's table into `table-layout: fixed`, ColGroup ignores
-      // `minWidth` — so the desktop column needs an explicit `width` so the
-      // two-line clamp has room to show enough of the name to distinguish
-      // rules that share a prefix. The rule's id sits underneath as secondary
-      // text instead of occupying its own column.
-      title: t('name'), dataIndex: 'name', key: 'name', width: 220,
-      render: renderName,
+      // v1.3.3: the name is the primary column. Explicit width (220px) + left
+      // pinning keeps it readable and anchored alongside the selection column
+      // at 1280px/1440px even while scrolling sideways or opening the right-
+      // fixed action menu. The rule's id sits underneath as secondary text.
+      title: t('name'), dataIndex: 'name', key: 'name', width: 220, fixed: 'left' as const,
+      render: (v: string, r: ForwardRule) => renderName(v, r),
     },
     // v0.4.9: inbound group name. Hidden on small screens (responsive md+) so
     // the mobile view keeps the core columns. Lookup misses → "未知分组 (#ID)".
@@ -1053,17 +1136,17 @@ const IMPORT_DEFAULTS = {
   // v1.3.3: the phone layout. The responsive-column approach left the phone
   // client scrolling sideways to find the status ("paused") and the actions;
   // there is no room for an 8-column table on a 390px screen. The phone gets
-  // four columns that fit: name (with the id under it), status, listen port and
-  // the actions. Everything else stays reachable through the edit dialog — the
-  // rule's own full record — and through search, which keeps working because it
-  // runs over the whole loaded set, not over the visible columns.
+  // four columns that fit: name (with the id and expand chevron under it),
+  // status, listen port and the actions. Tapping the row expands an in-place
+  // detail panel showing targets, inbound group, listen IP, owner (for admins)
+  // and traffic without having to open the edit dialog.
   //
   // Status folds the protocol tags and the state tags into one cell: on a phone
   // the reader wants "is it on and does it work", not the protocol breakdown.
   const mobileColumns = [
     {
       title: t('name'), dataIndex: 'name', key: 'name', minWidth: 116,
-      render: renderName,
+      render: (v: string, r: ForwardRule) => renderName(v, r, true),
     },
     {
       title: t('status'), key: 'status', width: 72,
@@ -1428,7 +1511,9 @@ const IMPORT_DEFAULTS = {
         </div>
       )}
       <Table
+        className={isMobile ? 'rp-rules-mobile-table' : undefined}
         rowSelection={{
+          fixed: !isMobile,
           selectedRowKeys,
           onChange: (keys) => setSelectedRowKeys(keys as number[]),
           // v1.3.3: the row checkbox used to be announced as a bare
@@ -1442,6 +1527,18 @@ const IMPORT_DEFAULTS = {
             'aria-label': t('ruleSelectAria').replace('{name}', r.name),
           }) as { disabled?: boolean },
         }}
+        expandable={isMobile ? {
+          expandedRowKeys: mobileExpandedIds,
+          showExpandColumn: false,
+          expandedRowRender: (r) => renderMobileDetail(r),
+        } : undefined}
+        onRow={isMobile ? (r) => ({
+          className: 'rp-rule-mobile-row',
+          onClick: (e) => {
+            if ((e.target as HTMLElement).closest('button, a, input, label, .ant-checkbox-wrapper, .ant-dropdown-trigger')) return;
+            toggleMobileExpand(r.id);
+          },
+        }) : undefined}
         dataSource={visibleRules} columns={shownColumns} rowKey="id" loading={loading}
         pagination={{
           pageSize: rulePageSize,
@@ -1450,10 +1547,9 @@ const IMPORT_DEFAULTS = {
           onChange: (_page, size) => { if (size !== rulePageSize) changeRulePageSize(size); },
         }}
         // Desktop uses `x: 'max-content'` so fixed column widths are honored at
-        // 1280px/1440px (with `x: true` + a right-fixed action column, antd
-        // falls into `table-layout: fixed; width: auto`, which ignores
-        // `minWidth` and compresses columns below their declared `width`).
-        // The phone table fits without sideways scroll.
+        // 1280px/1440px while the selection + name columns stay pinned left and
+        // the action column stays pinned right. The phone table fits without
+        // sideways scroll.
         scroll={isMobile ? undefined : DESKTOP_RULES_SCROLL}
       />
 

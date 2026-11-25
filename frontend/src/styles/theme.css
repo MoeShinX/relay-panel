@@ -1608,6 +1608,72 @@ html, body, #root {
   line-height: 1.2;
   color: var(--rp-text-tertiary);
 }
+/* Mobile rules table: tighter horizontal cell padding so all columns fit
+   inside 390px without sideways scrolling, plus tap-to-expand detail panel. */
+.rp-rules-mobile-table .ant-table-thead > tr > th.ant-table-cell,
+.rp-rules-mobile-table .ant-table-tbody > tr > td.ant-table-cell {
+  padding-inline: 6px;
+}
+.rp-rule-mobile-row {
+  cursor: pointer;
+}
+.rp-rule-name-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  min-width: 0;
+}
+.rp-rule-name-toggle:focus-visible {
+  outline: 2px solid var(--ant-color-primary, #6c5dd8);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.rp-rule-id-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.rp-rule-expand-chevron {
+  font-size: 10px;
+  color: var(--rp-text-tertiary);
+  transition: transform 0.15s ease;
+}
+.rp-rules-mobile-table .ant-table-expanded-row > td.ant-table-cell {
+  background: var(--rp-table-header-bg);
+  padding: 10px 12px !important;
+}
+.rp-rule-mobile-detail {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  font-size: 12.5px;
+}
+.rp-rule-mobile-detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.rp-rule-mobile-detail-item.is-full {
+  grid-column: 1 / -1;
+}
+.rp-rule-mobile-detail-label {
+  font-size: 11.5px;
+  color: var(--rp-text-tertiary);
+}
+.rp-rule-mobile-detail-value {
+  color: var(--rp-text);
+  overflow-wrap: anywhere;
+}
 
 /* ---- v1.3.3: the node table's identity, rate and detail columns ---- */
 

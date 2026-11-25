@@ -215,6 +215,8 @@ export const enUS: Dict = {
   ruleFormInvalid: 'Something is not filled in correctly — check the fields marked in red',
   tabForward: 'Forwarding',
   rateLimitsShortHint: '0 = unlimited',
+  ruleExpandDetails: 'Show details for {name}',
+  ruleCollapseDetails: 'Hide details for {name}',
   inboundGroup: 'Listener Group',
   outboundGroup: 'Outbound Group',
   createGroupFirst: 'Create a group first',

@@ -12,19 +12,29 @@ independent `v*` / `node-v*` tracks since this release).
 
 ### Changed
 
-- **Rules table**: the rule name is now the primary column (at least 180px
-  wide, at most two lines with the full name on hover) and the rule's ID moved
-  underneath it as secondary text instead of occupying a column of its own.
-  Each row keeps one visible action — 编辑 — and folds pause/resume, copy,
-  diagnose, restart and delete into a **更多** menu; delete sits after a
-  separator in red. Restart and delete ask for confirmation in a dialog that
-  names the rule. On phones (< 768px) the table becomes four columns that fit
-  without sideways scrolling: name, status, listen port and the action menu.
+- **Rules table**: the rule name is now the primary column (220px wide, pinned
+  on the left alongside the selection checkbox so it stays visible while
+  scrolling horizontally or opening row actions, clamped to two lines with the
+  full name on hover) and the rule's ID moved underneath it as secondary text
+  instead of occupying a column of its own. Each row keeps one visible action —
+  **Edit** — and folds pause/resume, copy, diagnose, restart and delete into a
+  **More** menu; delete sits after a separator in red. Restart and delete ask
+  for confirmation in a dialog that names the rule. On phones (< 768px) the
+  table becomes four columns that fit without sideways scrolling (name, status,
+  listen port and the action menu), and tapping a row expands its targets,
+  group, listen IP, owner (for admins) and traffic in place.
+- **Rule create/edit modal**: tightened the modal width from 620px to 540px and
+  compacted the Forwarding tab so it fits on one screen without scrolling. Each
+  target row (address wide enough for a full 39-character IPv6 literal, port,
+  enable switch and reorder/delete buttons) stays aligned on a single line;
+  upload/download rate limits, max connections/auto-restart and PROXY protocol
+  send/accept are paired into two columns; and standing multi-line field
+  descriptions move into `?` tooltips beside each label.
 - **Node status table**: the columns are reordered so the live upload/download
   rate sits right after the node's identity (name + a one-line address) and is
   read before CPU/memory/network, and the two right-fixed columns (detail and
   remove) are now one: the detail link carries the delete icon on offline rows.
-  "系统运行时长" is no longer covered by the fixed columns at 1440px. The rate
+  "System Uptime" is no longer covered by the fixed columns at 1440px. The rate
   shows upload and download on separate right-aligned lines with tabular
   digits, and the phone card leads with the name, state and live rate, with
   44×44px tap targets for the detail entry.
@@ -35,9 +45,10 @@ independent `v*` / `node-v*` tracks since this release).
   as fresh.
 - **Node status page**: `?status=offline` shows only offline nodes, with a
   visible banner and a one-click "show all".
-- **Group latency overview**: the "most stable node" card labels its percentage
-  as 失败 / 丢包, matching the Overall column, and the "weakest link" card names
-  the figure by the target's type — 探测失败 for a TCP target, 丢包 for ICMP.
+- **Group latency overview**: the "Most stable node" card labels its percentage
+  as **Failed / loss**, matching the Overall column, and the "Weakest link"
+  card names the figure by the target's type — **Failed** for a TCP target,
+  **Loss** for ICMP.
 - **Accessibility**: row checkboxes in the rules table are announced with the
   rule's name, sortable column headers show a focus ring, and the rules page's
   group-filter placeholder now meets WCAG AA contrast.

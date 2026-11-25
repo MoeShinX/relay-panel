@@ -40,14 +40,17 @@ const renderPage = (initial = '/rules') =>
     </MemoryRouter>,
   );
 
-/** Route the two independent list reads separately so each can fail alone. */
-function routes({ rules, groups }: { rules?: unknown; groups?: unknown }) {
+/** Route the independent list reads separately so each can fail alone. */
+function routes({ rules, groups, users }: { rules?: unknown; groups?: unknown; users?: unknown }) {
   mockGet.mockImplementation((url: string) => {
     if (url.startsWith('/rules')) {
       return rules instanceof Error ? Promise.reject(rules) : Promise.resolve(rules);
     }
     if (url === '/groups') {
       return groups instanceof Error ? Promise.reject(groups) : Promise.resolve(groups);
+    }
+    if (url === '/admin/users' && users !== undefined) {
+      return users instanceof Error ? Promise.reject(users) : Promise.resolve(users);
     }
     return Promise.resolve(ok([]));
   });
@@ -618,7 +621,7 @@ describe('the name is the primary column and carries the id', () => {
     expect(nameEl.getAttribute('title')).toBe(longName);
   });
 
-  it('gives the desktop name column an explicit width and max-content scroll so 1280/1440px windows do not squeeze it', async () => {
+  it('gives the desktop name column an explicit width, pins it left, and uses max-content scroll so 1280/1440px windows do not squeeze or scroll it away', async () => {
     const { container } = renderPage();
     await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
     const cols = Array.from(container.querySelectorAll('.ant-table colgroup col')) as HTMLElement[];
@@ -626,6 +629,10 @@ describe('the name is the primary column and carries the id', () => {
     const nameWidth = parseInt(cols[1]?.style.width || '', 10);
     expect(nameWidth).toBeGreaterThanOrEqual(180);
     expect((container.querySelector('.ant-table table') as HTMLElement).style.width).toBe('max-content');
+    // Both the checkbox column and the name column are pinned to the left edge.
+    const headerCells = Array.from(container.querySelectorAll('.ant-table-thead th'));
+    expect(headerCells[0]?.className).toMatch(/ant-table-cell-fix-(left|start)/);
+    expect(headerCells[1]?.className).toMatch(/ant-table-cell-fix-(left|start)/);
   });
 
   it('shows the rule id under the name instead of in its own column', async () => {
@@ -723,5 +730,60 @@ describe('the phone layout', () => {
 
     // The compact action cell holds only the trigger; edit lives in the menu.
     expect(screen.queryByRole('button', { name: 'edit hk-web' })).toBeNull();
+  });
+
+  it('expands a phone row on tap to show targets, group, listen IP, owner and traffic', async () => {
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes('max-width: 767px'),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })) as unknown as typeof window.matchMedia;
+
+    routes({
+      rules: ok([rule({
+        id: 12,
+        name: 'hk-web',
+        uid: 2,
+        traffic_used: 2048,
+        targets: [
+          { host: '203.0.113.10', port: 443, enabled: true, position: 1, id: 1, rule_id: 12 },
+          { host: '203.0.113.11', port: 443, enabled: true, position: 2, id: 2, rule_id: 12 },
+        ],
+      })]),
+      groups: ok([group({ name: 'hk-line', connect_host: '198.51.100.45' })]),
+      users: ok([{ id: 2, username: 'alice' }]),
+    });
+
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
+
+    // Collapsed initially: hidden fields are not rendered yet.
+    expect(screen.queryByTestId('rule-mobile-detail-12')).toBeNull();
+
+    // Tapping the name toggle expands the detail panel in place.
+    const toggle = screen.getByRole('button', { name: 'ruleExpandDetails' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await user.click(toggle);
+
+    const detail = await screen.findByTestId('rule-mobile-detail-12');
+    expect(detail).toHaveTextContent('203.0.113.10:443');
+    expect(detail).toHaveTextContent('203.0.113.11:443');
+    expect(detail).toHaveTextContent('hk-line');
+    expect(detail).toHaveTextContent('198.51.100.45');
+    expect(detail).toHaveTextContent('alice');
+    expect(detail).toHaveTextContent('2.00 KB');
+
+    // Tapping again collapses it (antd keeps the row mounted with display:none).
+    await user.click(screen.getByRole('button', { name: 'ruleCollapseDetails' }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'ruleExpandDetails' })).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.getByTestId('rule-mobile-detail-12')).not.toBeVisible();
+    });
   });
 });
