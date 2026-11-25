@@ -81,39 +81,18 @@ jobs:
 
       # Release binaries are built on GitHub's runners, whose C compiler may
       # target a newer x86-64 level than older servers support (panel 1.2.23
-      # to 1.3.2 crashed with "invalid opcode" on CPUs without AVX2). Start
-      # both binaries on an emulated CPU without AVX so that cannot ship again.
-      # They run inside debian:bookworm-slim, the panel image's base: the
-      # runner's own glibc may itself need a newer CPU.
-      - name: old-CPU smoke setup (gdb, to name a crash site)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gdb
-
-      # TEMP calibration (remove before merge): 1.2.22 runs on an Ivy Bridge
-      # host, 1.2.23 does not. The check must pass the first and fail the second.
-      - name: TEMP old-CPU calibration against published images
-        continue-on-error: true
-        run: |
-          for v in 1.2.22 1.2.23; do
-            id=$(docker create ghcr.io/moeshinx/relay-panel-panel:$v-amd64)
-            docker cp "$id:/app/relay-panel" "/tmp/relay-panel-$v"
-            docker rm "$id" >/dev/null
-            for cpu in Nehalem IvyBridge; do
-              echo "===== published $v on $cpu ====="
-              OLD_CPU=$cpu bash scripts/old-cpu-smoke.sh panel "/tmp/relay-panel-$v" && echo "RESULT $v $cpu: PASSED" || echo "RESULT $v $cpu: FAILED"
-            done
-          done
-          for v in 1.2.12 1.3.1; do
-            curl -fsSL -o "/tmp/relay-node-$v" "https://github.com/MoeShinX/relay-panel/releases/download/node-v$v/relay-node-linux-amd64"
-            chmod +x "/tmp/relay-node-$v"
-            echo "===== published node $v on Nehalem ====="
-            bash scripts/old-cpu-smoke.sh node "/tmp/relay-node-$v" && echo "RESULT node $v: PASSED" || echo "RESULT node $v: FAILED"
-          done
-
+      # to 1.3.2 and node 1.2.13 to 1.3.1 crashed with "invalid opcode" on CPUs
+      # without AVX2). Start the panel on an emulated CPU without AVX, inside
+      # debian:bookworm-slim, so that cannot ship again. Checked against the
+      # published binaries: 1.2.22 passes, 1.2.23 fails.
+      #
       # Panel only: the debug node here links the runner's newer glibc and
       # cannot start inside bookworm at all. The released node is a static
       # musl binary; node-release.yml checks that one.
       - name: old-CPU smoke (emulated Nehalem, no AVX)
-        run: bash scripts/old-cpu-smoke.sh panel target/debug/relay-panel
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends gdb
+          bash scripts/old-cpu-smoke.sh panel target/debug/relay-panel
 
       - name: npm ci (frontend)
         run: npm ci --no-audit --no-fund

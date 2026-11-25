@@ -15,12 +15,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
-- The amd64 node binary is built for the baseline x86-64 CPU level again.
-  Releases from node-v1.2.13 to node-v1.3.1 were compiled on a build machine
-  whose compiler targets newer CPUs, so parts of the TLS code could stop with
-  "invalid opcode" on CPUs without AVX2 (no failure has been reported so far).
-  Release builds now pin the build machine and the CPU baseline, and the binary
-  is started on an emulated CPU without AVX before it can ship.
+- **The amd64 node runs again on CPUs without AVX2** (for example Intel Ivy
+  Bridge and older). node-v1.2.13 to node-v1.3.1 were compiled on a build
+  machine whose compiler targets newer CPUs and stop with "invalid opcode" on
+  such hosts; node-v1.2.12 and older are not affected. Release builds now pin
+  the build machine and the CPU baseline, and the binary is started on an
+  emulated CPU without AVX before it can ship.
 
 ## [1.3.1] - 2026-11-24
 
