@@ -7,34 +7,46 @@
 #   bash scripts/old-cpu-smoke.sh panel target/release/relay-panel
 #   bash scripts/old-cpu-smoke.sh node  target/x86_64-unknown-linux-musl/release/relay-node
 #
-# Needs qemu-x86_64 (Debian/Ubuntu package: qemu-user). OLD_CPU picks the
-# emulated model; the default, Nehalem, has SSE4.2 but no AVX at all.
+# The binary runs under a static qemu-x86_64 inside a container of
+# OLD_CPU_IMAGE (default debian:bookworm-slim, the panel image's base), so it
+# loads that image's libraries. Running it on the host instead would load the
+# host's glibc, which may itself need a newer CPU (Ubuntu 26.04's refuses to
+# start below x86-64-v3) and would fail every binary.
 #
-# qemu-user loads a dynamically linked binary's libraries from the host, and a
-# host's own glibc may itself need a newer CPU (Ubuntu 26.04's refuses to run
-# below x86-64-v3), which would fail every binary. OLD_CPU_SYSROOT points at
-# the root filesystem the binary really runs on — for the panel, the
-# debian:bookworm-slim image it ships in — and qemu takes libraries from there.
+# Needs docker and a static qemu-x86_64 (Debian/Ubuntu package
+# qemu-user-static). OLD_CPU picks the emulated model; the default, Nehalem,
+# has SSE4.2 but no AVX at all.
 set -euo pipefail
 
 KIND=${1:?usage: old-cpu-smoke.sh panel|node <binary>}
 BIN=$(realpath "${2:?usage: old-cpu-smoke.sh panel|node <binary>}")
 CPU=${OLD_CPU:-Nehalem}
-QEMU=${QEMU:-qemu-x86_64}
-command -v "$QEMU" >/dev/null || { echo "old-cpu-smoke: $QEMU not found (install qemu-user)" >&2; exit 2; }
-QEMU_ARGS=(-cpu "$CPU")
-if [ -n "${OLD_CPU_SYSROOT:-}" ]; then
-    QEMU_ARGS+=(-L "$OLD_CPU_SYSROOT")
-fi
+IMAGE=${OLD_CPU_IMAGE:-debian:bookworm-slim}
+QEMU=${QEMU:-$(command -v qemu-x86_64-static || true)}
+[ -n "$QEMU" ] || { echo "old-cpu-smoke: qemu-x86_64-static not found (install qemu-user-static)" >&2; exit 2; }
+QEMU=$(realpath "$QEMU")
+command -v docker >/dev/null || { echo "old-cpu-smoke: docker not found" >&2; exit 2; }
 
 WORK=$(mktemp -d)
+chmod 777 "$WORK"
 LOG="$WORK/out.log"
-PID=
+NAME="old-cpu-smoke-$$"
 cleanup() {
-    if [ -n "$PID" ]; then kill "$PID" 2>/dev/null || true; fi
-    rm -rf "$WORK"
+    docker rm -f "$NAME" >/dev/null 2>&1 || true
+    rm -rf "$WORK" 2>/dev/null || sudo rm -rf "$WORK" 2>/dev/null || true
 }
 trap cleanup EXIT
+
+# run_in_box <env...> -- <command...>: the command runs in the container with
+# the binary at /under-test and qemu at /qemu; the work dir is /work.
+run_in_box() {
+    local envs=()
+    while [ "$1" != "--" ]; do envs+=(-e "$1"); shift; done
+    shift
+    docker run --rm --name "$NAME" --network host --ulimit core=-1 \
+        -v "$QEMU:/qemu:ro" -v "$BIN:/under-test:ro" -v "$WORK:/work" -w /work \
+        "${envs[@]}" "$IMAGE" "$@"
+}
 
 fail() {
     echo "::error::old-cpu-smoke ($KIND on $CPU): $1" >&2
@@ -55,21 +67,17 @@ panel)
     PORT=${OLD_CPU_PORT:-18997}
     # Opening the SQLite database and running every migration happens before
     # the listener comes up, so an HTTP answer means SQLite ran on this CPU.
-    (
-        cd "$WORK"
-        ulimit -c unlimited 2>/dev/null || true
-        DATABASE_URL="sqlite:$WORK/data.db?mode=rwc" \
-        LISTEN="127.0.0.1:$PORT" \
-        PUBLIC_DIR="$WORK" \
-        JWT_SECRET="old-cpu-smoke-0123456789abcdef0123456789abcdef" \
-        GEOIP_ENABLED=false \
-        exec "$QEMU" "${QEMU_ARGS[@]}" "$BIN"
-    ) >"$LOG" 2>&1 &
+    run_in_box \
+        "DATABASE_URL=sqlite:/work/data.db?mode=rwc" \
+        "LISTEN=127.0.0.1:$PORT" \
+        "PUBLIC_DIR=/work" \
+        "JWT_SECRET=old-cpu-smoke-0123456789abcdef0123456789abcdef" \
+        "GEOIP_ENABLED=false" \
+        -- /qemu -cpu "$CPU" /under-test >"$LOG" 2>&1 &
     PID=$!
     for _ in $(seq 1 300); do
         if ! kill -0 "$PID" 2>/dev/null; then
             set +e; wait "$PID"; rc=$?; set -e
-            PID=
             [ "$rc" -eq 132 ] && fail "illegal instruction (exit 132): the binary needs a newer CPU than $CPU"
             fail "exited early with code $rc"
         fi
@@ -77,7 +85,7 @@ panel)
         code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/api/v1/auth/login" \
             -H 'Content-Type: application/json' --data '{"username":"old-cpu-smoke","password":"x"}' || true)
         if [ -n "$code" ] && [ "$code" != 000 ]; then
-            echo "old-cpu-smoke: panel answered HTTP $code on emulated $CPU"
+            echo "old-cpu-smoke: panel answered HTTP $code on emulated $CPU ($IMAGE)"
             exit 0
         fi
         sleep 1
@@ -89,16 +97,12 @@ node)
     # unreachable or wrong panel only makes it retry, so it must still be
     # running when the timeout ends it.
     set +e
-    (
-        cd "$WORK"
-        ulimit -c unlimited 2>/dev/null || true
-        PANEL_URL="https://example.com" NODE_TOKEN="old-cpu-smoke-token" \
-        exec timeout 45 "$QEMU" "${QEMU_ARGS[@]}" "$BIN"
-    ) >"$LOG" 2>&1
+    run_in_box "PANEL_URL=https://example.com" "NODE_TOKEN=old-cpu-smoke-token" \
+        -- timeout 45 /qemu -cpu "$CPU" /under-test >"$LOG" 2>&1
     rc=$?
     set -e
     case "$rc" in
-        124) echo "old-cpu-smoke: node ran 45s on emulated $CPU" ;;
+        124) echo "old-cpu-smoke: node ran 45s on emulated $CPU ($IMAGE)" ;;
         132) fail "illegal instruction (exit 132): the binary needs a newer CPU than $CPU" ;;
         *)   fail "exited early with code $rc" ;;
     esac

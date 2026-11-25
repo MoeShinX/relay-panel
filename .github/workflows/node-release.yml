@@ -84,7 +84,7 @@ jobs:
       - name: Old-CPU smoke (emulated Nehalem, no AVX)
         if: matrix.rust_target == 'x86_64-unknown-linux-musl'
         run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user-static gdb
           bash scripts/old-cpu-smoke.sh node target/${{ matrix.rust_target }}/release/relay-node
 
       - name: Rename binary

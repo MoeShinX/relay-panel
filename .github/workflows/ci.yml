@@ -83,20 +83,17 @@ jobs:
       # target a newer x86-64 level than older servers support (panel 1.2.23
       # to 1.3.2 crashed with "invalid opcode" on CPUs without AVX2). Start
       # both binaries on an emulated CPU without AVX so that cannot ship again.
-      # They run against the libraries of debian:bookworm-slim, the panel
-      # image's base: the runner's own glibc may itself need a newer CPU.
-      - name: old-CPU smoke setup (qemu-user, bookworm sysroot)
+      # They run inside debian:bookworm-slim, the panel image's base: the
+      # runner's own glibc may itself need a newer CPU.
+      - name: old-CPU smoke setup (static qemu)
         run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user gdb
-          mkdir -p /tmp/bookworm-root
-          docker export "$(docker create debian:bookworm-slim)" | tar -x -C /tmp/bookworm-root
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user-static gdb
+          docker pull -q debian:bookworm-slim
 
       # TEMP calibration (remove before merge): 1.2.22 runs on an Ivy Bridge
       # host, 1.2.23 does not. The check must pass the first and fail the second.
       - name: TEMP old-CPU calibration against published images
         continue-on-error: true
-        env:
-          OLD_CPU_SYSROOT: /tmp/bookworm-root
         run: |
           for v in 1.2.22 1.2.23; do
             id=$(docker create ghcr.io/moeshinx/relay-panel-panel:$v-amd64)
@@ -109,8 +106,6 @@ jobs:
           done
 
       - name: old-CPU smoke (emulated Nehalem, no AVX)
-        env:
-          OLD_CPU_SYSROOT: /tmp/bookworm-root
         run: |
           bash scripts/old-cpu-smoke.sh panel target/debug/relay-panel
           bash scripts/old-cpu-smoke.sh node target/debug/relay-node

@@ -144,13 +144,9 @@ jobs:
 
       - name: Old-CPU smoke (emulated Nehalem, no AVX)
         if: matrix.arch == 'amd64'
-        # Against the libraries of debian:bookworm-slim, the image's base.
-        env:
-          OLD_CPU_SYSROOT: /tmp/bookworm-root
+        # Inside debian:bookworm-slim, the image's base (see the script).
         run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user gdb
-          mkdir -p /tmp/bookworm-root
-          docker export "$(docker create debian:bookworm-slim)" | tar -x -C /tmp/bookworm-root
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user-static gdb
           bash scripts/old-cpu-smoke.sh panel target/release/relay-panel
 
       - name: Prepare release dist layout
