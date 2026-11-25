@@ -102,11 +102,18 @@ jobs:
               OLD_CPU=$cpu bash scripts/old-cpu-smoke.sh panel "/tmp/relay-panel-$v" && echo "RESULT $v $cpu: PASSED" || echo "RESULT $v $cpu: FAILED"
             done
           done
+          for v in 1.2.12 1.3.1; do
+            curl -fsSL -o "/tmp/relay-node-$v" "https://github.com/MoeShinX/relay-panel/releases/download/node-v$v/relay-node-linux-amd64"
+            chmod +x "/tmp/relay-node-$v"
+            echo "===== published node $v on Nehalem ====="
+            bash scripts/old-cpu-smoke.sh node "/tmp/relay-node-$v" && echo "RESULT node $v: PASSED" || echo "RESULT node $v: FAILED"
+          done
 
+      # Panel only: the debug node here links the runner's newer glibc and
+      # cannot start inside bookworm at all. The released node is a static
+      # musl binary; node-release.yml checks that one.
       - name: old-CPU smoke (emulated Nehalem, no AVX)
-        run: |
-          bash scripts/old-cpu-smoke.sh panel target/debug/relay-panel
-          bash scripts/old-cpu-smoke.sh node target/debug/relay-node
+        run: bash scripts/old-cpu-smoke.sh panel target/debug/relay-panel
 
       - name: npm ci (frontend)
         run: npm ci --no-audit --no-fund
