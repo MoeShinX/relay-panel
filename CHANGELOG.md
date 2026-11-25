@@ -10,6 +10,17 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The panel image starts again on CPUs without AVX2** (for example Intel
+  Ivy Bridge and older, or older AMD). Images 1.2.23 to 1.3.2 for amd64 exited
+  right after "database backend: SQLite" and restarted in a loop with exit code
+  132; the kernel log showed "invalid opcode" in a `sqlx-sqlite-worker` thread.
+  The build machine had switched to a newer compiler that built the bundled
+  SQLite for newer CPUs. Release builds now pin the build machine and the CPU
+  baseline, and every build is started on an emulated CPU without AVX before
+  it can ship. Upgrading from 1.2.22 or older is safe again; no data change.
+
 ### Changed
 
 - **Rules table**: the rule name is now the primary column (220px wide, pinned

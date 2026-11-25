@@ -37,6 +37,10 @@ jobs:
 
     env:
       TEST_PG_URL: postgres://relaytest:relaytest@localhost:5432/relaytest
+      # Same C baseline as the release builds, so the old-CPU smoke below
+      # tests what ships. Read by the cc crate (bundled SQLite, ring).
+      CFLAGS_x86_64_unknown_linux_gnu: -march=x86-64 -mtune=generic
+      CXXFLAGS_x86_64_unknown_linux_gnu: -march=x86-64 -mtune=generic
 
     steps:
       - uses: actions/checkout@v4
