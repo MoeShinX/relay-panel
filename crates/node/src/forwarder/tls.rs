@@ -6,7 +6,7 @@
 //
 //   client ──TLS──▶ relay-node (rustls terminates) ──plain TCP──▶ target
 //
-// Security contract (see ROADMAP-v0.4.md v0.4.1):
+// Security contract (since v0.4.1):
 //   - TLS 1.2 + 1.3 only (1.0/1.1 rejected by protocol_versions config).
 //   - No client certificate authentication (with_no_client_auth).
 //   - Handshake timeout: 10 seconds (prevents slow-loris-style resource hold).

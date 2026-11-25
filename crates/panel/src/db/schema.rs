@@ -793,7 +793,7 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
     // idempotently by checking pragma_table_info first (the same pattern as
     // Migrations 1 & 4).
     //
-    // Design reference: docs/TLS_WS_WSS_DESIGN.md §5.2.
+    // (The TLS/WS/WSS design behind it was retired in v0.4.1.)
     // ════════════════════════════════════════════════════════════════════
 
     // ── Migration 5: create tunnel_profiles table (if missing) ──
@@ -979,7 +979,7 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> 
     tracing::info!("Migration 17: v0.4.0 transport split columns added + backfilled");
 
     // ── Migration 18: v0.4.1 WSS removal ──
-    // Business WSS is cancelled (see ROADMAP-v0.4.md). Existing wss rules are
+    // Business WSS is cancelled (v0.4.1). Existing wss rules are
     // converted to plain ws (the node already runs a ws listener for them; only
     // the public label changes). The builtin wss-via-caddy tunnel profile is
     // deleted. Order matters: convert rules BEFORE deleting the profile, and
