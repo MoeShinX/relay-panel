@@ -1505,6 +1505,17 @@ html, body, #root {
   gap: 2px;
   min-width: 0;
 }
+@media (min-width: 768px) {
+  /* Desktop rules table uses `scroll={{ x: 'max-content' }}` so columns keep
+     their widths at 1280px/1440px instead of being squeezed. Bound the cell so
+     long rule names still wrap to at most two lines without stretching the
+     column across the whole table, while guaranteeing >= 198px of text width
+     (~220px column with 11px side padding). */
+  .rp-rule-name-cell {
+    min-width: 198px;
+    max-width: 240px;
+  }
+}
 .rp-rule-name {
   display: -webkit-box;
   -webkit-line-clamp: 2;

@@ -618,6 +618,16 @@ describe('the name is the primary column and carries the id', () => {
     expect(nameEl.getAttribute('title')).toBe(longName);
   });
 
+  it('gives the desktop name column an explicit width and max-content scroll so 1280/1440px windows do not squeeze it', async () => {
+    const { container } = renderPage();
+    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
+    const cols = Array.from(container.querySelectorAll('.ant-table colgroup col')) as HTMLElement[];
+    // col[0] is the row-selection checkbox; col[1] is the primary name column.
+    const nameWidth = parseInt(cols[1]?.style.width || '', 10);
+    expect(nameWidth).toBeGreaterThanOrEqual(180);
+    expect((container.querySelector('.ant-table table') as HTMLElement).style.width).toBe('max-content');
+  });
+
   it('shows the rule id under the name instead of in its own column', async () => {
     routes({ rules: ok([rule({ id: 12, name: 'hk-web' })]), groups: ok([group()]) });
     const { container } = renderPage();

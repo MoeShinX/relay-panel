@@ -88,9 +88,13 @@ function storedRulePageSize(): number {
   }
 }
 
+/** v1.3.3: desktop rules table scrolls inside itself at natural column widths
+ *  so `name` and right-fixed `action` are never compressed below their declared
+ *  widths on 1280px/1440px viewports (matching NodeDesktopTable / AuditLog). */
+const DESKTOP_RULES_SCROLL = { x: 'max-content' } as const;
+
 export default function Rules() {
   const { t } = useI18n();
-  const tableScroll = useTableScroll();
   // v1.3.3: the phone gets its own four-column set (see mobileColumns).
   const isMobile = useIsMobile();
   // v1.2.15: the table was given pageSize 20 as a fixed prop, so picking 100
@@ -943,13 +947,14 @@ const IMPORT_DEFAULTS = {
   const allColumns = [
     {
       // v1.3.3: the name is the primary column. It used to have no width at all
-      // and was squeezed to ~48px on a 1440px window, wrapping a long Chinese
-      // name one character per line. minWidth (not width) lets it grow on a wide
-      // window but never collapse below a readable two-line block. The rule's id
-      // moved underneath it as secondary text instead of occupying a column —
-      // it is still searchable, since the search box matches the name and the
-      // visible id is derived from the row.
-      title: t('name'), dataIndex: 'name', key: 'name', minWidth: 180,
+      // and was squeezed to ~48px on 1280px/1440px windows, wrapping a long
+      // Chinese name one character per line. Because the right-fixed action
+      // column puts antd's table into `table-layout: fixed`, ColGroup ignores
+      // `minWidth` — so the desktop column needs an explicit `width` so the
+      // two-line clamp has room to show enough of the name to distinguish
+      // rules that share a prefix. The rule's id sits underneath as secondary
+      // text instead of occupying its own column.
+      title: t('name'), dataIndex: 'name', key: 'name', width: 220,
       render: renderName,
     },
     // v0.4.9: inbound group name. Hidden on small screens (responsive md+) so
@@ -1415,9 +1420,12 @@ const IMPORT_DEFAULTS = {
           showSizeChanger: true,
           onChange: (_page, size) => { if (size !== rulePageSize) changeRulePageSize(size); },
         }}
-        // The phone table fits by column widths and wraps long names; forcing
-        // `x: max-content` would make a long name widen the whole table again.
-        scroll={isMobile ? undefined : tableScroll}
+        // Desktop uses `x: 'max-content'` so fixed column widths are honored at
+        // 1280px/1440px (with `x: true` + a right-fixed action column, antd
+        // falls into `table-layout: fixed; width: auto`, which ignores
+        // `minWidth` and compresses columns below their declared `width`).
+        // The phone table fits without sideways scroll.
+        scroll={isMobile ? undefined : DESKTOP_RULES_SCROLL}
       />
 
       <Modal title={t('addRule')} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={() => createForm.submit()} okText={t('create')} cancelText={t('cancel')} width={620}>
