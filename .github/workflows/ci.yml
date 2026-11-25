@@ -85,10 +85,8 @@ jobs:
       # both binaries on an emulated CPU without AVX so that cannot ship again.
       # They run inside debian:bookworm-slim, the panel image's base: the
       # runner's own glibc may itself need a newer CPU.
-      - name: old-CPU smoke setup (static qemu)
-        run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user-static gdb
-          docker pull -q debian:bookworm-slim
+      - name: old-CPU smoke setup (gdb, to name a crash site)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gdb
 
       # TEMP calibration (remove before merge): 1.2.22 runs on an Ivy Bridge
       # host, 1.2.23 does not. The check must pass the first and fail the second.

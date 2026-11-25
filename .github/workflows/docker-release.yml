@@ -146,7 +146,7 @@ jobs:
         if: matrix.arch == 'amd64'
         # Inside debian:bookworm-slim, the image's base (see the script).
         run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user-static gdb
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends gdb
           bash scripts/old-cpu-smoke.sh panel target/release/relay-panel
 
       - name: Prepare release dist layout

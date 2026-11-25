@@ -7,25 +7,28 @@
 #   bash scripts/old-cpu-smoke.sh panel target/release/relay-panel
 #   bash scripts/old-cpu-smoke.sh node  target/x86_64-unknown-linux-musl/release/relay-node
 #
-# The binary runs under a static qemu-x86_64 inside a container of
-# OLD_CPU_IMAGE (default debian:bookworm-slim, the panel image's base), so it
-# loads that image's libraries. Running it on the host instead would load the
-# host's glibc, which may itself need a newer CPU (Ubuntu 26.04's refuses to
-# start below x86-64-v3) and would fail every binary.
+# The binary runs under qemu-x86_64-static inside a debian:bookworm-slim
+# container (the panel image's base, with Debian's qemu-user-static added;
+# built here on first use), so it loads that image's libraries. Running it on
+# the host instead would load the host's glibc, which may itself need a newer
+# CPU (Ubuntu 26.04's refuses to start below x86-64-v3) and would fail every
+# binary. The host only needs docker (and gdb, to name a crash site).
 #
-# Needs docker and a static qemu-x86_64 (Debian/Ubuntu package
-# qemu-user-static). OLD_CPU picks the emulated model; the default, Nehalem,
-# has SSE4.2 but no AVX at all.
+# OLD_CPU picks the emulated model; the default, Nehalem, has SSE4.2 but no
+# AVX at all.
 set -euo pipefail
 
 KIND=${1:?usage: old-cpu-smoke.sh panel|node <binary>}
 BIN=$(realpath "${2:?usage: old-cpu-smoke.sh panel|node <binary>}")
 CPU=${OLD_CPU:-Nehalem}
-IMAGE=${OLD_CPU_IMAGE:-debian:bookworm-slim}
-QEMU=${QEMU:-$(command -v qemu-x86_64-static || true)}
-[ -n "$QEMU" ] || { echo "old-cpu-smoke: qemu-x86_64-static not found (install qemu-user-static)" >&2; exit 2; }
-QEMU=$(realpath "$QEMU")
+IMAGE=relaypanel-old-cpu:bookworm
 command -v docker >/dev/null || { echo "old-cpu-smoke: docker not found" >&2; exit 2; }
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    printf '%s\n' \
+        'FROM debian:bookworm-slim' \
+        'RUN apt-get update && apt-get install -y --no-install-recommends qemu-user-static && rm -rf /var/lib/apt/lists/*' \
+        | docker build -q -t "$IMAGE" - >/dev/null
+fi
 
 WORK=$(mktemp -d)
 chmod 777 "$WORK"
@@ -38,13 +41,13 @@ cleanup() {
 trap cleanup EXIT
 
 # run_in_box <env...> -- <command...>: the command runs in the container with
-# the binary at /under-test and qemu at /qemu; the work dir is /work.
+# the binary at /under-test; the work dir is /work.
 run_in_box() {
     local envs=()
     while [ "$1" != "--" ]; do envs+=(-e "$1"); shift; done
     shift
     docker run --rm --name "$NAME" --network host --ulimit core=-1 \
-        -v "$QEMU:/qemu:ro" -v "$BIN:/under-test:ro" -v "$WORK:/work" -w /work \
+        -v "$BIN:/under-test:ro" -v "$WORK:/work" -w /work \
         "${envs[@]}" "$IMAGE" "$@"
 }
 
@@ -73,7 +76,7 @@ panel)
         "PUBLIC_DIR=/work" \
         "JWT_SECRET=old-cpu-smoke-0123456789abcdef0123456789abcdef" \
         "GEOIP_ENABLED=false" \
-        -- /qemu -cpu "$CPU" /under-test >"$LOG" 2>&1 &
+        -- qemu-x86_64-static -cpu "$CPU" /under-test >"$LOG" 2>&1 &
     PID=$!
     for _ in $(seq 1 300); do
         if ! kill -0 "$PID" 2>/dev/null; then
@@ -85,7 +88,7 @@ panel)
         code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/api/v1/auth/login" \
             -H 'Content-Type: application/json' --data '{"username":"old-cpu-smoke","password":"x"}' || true)
         if [ -n "$code" ] && [ "$code" != 000 ]; then
-            echo "old-cpu-smoke: panel answered HTTP $code on emulated $CPU ($IMAGE)"
+            echo "old-cpu-smoke: panel answered HTTP $code on emulated $CPU (bookworm)"
             exit 0
         fi
         sleep 1
@@ -98,11 +101,11 @@ node)
     # running when the timeout ends it.
     set +e
     run_in_box "PANEL_URL=https://example.com" "NODE_TOKEN=old-cpu-smoke-token" \
-        -- timeout 45 /qemu -cpu "$CPU" /under-test >"$LOG" 2>&1
+        -- timeout 45 qemu-x86_64-static -cpu "$CPU" /under-test >"$LOG" 2>&1
     rc=$?
     set -e
     case "$rc" in
-        124) echo "old-cpu-smoke: node ran 45s on emulated $CPU ($IMAGE)" ;;
+        124) echo "old-cpu-smoke: node ran 45s on emulated $CPU (bookworm)" ;;
         132) fail "illegal instruction (exit 132): the binary needs a newer CPU than $CPU" ;;
         *)   fail "exited early with code $rc" ;;
     esac
