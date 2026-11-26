@@ -10,6 +10,14 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Changed
+
+- **Node status table back to the 1.3.2 layout**: the columns are in their
+  earlier order again (status, label, version, upgrade, network, connections,
+  CPU, memory, disk, live rate, traffic, uptime), with separate Details and
+  remove columns, and the phone card is the earlier one. The dashboard's
+  online / offline summary and the node page's `?status=offline` filter stay.
+
 ## [1.3.3] - 2026-11-26
 
 Released together with node 1.3.2. Servers with a CPU without AVX2 should

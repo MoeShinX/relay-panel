@@ -4,16 +4,13 @@ import { CloudDownloadOutlined, CheckCircleOutlined, CloudServerOutlined } from 
 import type { Tfn } from './types';
 import type { NodeDisplayRow } from '../../api/types';
 import { NodeResourceBar, DiskList, hasDiskList } from './NodeResourceBar';
-import { NetworkCell, cpuTooltip, memTooltip, statusTag, addressSummary } from './shared';
+import { NetworkCell, cpuTooltip, memTooltip, statusTag } from './shared';
 import { formatBps, formatUptime } from '../../utils/format';
 import { versionRelation, versionTagColor } from '../../utils/version';
 import { resolveNodeUpgrade, type NodeUpgradeState } from './upgrade';
 import { NodeLabelCell } from './NodeLabelCell';
 
 const { Text } = Typography;
-
-/** v1.3.3: the smallest tap target the page allows for an entry point. */
-const MIN_TAP = 44;
 
 interface Props {
   rows: NodeDisplayRow[];
@@ -25,6 +22,9 @@ interface Props {
   nodeVersionCheckFailed?: boolean;
   t: Tfn;
   openDetail: (row: NodeDisplayRow) => void;
+  /** v1.0.10/v1.2: admin-only per-node upgrade trigger. When set, each card
+   *  shows the node version + an upgrade affordance mirroring the desktop
+   *  ladder (PR4), compared against the latest NODE release (PR5). */
   /** Admin view: show each node's version and upgrade state. */
   showUpgrade?: boolean;
   /** v1.2.21: admin-only. Opens the node's latency page (see NetworkCell). */
@@ -32,12 +32,8 @@ interface Props {
 }
 
 /** Mobile-friendly compact list — one card per node. No wide table, no
- *  horizontal scroll.
- *
- *  v1.3.3: the card now leads with what the page is for — the machine's name,
- *  whether it is up, and its live upload/download rate. Version, upgrade state
- *  and the detail entry sit together underneath, and every tappable thing meets
- *  the 44×44px minimum. */
+ *  horizontal scroll. Shows: status + version + upgrade + network + speed +
+ *  resource bars + uptime + a details button. */
 export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', nodeVersionCheckFailed = false, t, openDetail, showUpgrade, onOpenLatency }: Props) {
   const labels = { d: t('uptimeDay'), h: t('uptimeHour'), m: t('uptimeMinute'), s: t('uptimeSecond') };
 
@@ -51,7 +47,6 @@ export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', no
         const { state: upgradeState } = showUpgrade
           ? resolveNodeUpgrade(r, latestNodeVersion, panelProtocol, nodeVersionCheckFailed)
           : { state: 'none' as NodeUpgradeState };
-        const addr = addressSummary(r).text;
         return (
           <div
             key={`${r.group_id}:${r.node_id || 'none'}`}
@@ -61,72 +56,51 @@ export function NodeMobileList({ rows, panelProtocol, latestNodeVersion = '', no
             className={r.online ? undefined : 'rp-node-offline-card'}
             style={{ border: '1px solid var(--rp-border)', borderRadius: 10, padding: 12, background: r.online ? '#ffffff' : undefined }}
           >
-            {/* Identity: the name (or the address when unnamed) and the status
-                tag share the first line, so "which machine, is it up" is the
-                first thing read. */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 4 }}>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                {!isPlaceholder && r.label ? (
-                  <div style={{ fontWeight: 600, fontSize: 15, lineHeight: 1.3 }}>
-                    <NodeLabelCell row={r} t={t} wide />
-                  </div>
-                ) : (
-                  <div className="rp-mono" style={{ fontSize: 13.5, fontWeight: 500, color: 'var(--rp-text)' }}>
-                    {addr || (isPlaceholder ? '-' : r.node_id)}
-                  </div>
-                )}
-                {!isPlaceholder && r.label && addr ? (
-                  <div className="rp-mono rp-node-identity-addr" style={{ marginTop: 2 }}>{addr}</div>
-                ) : null}
+            {/* The machine's name has a line of its own: squeezed in beside the
+                status and version tags it shrank to a bare "…". */}
+            {!isPlaceholder && r.label ? (
+              <div style={{ marginBottom: 6, fontWeight: 500 }}>
+                <NodeLabelCell row={r} t={t} wide />
               </div>
+            ) : null}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, flexWrap: 'wrap', gap: 4 }}>
               {statusTag(r, t, panelProtocol)}
-            </div>
-
-            {/* The live rate leads the body: it is what an operator opens this
-                page to see. */}
-            <div className="rp-node-mobile-rate">
-              <span className="rp-node-rate-line rp-mono">
-                <span style={{ color: 'var(--rp-text-tertiary)', fontSize: 11, marginInlineEnd: 4 }}>↑</span>
-                {formatBps(r.upload_bps)}
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                {/* node version tag (only when the admin upgrade view is on).
+                    When the node-version check failed, render the bare version
+                    with no behind-arrow (we can't vouch for any colouring). */}
+                {showUpgrade && r.node_version ? (
+                  <Tag color={nodeVersionCheckFailed ? undefined : versionTagColor(versionRelation(r.node_version, latestNodeVersion))} className="rp-mono">
+                    {`v${r.node_version}`}
+                  </Tag>
+                ) : null}
+                {/* upgrade affordance — same ladder as desktop */}
+                {showUpgrade ? (
+                  <MobileUpgradeAffordance
+                    state={upgradeState}
+                    latestNodeVersion={latestNodeVersion}
+                    t={t}
+                  />
+                ) : null}
+                <Button
+                  size="small"
+                  type="link"
+                  disabled={isPlaceholder}
+                  onClick={() => openDetail(r)}
+                  aria-label={t('resourceDetails')}
+                >
+                  {t('resourceDetails')}
+                </Button>
               </span>
-              <span className="rp-node-rate-line rp-mono" data-direction="down">
-                <span style={{ color: 'var(--rp-text-tertiary)', fontSize: 11, marginInlineEnd: 4 }}>↓</span>
-                {formatBps(r.download_bps)}
-              </span>
             </div>
-
             <NetworkCell row={r} t={t} onOpenLatency={onOpenLatency ? () => onOpenLatency(r) : undefined} />
-
-            {/* Version / upgrade / detail. Each entry point is at least 44×44px
-                (see MIN_TAP), including the detail link that used to be a
-                small inline button. */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
-              {showUpgrade && r.node_version ? (
-                <Tag color={nodeVersionCheckFailed ? undefined : versionTagColor(versionRelation(r.node_version, latestNodeVersion))} className="rp-mono">
-                  {`v${r.node_version}`}
-                </Tag>
-              ) : null}
-              {showUpgrade ? (
-                <MobileUpgradeAffordance
-                  state={upgradeState}
-                  latestNodeVersion={latestNodeVersion}
-                  t={t}
-                />
-              ) : null}
-              <Button
-                type="link"
-                disabled={isPlaceholder}
-                onClick={() => openDetail(r)}
-                aria-label={t('resourceDetails')}
-                style={{ minHeight: MIN_TAP, minWidth: MIN_TAP, paddingInline: 8 }}
-              >
-                {t('resourceDetails')}
-              </Button>
-              <span className="rp-node-meta" style={{ fontSize: 12, marginInlineStart: 'auto' }}>
-                {t('systemUptime')}: {formatUptime(r.uptime, labels)}
-              </span>
+            {/* The rate/uptime line used a hardcoded #888 (3.5:1 on white,
+                under AA) and could not be greyed further on an offline card.
+                Both now come from the theme. */}
+            <div className="rp-node-meta" style={{ fontSize: 12, marginTop: 4 }}>
+              ↑ {formatBps(r.upload_bps)} ↓ {formatBps(r.download_bps)}
+              {' · '}{t('systemUptime')}: {formatUptime(r.uptime, labels)}
             </div>
-
             <div style={{ display: 'flex', gap: 12, marginTop: 6 }}>
               <div style={{ flex: 1 }}>
                 <Text type="secondary" style={{ fontSize: 11 }}>CPU</Text>
@@ -163,8 +137,8 @@ function MobileUpgradeAffordance({
   latestNodeVersion: string;
   t: Tfn;
 }) {
-  // v1.3.3: 44×44 minimum tap target (was 32×32, under the mobile guidance).
-  const tapStyle: React.CSSProperties = { minWidth: 44, minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 };
+  // 32×32 minimum tap target (WCAG / mobile guidance).
+  const tapStyle: React.CSSProperties = { minWidth: 32, minHeight: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 };
   switch (state) {
     case 'none':
     case 'checkFailed':

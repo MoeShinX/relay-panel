@@ -793,7 +793,6 @@ export const zhCN = {
   showNodeLabels: '向用户显示节点备注',
   showNodeLabelsHint: '节点状态页、规则诊断里，管理员给机器起的备注是否让普通用户也看到。默认关闭：备注是你自己的记号，可能写着供应商或机柜。告警、审计日志只发给管理员，不受此开关影响。',
   nodeLabel: '备注',
-  nodeColumn: '节点',
   nodeLabelEdit: '编辑备注',
   nodeLabelAdd: '添加备注',
   nodeLabelPlaceholder: '给这台机器起个名字，例如 HK-1 备用',

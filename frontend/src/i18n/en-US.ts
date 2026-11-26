@@ -798,7 +798,6 @@ export const enUS: Dict = {
   showNodeLabels: 'Show node labels to users',
   showNodeLabelsHint: "Whether regular users see the names you give your machines on the node status page and in rule diagnosis. Off by default: a label is your own note and may name a provider or a rack. Alerts and the audit log go to admins only and are not affected.",
   nodeLabel: 'Label',
-  nodeColumn: 'Node',
   nodeLabelEdit: 'Edit label',
   nodeLabelAdd: 'Add label',
   nodeLabelPlaceholder: 'Name this machine, e.g. HK-1 backup',

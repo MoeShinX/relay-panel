@@ -85,22 +85,14 @@ describe('the label column on the node status page', () => {
   const props = { panelProtocol: 0, latestNodeVersion: '1.1.0', nodeVersionCheckFailed: false, isMobile: false, t, openDetail: vi.fn() };
   const header = () => Array.from(document.querySelectorAll('.ant-table-thead th')).map((th) => th.textContent);
 
-  // v1.3.3: the name is no longer a column that appears only once some node has
-  // one — it folds into the node identity column together with a one-line
-  // address, so the column exists from the first node. What matters is that an
-  // unnamed node shows no invented name.
-  it('always has the identity column, and shows no invented name for an unnamed node', () => {
-    render(<NodeGroupSection {...props} rows={[row({ online: true, public_ipv4: '203.0.113.9' })]} />);
-    expect(header()).toContain('nodeColumn');
-    expect(screen.queryByText('nodeLabelAdd')).toBeNull();
-    // The address appears in the identity column and again in the network
-    // column (both are kept per the layout brief), so allow either.
-    expect(screen.getAllByText('203.0.113.9').length).toBeGreaterThan(0);
+  it('is not there while no node has a name, so the page looks as it always did', () => {
+    render(<NodeGroupSection {...props} rows={[row({ online: true })]} />);
+    expect(header()).not.toContain('nodeLabel');
   });
 
   it('appears, read-only, once some node has a name', () => {
     render(<NodeGroupSection {...props} rows={[row({ online: true, label: 'HK-1' })]} />);
-    expect(header()).toContain('nodeColumn');
+    expect(header()).toContain('nodeLabel');
     expect(screen.getByText('HK-1')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'nodeLabelEdit' })).toBeNull();
   });
