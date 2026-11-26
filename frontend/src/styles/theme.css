@@ -1675,67 +1675,6 @@ html, body, #root {
   overflow-wrap: anywhere;
 }
 
-/* ---- v1.3.3: the node table's identity, rate and detail columns ---- */
-
-/* The node column: the admin's name over the one-line address. */
-.rp-node-identity {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-.rp-node-identity-addr {
-  font-size: 11.5px;
-  line-height: 1.25;
-  color: var(--rp-text-tertiary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Live upload / download: one line each, right-aligned, tabular digits so the
-   two figures line up digit for digit. The value and its unit never split. */
-.rp-node-rates {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 1px;
-}
-.rp-node-rate-line {
-  display: inline-block;
-  text-align: right;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-  color: #18181b;
-  font-weight: 500;
-  line-height: 1.3;
-}
-.rp-node-rate-line[data-direction='down'] {
-  color: #52525b;
-}
-
-/* One right-fixed column: the detail link, plus the delete icon on offline rows. */
-.rp-node-detail-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  white-space: nowrap;
-}
-
-/* The phone card's live rate: the headline figure, so it is larger than the
-   table's and reads as two labelled lines rather than a single run-on value. */
-.rp-node-mobile-rate {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 14px;
-  margin: 2px 0 6px;
-}
-.rp-node-mobile-rate .rp-node-rate-line {
-  font-size: 15px;
-  font-weight: 600;
-}
-
 /* v1.3.3: the dashboard's fleet summary line, above the KPI cards. */
 .rp-fleet-summary {
   display: flex;

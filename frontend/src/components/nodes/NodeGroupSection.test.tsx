@@ -6,7 +6,6 @@ import type { NodeDisplayRow } from '../../api/types';
 import { cpuSummary, memSummary, statusTag } from './shared';
 import { NodeGroupSection } from './NodeGroupSection';
 import { nodeDesktopColumnWidths } from './tableLayout';
-import { formatBps } from '../../utils/format';
 
 // A fake t() that echoes the key — assertions match on the i18n KEY, not on a
 // translated string, so the tests don't break when wording changes.
@@ -63,48 +62,12 @@ describe('NodeGroupSection mobile vs desktop', () => {
   });
 });
 
-describe('Node desktop table layout', () => {
-  it('gives the rate its own column right after the node identity', () => {
-    // v1.3.3: the rate no longer has to fight the 300px network cell for room;
-    // it sits directly after the identity block, before CPU/memory/network.
-    expect(nodeDesktopColumnWidths.rate).toBeGreaterThanOrEqual(120);
+describe('Node desktop table throughput layout', () => {
+  it('prioritizes the upload/download rate column without widening the short status columns', () => {
+    expect(nodeDesktopColumnWidths.rate).toBeGreaterThanOrEqual(192);
     expect(nodeDesktopColumnWidths.status).toBeLessThan(84);
     expect(nodeDesktopColumnWidths.nodeVersion).toBeLessThan(100);
     expect(nodeDesktopColumnWidths.nodeUpgrade).toBeLessThan(72);
-  });
-
-  it('puts the columns in the documented order', () => {
-    const { container } = render(
-      <NodeGroupSection
-        rows={[row({ online: true })]}
-        panelProtocol={0}
-        latestNodeVersion="1.1.0"
-        nodeVersionCheckFailed={false}
-        isMobile={false}
-        t={t}
-        openDetail={vi.fn()}
-        // Admins see the upgrade column (it is derived from this callback).
-        onBatchUpgraded={vi.fn()}
-      />,
-    );
-    const headers = Array.from(container.querySelectorAll('.ant-table-thead th'))
-      .map((th) => th.textContent?.trim())
-      .filter((text) => text && text !== '');
-    // Status / node / rate / connections / CPU / memory / network / version /
-    // upgrade / disk / traffic / uptime / detail.
-    expect(headers[0]).toBe('status');
-    expect(headers[1]).toBe('nodeColumn');
-    expect(headers[2]).toContain('uploadRate');
-    expect(headers[3]).toBe('connections');
-    expect(headers[4]).toBe('CPU');
-    expect(headers[5]).toBe('mem');
-    expect(headers[6]).toBe('network');
-    expect(headers[7]).toBe('nodeVersion');
-    expect(headers[8]).toBe('nodeUpgrade');
-    expect(headers[9]).toBe('disk');
-    expect(headers[10]).toContain('totalUpload');
-    expect(headers[11]).toBe('systemUptime');
-    expect(headers[12]).toBe('resourceDetails');
   });
 
   it('keeps transfer values on one line', () => {
@@ -120,31 +83,7 @@ describe('Node desktop table layout', () => {
       />,
     );
 
-    // v1.3.3: two rate lines plus the cumulative-traffic line.
-    expect(container.querySelectorAll('.rp-node-throughput')).toHaveLength(3);
-    expect(container.querySelectorAll('.rp-node-rate-line')).toHaveLength(2);
-  });
-
-  it('right-fixes exactly one column and keeps the delete action in it', () => {
-    const { container } = render(
-      <NodeGroupSection
-        rows={[row({ node_id: 'up', online: true }), row({ node_id: 'down', online: false })]}
-        panelProtocol={0}
-        latestNodeVersion="1.1.0"
-        nodeVersionCheckFailed={false}
-        isMobile={false}
-        t={t}
-        openDetail={vi.fn()}
-        onDelete={vi.fn()}
-      />,
-    );
-    const fixedRight = container.querySelectorAll('th.ant-table-cell-fix-end, th.ant-table-cell-fix-right');
-    expect(fixedRight).toHaveLength(1);
-    // The offline row's cell holds both the detail link and the delete icon;
-    // the online row has only the link.
-    const cells = Array.from(container.querySelectorAll('td.ant-table-cell-fix-end, td.ant-table-cell-fix-right'));
-    expect(cells[0].querySelector('button[aria-label="removeNodeTitle"]')).toBeNull();
-    expect(cells[1].querySelector('button[aria-label="removeNodeTitle"]')).not.toBeNull();
+    expect(container.querySelectorAll('.rp-node-throughput')).toHaveLength(2);
   });
 });
 
@@ -369,89 +308,5 @@ describe('every disk in the disk tooltip', () => {
   it('leaves the bar on the primary disk when there are several', () => {
     const { container } = section(row({ online: true, cpu: 1, mem: 2, ...primary, disks: [root, data] }), false);
     expect(diskBar(container).textContent).toContain('40%');
-  });
-});
-
-// ── v1.3.3: the delete affordance moved into the single right-fixed column.
-// It must keep its confirmation and still call the original handler.
-describe('Node desktop table offline delete', () => {
-  it('confirms first and then calls the handler once', async () => {
-    const user = userEvent.setup();
-    const onDelete = vi.fn();
-    render(
-      <NodeGroupSection
-        rows={[row({ node_id: 'down', online: false, public_ipv4: '203.0.113.7' })]}
-        panelProtocol={0}
-        latestNodeVersion="1.1.0"
-        nodeVersionCheckFailed={false}
-        isMobile={false}
-        t={t}
-        openDetail={vi.fn()}
-        onDelete={onDelete}
-      />,
-    );
-    await user.click(screen.getByRole('button', { name: 'removeNodeTitle' }));
-    // The confirmation is the existing one — nothing was removed yet.
-    expect(onDelete).not.toHaveBeenCalled();
-    expect(await screen.findByText('removeNodeHint')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'confirmRemoveNode' }));
-    expect(onDelete).toHaveBeenCalledTimes(1);
-  });
-
-  it('offers no delete on an online row', () => {
-    render(
-      <NodeGroupSection
-        rows={[row({ node_id: 'up', online: true })]}
-        panelProtocol={0}
-        latestNodeVersion="1.1.0"
-        nodeVersionCheckFailed={false}
-        isMobile={false}
-        t={t}
-        openDetail={vi.fn()}
-        onDelete={vi.fn()}
-      />,
-    );
-    expect(screen.queryByRole('button', { name: 'removeNodeTitle' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'resourceDetails' })).toBeInTheDocument();
-  });
-});
-
-// ── v1.3.3: on a phone the card leads with name, state and live rate, and the
-// detail entry is a real 44×44px tap target.
-describe('Node mobile card', () => {
-  it('shows the name, the status and both live rates', () => {
-    render(
-      <NodeGroupSection
-        rows={[row({ node_id: 'n1', online: true, label: 'HK-1', public_ipv4: '203.0.113.5', upload_bps: 1024, download_bps: 2048 })]}
-        panelProtocol={0}
-        latestNodeVersion="1.1.0"
-        nodeVersionCheckFailed={false}
-        isMobile
-        t={t}
-        openDetail={vi.fn()}
-      />,
-    );
-    expect(screen.getByText('HK-1')).toBeInTheDocument();
-    expect(screen.getByText('online')).toBeInTheDocument();
-    // Both also appear in the group header's aggregate, so allow >0.
-    expect(screen.getAllByText(formatBps(1024)).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(formatBps(2048)).length).toBeGreaterThan(0);
-  });
-
-  it('gives the detail entry a 44px tap target', () => {
-    render(
-      <NodeGroupSection
-        rows={[row({ node_id: 'n1', online: true })]}
-        panelProtocol={0}
-        latestNodeVersion="1.1.0"
-        nodeVersionCheckFailed={false}
-        isMobile
-        t={t}
-        openDetail={vi.fn()}
-      />,
-    );
-    const btn = screen.getByRole('button', { name: 'resourceDetails' });
-    expect(btn.style.minHeight).toBe('44px');
-    expect(btn.style.minWidth).toBe('44px');
   });
 });
