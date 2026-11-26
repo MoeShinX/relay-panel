@@ -10,6 +10,11 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+## [1.3.4] - 2026-11-26
+
+Panel only, a quick follow-up to 1.3.3: nodes stay on node-v1.3.2, and the
+config protocol and the database are unchanged.
+
 ### Changed
 
 - **Node status table back to the 1.3.2 layout**: the columns are in their
