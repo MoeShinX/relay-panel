@@ -1,13 +1,13 @@
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, message, Popconfirm, Tag, Alert, Typography, Dropdown, Switch, Tabs, Spin, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
-import { PlusOutlined, ReloadOutlined, EditOutlined, ApiOutlined, CopyOutlined, DownloadOutlined, UploadOutlined, PauseCircleOutlined, PlayCircleOutlined, DeleteOutlined, ArrowUpOutlined, ArrowDownOutlined, MedicineBoxOutlined, QuestionCircleOutlined, ThunderboltOutlined, SearchOutlined, MoreOutlined, RightOutlined, DownOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, EditOutlined, ApiOutlined, CopyOutlined, DownloadOutlined, UploadOutlined, PauseCircleOutlined, PlayCircleOutlined, DeleteOutlined, ArrowUpOutlined, ArrowDownOutlined, MedicineBoxOutlined, QuestionCircleOutlined, ThunderboltOutlined, SearchOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api/client';
 import type { ApiEnvelope, ForwardRule, DeviceGroup, User, UserSelf, RuleTargetInput, DiagnoseResponse, NodeDiagnoseStatus, DiagnoseTargetResult, SharedGroupSummary, RestartResponse } from '../api/types';
 import { MIN_AUTO_RESTART_MINUTES } from '../api/types';
 import { useI18n } from '../i18n/context';
-import { useTableScroll, useIsMobile } from '../hooks/useIsMobile';
+import { useTableScroll } from '../hooks/useIsMobile';
 import { formatBytes } from '../utils/format';
 import { useAuth } from '../auth/useAuth';
 import HostSummary from '../components/HostSummary';
@@ -88,15 +88,9 @@ function storedRulePageSize(): number {
   }
 }
 
-/** v1.3.3: desktop rules table scrolls inside itself at natural column widths
- *  so `name` and right-fixed `action` are never compressed below their declared
- *  widths on 1280px/1440px viewports (matching NodeDesktopTable / AuditLog). */
-const DESKTOP_RULES_SCROLL = { x: 'max-content' } as const;
-
 export default function Rules() {
   const { t } = useI18n();
-  // v1.3.3: the phone gets its own four-column set (see mobileColumns).
-  const isMobile = useIsMobile();
+  const tableScroll = useTableScroll();
   // v1.2.15: the table was given pageSize 20 as a fixed prop, so picking 100
   // in the size changer did nothing. The size is state now (remembered), and
   // up to 500 a page.
@@ -180,12 +174,6 @@ export default function Rules() {
   }, [setSearchParams]);
 
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
-  // v1.3.3: mobile rows expand in place to reveal targets, group, listen IP,
-  // owner and traffic without opening the edit dialog.
-  const [mobileExpandedIds, setMobileExpandedIds] = useState<number[]>([]);
-  const toggleMobileExpand = (id: number) => {
-    setMobileExpandedIds(prev => (prev.includes(id) ? prev.filter(k => k !== id) : [...prev, id]));
-  };
   // Batch "move to another inbound group": dialog state, then the outcome.
   const [moveOpen, setMoveOpen] = useState(false);
   const [moveTarget, setMoveTarget] = useState<number | undefined>(undefined);
@@ -777,269 +765,14 @@ const IMPORT_DEFAULTS = {
     } catch { message.error(t('failedUpdateRule')); }
   };
 
-  /** v1.3.3: restart behind a named confirm. The dropdown items cannot host a
-   *  Popconfirm (antd closes the menu and the popup unmounts with it), so the
-   *  confirmation is a Modal that names the rule. */
-  const confirmRestart = (r: ForwardRule) => {
-    Modal.confirm({
-      title: t('restartConfirmNamed').replace('{name}', r.name),
-      content: t('restartConfirmDesc'),
-      okText: t('restart'),
-      cancelText: t('cancel'),
-      okButtonProps: { danger: true },
-      onOk: () => handleRestart(r),
-    });
-  };
-
-  /** v1.3.3: delete behind a named confirm, for the same reason as restart. */
-  const confirmDelete = (r: ForwardRule) => {
-    Modal.confirm({
-      title: t('deleteRuleConfirmNamed').replace('{name}', r.name),
-      okText: t('delete'),
-      cancelText: t('cancel'),
-      okButtonProps: { danger: true },
-      onOk: () => handleDelete(r.id),
-    });
-  };
-
   const protoTags = (p: string) => {
     if (p === 'tcp_udp') return <><Tag color="blue">TCP</Tag><Tag color="purple">UDP</Tag></>;
     if (p === 'udp') return <Tag color="purple">UDP</Tag>;
     return <Tag color="blue">TCP</Tag>;
   };
 
-  /** The state tags that matter at a glance: paused, out of quota, plus the
-   *  PROXY-protocol markers that say something about who sees the real client.
-   *  Shared by the desktop protocol column and the phone card header, so the two
-   *  can never disagree about what "status" means. */
-  const statusTags = (r: ForwardRule) => (
-    <>
-      {r.proxy_protocol_send && r.proxy_protocol_send !== 'off' && (
-        <Tooltip title={t('ppSendHint')}>
-          <Tag color="geekblue">{t('ppTagSend').replace('{v}', r.proxy_protocol_send)}</Tag>
-        </Tooltip>
-      )}
-      {r.proxy_protocol_accept && (
-        <Tooltip title={t('ppAcceptHint')}>
-          <Tag color="geekblue">{t('ppTagAccept')}</Tag>
-        </Tooltip>
-      )}
-      {r.paused && <Tag color="red">{t('paused')}</Tag>}
-      {!r.paused && ruleOverQuota(r) && (
-        <Tooltip title={t('quotaExhaustedHint')}>
-          <Tag color="orange">{t('quotaExhausted')}</Tag>
-        </Tooltip>
-      )}
-    </>
-  );
-
-  /** v1.3.3: the name is the primary column. On desktop it has an explicit
-   *  220px width and is pinned on the left so scrolling horizontally or opening
-   *  the right-fixed "More" menu never hides which rule is being acted on; the
-   *  CSS clamps it to two lines with the full name in the title attribute.
-   *
-   *  The rule's id sits underneath as secondary text instead of occupying a
-   *  column of its own. On phones, tapping the name cell (or row) toggles the
-   *  in-place detail drawer below the row. */
-  const renderName = (v: string, r: ForwardRule, expandable = false) => {
-    if (!expandable) {
-      return (
-        <div className="rp-rule-name-cell">
-          <span className="rp-rule-name" title={v}>{v}</span>
-          <span className="rp-rule-id" aria-label={t('ruleIdLabel').replace('{id}', String(r.id))}>#{r.id}</span>
-        </div>
-      );
-    }
-    const expanded = mobileExpandedIds.includes(r.id);
-    const toggleLabel = (expanded ? t('ruleCollapseDetails') : t('ruleExpandDetails')).replace('{name}', v);
-    return (
-      <button
-        type="button"
-        className="rp-rule-name-toggle"
-        aria-expanded={expanded}
-        aria-label={toggleLabel}
-        onClick={(e) => { e.stopPropagation(); toggleMobileExpand(r.id); }}
-      >
-        <span className="rp-rule-name" title={v}>{v}</span>
-        <span className="rp-rule-id-row">
-          <span className="rp-rule-id" aria-label={t('ruleIdLabel').replace('{id}', String(r.id))}>#{r.id}</span>
-          {expanded
-            ? <DownOutlined className="rp-rule-expand-chevron" aria-hidden="true" />
-            : <RightOutlined className="rp-rule-expand-chevron" aria-hidden="true" />}
-        </span>
-      </button>
-    );
-  };
-
-  /** v1.3.3: expanded mobile row details — targets, group, listen IP, owner
-   *  (admin only) and cumulative traffic, all hidden from the 4-column phone
-   *  table so the row fits cleanly within 390px without sideways scrolling. */
-  const renderMobileDetail = (r: ForwardRule) => {
-    const enabledTargets = ruleTargets(r).filter(tgt => tgt.enabled);
-    const targets = enabledTargets.length > 0 ? enabledTargets : ruleTargets(r);
-    const g = groupInfo.get(r.device_group_in);
-    return (
-      <div className="rp-rule-mobile-detail" data-testid={`rule-mobile-detail-${r.id}`}>
-        <div className="rp-rule-mobile-detail-item is-full">
-          <span className="rp-rule-mobile-detail-label">{t('target')}</span>
-          <div className="rp-rule-mobile-detail-value">
-            <Space size={4} wrap>
-              {targets.length === 0 ? '-' : targets.map((tgt, i) => (
-                <span key={i} className="rp-mono">{formatTargetHostPort(tgt.host, tgt.port)}</span>
-              ))}
-              {r.load_balance_strategy && r.load_balance_strategy !== 'first' && (
-                <Tag color="cyan">{r.load_balance_strategy === 'round_robin' ? t('lbRoundRobin') : t('lbFailover')}</Tag>
-              )}
-            </Space>
-          </div>
-        </div>
-        <div className="rp-rule-mobile-detail-item">
-          <span className="rp-rule-mobile-detail-label">{t('groupName')}</span>
-          <div className="rp-rule-mobile-detail-value">
-            {g
-              ? <Tag color="cyan" style={{ marginInlineEnd: 0 }}>{g.name}</Tag>
-              : <Text type="secondary">{t('unknownGroup')} (#{r.device_group_in})</Text>}
-          </div>
-        </div>
-        <div className="rp-rule-mobile-detail-item">
-          <span className="rp-rule-mobile-detail-label">{t('listenIp')}</span>
-          <div className="rp-rule-mobile-detail-value">
-            <HostSummary
-              value={g?.connect_host}
-              empty={<Text type="secondary">{t('notConfigured')}</Text>}
-            />
-          </div>
-        </div>
-        {isAdmin && (
-          <div className="rp-rule-mobile-detail-item">
-            <span className="rp-rule-mobile-detail-label">{t('owner')}</span>
-            <span className="rp-rule-mobile-detail-value">{userMap.get(r.uid) ?? `#${r.uid}`}</span>
-          </div>
-        )}
-        <div className="rp-rule-mobile-detail-item">
-          <span className="rp-rule-mobile-detail-label">{t('traffic')}</span>
-          <span
-            className="rp-rule-mobile-detail-value rp-mono"
-            style={{ color: (r.traffic_used ?? 0) > 0 ? '#0f766e' : 'var(--rp-text-tertiary)' }}
-          >
-            {formatBytes(r.traffic_used ?? 0)}
-          </span>
-        </div>
-      </div>
-    );
-  };
-
-  /** v1.3.3: one visible action ("编辑") plus a "更多" menu. The menu is built
-   *  per row because every item acts on that rule; its items keep a
-   *  rule-qualified accessible name, so a screen reader reads "删除 hk-web"
-   *  rather than an anonymous "删除".
-   *
-   *  `compact` is the phone layout: there is no room for a second button, so
-   *  edit moves into the menu and only the "更多" trigger is drawn. */
-  const renderActions = (r: ForwardRule, compact = false) => {
-    const moreItems: MenuProps['items'] = [
-      ...(compact ? [{
-        key: 'edit',
-        icon: <EditOutlined />,
-        label: <span aria-label={`${t('edit')} ${r.name}`}>{t('edit')}</span>,
-        onClick: () => handleEdit(r),
-      }] : []),
-      {
-        key: 'pause',
-        icon: r.paused ? <PlayCircleOutlined /> : <PauseCircleOutlined />,
-        label: <span aria-label={`${r.paused ? t('resume') : t('pause')} ${r.name}`}>{r.paused ? t('resume') : t('pause')}</span>,
-        onClick: () => handleTogglePause(r),
-      },
-      {
-        key: 'copy',
-        icon: <CopyOutlined />,
-        label: <span aria-label={`${t('copy')} ${r.name}`}>{t('copy')}</span>,
-        onClick: () => handleCopy(r),
-      },
-      {
-        // v0.4.9: diagnosis is TCP-only — disabled for pure-UDP rules, saying why.
-        key: 'diagnose',
-        icon: <MedicineBoxOutlined />,
-        disabled: r.protocol === 'udp',
-        label: (
-          <span
-            aria-label={`${t('diagnose')} ${r.name}`}
-            title={r.protocol === 'udp' ? t('diagnoseUdpUnsupported') : undefined}
-          >
-            {t('diagnose')}
-          </span>
-        ),
-        onClick: () => handleDiagnose(r),
-      },
-      {
-        // v1.2.0: restart drops every live connection, so it asks first.
-        // Disabled while paused — there are no listeners to restart.
-        key: 'restart',
-        icon: <ThunderboltOutlined />,
-        disabled: r.paused,
-        label: (
-          <span
-            aria-label={`${t('restart')} ${r.name}`}
-            title={r.paused ? t('restartPausedHint') : undefined}
-          >
-            {t('restart')}
-          </span>
-        ),
-        onClick: () => confirmRestart(r),
-      },
-      { type: 'divider' as const },
-      {
-        key: 'delete',
-        danger: true,
-        icon: <DeleteOutlined />,
-        label: <span aria-label={`${t('delete')} ${r.name}`}>{t('delete')}</span>,
-        onClick: () => confirmDelete(r),
-      },
-    ];
-    if (compact) {
-      return (
-        <Dropdown menu={{ items: moreItems }} trigger={['click']} placement="bottomRight">
-          <Button
-            size="small" type="text"
-            icon={<MoreOutlined />}
-            aria-label={`${t('ruleMoreActions')} ${r.name}`}
-            data-testid={`rule-more-${r.id}`}
-          />
-        </Dropdown>
-      );
-    }
-    return (
-      <Space size={4} wrap>
-        <Button
-          size="small" type="text"
-          icon={<EditOutlined />}
-          aria-label={`${t('edit')} ${r.name}`}
-          onClick={() => handleEdit(r)}
-        >
-          {t('edit')}
-        </Button>
-        <Dropdown menu={{ items: moreItems }} trigger={['click']} placement="bottomRight">
-          <Button
-            size="small" type="text"
-            aria-label={`${t('ruleMoreActions')} ${r.name}`}
-            data-testid={`rule-more-${r.id}`}
-          >
-            {t('moreActions')}
-          </Button>
-        </Dropdown>
-      </Space>
-    );
-  };
-
   const allColumns = [
-    {
-      // v1.3.3: the name is the primary column. Explicit width (220px) + left
-      // pinning keeps it readable and anchored alongside the selection column
-      // at 1280px/1440px even while scrolling sideways or opening the right-
-      // fixed action menu. The rule's id sits underneath as secondary text.
-      title: t('name'), dataIndex: 'name', key: 'name', width: 220, fixed: 'left' as const,
-      render: (v: string, r: ForwardRule) => renderName(v, r),
-    },
+    { title: t('id'), dataIndex: 'id', key: 'id', width: 60 },
     // v0.4.9: inbound group name. Hidden on small screens (responsive md+) so
     // the mobile view keeps the core columns. Lookup misses → "未知分组 (#ID)".
     {
@@ -1051,25 +784,46 @@ const IMPORT_DEFAULTS = {
           : <Text type="secondary">{t('unknownGroup')} (#{r.device_group_in})</Text>;
       },
     },
+    // The name never narrows below a readable block, and the address columns
+    // below stay on one line, so a narrow window scrolls the table sideways
+    // instead of breaking a name or an IP across lines.
+    { title: t('name'), dataIndex: 'name', key: 'name', render: (v: string) => <Text strong className="rp-cell-name">{v}</Text> },
     {
       title: t('listenIp'), key: 'listen_ip', width: 160,
       render: (_: unknown, r: ForwardRule) => {
         // Several addresses read like several targets: first, "(+N)", all on hover.
         return (
-          <HostSummary
-            value={groupInfo.get(r.device_group_in)?.connect_host}
-            empty={<Text type="secondary">{t('notConfigured')}</Text>}
-          />
+          <div className="rp-cell-oneline is-host">
+            <HostSummary
+              value={groupInfo.get(r.device_group_in)?.connect_host}
+              empty={<Text type="secondary">{t('notConfigured')}</Text>}
+            />
+          </div>
         );
       },
     },
-    { title: t('listenPort'), dataIndex: 'listen_port', key: 'listen_port', width: 96, render: (v: number) => <span className="rp-port-pill">{v}</span> },
+    { title: t('listenPort'), dataIndex: 'listen_port', key: 'listen_port', render: (v: number) => <span className="rp-port-pill">{v}</span> },
     {
-      title: t('protocol'), dataIndex: 'protocol', key: 'protocol', width: 140,
+      title: t('protocol'), dataIndex: 'protocol', key: 'protocol',
       render: (p: string, r: ForwardRule) => (
-        <Space size={4} wrap>
+        <Space size={4}>
           {protoTags(p)}
-          {statusTags(r)}
+          {r.proxy_protocol_send && r.proxy_protocol_send !== 'off' && (
+            <Tooltip title={t('ppSendHint')}>
+              <Tag color="geekblue">{t('ppTagSend').replace('{v}', r.proxy_protocol_send)}</Tag>
+            </Tooltip>
+          )}
+          {r.proxy_protocol_accept && (
+            <Tooltip title={t('ppAcceptHint')}>
+              <Tag color="geekblue">{t('ppTagAccept')}</Tag>
+            </Tooltip>
+          )}
+          {r.paused && <Tag color="red">{t('paused')}</Tag>}
+          {!r.paused && ruleOverQuota(r) && (
+            <Tooltip title={t('quotaExhaustedHint')}>
+              <Tag color="orange">{t('quotaExhausted')}</Tag>
+            </Tooltip>
+          )}
         </Space>
       ),
     },
@@ -1078,10 +832,13 @@ const IMPORT_DEFAULTS = {
       render: (_: unknown, r: ForwardRule) => {
         // v1.0.9: a multi-target rule shows "first (+N)"; hovering lists every
         // enabled target IP so the admin can see the failover/round-robin pool.
+        // The address stays on one line; a long one ends in "…" with the whole
+        // value as the title.
         const all = ruleTargets(r).filter(t => t.enabled).map(t => formatTargetHostPort(t.host, t.port));
-        const summary = <span className="rp-mono">{targetSummary(r)}</span>;
+        const text = targetSummary(r);
+        const summary = <span className="rp-mono rp-cell-oneline" title={text}>{text}</span>;
         return (
-          <Space size={4} wrap>
+          <Space size={4} className="rp-cell-oneline-row">
             {all.length > 1 ? (
               <Tooltip title={<div>{all.map((s, i) => <div key={i} className="rp-mono">{s}</div>)}</div>}>
                 {summary}
@@ -1108,7 +865,7 @@ const IMPORT_DEFAULTS = {
     },
     // v1.2.15: sortable, across every page, so the heaviest rules can be found.
     {
-      title: t('traffic'), dataIndex: 'traffic_used', key: 'traffic_used', width: 120,
+      title: t('traffic'), dataIndex: 'traffic_used', key: 'traffic_used',
       sorter: (a: ForwardRule, b: ForwardRule) => (a.traffic_used ?? 0) - (b.traffic_used ?? 0),
       render: (v: number) => (
         <span className="rp-mono" style={{ whiteSpace: 'nowrap', color: v > 0 ? '#0f766e' : 'var(--rp-text-tertiary)' }}>
@@ -1117,58 +874,66 @@ const IMPORT_DEFAULTS = {
       ),
     },
     {
-      // v1.3.3: one visible action ("编辑") keeps the common case one click away;
-      // everything else folds into a "更多" dropdown. Six inline buttons forced the
-      // table past a 1440px window and pushed the owner column to one letter per
-      // line (see the v1.2.14 note this replaces).
-      //
-      // The dropdown items still carry a rule-qualified accessible name, so a
-      // screen reader reads "删除 hk-web" rather than an anonymous "删除".
-      title: t('action'), key: 'action', width: 132, fixed: 'right' as const,
-      render: (_: unknown, r: ForwardRule) => renderActions(r),
+      // v1.2.14: no fixed width, and the buttons wrap, as on the users page.
+      // Six buttons on one line in a 260px column overflowed it: the table
+      // grew past a 1440px window, the owner column was squeezed to one
+      // letter per line, and delete went off screen. Now the column gets a
+      // full line where there is room and folds the buttons, three to a line,
+      // only where the window is narrow. The minimum is the wider English
+      // half (Diagnose, Restart, Delete: 244px) — less folds it to three lines.
+      title: t('action'), key: 'action',
+      // v1.2.7: every action carries an accessible name that names its RULE.
+      // The visible text alone ("编辑") is identical on every row, so tabbing
+      // this table with a screen reader announced the same word once per rule
+      // with nothing to distinguish them — and "delete" is not a button you
+      // want to press on faith. The visible label stays short; only the
+      // accessible name is qualified.
+      render: (_: unknown, r: ForwardRule) => (
+        <Space size="small" wrap style={{ minWidth: 250 }}>
+          <Button
+            size="small" type="text"
+            icon={r.paused ? <PlayCircleOutlined /> : <PauseCircleOutlined />}
+            aria-label={`${r.paused ? t('resume') : t('pause')} ${r.name}`}
+            onClick={() => handleTogglePause(r)}
+          >
+            {r.paused ? t('resume') : t('pause')}
+          </Button>
+          <Button size="small" type="text" icon={<EditOutlined />} aria-label={`${t('edit')} ${r.name}`} onClick={() => handleEdit(r)}>{t('edit')}</Button>
+          <Button size="small" type="text" icon={<CopyOutlined />} aria-label={`${t('copy')} ${r.name}`} onClick={() => handleCopy(r)}>{t('copy')}</Button>
+          {/* v0.4.9: diagnosis is TCP-only — disable for pure-UDP rules. */}
+          <Button size="small" type="text" icon={<MedicineBoxOutlined />} disabled={r.protocol === 'udp'} aria-label={`${t('diagnose')} ${r.name}`} onClick={() => handleDiagnose(r)} title={r.protocol === 'udp' ? t('diagnoseUdpUnsupported') : t('diagnose')}>{t('diagnose')}</Button>
+          {/* v1.2.0: restart drops every live connection on this rule, so it is
+              behind a confirm (diagnose is read-only and isn't). Disabled while
+              paused — there are no listeners to restart. */}
+          <Popconfirm
+            title={t('restartConfirmTitle')}
+            description={t('restartConfirmDesc')}
+            onConfirm={() => handleRestart(r)}
+            okButtonProps={{ danger: true }}
+            disabled={r.paused}
+          >
+            <Button
+              size="small"
+              type="text"
+              icon={<ThunderboltOutlined />}
+              disabled={r.paused}
+              aria-label={`${t('restart')} ${r.name}`}
+              title={r.paused ? t('restartPausedHint') : t('restart')}
+            >
+              {t('restart')}
+            </Button>
+          </Popconfirm>
+          <Popconfirm title={t('deleteRuleConfirm')} onConfirm={() => handleDelete(r.id)}>
+            <Button danger size="small" type="text" aria-label={`${t('delete')} ${r.name}`}>{t('delete')}</Button>
+          </Popconfirm>
+        </Space>
+      ),
     },
   ];
   // v0.4.10: hide the owner column for regular users — they only ever own
   // their own rules, and /admin/users is never fetched for them (so userMap
   // is empty and the column would show "-" everywhere).
   const columns = isAdmin ? allColumns : allColumns.filter(c => c.key !== 'owner');
-
-  // v1.3.3: the phone layout. The responsive-column approach left the phone
-  // client scrolling sideways to find the status ("paused") and the actions;
-  // there is no room for an 8-column table on a 390px screen. The phone gets
-  // four columns that fit: name (with the id and expand chevron under it),
-  // status, listen port and the actions. Tapping the row expands an in-place
-  // detail panel showing targets, inbound group, listen IP, owner (for admins)
-  // and traffic without having to open the edit dialog.
-  //
-  // Status folds the protocol tags and the state tags into one cell: on a phone
-  // the reader wants "is it on and does it work", not the protocol breakdown.
-  const mobileColumns = [
-    {
-      title: t('name'), dataIndex: 'name', key: 'name', minWidth: 116,
-      render: (v: string, r: ForwardRule) => renderName(v, r, true),
-    },
-    {
-      title: t('status'), key: 'status', width: 72,
-      render: (_: unknown, r: ForwardRule) => (
-        <Space size={2} wrap>
-          {protoTags(r.protocol)}
-          {statusTags(r)}
-        </Space>
-      ),
-    },
-    {
-      title: t('listenPort'), dataIndex: 'listen_port', key: 'listen_port', width: 60,
-      render: (v: number) => <span className="rp-port-pill">{v}</span>,
-    },
-    {
-      // No `fixed` here: the phone table is not horizontally scrollable, so
-      // there is nothing to pin against, and a fixed column would require one.
-      title: t('action'), key: 'action', width: 56,
-      render: (_: unknown, r: ForwardRule) => renderActions(r, true),
-    },
-  ];
-  const shownColumns = isMobile ? mobileColumns : columns;
 
   const inGroups = groups.filter(g => g.group_type === 'in');
   // v0.4.12 PR1: inbound group selection. Admins pick from their OWN 'in'
@@ -1511,49 +1276,18 @@ const IMPORT_DEFAULTS = {
         </div>
       )}
       <Table
-        className={isMobile ? 'rp-rules-mobile-table' : undefined}
-        rowSelection={{
-          fixed: !isMobile,
-          selectedRowKeys,
-          onChange: (keys) => setSelectedRowKeys(keys as number[]),
-          // v1.3.3: the row checkbox used to be announced as a bare
-          // "checkbox" — every row identical. Qualify it with the rule name.
-          //
-          // rc-checkbox spreads the remaining props onto its real <input>, so
-          // the label reaches the element a screen reader reads; antd's
-          // CheckboxProps type just does not declare aria-* attributes, hence
-          // the cast.
-          getCheckboxProps: (r: ForwardRule) => ({
-            'aria-label': t('ruleSelectAria').replace('{name}', r.name),
-          }) as { disabled?: boolean },
-        }}
-        expandable={isMobile ? {
-          expandedRowKeys: mobileExpandedIds,
-          showExpandColumn: false,
-          expandedRowRender: (r) => renderMobileDetail(r),
-        } : undefined}
-        onRow={isMobile ? (r) => ({
-          className: 'rp-rule-mobile-row',
-          onClick: (e) => {
-            if ((e.target as HTMLElement).closest('button, a, input, label, .ant-checkbox-wrapper, .ant-dropdown-trigger')) return;
-            toggleMobileExpand(r.id);
-          },
-        }) : undefined}
-        dataSource={visibleRules} columns={shownColumns} rowKey="id" loading={loading}
+        rowSelection={{ selectedRowKeys, onChange: (keys) => setSelectedRowKeys(keys as number[]) }}
+        dataSource={visibleRules} columns={columns} rowKey="id" loading={loading}
         pagination={{
           pageSize: rulePageSize,
           pageSizeOptions: RULE_PAGE_SIZES,
           showSizeChanger: true,
           onChange: (_page, size) => { if (size !== rulePageSize) changeRulePageSize(size); },
         }}
-        // Desktop uses `x: 'max-content'` so fixed column widths are honored at
-        // 1280px/1440px while the selection + name columns stay pinned left and
-        // the action column stays pinned right. The phone table fits without
-        // sideways scroll.
-        scroll={isMobile ? undefined : DESKTOP_RULES_SCROLL}
+        scroll={tableScroll}
       />
 
-      <Modal title={t('addRule')} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={() => createForm.submit()} okText={t('create')} cancelText={t('cancel')} width={540}>
+      <Modal title={t('addRule')} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={() => createForm.submit()} okText={t('create')} cancelText={t('cancel')} width={620}>
         <Form form={createForm} onFinish={handleCreate} onFinishFailed={onSaveFailed(setCreateTab)} layout="vertical" className="rp-rule-form">
           <Tabs activeKey={createTab} onChange={(k) => setCreateTab(k as RuleTab)} items={[
             {

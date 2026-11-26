@@ -1569,110 +1569,33 @@ html, body, #root {
   line-height: 18px;
 }
 
-/* v1.3.3: the rules table's primary column — the name, with the rule's id
-   underneath as secondary text. The name gets at most two lines; past that it
-   ellipsises, and the whole name stays available as the cell's title. Before
-   this the name column had no width at all and a long Chinese name wrapped to
-   one character per line on a 1440px window. */
-.rp-rule-name-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-@media (min-width: 768px) {
-  /* Desktop rules table uses `scroll={{ x: 'max-content' }}` so columns keep
-     their widths at 1280px/1440px instead of being squeezed. Bound the cell so
-     long rule names still wrap to at most two lines without stretching the
-     column across the whole table, while guaranteeing >= 198px of text width
-     (~220px column with 11px side padding). */
-  .rp-rule-name-cell {
-    min-width: 198px;
-    max-width: 240px;
-  }
-}
-.rp-rule-name {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
+/* Rules table: the listen address and the target stay on one line, up to a
+   cap; a longer value ends in an ellipsis (the full value is the title). The
+   name keeps a minimum width so it wraps by words, never a letter per line. */
+.rp-cell-oneline {
+  display: block;
+  max-width: 260px;
   overflow: hidden;
-  overflow-wrap: anywhere;
-  font-weight: 500;
-  line-height: 1.35;
-  color: var(--rp-text);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
-.rp-rule-id {
-  font-family: var(--rp-font-mono);
-  font-size: 11.5px;
-  line-height: 1.2;
-  color: var(--rp-text-tertiary);
+.rp-cell-oneline.is-host {
+  max-width: 200px;
 }
-/* Mobile rules table: tighter horizontal cell padding so all columns fit
-   inside 390px without sideways scrolling, plus tap-to-expand detail panel. */
-.rp-rules-mobile-table .ant-table-thead > tr > th.ant-table-cell,
-.rp-rules-mobile-table .ant-table-tbody > tr > td.ant-table-cell {
-  padding-inline: 6px;
+.rp-cell-name {
+  display: inline-block;
+  min-width: 140px;
 }
-.rp-rule-mobile-row {
-  cursor: pointer;
-}
-.rp-rule-name-toggle {
+.rp-cell-oneline-row {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: none;
-  text-align: left;
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
+  flex-wrap: nowrap;
+}
+.rp-cell-oneline-row > .ant-space-item:first-child {
   min-width: 0;
+  overflow: hidden;
 }
-.rp-rule-name-toggle:focus-visible {
-  outline: 2px solid var(--ant-color-primary, #6c5dd8);
-  outline-offset: 2px;
-  border-radius: 4px;
-}
-.rp-rule-id-row {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.rp-rule-expand-chevron {
-  font-size: 10px;
-  color: var(--rp-text-tertiary);
-  transition: transform 0.15s ease;
-}
-.rp-rules-mobile-table .ant-table-expanded-row > td.ant-table-cell {
-  background: var(--rp-table-header-bg);
-  padding: 10px 12px !important;
-}
-.rp-rule-mobile-detail {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 12px;
-  font-size: 12.5px;
-}
-.rp-rule-mobile-detail-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.rp-rule-mobile-detail-item.is-full {
-  grid-column: 1 / -1;
-}
-.rp-rule-mobile-detail-label {
-  font-size: 11.5px;
-  color: var(--rp-text-tertiary);
-}
-.rp-rule-mobile-detail-value {
-  color: var(--rp-text);
-  overflow-wrap: anywhere;
+.rp-cell-oneline-row > .ant-space-item:not(:first-child) {
+  flex-shrink: 0;
 }
 
 /* v1.3.3: the dashboard's fleet summary line, above the KPI cards. */
