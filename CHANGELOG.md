@@ -10,6 +10,11 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+## [1.3.5] - 2026-11-27
+
+Panel only: nodes stay on node-v1.3.2, and the config protocol and the
+database are unchanged.
+
 ### Changed
 
 - **My Rules list back to the 1.3.2 layout**: the ID column, the name column and
