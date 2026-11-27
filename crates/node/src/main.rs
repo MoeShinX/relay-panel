@@ -7,6 +7,7 @@ mod latency;
 mod poller;
 mod reporter;
 mod shutdown;
+mod sysconns;
 mod updater;
 mod ws_client;
 

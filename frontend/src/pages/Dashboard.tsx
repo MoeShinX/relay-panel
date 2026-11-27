@@ -9,6 +9,7 @@ import api from '../api/client';
 import type { ApiEnvelope, User, ForwardRule, DeviceGroup, NodeStatus } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { aggregateNodesByGroup } from '../components/nodes/aggregate';
+import { connectionsTooltip } from '../components/nodes/shared';
 import TrafficChart from '../components/TrafficChart';
 import NodeMetricsChart from '../components/NodeMetricsChart';
 import { formatBps, formatBytes } from '../utils/format';
@@ -250,7 +251,11 @@ export default function Dashboard() {
     },
     {
       title: t('connections'), dataIndex: 'connections', key: 'connections', width: 90,
-      render: (v: number) => <span className={`rp-count-pill${!v ? ' is-zero' : ''}`}>{v}</span>,
+      render: (v: number, r: ReturnType<typeof aggregateNodesByGroup>[number]) => (
+        <Tooltip title={connectionsTooltip({ connections: r.connections, tcp_connections: r.tcp_connections, udp_connections: r.udp_connections }, t)}>
+          <span className={`rp-count-pill${!v ? ' is-zero' : ''}`}>{v}</span>
+        </Tooltip>
+      ),
     },
     {
       title: t('groupRate'), key: 'rate', width: 196,

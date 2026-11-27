@@ -107,8 +107,29 @@ describe('aggregateNodesByGroup — live rate & connections (online only)', () =
       node(1, { node_id: 'b', online: false, connections: 5, upload_bps: 999, download_bps: 999 }),
     ]);
     expect(out[0].connections).toBe(3);
+    expect(out[0].tcp_connections).toBeNull();
+    expect(out[0].udp_connections).toBeNull();
     expect(out[0].upload_bps).toBe(100);
     expect(out[0].download_bps).toBe(200);
+  });
+
+  it('keeps connections as relay sum and aggregates system TCP/UDP only when every online node reports them', () => {
+    const allNew = aggregateNodesByGroup([
+      node(1, { node_id: 'a', online: true, connections: 4, tcp_connections: 30, udp_connections: 10 }),
+      node(1, { node_id: 'b', online: true, connections: 8, tcp_connections: 18, udp_connections: 5 }),
+      node(1, { node_id: 'c', online: false, connections: 9, tcp_connections: 99, udp_connections: 99 }),
+    ]);
+    expect(allNew[0].connections).toBe(12);
+    expect(allNew[0].tcp_connections).toBe(48);
+    expect(allNew[0].udp_connections).toBe(15);
+
+    const mixed = aggregateNodesByGroup([
+      node(1, { node_id: 'a', online: true, connections: 4, tcp_connections: 30, udp_connections: 10 }),
+      node(1, { node_id: 'b', online: true, connections: 8 }),
+    ]);
+    expect(mixed[0].connections).toBe(12);
+    expect(mixed[0].tcp_connections).toBeNull();
+    expect(mixed[0].udp_connections).toBeNull();
   });
 });
 

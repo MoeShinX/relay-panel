@@ -423,6 +423,13 @@ pub async fn get_node_status(
             .strip_prefix("node_status:")
             .is_some_and(|node_key| latency_off.contains(node_key)));
 
+        if !user.admin {
+            if let Some(obj) = status.as_object_mut() {
+                obj.remove("tcp_connections");
+                obj.remove("udp_connections");
+            }
+        }
+
         statuses.push(status);
     }
 

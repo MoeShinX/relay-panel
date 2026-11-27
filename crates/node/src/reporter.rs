@@ -1214,6 +1214,7 @@ pub async fn report_status(
 ) {
     let snap = metrics.snapshot().await;
     let active_connections = connections.current().await;
+    let (tcp_connections, udp_connections) = crate::sysconns::read_system_connections();
     // node-v1.2.12: finished latency minutes not yet acknowledged. They stay in
     // the monitor until a report carrying them is accepted (below), so a failed
     // report just sends them again with the next one.
@@ -1268,15 +1269,19 @@ pub async fn report_status(
         // After node-v1.2.9: every local disk, not just `/`.
         disks: snap.disk_list,
         latency: latency_samples.clone(),
+        tcp_connections,
+        udp_connections,
     };
 
     // debug, not info: this runs every poll cycle (default 10s). Keeping it
     // at info floods the log with one line per cycle on a healthy node.
     tracing::debug!(
-        "report_status: cpu={:.1}% mem={:.1}% conns={} sys_up={}s proc_up={}s disk={} ip={}",
+        "report_status: cpu={:.1}% mem={:.1}% conns={} (sys_tcp={:?} sys_udp={:?}) sys_up={}s proc_up={}s disk={} ip={}",
         report.cpu_usage,
         report.mem_usage,
         report.active_connections,
+        report.tcp_connections,
+        report.udp_connections,
         report.uptime_secs,
         report.process_uptime_secs.unwrap_or(0),
         report

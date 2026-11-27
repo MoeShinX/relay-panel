@@ -19,8 +19,13 @@ export interface NodeGroupSummary {
   group_name: string;
   online_nodes: number;
   total_nodes: number;
-  /** Sum of connections across ONLINE nodes only. */
+  /** Sum of relay-node forwarded connections across ONLINE nodes only. */
   connections: number;
+  /** Sum of host TCP / UDP counts across ONLINE nodes when EVERY online node
+   *  in the group reported them (null on empty or mixed old/new groups so the
+   *  tooltip never shows a partial host count). */
+  tcp_connections: number | null;
+  udp_connections: number | null;
   /** Sum of live upload/download rates across ONLINE nodes only. */
   upload_bps: number;
   download_bps: number;
@@ -79,12 +84,22 @@ export function aggregateNodesByGroup(rows: NodeStatus[]): NodeGroupSummary[] {
     const onlineMembers = members.filter((m) => m.online === true);
     const online = onlineMembers.length;
 
+    const allHaveSysConns = onlineMembers.length > 0 && onlineMembers.every(
+      (m) => m.tcp_connections != null && m.udp_connections != null,
+    );
+
     out.push({
       group_id: gid,
       group_name: members[0]?.group_name ?? '',
       online_nodes: online,
       total_nodes: total,
       connections: onlineMembers.reduce((s, m) => s + safeNumber(m.connections), 0),
+      tcp_connections: allHaveSysConns
+        ? onlineMembers.reduce((s, m) => s + safeNumber(m.tcp_connections), 0)
+        : null,
+      udp_connections: allHaveSysConns
+        ? onlineMembers.reduce((s, m) => s + safeNumber(m.udp_connections), 0)
+        : null,
       upload_bps: onlineMembers.reduce((s, m) => s + safeNumber(m.upload_bps), 0),
       download_bps: onlineMembers.reduce((s, m) => s + safeNumber(m.download_bps), 0),
       upload_bytes: members.reduce((s, m) => s + safeNumber(m.boot_upload_bytes), 0),

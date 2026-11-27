@@ -6,7 +6,7 @@ import type { NodeDisplayRow } from '../../api/types';
 import { NodeResourceBar, NodeDiskBar } from './NodeResourceBar';
 import { formatBps, formatBytes, formatUptime } from '../../utils/format';
 import { versionRelation, versionTagColor } from '../../utils/version';
-import { NetworkCell, cpuTooltip, memTooltip, wsDownTag } from './shared';
+import { NetworkCell, cpuTooltip, memTooltip, wsDownTag, connectionsTooltip } from './shared';
 import { resolveNodeUpgrade } from './upgrade';
 import { nodeDesktopColumnWidths } from './tableLayout';
 import { UPGRADE_COL_CLASS } from './upgradeAlign';
@@ -135,7 +135,11 @@ export function NodeDesktopTable({ rows, panelProtocol, latestNodeVersion, nodeV
     },
     {
       title: t('connections'), dataIndex: 'connections', key: 'connections', width: 70,
-      render: (v: number) => <span className={`rp-count-pill${!v ? ' is-zero' : ''}`}>{v || 0}</span>,
+      render: (v: number, r: NodeDisplayRow) => (
+        <Tooltip title={connectionsTooltip(r, t)}>
+          <span className={`rp-count-pill${!v ? ' is-zero' : ''}`}>{v || 0}</span>
+        </Tooltip>
+      ),
     },
     {
       title: 'CPU', key: 'cpu', width: nodeDesktopColumnWidths.cpu,

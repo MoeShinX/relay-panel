@@ -85,6 +85,48 @@ describe('Node desktop table throughput layout', () => {
 
     expect(container.querySelectorAll('.rp-node-throughput')).toHaveLength(2);
   });
+
+  it('keeps relay connections in the pill and shows separate system TCP · UDP on hover', async () => {
+    const user = userEvent.setup();
+    render(
+      <NodeGroupSection
+        rows={[row({ online: true, connections: 12, tcp_connections: 48, udp_connections: 15 })]}
+        panelProtocol={0}
+        latestNodeVersion="1.1.0"
+        nodeVersionCheckFailed={false}
+        isMobile={false}
+        t={t}
+        openDetail={vi.fn()}
+      />,
+    );
+    const pill = screen.getByText('12');
+    expect(pill).toBeInTheDocument();
+    await user.hover(pill);
+    const tip = await screen.findByRole('tooltip');
+    expect(tip).toHaveTextContent('relayConnections: 12');
+    expect(tip).toHaveTextContent('systemConnectionsSummary');
+  });
+
+  it('shows only relay connections on an older node without system counts', async () => {
+    const user = userEvent.setup();
+    render(
+      <NodeGroupSection
+        rows={[row({ online: true, connections: 9 })]}
+        panelProtocol={0}
+        latestNodeVersion="1.1.0"
+        nodeVersionCheckFailed={false}
+        isMobile={false}
+        t={t}
+        openDetail={vi.fn()}
+      />,
+    );
+    const pill = screen.getByText('9');
+    expect(pill).toBeInTheDocument();
+    await user.hover(pill);
+    const tip = await screen.findByRole('tooltip');
+    expect(tip).toHaveTextContent('relayConnections: 9');
+    expect(tip).not.toHaveTextContent('systemConnectionsSummary');
+  });
 });
 
 // ── v1.2.5: offline nodes are greyed so a stale row is distinguishable from a

@@ -10,6 +10,16 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Added
+
+- **System TCP/UDP counts (admin only, requires node-v1.3.3+)**: the node
+  status table's Connections column and the hourly connections chart keep
+  showing the relay's own forwarded connections (no curve jump on upgrade),
+  while admins now see the host's TCP and UDP counts separately (`System TCP
+  48 · UDP 15`) in the connections tooltip and as a dedicated **System
+  Connections** row in the node detail drawer. Shared-group user endpoints
+  never expose these host-level counts.
+
 ## [1.3.5] - 2026-11-27
 
 Panel only: nodes stay on node-v1.3.2, and the config protocol and the

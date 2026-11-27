@@ -91,6 +91,26 @@ describe('NodeDetailDrawer CPU model', () => {
     const memRow = screen.getByText('内存').closest('tr') as HTMLElement;
     expect(within(memRow).getByText('12.5%')).toBeInTheDocument();
   });
+
+  it('keeps connections as relay count and shows system TCP/UDP in a separate admin-only row', () => {
+    renderZh({ ...baseRow, connections: 12, tcp_connections: 48, udp_connections: 15 }, true);
+    const connRow = screen.getByText('连接数').closest('tr') as HTMLElement;
+    expect(within(connRow).getByText('12')).toBeInTheDocument();
+    const sysRow = screen.getByText('系统连接').closest('tr') as HTMLElement;
+    expect(within(sysRow).getByText('TCP 48 · UDP 15')).toBeInTheDocument();
+  });
+
+  it('hides the system connections row for regular users and older nodes', () => {
+    renderZh({ ...baseRow, connections: 12, tcp_connections: 48, udp_connections: 15 }, false);
+    expect(screen.queryByText('系统连接')).not.toBeInTheDocument();
+  });
+
+  it('omits the system connections row on an older node without system counts', () => {
+    renderZh({ ...baseRow, connections: 12 }, true);
+    const connRow = screen.getByText('连接数').closest('tr') as HTMLElement;
+    expect(within(connRow).getByText('12')).toBeInTheDocument();
+    expect(screen.queryByText('系统连接')).not.toBeInTheDocument();
+  });
 });
 
 // The disk row lists every disk a node reports (nodes after node-v1.2.9); one
