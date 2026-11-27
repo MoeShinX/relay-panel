@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
@@ -9,6 +9,8 @@ vi.mock('../api/client', () => ({
 }));
 const { mockUseAuth } = vi.hoisted(() => ({ mockUseAuth: vi.fn() }));
 vi.mock('../auth/useAuth', () => ({ useAuth: mockUseAuth }));
+const { mockCopyText } = vi.hoisted(() => ({ mockCopyText: vi.fn() }));
+vi.mock('../utils/clipboard', () => ({ copyText: mockCopyText }));
 
 import Rules from './Rules';
 
@@ -40,17 +42,14 @@ const renderPage = (initial = '/rules') =>
     </MemoryRouter>,
   );
 
-/** Route the independent list reads separately so each can fail alone. */
-function routes({ rules, groups, users }: { rules?: unknown; groups?: unknown; users?: unknown }) {
+/** Route the two independent list reads separately so each can fail alone. */
+function routes({ rules, groups }: { rules?: unknown; groups?: unknown }) {
   mockGet.mockImplementation((url: string) => {
     if (url.startsWith('/rules')) {
       return rules instanceof Error ? Promise.reject(rules) : Promise.resolve(rules);
     }
     if (url === '/groups') {
       return groups instanceof Error ? Promise.reject(groups) : Promise.resolve(groups);
-    }
-    if (url === '/admin/users' && users !== undefined) {
-      return users instanceof Error ? Promise.reject(users) : Promise.resolve(users);
     }
     return Promise.resolve(ok([]));
   });
@@ -168,45 +167,39 @@ describe('rule filters are URL state', () => {
   });
 });
 
-/** v1.3.3: open one row's "更多" dropdown. */
-async function openMore(user: ReturnType<typeof userEvent.setup>, ruleName: string) {
-  await user.click(screen.getByRole('button', { name: `ruleMoreActions ${ruleName}` }));
-}
-
-// ── v1.3.3: the row used to carry six inline buttons, which forced the table
-// past a 1440px window; they fold into "编辑" + a "更多" dropdown now. The
-// accessible names stay rule-qualified, so a screen reader still reads
-// "删除 hk-web" and not an anonymous "删除" once the menu is open.
+// ── Every row's action buttons carry the same visible word ("编辑"), so the
+// accessible name has to say which rule, or a screen reader announces an
+// undifferentiated list of them — including "delete".
 describe('row actions name their rule', () => {
   it('gives each action an accessible name containing the rule name', async () => {
-    const user = userEvent.setup();
     renderPage();
     await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
-    // Edit is the one visible action.
-    expect(screen.getByRole('button', { name: 'edit hk-web' })).toBeInTheDocument();
-    await openMore(user, 'hk-web');
-    for (const action of ['copy', 'delete', 'diagnose', 'restart', 'pause']) {
+    for (const action of ['edit', 'copy', 'delete', 'diagnose', 'restart', 'pause']) {
       expect(
-        await screen.findByLabelText(`${action} hk-web`),
+        screen.getByRole('button', { name: `${action} hk-web` }),
         `${action} must be addressable on hk-web`,
       ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: `${action} jp-game` })).toBeInTheDocument();
     }
   });
 
   it('names the resume action on a paused rule', async () => {
     routes({ rules: ok([rule({ paused: true })]), groups: ok([group()]) });
-    const user = userEvent.setup();
     renderPage();
     await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
-    await openMore(user, 'hk-web');
-    expect(await screen.findByLabelText('resume hk-web')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'resume hk-web' })).toBeInTheDocument();
   });
 
-  // v1.2.14 → v1.3.3: the six inline buttons overflowed a fixed-width column;
-  // what matters now is that the table does not insist on an old fixed width.
-  it('does not pin the table to the old fixed widths', async () => {
+  // v1.2.14: six buttons on one line in a fixed 260px column overflowed it —
+  // at 1440px the owner column was squeezed to a letter per line and delete
+  // went off screen. The buttons fold now, and the table no longer insists
+  // on 1200px.
+  it('lets the six actions fold instead of widening the table', async () => {
     const { container } = renderPage();
     await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
+    const space = screen.getByRole('button', { name: 'edit hk-web' }).closest('.ant-space') as HTMLElement;
+    expect(space.style.flexWrap).toBe('wrap');
+    // no column is pinned to the old 260px (col order shifts with responsive columns)
     const widths = Array.from(container.querySelectorAll('.ant-table colgroup col')).map((c) => (c as HTMLElement).style.width);
     expect(widths).not.toContain('260px');
     expect((container.querySelector('.ant-table table') as HTMLElement).style.width).not.toBe('1200px');
@@ -441,8 +434,7 @@ describe('diagnosis names a node by its label', () => {
     const user = userEvent.setup();
     renderPage();
     await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
-    await openMore(user, 'hk-web');
-    await user.click(await screen.findByLabelText('diagnose hk-web'));
+    await user.click(screen.getByRole('button', { name: 'diagnose hk-web' }));
 
     expect(await screen.findByText('蓝希云 1号 · hk-line · 1.1.1.1')).toBeInTheDocument();
     expect(screen.getByText('hk-line · 2.2.2.2')).toBeInTheDocument();
@@ -454,8 +446,7 @@ describe('diagnosis names a node by its label', () => {
     const user = userEvent.setup();
     renderPage();
     await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
-    await openMore(user, 'hk-web');
-    await user.click(await screen.findByLabelText('diagnose hk-web'));
+    await user.click(screen.getByRole('button', { name: 'diagnose hk-web' }));
     expect(await screen.findByText('hk-line · 1.1.1.1')).toBeInTheDocument();
   });
 });
@@ -476,6 +467,33 @@ describe('listen IP column', () => {
     await user.hover(multi);
     expect(await screen.findByText('2001:db8::1')).toBeInTheDocument();
     expect(screen.getByText('1.2.3.4')).toBeInTheDocument();
+  });
+
+  it('copies address:port with the copy button, an IPv6 address in brackets', async () => {
+    mockCopyText.mockReset();
+    mockCopyText.mockResolvedValue(true);
+    routes({
+      rules: ok([
+        rule({ listen_port: 10001, device_group_in: 7 }),
+        rule({ id: 2, name: 'v6', listen_port: 20002, device_group_in: 8 }),
+      ]),
+      groups: ok([
+        group({ connect_host: '203.0.113.11,198.51.100.2' }),
+        group({ id: 8, name: 'six', connect_host: '2001:db8:abcd:1234:5678:9abc:def0:1234' }),
+      ]),
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('v6');
+    const buttons = screen.getAllByRole('button', { name: /copyConnectAddress/ });
+    expect(buttons).toHaveLength(2);
+    await user.click(buttons[0]);
+    await waitFor(() => expect(mockCopyText).toHaveBeenCalledTimes(1));
+    // Several connect addresses: the first one, the one the cell shows.
+    expect(mockCopyText.mock.calls[0][0]).toBe('203.0.113.11:10001');
+    await user.click(buttons[1]);
+    await waitFor(() => expect(mockCopyText).toHaveBeenCalledTimes(2));
+    expect(mockCopyText.mock.calls[1][0]).toBe('[2001:db8:abcd:1234:5678:9abc:def0:1234]:20002');
   });
 });
 
@@ -599,191 +617,5 @@ describe('PROXY protocol', () => {
     await openEdit('hk-web');
     expect(screen.getByRole('switch', { name: 'ppAccept' })).toBeDisabled();
     expect(screen.getByText('ppUdpUnsupported')).toBeInTheDocument();
-  });
-});
-
-// ── v1.3.3: the name column. It used to have no width and was squeezed to
-// about 48px on a 1440px window, so a long Chinese name wrapped to one
-// character per line; the rule's id occupied a whole column of its own.
-describe('the name is the primary column and carries the id', () => {
-  const longName = '香港-日本-新加坡-多区域混合专线转发规则-用于长名称换行验证-80';
-
-  it('keeps a long name to two lines instead of one character per line', async () => {
-    routes({ rules: ok([rule({ name: longName })]), groups: ok([group()]) });
-    const { container } = renderPage();
-    await waitFor(() => expect(screen.getByText(longName)).toBeInTheDocument());
-    const cell = container.querySelector('.rp-rule-name-cell') as HTMLElement;
-    expect(cell).not.toBeNull();
-    // The clamp is CSS (jsdom cannot lay out), so assert the cell that carries
-    // the rule: a single element holding the whole name, not a broken column.
-    const nameEl = cell.querySelector('.rp-rule-name') as HTMLElement;
-    expect(nameEl.textContent).toBe(longName);
-    expect(nameEl.getAttribute('title')).toBe(longName);
-  });
-
-  it('gives the desktop name column an explicit width, pins it left, and uses max-content scroll so 1280/1440px windows do not squeeze or scroll it away', async () => {
-    const { container } = renderPage();
-    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
-    const cols = Array.from(container.querySelectorAll('.ant-table colgroup col')) as HTMLElement[];
-    // col[0] is the row-selection checkbox; col[1] is the primary name column.
-    const nameWidth = parseInt(cols[1]?.style.width || '', 10);
-    expect(nameWidth).toBeGreaterThanOrEqual(180);
-    expect((container.querySelector('.ant-table table') as HTMLElement).style.width).toBe('max-content');
-    // Both the checkbox column and the name column are pinned to the left edge.
-    const headerCells = Array.from(container.querySelectorAll('.ant-table-thead th'));
-    expect(headerCells[0]?.className).toMatch(/ant-table-cell-fix-(left|start)/);
-    expect(headerCells[1]?.className).toMatch(/ant-table-cell-fix-(left|start)/);
-  });
-
-  it('shows the rule id under the name instead of in its own column', async () => {
-    routes({ rules: ok([rule({ id: 12, name: 'hk-web' })]), groups: ok([group()]) });
-    const { container } = renderPage();
-    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
-    const cell = container.querySelector('.rp-rule-name-cell') as HTMLElement;
-    expect(cell.querySelector('.rp-rule-id')?.textContent).toBe('#12');
-    // No column titled "ID" any more.
-    const headers = Array.from(container.querySelectorAll('.ant-table-thead th')).map((th) => th.textContent?.trim());
-    expect(headers).not.toContain('id');
-  });
-});
-
-// ── v1.3.3: restart and delete moved into the "更多" dropdown, where a
-// Popconfirm cannot live (antd closes the menu and unmounts the popup), so the
-// confirmation is a Modal that names the rule.
-describe('the named confirmations in the more menu', () => {
-  it('names the rule in the restart question', async () => {
-    const user = userEvent.setup();
-    renderPage();
-    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
-    await openMore(user, 'hk-web');
-    await user.click(await screen.findByLabelText('restart hk-web'));
-    expect((await screen.findAllByText('restartConfirmNamed')).length).toBeGreaterThan(0);
-  });
-
-  it('names the rule in the delete question', async () => {
-    const user = userEvent.setup();
-    renderPage();
-    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
-    await openMore(user, 'hk-web');
-    await user.click(await screen.findByLabelText('delete hk-web'));
-    expect((await screen.findAllByText('deleteRuleConfirmNamed')).length).toBeGreaterThan(0);
-  });
-
-  it('disables diagnosis on a UDP rule inside the menu', async () => {
-    routes({ rules: ok([rule({ protocol: 'udp', name: 'udp-rule' })]), groups: ok([group()]) });
-    const user = userEvent.setup();
-    renderPage();
-    await waitFor(() => expect(screen.getByText('udp-rule')).toBeInTheDocument());
-    await openMore(user, 'udp-rule');
-    const item = await screen.findByLabelText('diagnose udp-rule');
-    // antd marks a disabled menu item on its list item wrapper.
-    expect(item.closest('.ant-dropdown-menu-item')?.classList.contains('ant-dropdown-menu-item-disabled')).toBe(true);
-  });
-});
-
-// ── v1.3.3: the row checkbox used to be an unqualified "checkbox" on every row.
-describe('the row checkbox says which rule it selects', () => {
-  it('labels each row checkbox with the rule name', async () => {
-    const { container } = renderPage();
-    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
-    const boxes = Array.from(container.querySelectorAll('tr.ant-table-row input[type="checkbox"]'));
-    const labels = boxes.map((b) => b.getAttribute('aria-label'));
-    expect(labels).toContain('ruleSelectAria');
-    expect(labels).toHaveLength(2);
-  });
-});
-
-// ── v1.3.3: on a phone the table keeps four columns that fit without a
-// sideways scroll: name (with id), status, listen port, and the "更多" menu.
-describe('the phone layout', () => {
-  const realMatchMedia = window.matchMedia;
-  afterEach(() => { window.matchMedia = realMatchMedia; });
-
-  it('shows name, status, port and the more menu without horizontal scroll', async () => {
-    window.matchMedia = ((query: string) => ({
-      matches: query.includes('max-width: 767px'),
-      media: query,
-      onchange: null,
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-    })) as unknown as typeof window.matchMedia;
-
-    routes({
-      rules: ok([rule({ paused: true, proxy_protocol_accept: true })]),
-      groups: ok([group()]),
-    });
-    const { container } = renderPage();
-    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
-
-    const headers = Array.from(container.querySelectorAll('.ant-table-thead th'))
-      .map((th) => th.textContent?.trim())
-      .filter((text) => text && text !== '');
-    expect(headers).toEqual(['name', 'status', 'listenPort', 'action']);
-
-    // Status and actions are on screen: the paused tag renders, and the more
-    // menu is a real button.
-    expect(screen.getByText('paused')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'ruleMoreActions hk-web' })).toBeInTheDocument();
-
-    // The compact action cell holds only the trigger; edit lives in the menu.
-    expect(screen.queryByRole('button', { name: 'edit hk-web' })).toBeNull();
-  });
-
-  it('expands a phone row on tap to show targets, group, listen IP, owner and traffic', async () => {
-    window.matchMedia = ((query: string) => ({
-      matches: query.includes('max-width: 767px'),
-      media: query,
-      onchange: null,
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-    })) as unknown as typeof window.matchMedia;
-
-    routes({
-      rules: ok([rule({
-        id: 12,
-        name: 'hk-web',
-        uid: 2,
-        traffic_used: 2048,
-        targets: [
-          { host: '203.0.113.10', port: 443, enabled: true, position: 1, id: 1, rule_id: 12 },
-          { host: '203.0.113.11', port: 443, enabled: true, position: 2, id: 2, rule_id: 12 },
-        ],
-      })]),
-      groups: ok([group({ name: 'hk-line', connect_host: '198.51.100.45' })]),
-      users: ok([{ id: 2, username: 'alice' }]),
-    });
-
-    const user = userEvent.setup();
-    renderPage();
-    await waitFor(() => expect(screen.getByText('hk-web')).toBeInTheDocument());
-
-    // Collapsed initially: hidden fields are not rendered yet.
-    expect(screen.queryByTestId('rule-mobile-detail-12')).toBeNull();
-
-    // Tapping the name toggle expands the detail panel in place.
-    const toggle = screen.getByRole('button', { name: 'ruleExpandDetails' });
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    await user.click(toggle);
-
-    const detail = await screen.findByTestId('rule-mobile-detail-12');
-    expect(detail).toHaveTextContent('203.0.113.10:443');
-    expect(detail).toHaveTextContent('203.0.113.11:443');
-    expect(detail).toHaveTextContent('hk-line');
-    expect(detail).toHaveTextContent('198.51.100.45');
-    expect(detail).toHaveTextContent('alice');
-    expect(detail).toHaveTextContent('2.00 KB');
-
-    // Tapping again collapses it (antd keeps the row mounted with display:none).
-    await user.click(screen.getByRole('button', { name: 'ruleCollapseDetails' }));
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'ruleExpandDetails' })).toHaveAttribute('aria-expanded', 'false');
-      expect(screen.getByTestId('rule-mobile-detail-12')).not.toBeVisible();
-    });
   });
 });

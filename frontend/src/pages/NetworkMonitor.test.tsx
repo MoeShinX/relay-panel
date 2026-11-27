@@ -89,13 +89,14 @@ describe('NetworkMonitor page', () => {
     expect(await screen.findByTestId('groups-page')).toBeInTheDocument();
   });
 
-  it('hides group switcher when exactly 1 group is monitored and embeds GroupLatency without back button', async () => {
+  it('shows the single monitored group as one selected tag and embeds GroupLatency without back button', async () => {
     serveGroups([{ id: 5, name: 'HK-Core', targets: 3 }]);
     renderMonitor();
     await waitFor(() => {
       expect(screen.getByTestId('group-latency-title')).toHaveTextContent('HK-Core');
     });
-    expect(screen.queryByTestId('monitor-group-switcher')).toBeNull();
+    const switcher = screen.getByTestId('monitor-group-switcher');
+    expect(switcher).toHaveTextContent('HK-Core');
     expect(screen.queryByText('latencyBack')).toBeNull();
     expect(mockGet).toHaveBeenCalledWith(expect.stringContaining('/admin/groups/5/latency'));
   });

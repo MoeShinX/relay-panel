@@ -868,6 +868,7 @@ export const enUS: Dict = {
   exportTxt: 'Export TXT',
   dismiss: 'Dismiss',
   copied: 'Copied',
+  copyConnectAddress: 'Copy connect address {addr}',
   deleteCodesConfirm: 'Delete {count} selected codes?',
   deleteCodesDesc: 'Used codes are never deleted — they are the record of money that entered the system.',
   codesDeleted: 'Deleted {count}',

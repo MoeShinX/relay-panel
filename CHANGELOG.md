@@ -10,6 +10,21 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+### Changed
+
+- **My Rules list back to the 1.3.2 layout**: the ID column, the name column and
+  the row of action buttons (pause / resume, edit, copy, diagnose, restart,
+  delete) are back as they were, on phones too. The listen address and the
+  target now stay on one line (a long one ends in an ellipsis, full value on
+  hover) and the name keeps a minimum width, so on a narrow window the table
+  scrolls sideways instead of breaking a name or an IP across lines (a full
+  IPv6 address still shows whole). The compact rule dialog from 1.3.3 stays.
+- **Copy the connect address**: a small copy button beside the listen address
+  puts `address:port` on the clipboard, an IPv6 address in brackets
+  (`[2001:db8::1]:20053`); with several connect addresses it copies the first.
+- **Network Monitor**: the group tag above the comparison also shows when only
+  one group is monitored, so the page always shows which group it is on.
+
 ## [1.3.4] - 2026-11-26
 
 Panel only, a quick follow-up to 1.3.3: nodes stay on node-v1.3.2, and the

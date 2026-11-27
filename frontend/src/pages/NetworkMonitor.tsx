@@ -203,7 +203,9 @@ export default function NetworkMonitor() {
   }
 
   const switcher =
-    groups.length > 1 ? (
+    // Shown even for a single monitored group, so the page always says which
+    // group it is on in the same place (the title repeats the name).
+    groups.length > 0 ? (
       <div data-testid="monitor-group-switcher" className="rp-monitor-switcher">
         {groups.length <= SEGMENTED_MAX_GROUPS ? (
           <Segmented
