@@ -12,6 +12,7 @@ import { formatBytes } from '../utils/format';
 import { useAuth } from '../auth/useAuth';
 import HostSummary from '../components/HostSummary';
 import { splitHosts } from '../utils/connectHosts';
+import { copyText } from '../utils/clipboard';
 import { moveRules } from '../utils/moveRules';
 import type { MoveResult } from '../utils/moveRules';
 import { asValidatedEntry, buildExportJSON, countUnexportable, exportFileLabel, mergeBulkTargets, parseDest, ruleTargets, validateImportEntry } from '../utils/rulesIO';
@@ -792,12 +793,33 @@ const IMPORT_DEFAULTS = {
       title: t('listenIp'), key: 'listen_ip', width: 160,
       render: (_: unknown, r: ForwardRule) => {
         // Several addresses read like several targets: first, "(+N)", all on hover.
+        // A small copy button puts "address:port" — what a client connects
+        // to — on the clipboard (an IPv6 address in brackets). With several
+        // connect addresses it copies the first, the one shown.
+        const connectHost = groupInfo.get(r.device_group_in)?.connect_host;
+        const first = splitHosts(connectHost)[0];
+        const endpoint = first ? formatTargetHostPort(first, r.listen_port) : '';
         return (
-          <div className="rp-cell-oneline is-host">
-            <HostSummary
-              value={groupInfo.get(r.device_group_in)?.connect_host}
-              empty={<Text type="secondary">{t('notConfigured')}</Text>}
-            />
+          <div className="rp-host-cell">
+            <div className="rp-cell-oneline is-host">
+              <HostSummary
+                value={connectHost}
+                empty={<Text type="secondary">{t('notConfigured')}</Text>}
+              />
+            </div>
+            {endpoint && (
+              <Tooltip title={t('copyConnectAddress').replace('{addr}', endpoint)}>
+                <Button
+                  type="text" size="small" className="rp-copy-btn"
+                  icon={<CopyOutlined />}
+                  aria-label={t('copyConnectAddress').replace('{addr}', endpoint)}
+                  onClick={async () => {
+                    if (await copyText(endpoint)) message.success(`${t('copied')}: ${endpoint}`);
+                    else message.error(t('copyFailed'));
+                  }}
+                />
+              </Tooltip>
+            )}
           </div>
         );
       },

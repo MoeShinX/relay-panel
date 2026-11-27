@@ -1579,8 +1579,36 @@ html, body, #root {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+/* Wide enough for a full IPv6 address (39 characters). */
 .rp-cell-oneline.is-host {
-  max-width: 200px;
+  max-width: 300px;
+}
+/* The listen address with its copy button on the same line. The button is
+   faint until the row is hovered or the button is focused, and always takes
+   its space, so nothing shifts when it lights up. */
+.rp-host-cell {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+.rp-host-cell > .rp-cell-oneline {
+  min-width: 0;
+}
+.rp-host-cell .rp-copy-btn.ant-btn {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  padding: 0;
+  color: var(--rp-text-tertiary, #9ca3af);
+  opacity: 0.45;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+.ant-table-row:hover .rp-host-cell .rp-copy-btn.ant-btn,
+.rp-host-cell .rp-copy-btn.ant-btn:focus-visible {
+  opacity: 1;
+  color: #5b4cc4;
 }
 .rp-cell-name {
   display: inline-block;

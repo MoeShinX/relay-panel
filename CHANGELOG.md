@@ -17,8 +17,11 @@ independent `v*` / `node-v*` tracks since this release).
   delete) are back as they were, on phones too. The listen address and the
   target now stay on one line (a long one ends in an ellipsis, full value on
   hover) and the name keeps a minimum width, so on a narrow window the table
-  scrolls sideways instead of breaking a name or an IP across lines. The
-  compact rule dialog from 1.3.3 stays.
+  scrolls sideways instead of breaking a name or an IP across lines (a full
+  IPv6 address still shows whole). The compact rule dialog from 1.3.3 stays.
+- **Copy the connect address**: a small copy button beside the listen address
+  puts `address:port` on the clipboard, an IPv6 address in brackets
+  (`[2001:db8::1]:20053`); with several connect addresses it copies the first.
 
 ## [1.3.4] - 2026-11-26
 

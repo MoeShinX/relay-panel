@@ -9,6 +9,8 @@ vi.mock('../api/client', () => ({
 }));
 const { mockUseAuth } = vi.hoisted(() => ({ mockUseAuth: vi.fn() }));
 vi.mock('../auth/useAuth', () => ({ useAuth: mockUseAuth }));
+const { mockCopyText } = vi.hoisted(() => ({ mockCopyText: vi.fn() }));
+vi.mock('../utils/clipboard', () => ({ copyText: mockCopyText }));
 
 import Rules from './Rules';
 
@@ -465,6 +467,33 @@ describe('listen IP column', () => {
     await user.hover(multi);
     expect(await screen.findByText('2001:db8::1')).toBeInTheDocument();
     expect(screen.getByText('1.2.3.4')).toBeInTheDocument();
+  });
+
+  it('copies address:port with the copy button, an IPv6 address in brackets', async () => {
+    mockCopyText.mockReset();
+    mockCopyText.mockResolvedValue(true);
+    routes({
+      rules: ok([
+        rule({ listen_port: 10001, device_group_in: 7 }),
+        rule({ id: 2, name: 'v6', listen_port: 20002, device_group_in: 8 }),
+      ]),
+      groups: ok([
+        group({ connect_host: '203.0.113.11,198.51.100.2' }),
+        group({ id: 8, name: 'six', connect_host: '2001:db8:abcd:1234:5678:9abc:def0:1234' }),
+      ]),
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('v6');
+    const buttons = screen.getAllByRole('button', { name: /copyConnectAddress/ });
+    expect(buttons).toHaveLength(2);
+    await user.click(buttons[0]);
+    await waitFor(() => expect(mockCopyText).toHaveBeenCalledTimes(1));
+    // Several connect addresses: the first one, the one the cell shows.
+    expect(mockCopyText.mock.calls[0][0]).toBe('203.0.113.11:10001');
+    await user.click(buttons[1]);
+    await waitFor(() => expect(mockCopyText).toHaveBeenCalledTimes(2));
+    expect(mockCopyText.mock.calls[1][0]).toBe('[2001:db8:abcd:1234:5678:9abc:def0:1234]:20002');
   });
 });
 

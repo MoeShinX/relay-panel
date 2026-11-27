@@ -866,6 +866,7 @@ export const zhCN = {
   exportTxt: '导出 TXT',
   dismiss: '关闭',
   copied: '已复制',
+  copyConnectAddress: '复制连接地址 {addr}',
   deleteCodesConfirm: '确定删除选中的 {count} 张卡密?',
   deleteCodesDesc: '已使用的卡密不会被删除 —— 它是资金入账的凭证,必须保留。',
   codesDeleted: '已删除 {count} 张',
