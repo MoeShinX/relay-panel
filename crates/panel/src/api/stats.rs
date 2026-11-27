@@ -1323,6 +1323,47 @@ mod upgrade_result_tests {
     }
 
     #[tokio::test]
+    async fn host_connection_counts_are_shown_to_admins_only() {
+        let state = state_with_group().await;
+        let status = serde_json::json!({
+            "node_id": "n1",
+            "last_seen": chrono::Utc::now().to_rfc3339(),
+            "connections": 7,
+            "tcp_connections": 48,
+            "udp_connections": 15,
+        });
+        state
+            .db
+            .set("node_status:9:n1", &status.to_string())
+            .await
+            .unwrap();
+
+        let seen_by = |admin: bool| {
+            let state = state.clone();
+            async move {
+                // User 1 owns group 9, so the non-admin still gets the row.
+                let Json(resp) =
+                    get_node_status(AuthUser { user_id: 1, admin }, State(state)).await;
+                let rows = resp.data.unwrap();
+                assert_eq!(rows.len(), 1);
+                rows.into_iter().next().unwrap()
+            }
+        };
+
+        let admin_row = seen_by(true).await;
+        assert_eq!(admin_row["connections"], 7);
+        assert_eq!(admin_row["tcp_connections"], 48);
+        assert_eq!(admin_row["udp_connections"], 15);
+
+        let user_row = seen_by(false).await;
+        assert_eq!(user_row["connections"], 7, "relay count stays visible");
+        assert!(
+            user_row.get("tcp_connections").is_none() && user_row.get("udp_connections").is_none(),
+            "host-level counts must not reach non-admins: {user_row}"
+        );
+    }
+
+    #[tokio::test]
     async fn removing_a_node_removes_its_label_and_only_its_label() {
         let state = state_with_group().await;
         put_status(&state, "n1").await;
