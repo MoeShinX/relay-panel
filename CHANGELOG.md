@@ -22,6 +22,8 @@ independent `v*` / `node-v*` tracks since this release).
 - **Copy the connect address**: a small copy button beside the listen address
   puts `address:port` on the clipboard, an IPv6 address in brackets
   (`[2001:db8::1]:20053`); with several connect addresses it copies the first.
+- **Network Monitor**: the group tag above the comparison also shows when only
+  one group is monitored, so the page always shows which group it is on.
 
 ## [1.3.4] - 2026-11-26
 
