@@ -10,6 +10,12 @@ independent `v*` / `node-v*` tracks since this release).
 
 ## [Unreleased]
 
+## [1.3.6] - 2026-11-28
+
+Released with node-v1.3.3. The host TCP/UDP counts need both the panel and
+the node updated; either side alone keeps working without them. The config
+protocol and the database are unchanged.
+
 ### Added
 
 - **System TCP/UDP counts (admin only, requires node-v1.3.3+)**: the node

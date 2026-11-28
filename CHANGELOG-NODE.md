@@ -13,6 +13,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-11-28
+
+Runs against any current panel (still protocol version 4). The host TCP/UDP
+counts show in panel v1.3.6 and later.
+
 ### Added
 
 - **Host-level TCP/UDP connection counts (Linux only)**: status reports now
