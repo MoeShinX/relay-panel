@@ -61,12 +61,10 @@
   --rp-table-row-hover: #f9f9fb;
 
   /* Font — Western UI precision stack first (crisp ClearType/SF Pro Latin &
-     digits), then native OS CJK (PingFang SC on macOS, Microsoft YaHei UI on
-     Windows for full ClearType hinting at 12–14px), with self-hosted Noto Sans
-     SC as the clean fallback for Linux and systems without either. */
+     digits), then CJK (PingFang SC / HarmonyOS Sans SC / Noto Sans SC). */
   --rp-font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI",
-    "Helvetica Neue", Arial, "PingFang SC", "HarmonyOS Sans SC",
-    "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+    "Helvetica Neue", Arial, "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC",
+    "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
   --rp-font-mono: "JetBrains Mono", "Cascadia Mono", "Cascadia Code", "SF Mono",
     ui-monospace, Menlo, Consolas, monospace;
 }
@@ -84,6 +82,7 @@ html, body, #root {
   /* Never let Chromium/DirectWrite synthesize blurry faux-bold or faux-italic */
   font-synthesis: none;
   font-feature-settings: "kern" 1, "liga" 1;
+  text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -346,16 +345,9 @@ html, body, #root {
   color: var(--rp-text-secondary);
 }
 
-/* Segmented (language switch, latency sort/carrier filters) */
+/* Segmented (language switch) */
 .ant-segmented {
   border-radius: var(--rp-radius-sm);
-  font-variant-numeric: tabular-nums;
-}
-.ant-segmented.ant-segmented-sm {
-  font-size: 12.5px;
-}
-.ant-segmented .ant-segmented-item-selected {
-  font-weight: 500;
 }
 
 /* Code/mono text for tokens, IPs, ports */
@@ -1003,6 +995,49 @@ html, body, #root {
   font-size: 12px;
   color: var(--ant-color-text-secondary, #4b5563);
   cursor: pointer;
+}
+.rp-lat-matrix-tools .rp-lat-smooth {
+  font-size: 13px;
+  font-weight: 500;
+  color: #52525b;
+}
+/* One look for every switch on the latency pages: the range switch in the page
+   header and the sort / carrier switches above the matrix. */
+:is(.rp-lat-matrix-tools, .rp-lat-controls) .ant-segmented {
+  padding: 3px;
+  background: #f1f2f5;
+  border-radius: 8px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+/* The header switch sits on the grey page, not a white card: keep its track a
+   hair darker so it still reads as a control. */
+.rp-lat-controls .ant-segmented {
+  background: rgba(24, 24, 27, 0.06);
+}
+:is(.rp-lat-matrix-tools, .rp-lat-controls) .ant-segmented .ant-segmented-item {
+  border-radius: 6px;
+  color: #52525b;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+:is(.rp-lat-matrix-tools, .rp-lat-controls) .ant-segmented .ant-segmented-item-label {
+  min-height: 24px;
+  line-height: 24px;
+  padding: 0 10px;
+}
+:is(.rp-lat-matrix-tools, .rp-lat-controls) .ant-segmented .ant-segmented-item:hover:not(.ant-segmented-item-selected) {
+  color: #09090b;
+}
+:is(.rp-lat-matrix-tools, .rp-lat-controls) .ant-segmented .ant-segmented-item-selected,
+:is(.rp-lat-matrix-tools, .rp-lat-controls) .ant-segmented .ant-segmented-thumb {
+  background: #ffffff;
+  border-radius: 6px;
+  box-shadow: 0 1px 2px rgba(9, 9, 11, 0.08);
+}
+:is(.rp-lat-matrix-tools, .rp-lat-controls) .ant-segmented .ant-segmented-item-selected {
+  color: #09090b;
+  font-weight: 600;
 }
 /* The chart, its loading veil, its empty state and a failed load share one box
    of fixed height, so the card does not jump on a refresh or a range change. */

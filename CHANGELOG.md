@@ -20,6 +20,15 @@ independent `v*` / `node-v*` tracks since this release).
   Connections** row in the node detail drawer. Shared-group user endpoints
   never expose these host-level counts.
 
+### Changed
+
+- **Network Monitor switches**: the time-range switch in the page header and
+  the sort / carrier switches above the comparison matrix share one calmer
+  look (light track, white selected item, steady-width numbers).
+- **README**: the repository front page is now in English (`README.md`), with
+  the Chinese version at `README.zh-CN.md`; the dashboard's **Update Now** link
+  opens the one in the panel's language.
+
 ## [1.3.5] - 2026-11-27
 
 Panel only: nodes stay on node-v1.3.2, and the config protocol and the

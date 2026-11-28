@@ -28,8 +28,8 @@ export const rpTheme: ThemeConfig = {
     fontWeightStrong: 500,
     fontFamily:
       '-apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", ' +
-      '"Helvetica Neue", Arial, "PingFang SC", "HarmonyOS Sans SC", ' +
-      '"Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", sans-serif',
+      '"Helvetica Neue", Arial, "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC", ' +
+      '"Microsoft YaHei UI", "Microsoft YaHei", sans-serif',
     fontFamilyCode:
       '"JetBrains Mono", "Cascadia Mono", "Cascadia Code", "SF Mono", ui-monospace, ' +
       'Menlo, Consolas, monospace',
@@ -87,13 +87,6 @@ export const rpTheme: ThemeConfig = {
     },
     Modal: {
       borderRadiusLG: 14,
-    },
-    Segmented: {
-      trackBg: '#f1f2f5',
-      itemColor: '#52525b',
-      itemHoverColor: '#09090b',
-      itemSelectedBg: '#ffffff',
-      itemSelectedColor: '#09090b',
     },
     Layout: {
       bodyBg: '#f6f6f7',
