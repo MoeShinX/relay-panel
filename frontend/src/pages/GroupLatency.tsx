@@ -906,7 +906,7 @@ export default function GroupLatency({
           </Space>
         }
         extra={
-          <Space size={[10, 6]} wrap>
+          <Space size={[10, 6]} wrap className="rp-lat-matrix-tools">
             {(nodes.length > 1 || onlyAnomalies) && (
               <label className="rp-lat-smooth">
                 <Switch

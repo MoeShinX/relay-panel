@@ -23,7 +23,7 @@ pre-flight check.
 | 1 | `crates/panel/Cargo.toml` | `version = "x.y.z"` |
 | 2 | `crates/panel/src/config.rs` | `COMPILED_APP_VERSION` (the panel's own version, shown in the update-check UI). Overridable at runtime via the `APP_VERSION` env var. |
 | 3 | `docker-compose.release.yaml` | the panel image tag — `RELAYPANEL_PANEL_TAG` default (`ghcr.io/moeshinx/relay-panel-panel:x.y.z`) |
-| 4 | `README.md` / `README.en.md` | dynamic `github/v/release` badge (auto-reflects the latest panel release; no static string to bump, just confirm the badge exists) |
+| 4 | `README.md` / `README.zh-CN.md` | dynamic `github/v/release` badge (auto-reflects the latest panel release; no static string to bump, just confirm the badge exists) |
 
 Also bump, but not part of the "must match" set:
 - `CHANGELOG.md` — add a new `## [x.y.z] - YYYY-MM-DD` section describing the

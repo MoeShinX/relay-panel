@@ -13,6 +13,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **Host-level TCP/UDP connection counts (Linux only)**: status reports now
+  carry optional `tcp_connections` (from `/proc/net/snmp` `Tcp: CurrEstab`,
+  covering IPv4 and IPv6 established/close-wait TCP connections) and
+  `udp_connections` (from `/proc/net/sockstat` `UDP: inuse` +
+  `/proc/net/sockstat6` `UDP6: inuse`, covering open IPv4 and IPv6 UDP sockets
+  such as NTP/DNS and active UDP sessions) alongside `active_connections`
+  (relay forwarded connections). Additive fields — no config-protocol version
+  bump, and older panels ignore them.
+
 ## [1.3.2] - 2026-11-26
 
 Runs against any current panel (still protocol version 4). Upgrade nodes that

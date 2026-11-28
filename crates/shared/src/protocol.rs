@@ -822,6 +822,18 @@ pub struct StatusReport {
     /// CONFIG_PROTOCOL_VERSION.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub latency: Vec<LatencySample>,
+    /// System-wide TCP connections (Linux `/proc/net/snmp` `Tcp: CurrEstab`,
+    /// covering both IPv4 and IPv6 services such as SSH, web, proxies, and
+    /// forwarded TCP). Additive optional field — does NOT bump
+    /// CONFIG_PROTOCOL_VERSION. Older nodes omit it and the panel falls back
+    /// to `active_connections`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tcp_connections: Option<u32>,
+    /// System-wide UDP sockets (Linux `/proc/net/sockstat` `UDP: inuse` +
+    /// `/proc/net/sockstat6` `UDP6: inuse`, covering services such as NTP/DNS
+    /// and active UDP sessions). Additive optional field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_connections: Option<u32>,
 }
 
 /// One mounted disk filesystem in a [`StatusReport`]: bytes, not a percentage,

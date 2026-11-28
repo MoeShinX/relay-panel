@@ -294,7 +294,7 @@ pub struct SharedNodeSummary {
     pub node_version: Option<String>,
     /// v0.4.14: config-protocol version the node speaks.
     pub config_protocol_version: Option<i64>,
-    /// v0.4.14: active connection count.
+    /// v0.4.14: active connection count (relay-node forwarded connections).
     pub connections: i64,
     /// v0.4.14: SYSTEM uptime (since OS boot), seconds.
     pub uptime: Option<i64>,

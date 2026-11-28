@@ -394,6 +394,8 @@ pub async fn report_status(
             "cpu": req.cpu_usage,
             "mem": req.mem_usage,
             "connections": req.active_connections,
+            "tcp_connections": req.tcp_connections,
+            "udp_connections": req.udp_connections,
             // v0.3.2: "uptime" is SYSTEM uptime (since OS boot). process uptime
             // is separate below; older nodes don't send it and it renders as "-".
             "uptime": req.uptime_secs,
@@ -886,6 +888,8 @@ mod tests {
             mem_used: None,
             disks: Vec::new(),
             latency: Vec::new(),
+            tcp_connections: None,
+            udp_connections: None,
         };
         let Json(resp) = report_status(State(state.clone()), h, Json(req)).await;
         assert_eq!(resp.code, 401, "missing token → business 401, not HTTP 401");
@@ -982,6 +986,8 @@ mod tests {
             mem_used: None,
             disks: Vec::new(),
             latency: Vec::new(),
+            tcp_connections: None,
+            udp_connections: None,
         };
         let Json(resp) =
             report_status(State(state.clone()), auth_headers("tok-A"), Json(req)).await;
@@ -1350,10 +1356,78 @@ mod tests {
                 mem_used: None,
                 disks: Vec::new(),
                 latency: Vec::new(),
+                tcp_connections: None,
+                udp_connections: None,
             };
             let Json(resp) =
                 report_status(State(state.clone()), auth_headers("tok-A"), Json(req)).await;
             assert_eq!(resp.code, 400, "bad node_id={bad:?} must be rejected");
         }
+    }
+
+    #[tokio::test]
+    async fn report_status_persists_system_connections_and_keeps_relay_metric() {
+        use relay_shared::protocol::StatusReport;
+        let (state, _pool) = seeded_state().await;
+        let req = StatusReport {
+            cpu_usage: 12.0,
+            mem_usage: 34.0,
+            active_connections: 7,
+            uptime_secs: 60,
+            public_ip: None,
+            public_ipv4: None,
+            public_ipv6: None,
+            disk_total: None,
+            disk_used: None,
+            disk_usage_percent: None,
+            disk_mount: None,
+            upload_bps: None,
+            download_bps: None,
+            boot_upload_bytes: None,
+            boot_download_bytes: None,
+            network_interface: None,
+            node_id: Some("n-sys".into()),
+            process_uptime_secs: None,
+            node_version: Some("1.3.3".into()),
+            config_protocol_version: None,
+            listener_errors: None,
+            install_method: None,
+            cpu_model: None,
+            cpu_cores: None,
+            mem_total: None,
+            mem_used: None,
+            disks: Vec::new(),
+            latency: Vec::new(),
+            tcp_connections: Some(48),
+            udp_connections: Some(15),
+        };
+        let Json(resp) =
+            report_status(State(state.clone()), auth_headers("tok-A"), Json(req)).await;
+        assert_eq!(resp.code, 0);
+
+        let raw = state
+            .db
+            .get("node_status:10:n-sys")
+            .await
+            .unwrap()
+            .expect("status row stored");
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["connections"], 7);
+        assert_eq!(v["tcp_connections"], 48);
+        assert_eq!(v["udp_connections"], 15);
+
+        let buckets = state
+            .db
+            .query_node_metrics("2000-01-01 00:00:00", false)
+            .await
+            .unwrap();
+        let b = buckets
+            .iter()
+            .find(|b| b.node_id == "n-sys")
+            .expect("metric bucket recorded");
+        assert_eq!(
+            b.conn_max, 7,
+            "hourly metric keeps relay connections so the history curve stays continuous"
+        );
     }
 }

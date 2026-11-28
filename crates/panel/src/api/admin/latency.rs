@@ -1191,6 +1191,8 @@ mod tests {
             mem_used: None,
             disks: vec![],
             latency,
+            tcp_connections: None,
+            udp_connections: None,
         };
         let mut headers = axum::http::HeaderMap::new();
         headers.insert("Authorization", "Bearer tok-5".parse().unwrap());
@@ -1315,6 +1317,8 @@ mod tests {
             mem_used: None,
             disks: vec![],
             latency,
+            tcp_connections: None,
+            udp_connections: None,
         }
     }
 

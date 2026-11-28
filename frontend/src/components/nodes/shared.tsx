@@ -41,6 +41,41 @@ export function memTooltip(r: NodeDisplayRow, t: Tfn): ReactNode {
   return <>{t('mem')}: {formatPercent(r.mem)}{bytes && <><br />{bytes}</>}</>;
 }
 
+/** Host-level TCP / UDP counts as "TCP 48 · UDP 15" (admin view, node-v1.3.3+),
+ *  never summed together because TCP counts established connections while UDP
+ *  counts open sockets. Null when the node did not report them or the viewer is
+ *  not an admin. */
+export function systemConnectionsText(
+  r: Pick<NodeDisplayRow, 'tcp_connections' | 'udp_connections'>,
+): string | null {
+  if (r.tcp_connections == null && r.udp_connections == null) return null;
+  const parts: string[] = [];
+  if (r.tcp_connections != null) parts.push(`TCP ${r.tcp_connections}`);
+  if (r.udp_connections != null) parts.push(`UDP ${r.udp_connections}`);
+  return parts.join(' · ');
+}
+
+/** Hover tooltip for the connections pill: always names the relay's own
+ *  forwarded connections first, and adds "系统 TCP 48 · UDP 15" on a second
+ *  line when the node reports host-level counts (admin view only). */
+export function connectionsTooltip(
+  r: Pick<NodeDisplayRow, 'connections' | 'tcp_connections' | 'udp_connections'>,
+  t: Tfn,
+): ReactNode {
+  const relay = r.connections || 0;
+  const sys = r.tcp_connections != null && r.udp_connections != null
+    ? t('systemConnectionsSummary')
+      .replace('{tcp}', String(r.tcp_connections))
+      .replace('{udp}', String(r.udp_connections))
+    : systemConnectionsText(r);
+  return (
+    <>
+      {t('relayConnections')}: {relay}
+      {sys && <><br />{sys}</>}
+    </>
+  );
+}
+
 /** Online/total (placeholder rows excluded) and the summed live ↑↓ of the
  *  ONLINE nodes among `rows`: one group's header, or the whole page's.
  *

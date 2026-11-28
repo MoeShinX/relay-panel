@@ -9,6 +9,7 @@ import api from '../api/client';
 import type { ApiEnvelope, User, ForwardRule, DeviceGroup, NodeStatus } from '../api/types';
 import { useI18n } from '../i18n/context';
 import { aggregateNodesByGroup } from '../components/nodes/aggregate';
+import { connectionsTooltip } from '../components/nodes/shared';
 import TrafficChart from '../components/TrafficChart';
 import NodeMetricsChart from '../components/NodeMetricsChart';
 import { formatBps, formatBytes } from '../utils/format';
@@ -34,13 +35,16 @@ interface VersionInfo {
 }
 
 const IGNORED_KEY = 'relaypanel_ignored_version';
-// The "Update Now" button points here. README.md is the user-facing entry
-// doc with the one-line install + a dedicated upgrade section, so it's a better
-// landing page than the (more ops-focused) docs/DEPLOYMENT.md.
-const DEPLOY_DOC_URL = 'https://github.com/MoeShinX/relay-panel/blob/main/README.md#-更新';
+// The "Update Now" button points here. README.md (English default) /
+// README.zh-CN.md are the user-facing entry docs with the one-line install and
+// a dedicated updating section, so they make a better landing page than the
+// (more ops-focused) docs/DEPLOYMENT.md.
+const DEPLOY_DOC_URL_EN = 'https://github.com/MoeShinX/relay-panel/blob/main/README.md#updating';
+const DEPLOY_DOC_URL_ZH = 'https://github.com/MoeShinX/relay-panel/blob/main/README.zh-CN.md#更新升级';
 
 export default function Dashboard() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
+  const deployDocUrl = lang === 'zh-CN' ? DEPLOY_DOC_URL_ZH : DEPLOY_DOC_URL_EN;
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const tableScroll = useTableScroll();
@@ -250,7 +254,11 @@ export default function Dashboard() {
     },
     {
       title: t('connections'), dataIndex: 'connections', key: 'connections', width: 90,
-      render: (v: number) => <span className={`rp-count-pill${!v ? ' is-zero' : ''}`}>{v}</span>,
+      render: (v: number, r: ReturnType<typeof aggregateNodesByGroup>[number]) => (
+        <Tooltip title={connectionsTooltip({ connections: r.connections, tcp_connections: r.tcp_connections, udp_connections: r.udp_connections }, t)}>
+          <span className={`rp-count-pill${!v ? ' is-zero' : ''}`}>{v}</span>
+        </Tooltip>
+      ),
     },
     {
       title: t('groupRate'), key: 'rate', width: 196,
@@ -323,7 +331,7 @@ export default function Dashboard() {
               <PanelUpdateButton
                 currentVersion={versionInfo?.current_version || ''}
                 targetVersion={versionInfo?.latest_version || ''}
-                manualUrl={DEPLOY_DOC_URL}
+                manualUrl={deployDocUrl}
               />
             </Space>
           }

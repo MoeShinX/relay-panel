@@ -473,6 +473,10 @@ export interface NodeStatus {
   mem_total?: number | null;
   mem_used?: number | null;
   connections: number;
+  /** Admin only (node-v1.3.3+): system-wide TCP connections (Linux /proc/net/snmp CurrEstab). */
+  tcp_connections?: number | null;
+  /** Admin only (node-v1.3.3+): system-wide UDP sockets (Linux /proc/net/sockstat{,6} inuse). */
+  udp_connections?: number | null;
   /** v0.3.2: SYSTEM uptime (since OS boot). Was process uptime before v0.3.2. */
   uptime: number;
   /** v0.3.2: relay-node process uptime (since this binary started). Optional —
@@ -729,6 +733,8 @@ export interface NodeDisplayRow {
   install_method?: string | null;
   config_protocol_version?: number | null;
   connections?: number | null;
+  tcp_connections?: number | null;
+  udp_connections?: number | null;
   cpu?: number | null;
   /** v1.2.13 (admin /nodes, node-v1.2.7+): CPU model and logical CPU count. */
   cpu_model?: string | null;

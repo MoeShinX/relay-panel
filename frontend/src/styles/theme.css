@@ -996,6 +996,49 @@ html, body, #root {
   color: var(--ant-color-text-secondary, #4b5563);
   cursor: pointer;
 }
+.rp-lat-matrix-tools .rp-lat-smooth {
+  font-size: 13px;
+  font-weight: 500;
+  color: #52525b;
+}
+/* One look for every switch on the latency pages: the range switch in the page
+   header and the sort / carrier switches above the matrix. */
+:is(.rp-lat-matrix-tools, .rp-lat-controls) .ant-segmented {
+  padding: 3px;
+  background: #f1f2f5;
+  border-radius: 8px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+/* The header switch sits on the grey page, not a white card: keep its track a
+   hair darker so it still reads as a control. */
+.rp-lat-controls .ant-segmented {
+  background: rgba(24, 24, 27, 0.06);
+}
+:is(.rp-lat-matrix-tools, .rp-lat-controls) .ant-segmented .ant-segmented-item {
+  border-radius: 6px;
+  color: #52525b;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+:is(.rp-lat-matrix-tools, .rp-lat-controls) .ant-segmented .ant-segmented-item-label {
+  min-height: 24px;
+  line-height: 24px;
+  padding: 0 10px;
+}
+:is(.rp-lat-matrix-tools, .rp-lat-controls) .ant-segmented .ant-segmented-item:hover:not(.ant-segmented-item-selected) {
+  color: #09090b;
+}
+:is(.rp-lat-matrix-tools, .rp-lat-controls) .ant-segmented .ant-segmented-item-selected,
+:is(.rp-lat-matrix-tools, .rp-lat-controls) .ant-segmented .ant-segmented-thumb {
+  background: #ffffff;
+  border-radius: 6px;
+  box-shadow: 0 1px 2px rgba(9, 9, 11, 0.08);
+}
+:is(.rp-lat-matrix-tools, .rp-lat-controls) .ant-segmented .ant-segmented-item-selected {
+  color: #09090b;
+  font-weight: 600;
+}
 /* The chart, its loading veil, its empty state and a failed load share one box
    of fixed height, so the card does not jump on a refresh or a range change. */
 .rp-lat-chart-box {
