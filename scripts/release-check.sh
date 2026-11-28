@@ -133,7 +133,7 @@ section "Required files"
 
 REQUIRED_FILES=(
     "README.md"
-    "README.en.md"
+    "README.zh-CN.md"
     "CHANGELOG.md"
     "CHANGELOG-NODE.md"
     "docs/DEPLOYMENT.md"
@@ -191,7 +191,7 @@ if [ "$TRACK" = "panel" ]; then
     fi
 
     # README dynamic release badge (reflects the latest GitHub panel release)
-    for rf in README.md README.en.md; do
+    for rf in README.md README.zh-CN.md; do
         if grep -q "github/v/release" "$rf" 2>/dev/null; then
             ok "$rf has dynamic release badge"
         else
@@ -447,7 +447,7 @@ done
 # README must link to key docs. Content-keyword checks (relay-node-install.sh,
 # device groups, install/upgrade phrasing) are WARN since the slim README
 # intentionally delegates detail to docs/ — only the doc LINKS are hard FAILs.
-for readme in README.md README.en.md; do
+for readme in README.md README.zh-CN.md; do
     [ -f "$readme" ] || { fail "$readme missing"; continue; }
     # Hard: README must link to the deployment guide (primary navigation).
     if grep -q -- "docs/DEPLOYMENT.md" "$readme" 2>/dev/null; then

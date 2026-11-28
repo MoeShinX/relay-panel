@@ -35,13 +35,16 @@ interface VersionInfo {
 }
 
 const IGNORED_KEY = 'relaypanel_ignored_version';
-// The "Update Now" button points here. README.md is the user-facing entry
-// doc with the one-line install + a dedicated upgrade section, so it's a better
-// landing page than the (more ops-focused) docs/DEPLOYMENT.md.
-const DEPLOY_DOC_URL = 'https://github.com/MoeShinX/relay-panel/blob/main/README.md#-更新';
+// The "Update Now" button points here. README.md (English default) /
+// README.zh-CN.md are the user-facing entry docs with the one-line install and
+// a dedicated updating section, so they make a better landing page than the
+// (more ops-focused) docs/DEPLOYMENT.md.
+const DEPLOY_DOC_URL_EN = 'https://github.com/MoeShinX/relay-panel/blob/main/README.md#updating';
+const DEPLOY_DOC_URL_ZH = 'https://github.com/MoeShinX/relay-panel/blob/main/README.zh-CN.md#更新升级';
 
 export default function Dashboard() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
+  const deployDocUrl = lang === 'zh-CN' ? DEPLOY_DOC_URL_ZH : DEPLOY_DOC_URL_EN;
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const tableScroll = useTableScroll();
@@ -328,7 +331,7 @@ export default function Dashboard() {
               <PanelUpdateButton
                 currentVersion={versionInfo?.current_version || ''}
                 targetVersion={versionInfo?.latest_version || ''}
-                manualUrl={DEPLOY_DOC_URL}
+                manualUrl={deployDocUrl}
               />
             </Space>
           }

@@ -61,10 +61,12 @@
   --rp-table-row-hover: #f9f9fb;
 
   /* Font — Western UI precision stack first (crisp ClearType/SF Pro Latin &
-     digits), then CJK (PingFang SC / HarmonyOS Sans SC / Noto Sans SC). */
+     digits), then native OS CJK (PingFang SC on macOS, Microsoft YaHei UI on
+     Windows for full ClearType hinting at 12–14px), with self-hosted Noto Sans
+     SC as the clean fallback for Linux and systems without either. */
   --rp-font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI",
-    "Helvetica Neue", Arial, "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC",
-    "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+    "Helvetica Neue", Arial, "PingFang SC", "HarmonyOS Sans SC",
+    "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", sans-serif;
   --rp-font-mono: "JetBrains Mono", "Cascadia Mono", "Cascadia Code", "SF Mono",
     ui-monospace, Menlo, Consolas, monospace;
 }
@@ -82,7 +84,6 @@ html, body, #root {
   /* Never let Chromium/DirectWrite synthesize blurry faux-bold or faux-italic */
   font-synthesis: none;
   font-feature-settings: "kern" 1, "liga" 1;
-  text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -345,9 +346,16 @@ html, body, #root {
   color: var(--rp-text-secondary);
 }
 
-/* Segmented (language switch) */
+/* Segmented (language switch, latency sort/carrier filters) */
 .ant-segmented {
   border-radius: var(--rp-radius-sm);
+  font-variant-numeric: tabular-nums;
+}
+.ant-segmented.ant-segmented-sm {
+  font-size: 12.5px;
+}
+.ant-segmented .ant-segmented-item-selected {
+  font-weight: 500;
 }
 
 /* Code/mono text for tokens, IPs, ports */

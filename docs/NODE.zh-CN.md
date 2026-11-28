@@ -500,5 +500,5 @@ curl -fL -o relay-node \
 ## 相关文档
 - [DEPLOYMENT.md](./DEPLOYMENT.md) —— 面板本身的部署（Docker Compose）
 - [NODE.md](./NODE.md) —— 本文档的英文版
-- [../README.md](../README.md) —— 项目总览（中文）
+- [../README.zh-CN.md](../README.zh-CN.md) —— 项目总览（中文）
 - [../CHANGELOG.md](../CHANGELOG.md) —— 版本历史
